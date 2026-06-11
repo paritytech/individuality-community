@@ -1,0 +1,15 @@
+{
+  "version": 0,
+  "descriptorPath": ".papi/descriptors",
+  "entries": {
+    "people": {
+      "wsUrl": "ws://127.0.0.1:10010",
+      "metadata": ".papi/metadata/people.scale",
+      "genesis": "0x0c29e2aa65ed7d018a999f13630ceab2a2eec07394e0010d90cf03a3551ab1d9",
+      "codeHash": "0xdaa5be821a54e71c506b0d0f29d924c4b6503df075469f8914047cfdea130a35"
+    },
+    "assethub": {
+      "metadata": ".papi/metadata/assethub.scale"
+    }
+  }
+}

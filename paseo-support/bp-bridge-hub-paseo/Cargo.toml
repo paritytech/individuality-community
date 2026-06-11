@@ -1,0 +1,65 @@
+[package]
+name = "bp-bridge-hub-paseo"
+description = "Primitives of BridgeHubPaseo parachain runtime."
+repository.workspace = true
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+# Local
+paseo-runtime-constants = { workspace = true }
+system-parachains-constants = { workspace = true }
+
+# Bridge Dependencies
+bp-bridge-hub-cumulus = { workspace = true }
+bp-header-chain = { workspace = true }
+bp-polkadot-core = { workspace = true }
+bp-runtime = { workspace = true }
+bp-messages = { workspace = true }
+snowbridge-core = { workspace = true }
+
+# Substrate Based Dependencies
+frame-support = { workspace = true }
+sp-api = { workspace = true }
+sp-runtime = { workspace = true }
+sp-std = { workspace = true }
+
+# Polkadot
+xcm = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+	"bp-bridge-hub-cumulus/std",
+	"bp-header-chain/std",
+	"bp-messages/std",
+	"bp-polkadot-core/std",
+	"bp-runtime/std",
+	"frame-support/std",
+	"paseo-runtime-constants/std",
+	"snowbridge-core/std",
+	"sp-api/std",
+	"sp-runtime/std",
+	"sp-std/std",
+	"system-parachains-constants/std",
+	"xcm/std",
+]
+runtime-benchmarks = [
+	"frame-support/runtime-benchmarks",
+	"paseo-runtime-constants/runtime-benchmarks",
+	"snowbridge-core/runtime-benchmarks",
+	"sp-runtime/runtime-benchmarks",
+	"system-parachains-constants/runtime-benchmarks",
+	"xcm/runtime-benchmarks",
+]
+try-runtime = [
+	"frame-support/try-runtime",
+	"sp-runtime/try-runtime",
+	"system-parachains-constants/try-runtime",
+]
+
+[lints]
+workspace = true

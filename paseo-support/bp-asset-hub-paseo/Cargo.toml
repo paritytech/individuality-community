@@ -1,0 +1,45 @@
+[package]
+name = "bp-asset-hub-paseo"
+description = "Primitives of AssetHubPaseo parachain runtime."
+repository.workspace = true
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+codec = { features = ["derive", "max-encoded-len"], workspace = true }
+scale-info = { features = ["derive"], workspace = true }
+
+# Local
+system-parachains-constants = { workspace = true }
+
+# Bridge Dependencies
+bp-xcm-bridge-hub-router = { workspace = true }
+
+# Substrate Based Dependencies
+frame-support = { workspace = true }
+sp-core = { workspace = true }
+
+# Polkadot
+xcm = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+	"bp-xcm-bridge-hub-router/std",
+	"codec/std",
+	"frame-support/std",
+	"scale-info/std",
+	"sp-core/std",
+	"system-parachains-constants/std",
+	"xcm/std",
+]
+runtime-benchmarks = [
+	"frame-support/runtime-benchmarks",
+	"system-parachains-constants/runtime-benchmarks",
+	"xcm/runtime-benchmarks",
+]
+
+[lints]
+workspace = true

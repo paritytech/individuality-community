@@ -1,0 +1,90 @@
+[package]
+name = "integration-tests"
+description = "Integration tests for personhood system"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+codec = { workspace = true, features = ["derive"] }
+scale-info = { workspace = true, features = ["derive"] }
+verifiable = { workspace = true }
+frame-support = { workspace = true }
+frame-system = { workspace = true }
+sp-arithmetic = { workspace = true }
+sp-core = { workspace = true }
+sp-io = { workspace = true }
+sp-runtime = { workspace = true }
+indiv-pallet-value-transfer-auth = { workspace = true }
+indiv-support = { workspace = true, features = ["genesis"] }
+paseo-runtime-constants = { workspace = true }
+rand = { workspace = true }
+xcm = { workspace = true }
+xcm-executor = { workspace = true }
+
+[dev-dependencies]
+pallet-balances = { workspace = true }
+indiv-pallet-chunks-manager = { workspace = true }
+indiv-pallet-members = { workspace = true }
+indiv-pallet-people = { workspace = true }
+indiv-pallet-proof-of-ink = { workspace = true }
+indiv-pallet-mob-rule = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+	"codec/std",
+	"frame-support/std",
+	"frame-system/std",
+	"indiv-pallet-chunks-manager/std",
+	"indiv-pallet-members/std",
+	"indiv-pallet-mob-rule/std",
+	"indiv-pallet-people/std",
+	"indiv-pallet-proof-of-ink/std",
+	"indiv-pallet-value-transfer-auth/std",
+	"indiv-support/std",
+	"pallet-balances/std",
+	"paseo-runtime-constants/std",
+	"scale-info/std",
+	"sp-arithmetic/std",
+	"sp-core/std",
+	"sp-io/std",
+	"sp-runtime/std",
+	"verifiable/std",
+	"xcm-executor/std",
+	"xcm/std",
+]
+runtime-benchmarks = [
+	"frame-support/runtime-benchmarks",
+	"frame-system/runtime-benchmarks",
+	"indiv-pallet-chunks-manager/runtime-benchmarks",
+	"indiv-pallet-members/runtime-benchmarks",
+	"indiv-pallet-mob-rule/runtime-benchmarks",
+	"indiv-pallet-people/runtime-benchmarks",
+	"indiv-pallet-proof-of-ink/runtime-benchmarks",
+	"indiv-pallet-value-transfer-auth/runtime-benchmarks",
+	"indiv-support/runtime-benchmarks",
+	"pallet-balances/runtime-benchmarks",
+	"paseo-runtime-constants/runtime-benchmarks",
+	"sp-runtime/runtime-benchmarks",
+	"xcm-executor/runtime-benchmarks",
+	"xcm/runtime-benchmarks",
+]
+try-runtime = [
+	"frame-support/try-runtime",
+	"frame-system/try-runtime",
+	"indiv-pallet-chunks-manager/try-runtime",
+	"indiv-pallet-members/try-runtime",
+	"indiv-pallet-mob-rule/try-runtime",
+	"indiv-pallet-people/try-runtime",
+	"indiv-pallet-proof-of-ink/try-runtime",
+	"indiv-pallet-value-transfer-auth/try-runtime",
+	"pallet-balances/try-runtime",
+	"sp-runtime/try-runtime",
+]

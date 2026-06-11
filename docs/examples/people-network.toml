@@ -1,0 +1,55 @@
+# RPC ports here are intentionally kept in sync with the init-setup scripts'
+# expected endpoints in `scripts/initial-setup/config-local.env`:
+[settings]
+timeout = 600
+node_spawn_timeout = 240
+
+[relaychain]
+chain = "rococo-local"
+default_command = "polkadot"
+default_args = ["--network-backend=libp2p", "--rpc-max-response-size=50"]
+
+[[relaychain.nodes]]
+name = "alice-relay-validator"
+validator = true
+rpc_port = 10000
+p2p_port = 30336
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "bob-relay-validator"
+validator = true
+rpc_port = 9955
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "charlie-relay-validator"
+validator = true
+rpc_port = 9956
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "dave-relay-validator"
+validator = true
+rpc_port = 9957
+balance = 1000000000000000
+
+[[parachains]]
+id = 1502
+cumulus_based = true
+chain_spec_path = "./generated/people-chain-spec.json"
+
+[[parachains.collators]]
+name = "people-collator1"
+rpc_port = 10010
+p2p_port = 30335
+command = "polkadot-omni-node"
+args = [
+	"--authoring=slot-based",
+	"--enable-statement-store",
+	"--force-authoring",
+	"--network-backend=libp2p",
+	"--rpc-max-connections=500",
+	"--rpc-max-response-size=50",
+	"-lparachain=debug,xcm=trace",
+]

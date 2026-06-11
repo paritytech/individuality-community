@@ -1,0 +1,78 @@
+// Copyright (C) Parity Technologies (UK) Ltd.
+// This file is part of Individuality.
+// SPDX-License-Identifier: Apache-2.0
+
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Module with configuration which reflects AssetHubPolkadot runtime setup.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+use codec::{Decode, Encode};
+use scale_info::TypeInfo;
+
+pub use bp_xcm_bridge_hub_router::XcmBridgeHubRouterCall;
+use xcm::latest::prelude::*;
+
+use system_parachains_constants::paseo::currency::*;
+
+/// `AssetHubPaseo` Runtime `Call` enum.
+///
+/// The enum represents a subset of possible `Call`s we can send to `AssetHubPaseo` chain.
+/// Ideally this code would be auto-generated from metadata, because we want to
+/// avoid depending directly on the ENTIRE runtime just to get the encoding of `Dispatchable`s.
+///
+/// All entries here (like pretty much in the entire file) must be kept in sync with
+/// `AssetHubPaseo` `construct_runtime`, so that we maintain SCALE-compatibility.
+#[allow(clippy::large_enum_variant)]
+#[derive(Encode, Decode, Debug, PartialEq, Eq, Clone, TypeInfo)]
+pub enum Call {
+	/// `ToKusamaXcmRouter` bridge pallet.
+	#[codec(index = 34)]
+	ToKusamaXcmRouter(XcmBridgeHubRouterCall),
+}
+
+frame_support::parameter_types! {
+	/// Some sane weight to execute `xcm::Transact(pallet-xcm-bridge-hub-router::Call::report_bridge_status)`.
+	pub const XcmBridgeHubRouterTransactCallMaxWeight: Weight = Weight::from_parts(200_000_000, 6144);
+
+	/// Should match the `AssetDeposit` of the `ForeignAssets` pallet on Asset Hub.
+	pub const CreateForeignAssetDeposit: u128 = system_para_deposit(1, 190);
+	/// The pallet index of the Ethereum system frontend pallet in the AssetHub Hub runtime.
+	pub const SystemFrontendPalletInstance: u8 = 36;
+}
+
+/// Builds an (un)congestion XCM program with the `report_bridge_status` call for
+/// `ToKusamaXcmRouter`.
+pub fn build_congestion_message<RuntimeCall>(
+	bridge_id: sp_core::H256,
+	is_congested: bool,
+) -> Vec<Instruction<RuntimeCall>> {
+	alloc::vec![
+		UnpaidExecution { weight_limit: Unlimited, check_origin: None },
+		Transact {
+			origin_kind: OriginKind::Xcm,
+			fallback_max_weight: Some(XcmBridgeHubRouterTransactCallMaxWeight::get()),
+			call: Call::ToKusamaXcmRouter(XcmBridgeHubRouterCall::report_bridge_status {
+				bridge_id,
+				is_congested,
+			})
+			.encode()
+			.into(),
+		},
+		ExpectTransactStatus(MaybeErrorCode::Success),
+	]
+}

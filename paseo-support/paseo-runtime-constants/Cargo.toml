@@ -1,0 +1,46 @@
+[package]
+name = "paseo-runtime-constants"
+repository.workspace = true
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hex-literal = { workspace = true }
+smallvec = { workspace = true }
+
+frame-support = { workspace = true }
+polkadot-primitives = { workspace = true }
+polkadot-runtime-common = { workspace = true }
+sp-runtime = { workspace = true }
+sp-weights = { workspace = true }
+sp-core = { workspace = true }
+
+xcm = { workspace = true }
+xcm-builder = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+	"frame-support/std",
+	"polkadot-primitives/std",
+	"polkadot-runtime-common/std",
+	"sp-core/std",
+	"sp-runtime/std",
+	"sp-weights/std",
+	"xcm-builder/std",
+	"xcm/std",
+]
+fast-runtime = []
+runtime-benchmarks = [
+	"frame-support/runtime-benchmarks",
+	"polkadot-primitives/runtime-benchmarks",
+	"polkadot-runtime-common/runtime-benchmarks",
+	"sp-runtime/runtime-benchmarks",
+	"xcm-builder/runtime-benchmarks",
+	"xcm/runtime-benchmarks",
+]
+
+[lints]
+workspace = true

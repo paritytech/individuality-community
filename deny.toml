@@ -1,0 +1,53 @@
+# cargo-deny configuration — https://embarkstudios.github.io/cargo-deny/
+#
+# This project is licensed Apache-2.0. The allow-list below is that license
+# plus the other permissive / weak-copyleft licenses that actually appear in
+# the dependency tree. Run: `cargo deny check licenses`.
+
+[licenses]
+# Minimum confidence when detecting a license from a crate's LICENSE text.
+confidence-threshold = 0.8
+
+allow = [
+	# Permissive
+	"0BSD",
+	"Apache-2.0 WITH LLVM-exception",
+	"Apache-2.0",
+	"BSD-1-Clause",
+	"BSD-2-Clause",
+	"BSD-3-Clause",
+	"MIT",
+	"MIT-0",
+	"Unicode-3.0",
+	"Zlib",
+	# Public-domain equivalents
+	"CC0-1.0",
+	"Unlicense",
+	# Weak copyleft (file-level)
+	"LGPL-2.1-or-later",
+	"MPL-2.0",
+	# Copyleft WITH a linking exception — safe to link from non-GPL code.
+	"GPL-3.0-or-later WITH Classpath-exception-2.0",
+]
+
+# Upstream Polkadot SDK crates licensed GPL-3.0-only that we knowingly depend on.
+# Listed per-crate (not blanket-allowed) so the copyleft surface stays explicit
+# and auditable.
+exceptions = [
+	{ allow = ["GPL-3.0-only"], name = "pallet-migrations" },
+	{ allow = ["GPL-3.0-only"], name = "pallet-revive-fixtures" },
+	{ allow = ["GPL-3.0-only"], name = "pallet-skip-feeless-payment" },
+	{ allow = ["GPL-3.0-only"], name = "pallet-xcm" },
+	{ allow = ["GPL-3.0-only"], name = "pallet-xcm-benchmarks" },
+	{ allow = ["GPL-3.0-only"], name = "polkadot-core-primitives" },
+	{ allow = ["GPL-3.0-only"], name = "polkadot-parachain-primitives" },
+	{ allow = ["GPL-3.0-only"], name = "polkadot-primitives" },
+	{ allow = ["GPL-3.0-only"], name = "polkadot-runtime-common" },
+	{ allow = ["GPL-3.0-only"], name = "polkadot-runtime-metrics" },
+	{ allow = ["GPL-3.0-only"], name = "polkadot-runtime-parachains" },
+	{ allow = ["GPL-3.0-only"], name = "slot-range-helper" },
+	{ allow = ["GPL-3.0-only"], name = "staging-xcm" },
+	{ allow = ["GPL-3.0-only"], name = "staging-xcm-builder" },
+	{ allow = ["GPL-3.0-only"], name = "staging-xcm-executor" },
+	{ allow = ["GPL-3.0-only"], name = "xcm-procedural" },
+]
