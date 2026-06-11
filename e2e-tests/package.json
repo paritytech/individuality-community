@@ -32,7 +32,7 @@
     "sqlite3": "6.0.1",
     "tsx": "^4.21.0",
     "verifiablejs": "1.2.0",
-    "vitest": "^3.2.4",
+    "vitest": "^3.2.6",
     "ws": "8.20.0"
   },
   "overrides": {
