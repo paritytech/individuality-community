@@ -71,8 +71,8 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@25.6.2)(tsx@4.21.0)
       ws:
-        specifier: 8.20.0
-        version: 8.20.0
+        specifier: 8.20.1
+        version: 8.20.1
 
 packages:
 
@@ -2248,8 +2248,8 @@ packages:
     resolution: {integrity: sha512-uMQTubF/vcu+Wd0b5BGtDmiXePd/+44hUWQz2nZPbs92/BnxRo74tqs+hqDo12RLiEd+CXFKUwxvvIZvtt34Jw==}
     engines: {node: '>=18'}
 
-  ws@8.20.0:
-    resolution: {integrity: sha512-sAt8BhgNbzCtgGbt2OxmpuryO63ZoDk/sqaB/znQm94T4fCEsy/yV+7CdC1kJhOU9lboAEU7R3kquuycDoibVA==}
+  ws@8.20.1:
+    resolution: {integrity: sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -2445,7 +2445,7 @@ snapshots:
       js-yaml: 4.1.1
       jsondiffpatch: 0.7.3
       lodash: 4.18.1
-      ws: 8.20.0
+      ws: 8.20.1
       yargs: 18.0.0
       zod: 3.25.76
     transitivePeerDependencies:
@@ -2829,7 +2829,7 @@ snapshots:
       '@polkadot-api/json-rpc-provider': 0.0.4
       '@polkadot-api/json-rpc-provider-proxy': 0.2.8
       '@types/ws': 8.18.1
-      ws: 8.20.0
+      ws: 8.20.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -3131,7 +3131,7 @@ snapshots:
     dependencies:
       '@polkadot/x-global': 14.0.3
       tslib: 2.8.1
-      ws: 8.20.0
+      ws: 8.20.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -4288,7 +4288,7 @@ snapshots:
 
   smoldot@2.0.40:
     dependencies:
-      ws: 8.20.0
+      ws: 8.20.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -4706,7 +4706,7 @@ snapshots:
       type-fest: 4.41.0
       write-json-file: 6.0.0
 
-  ws@8.20.0: {}
+  ws@8.20.1: {}
 
   y18n@5.0.8: {}
 
