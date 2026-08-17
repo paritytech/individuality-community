@@ -143,7 +143,7 @@ impl crate::OnPurseOccupied<u64> for RecordPurseOccupancy {
 		OccupiedPurses::set(&purses);
 	}
 
-	fn on_mint_weight() -> frame_support::weights::Weight {
+	fn on_purse_occupied_weight() -> frame_support::weights::Weight {
 		frame_support::weights::Weight::from_parts(678, 90)
 	}
 }

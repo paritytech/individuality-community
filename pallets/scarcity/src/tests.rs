@@ -953,10 +953,10 @@ fn the_depositless_mint_hook_weight_covers_the_policy() {
 	let hook_weight = |pairs| <Scarcity as MintWithoutDeposit<u64>>::mint_hook_weight(pairs);
 
 	new_test_ext().execute_with(|| {
-		assert_eq!(hook_weight(0), RecordPurseOccupancy::on_mint_weight());
+		assert_eq!(hook_weight(0), RecordPurseOccupancy::on_purse_occupied_weight());
 		assert_eq!(
 			hook_weight(3),
-			RecordPurseOccupancy::on_mint_weight().saturating_add(policy_weight(3))
+			RecordPurseOccupancy::on_purse_occupied_weight().saturating_add(policy_weight(3))
 		);
 		assert!(
 			policy_weight(3).all_gt(frame_support::weights::Weight::zero()),
@@ -2387,14 +2387,17 @@ fn mint_weight_includes_the_purse_occupancy_hook() {
 		.call_weight;
 		assert_eq!(
 			declared,
-			<() as WeightInfo>::mint(0).saturating_add(RecordPurseOccupancy::on_mint_weight())
+			<() as WeightInfo>::mint(0)
+				.saturating_add(RecordPurseOccupancy::on_purse_occupied_weight())
 		);
 	});
 }
 
-/// Both mint entries notify, so a runtime hook cannot be reached by one and missed by the other.
+/// Every path that gives a key an instance notifies, so a runtime hook cannot be reached by one
+/// and missed by another. A holder the hook misses reads as holding nothing, and its address
+/// resolves to a different account.
 #[test]
-fn every_mint_path_notifies_the_purse_occupancy_hook() {
+fn every_occupying_path_notifies_the_purse_occupancy_hook() {
 	new_test_ext().execute_with(|| {
 		setup_item();
 		assert!(OccupiedPurses::get().is_empty());
@@ -2410,10 +2413,37 @@ fn every_mint_path_notifies_the_purse_occupancy_hook() {
 		));
 		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER]);
 
-		// Moves do not notify: the fee-less path would write an unpaid entry at every hop.
 		assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, 4));
-		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER]);
+		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER, 4]);
+
+		assert_ok!(Scarcity::do_transfer_by_holder(&4, 0, 5));
+		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER, 4, 5]);
+
+		// The fee-less holder path has its own body rather than calling `do_transfer_by_holder`,
+		// so reaching it through the extrinsic is what proves the hook is wired there too.
+		let nft = NftsByOwner::<Test>::get(5).expect("the instance moved to 5");
+		assert_ok!(Scarcity::transfer(nft_origin(5, nft), 6));
+		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER, 4, 5, 6]);
 	});
+}
+
+/// Both moves declare the hook's weight, as the mint paths do.
+#[test]
+fn transfer_weights_include_the_purse_occupancy_hook() {
+	use crate::{weights::WeightInfo, OnPurseOccupied};
+	use frame_support::dispatch::GetDispatchInfo;
+
+	let hook = RecordPurseOccupancy::on_purse_occupied_weight();
+	assert_eq!(
+		crate::Call::<Test>::transfer { to: RECIPIENT }.get_dispatch_info().call_weight,
+		<() as WeightInfo>::transfer().saturating_add(hook)
+	);
+	assert_eq!(
+		crate::Call::<Test>::force_transfer { instance: 0, to: RECIPIENT }
+			.get_dispatch_info()
+			.call_weight,
+		<() as WeightInfo>::force_transfer().saturating_add(hook)
+	);
 }
 
 #[test]

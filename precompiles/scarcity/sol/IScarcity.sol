@@ -45,16 +45,23 @@ interface IScarcityCollection {
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
 
     /// @dev Returns the number of tokens of this collection held by `owner`, always 0 or 1
-    /// because a purse key holds at most one instance. Reverts for the zero address. Minting
-    /// registers its destination, so a holder that was minted to answers correctly whatever
-    /// its balance. A key that received its instance by transfer instead, or whose account
-    /// has since been reaped, answers 0 unless it is registered for some other reason,
-    /// because its address cannot otherwise be resolved back. See {ownerOf}.
+    /// because a purse key holds at most one instance. Reverts for the zero address. Every path
+    /// that gives a key an instance registers that key, so a live holder answers correctly
+    /// whatever its balance. A holder whose account has since been reaped answers 0, because
+    /// reaping drops the registration and its address cannot otherwise be resolved back. See
+    /// {ownerOf}.
     function balanceOf(address owner) external view returns (uint256);
 
     /// @dev Returns the purse key holding `tokenId`. Reverts if `tokenId` is not a live
     /// instance of this collection. The address is stable and correct for every holder, unlike
     /// {balanceOf}, so prefer this to establish ownership.
+    ///
+    /// A purse key holds 32 bytes and an address holds 20, so an unregistered key is reported as
+    /// a truncated hash of itself, and that hash resolves back to a different account. Occupying
+    /// a key registers it, so the only holder this reaches is one whose account was reaped
+    /// afterwards. Passing such an address to {mint}, {forceTransfer} or
+    /// {nominateCollectionOwner} names an account no key can sign for; {forceTransfer} rejects
+    /// the one case it can detect, where the address given is the instance's current holder.
     function ownerOf(uint256 tokenId) external view returns (address);
 
     /// @dev As {safeTransferFrom}. `data` is only ever forwarded to a receiver callback, which

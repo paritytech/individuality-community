@@ -981,6 +981,55 @@ fn force_transfer_and_burn_work() {
 	});
 }
 
+/// `forceTransfer` refuses the address `ownerOf` reports for the instance's own holder.
+///
+/// Occupying a key registers it, so the only holder left whose address does not resolve back is
+/// one whose account was reaped afterwards. That address is a truncated hash resolving to the
+/// fallback account, so the pallet compares two different accounts and its own self-transfer
+/// check passes. Only the precompile can reject this.
+#[test]
+fn force_transfer_refuses_the_holders_own_address() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let target = collection_address(collection);
+
+		// Funded so the mint's registration has an account to be reaped with.
+		let holder = id_to_account(9);
+		Balances::make_free_balance_be(&holder, 1_000_000);
+		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+			alice.clone(),
+			collection,
+			item,
+			holder.clone(),
+			alloc::vec![]
+		)
+		.unwrap();
+		assert!(<Test as pallet_revive::Config>::AddressMapper::is_mapped(&holder));
+		Balances::make_free_balance_be(&holder, 0);
+		assert!(!<Test as pallet_revive::Config>::AddressMapper::is_mapped(&holder));
+		assert!(NftsByOwner::<Test>::contains_key(&holder));
+
+		let token = U256::from(instance);
+		let data =
+			call_ok(&alice, target, IScarcityCollection::ownerOfCall { tokenId: token }.abi_encode());
+		let reported = IScarcityCollection::ownerOfCall::abi_decode_returns(&data).unwrap();
+		assert_eq!(reported, address_of::<Test>(&holder));
+		// The address does not resolve back to the holder, which is what makes the pallet's own
+		// check miss it.
+		assert_ne!(account_of::<Test>(&reported), holder);
+
+		call_reverted_with(
+			&alice,
+			target,
+			IScarcityCollection::forceTransferCall { tokenId: token, to: reported }.abi_encode(),
+			"destination already holds this instance",
+		);
+		assert_eq!(NftsByOwner::<Test>::get(&holder).unwrap().instance, instance);
+	});
+}
+
 #[test]
 fn approval_stubs_behave() {
 	new_test_ext().execute_with(|| {
@@ -1941,13 +1990,13 @@ fn unpayable_storage_deposit_reverts() {
 	});
 }
 
-/// Minting registers the destination purse key, so `balanceOf` answers for a zero-balance
-/// holder that frame-system never created an account for.
+/// Occupying a purse key registers it, so `balanceOf` answers for a zero-balance holder that
+/// frame-system never created an account for, whether it was minted to or moved to.
 ///
-/// Also pins the two states the mint hook does not reach, so neither reads as a fresh defect:
-/// a move to a purse key the hook never saw, and a key whose account is reaped afterwards.
+/// Also pins the one state the hook does not reach, so it does not read as a fresh defect: a key
+/// whose account is reaped afterwards keeps the instance but loses the registration.
 #[test]
-fn mint_makes_a_zero_balance_purse_addressable() {
+fn occupying_a_purse_key_makes_a_zero_balance_holder_addressable() {
 	new_test_ext().execute_with(|| {
 		let alice = id_to_account(1);
 		let collection = setup_collection(&alice);
@@ -1998,8 +2047,7 @@ fn mint_makes_a_zero_balance_purse_addressable() {
 		assert!(<Test as pallet_revive::Config>::AddressMapper::is_mapped(&bare));
 		assert_eq!(bare_balance, U256::ONE);
 
-		// Not reached: a move puts the instance on a key the mint hook never saw. The fee-less
-		// transfer path stays unhooked on purpose, so this is the documented edge.
+		// A move registers its destination too, so a holder that never saw a mint still resolves.
 		let moved_to = id_to_account(11);
 		let instance = NftsByOwner::<Test>::get(&bare).unwrap().instance;
 		assert_ok!(Scarcity::force_transfer(
@@ -2007,8 +2055,8 @@ fn mint_makes_a_zero_balance_purse_addressable() {
 			instance,
 			moved_to.clone()
 		));
-		assert!(!<Test as pallet_revive::Config>::AddressMapper::is_mapped(&moved_to));
-		assert_eq!(balance_of(&moved_to), U256::ZERO);
+		assert!(<Test as pallet_revive::Config>::AddressMapper::is_mapped(&moved_to));
+		assert_eq!(balance_of(&moved_to), U256::ONE);
 
 		// Not reached: reaping unmaps a key that still holds an instance, whoever registered it.
 		let funded = id_to_account(10);

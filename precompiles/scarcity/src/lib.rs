@@ -97,16 +97,21 @@
 //! is registered with `AddressMapper`: `to_address` of a native key is a truncated keccak hash
 //! and cannot be inverted. Runtimes register the accounts frame-system creates, but a purse key
 //! needs no `system::Account`, so a zero-balance holder would have no registration and would
-//! read as holding nothing. [`MapPurseKey`] closes that by registering the destination of every
-//! mint, and a runtime wires it through `pallet-scarcity`'s `OnPurseOccupied`.
+//! read as holding nothing. [`MapPurseKey`] closes that by registering every key an instance
+//! lands on, mints and both moves alike, and a runtime wires it through `pallet-scarcity`'s
+//! `OnPurseOccupied`. Registration also makes `ownerOf` invertible: an address derived from a
+//! registered key resolves back to that key, so a caller can pass a holder address to `mint`,
+//! `forceTransfer` or `nominateCollectionOwner` and reach the account it read. That holds for
+//! every live holder except one whose account was reaped, which is the case below.
 //!
-//! Two states can leave a holder unregistered, both deliberate. A move puts an instance on a
-//! key no mint touched: `transfer` is fee-less, so hooking it would let a token walk through
-//! unbounded fresh keys writing an unpaid entry per hop, and `force_transfer` is excluded with
-//! it so that the rule stays "mints register, moves do not". Reaping a holder's account removes
-//! its registration while the instance stays put. In either, `balanceOf` reads 0 unless that
-//! key happens to be registered for another reason, while `ownerOf` always reports the key's
-//! address, so `ownerOf` is the read to trust for ownership.
+//! Registration costs a permanent entry per key, on the fee-less transfer as well, so a token
+//! walking through fresh keys writes one unpaid entry per hop. The alternative is worse: an
+//! unregistered holder reads as holding nothing under `balanceOf`, and its address resolves to
+//! a different account, which silently misdirects any call that takes an address.
+//!
+//! Reaping a holder's account still removes its registration while the instance stays put. For
+//! that holder `balanceOf` reads 0 unless the key is registered for another reason, while
+//! `ownerOf` always reports the key's address, so `ownerOf` is the read to trust for ownership.
 //!
 //! `InstanceId`s are global across collections while every address names one collection, so
 //! every token lookup checks that the instance actually belongs to the address's collection
@@ -198,6 +203,7 @@ const ERR_ZERO_OWNER: &str = "balance query for the zero address";
 const ERR_INDEX_OUT_OF_RANGE: &str = "token index out of range for this owner";
 const ERR_ZERO_SUCCESSOR: &str = "successor is the zero address";
 const ERR_WRONG_HOLDER: &str = "transfer from the wrong holder";
+const ERR_SELF_TRANSFER: &str = "destination already holds this instance";
 const ERR_NOT_HOLDER: &str =
 	"caller does not hold this token: transfers on another holder's authority need approvals, \
 	 which are not supported yet";
@@ -227,19 +233,18 @@ const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8"
 /// the instance leaves it, and `AutoMapper` only unregisters keys that have an account to kill.
 /// This is deliberately weaker than `AutoMapper`, whose entries are reclaimed on reap, and is
 /// the cost of addressing a key the account system never sees. `map_no_deposit_unchecked`
-/// documents this outcome for exactly this case. Growth is one entry per mint that reaches a
-/// fresh key, and fees are its only lasting price: the instance deposit gates each mint but is
-/// refunded on burn, so mint-and-burn cycles accumulate entries against one recycled deposit.
-/// The claims path is bounded by its tree leaves, each claimable once.
+/// documents this outcome for exactly this case.
+///
+/// Growth is one entry per occupation that reaches a fresh key, over mints and both moves. A mint
+/// is gated by the instance deposit, which is refunded on burn, so mint-and-burn cycles
+/// accumulate entries against one recycled deposit; the claims path is bounded by its tree
+/// leaves, each claimable once. The holder move is gated by neither, because it is fee-less, so a
+/// token walking through fresh keys writes an unpaid entry at every hop. That is the price of the
+/// alternative: an unregistered holder reads as holding nothing under `balanceOf`, and its
+/// address resolves to a different account, so any call taking a holder address is misdirected.
 ///
 /// A runtime opts out by wiring `()`; this deliberately does not consult `AutoMap`, which
 /// governs account-driven registration rather than this.
-///
-/// Wired for mints only. `transfer` is fee-less, so hooking it would let a token walk through
-/// unbounded fresh keys writing an unpaid entry at every hop. `force_transfer` is paid and
-/// could carry the weight, but is excluded with it: a key that receives by either route reads
-/// as holding nothing, and splitting that behaviour by route would be harder to explain than
-/// the single rule that mints register and moves do not.
 pub struct MapPurseKey<T>(PhantomData<T>);
 
 impl<T> pallet_scarcity::OnPurseOccupied<T::AccountId> for MapPurseKey<T>
@@ -251,7 +256,7 @@ where
 		let _ = <T as pallet_revive::Config>::AddressMapper::map_no_deposit_unchecked(purse);
 	}
 
-	fn on_mint_weight() -> Weight {
+	fn on_purse_occupied_weight() -> Weight {
 		// The mapped check reads one entry, and registering an unmapped key writes one.
 		// `DbWeight` carries only `ref_time`, so the proof both touches is priced here on the
 		// same estimate the crate's reads use.
@@ -285,7 +290,7 @@ fn revert_scarcity<T: pallet_scarcity::Config>(e: DispatchError) -> Error {
 		(ScarcityError::UnknownItem, ERR_UNKNOWN_ITEM),
 		(ScarcityError::UnknownInstance, ERR_UNKNOWN_TOKEN),
 		(ScarcityError::AddressOccupied, "destination purse already holds an instance"),
-		(ScarcityError::SelfTransfer, "destination already holds this instance"),
+		(ScarcityError::SelfTransfer, ERR_SELF_TRANSFER),
 		(ScarcityError::Soulbound, "token is soulbound to its purse key"),
 		(ScarcityError::SupplyOverflow, "item supply exhausted"),
 		(ScarcityError::TooManyInstanceMetadata, "too many instance metadata entries"),

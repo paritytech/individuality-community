@@ -100,13 +100,16 @@ pub trait MintWithoutDeposit<AccountId> {
 		metadata: alloc::vec::Vec<(Self::MetadataKey, Self::MetadataValue)>,
 	) -> Result<InstanceId, sp_runtime::DispatchError>;
 
-	/// Weight the implementation spends on runtime hooks its caller cannot see. A caller adds
-	/// this to its own benchmarked weight, and undercharges by whatever the runtime wired
-	/// behind the mint if it does not.
+	/// Weight the implementation spends on runtime hooks its caller cannot see, for a mint
+	/// carrying `pairs` metadata entries. A caller adds this to its own benchmarked weight, and
+	/// undercharges by whatever the runtime wired behind the mint if it does not.
+	///
+	/// `pairs` is needed because the metadata policy runs once per entry, so a caller that mints
+	/// with metadata pays for validation a caller minting without it does not.
 	///
 	/// A caller whose own benchmark mints against a runtime with those hooks wired measures
 	/// them too, so regenerating its weights double-counts this.
-	fn mint_hook_weight() -> frame_support::weights::Weight;
+	fn mint_hook_weight(pairs: u32) -> frame_support::weights::Weight;
 }
 
 /// Read-only view of a collection for runtime pallets that gate work on collection state
@@ -159,31 +162,34 @@ impl OnCollectionDeleted for () {
 /// addressable to its contract environment without this pallet depending on that environment.
 ///
 /// A purse key needs no `system::Account` entry, so a runtime that registers addresses on
-/// account creation never sees one. The handler runs inside the mint and must not fail; its
-/// weight is added to the call through [`Self::on_mint_weight`], so an under-report undercharges
-/// the mint.
+/// account creation never sees one. The handler runs inside the call that occupies the key and
+/// must not fail; its weight is added through [`Self::on_purse_occupied_weight`], so an
+/// under-report undercharges that call.
 ///
-/// Only mints notify. The fee-less transfer would let a token walk through unbounded fresh keys
-/// at nobody's expense, and `force_transfer` is excluded with it so that the rule stays "mints
-/// notify, moves do not" rather than splitting by which move it was.
+/// Every path that gives a key an instance notifies: mints and both moves. A holder that reached
+/// its key by transfer is otherwise unregistered, and an address derived from an unregistered key
+/// does not resolve back to it, so a caller reading a holder address gets one that names a
+/// different account.
 pub trait OnPurseOccupied<AccountId> {
 	/// Runs after the instance is recorded against `purse`.
 	fn on_purse_occupied(purse: &AccountId);
 
-	/// Worst-case weight of one [`Self::on_purse_occupied`]. Every entry that reaches a mint
-	/// adds it: the extrinsic through its annotation, and callers of
-	/// [`MintWithoutDeposit`](crate::MintWithoutDeposit) through `mint_hook_weight`.
+	/// Worst-case weight of one [`Self::on_purse_occupied`]. Every entry that occupies a key
+	/// adds it: the extrinsic through its annotation, callers of
+	/// [`MintWithoutDeposit`](crate::MintWithoutDeposit) through `mint_hook_weight`, and a
+	/// precompile calling a pallet entry directly, where no annotation applies.
 	///
 	/// Benchmarks run against a runtime that wires a real handler measure the handler inside
-	/// `WeightInfo::mint`, which the annotation then adds again. Regenerating weights therefore
-	/// double-counts this unless the benchmark runs with `OnPurseOccupied = ()`.
-	fn on_mint_weight() -> frame_support::weights::Weight;
+	/// `WeightInfo::mint`, `WeightInfo::transfer` and `WeightInfo::force_transfer`, which each
+	/// annotation then adds again. Regenerating weights double-counts all three unless the
+	/// benchmark runs with `OnPurseOccupied = ()`.
+	fn on_purse_occupied_weight() -> frame_support::weights::Weight;
 }
 
 impl<AccountId> OnPurseOccupied<AccountId> for () {
 	fn on_purse_occupied(_purse: &AccountId) {}
 
-	fn on_mint_weight() -> frame_support::weights::Weight {
+	fn on_purse_occupied_weight() -> frame_support::weights::Weight {
 		frame_support::weights::Weight::zero()
 	}
 }
@@ -634,7 +640,7 @@ pub mod pallet {
 			budget.assert_fits(
 				"mint",
 				T::WeightInfo::mint(pairs)
-					.saturating_add(T::OnPurseOccupied::on_mint_weight())
+					.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
 					.saturating_add(T::MetadataPolicy::validate_weight(pairs)),
 			);
 			budget.assert_fits("burn", T::WeightInfo::burn(pairs));
@@ -788,7 +794,7 @@ pub mod pallet {
 		#[pallet::call_index(2)]
 		#[pallet::weight(
 			T::WeightInfo::mint(metadata.len() as u32)
-				.saturating_add(T::OnPurseOccupied::on_mint_weight())
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
 				.saturating_add(T::MetadataPolicy::validate_weight(metadata.len() as u32))
 		)]
 		pub fn mint(
@@ -806,7 +812,10 @@ pub mod pallet {
 		///
 		/// Fails for an instance of a [`Transferability::Soulbound`] definition.
 		#[pallet::call_index(3)]
-		#[pallet::weight(T::WeightInfo::transfer())]
+		#[pallet::weight(
+			T::WeightInfo::transfer()
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
+		)]
 		pub fn transfer(origin: OriginFor<T>, to: T::AccountId) -> DispatchResultWithPostInfo {
 			let Ok(Origin::Nft { owner, nft }) = origin.into() else {
 				return Err(DispatchError::BadOrigin.into());
@@ -821,6 +830,7 @@ pub mod pallet {
 			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
 			NftsByOwner::<T>::insert(&to, nft.clone());
 			Instances::<T>::insert(nft.instance, &to);
+			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance: nft.instance,
 				collection: nft.collection,
@@ -1017,7 +1027,10 @@ pub mod pallet {
 		/// consent and game rules before calling it. The move increments the instance state nonce,
 		/// invalidating prior holder authorizations.
 		#[pallet::call_index(13)]
-		#[pallet::weight(T::WeightInfo::force_transfer())]
+		#[pallet::weight(
+			T::WeightInfo::force_transfer()
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
+		)]
 		#[transactional]
 		pub fn force_transfer(
 			origin: OriginFor<T>,
@@ -1545,6 +1558,7 @@ pub mod pallet {
 			Locked::<T>::remove(&from);
 			NftsByOwner::<T>::insert(&to, nft);
 			Instances::<T>::insert(instance, &to);
+			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::ForceTransferred { instance, collection, from, to });
 			Ok(())
 		}
@@ -1597,6 +1611,7 @@ pub mod pallet {
 			Locked::<T>::remove(holder);
 			NftsByOwner::<T>::insert(&to, nft);
 			Instances::<T>::insert(instance, &to);
+			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance,
 				collection,
@@ -1751,8 +1766,9 @@ pub mod pallet {
 			Self::do_mint_inner(collection, item, to, metadata, false)
 		}
 
-		fn mint_hook_weight() -> frame_support::weights::Weight {
-			T::OnPurseOccupied::on_mint_weight()
+		fn mint_hook_weight(pairs: u32) -> frame_support::weights::Weight {
+			T::OnPurseOccupied::on_purse_occupied_weight()
+				.saturating_add(T::MetadataPolicy::validate_weight(pairs))
 		}
 	}
 
