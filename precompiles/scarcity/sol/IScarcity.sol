@@ -227,10 +227,20 @@ interface IScarcityCollection {
     /// metadata overrides, reserved keys checked as in {setCollectionMetadata}. Returns the
     /// permanent token id, the same value carried by the {Transfer} this emits from the zero
     /// address.
+    ///
+    /// An address {ownerOf} reported for a holder whose account was reaped resolves to the
+    /// fallback account, and this call cannot tell that address from an ordinary one. The
+    /// instance lands on that fallback rather than on the purse key, so the address answers for
+    /// two holders while {balanceOf} counts only the fallback. No key signs for it, so only the
+    /// collection owner moves it again, through {forceTransfer} or {forceBurn}.
     function mint(uint32 item, address to, bytes[] calldata keys, bytes[] calldata values) external returns (uint256);
 
     /// @dev Move a live instance of this collection to the empty purse key `to`, on the
     /// collection owner's authority. Emits {Transfer}.
+    ///
+    /// Reverts if `to` is the address {ownerOf} reports for this token's own holder, which
+    /// would otherwise move the instance away from a holder that asked for nothing. Any other
+    /// address of a reaped holder strands the instance as described on {mint}.
     function forceTransfer(uint256 tokenId, address to) external;
 
     /// @dev Permanently remove a live instance of this collection, on the collection
@@ -281,6 +291,9 @@ interface IScarcityCollection {
     /// @dev Nominate `successor` to claim ownership of this collection. Nomination alone
     /// changes no authority; the successor must call {claimCollectionOwnership}. Reverts
     /// for the zero address; use {clearCollectionOwnerNomination} to withdraw a nomination.
+    ///
+    /// An address {ownerOf} reported for a holder whose account was reaped names an account
+    /// that can never claim. Nominating again replaces it, so nothing is lost.
     function nominateCollectionOwner(address successor) external;
 
     /// @dev Clear the pending ownership nomination.

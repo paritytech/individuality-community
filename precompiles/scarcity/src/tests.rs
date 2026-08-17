@@ -995,25 +995,29 @@ fn force_transfer_refuses_the_holders_own_address() {
 		let item = setup_item(&alice, collection);
 		let target = collection_address(collection);
 
-		// Funded so the mint's registration has an account to be reaped with.
+		// The mint registers the key, then funding and emptying it reaps the account and takes
+		// that registration with it.
 		let holder = id_to_account(9);
-		Balances::make_free_balance_be(&holder, 1_000_000);
 		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
 			holder.clone(),
-			alloc::vec![]
+			alloc::vec![],
 		)
 		.unwrap();
 		assert!(<Test as pallet_revive::Config>::AddressMapper::is_mapped(&holder));
+		Balances::make_free_balance_be(&holder, 1_000_000);
 		Balances::make_free_balance_be(&holder, 0);
 		assert!(!<Test as pallet_revive::Config>::AddressMapper::is_mapped(&holder));
 		assert!(NftsByOwner::<Test>::contains_key(&holder));
 
 		let token = U256::from(instance);
-		let data =
-			call_ok(&alice, target, IScarcityCollection::ownerOfCall { tokenId: token }.abi_encode());
+		let data = call_ok(
+			&alice,
+			target,
+			IScarcityCollection::ownerOfCall { tokenId: token }.abi_encode(),
+		);
 		let reported = IScarcityCollection::ownerOfCall::abi_decode_returns(&data).unwrap();
 		assert_eq!(reported, address_of::<Test>(&holder));
 		// The address does not resolve back to the holder, which is what makes the pallet's own
@@ -1027,6 +1031,104 @@ fn force_transfer_refuses_the_holders_own_address() {
 			"destination already holds this instance",
 		);
 		assert_eq!(NftsByOwner::<Test>::get(&holder).unwrap().instance, instance);
+	});
+}
+
+/// `mint` accepts the address `ownerOf` reports for a reaped holder and lands the instance on
+/// the fallback account that address resolves to, not on the purse key.
+///
+/// A bare address carries nothing that tells a truncated purse key from an ordinary account no
+/// one has mapped, so `mint` has no guard to apply and the interface documents the outcome
+/// instead. This pins the blast radius: the purse key keeps what it holds, one address now
+/// answers for two holders, and the collection owner moves the new instance back out.
+#[test]
+fn minting_to_a_reaped_holders_address_lands_on_the_fallback_account() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let target = collection_address(collection);
+
+		// A mint destination is a key frame-system never created, so the hook is what registers
+		// it. Funding that key and emptying it again is what drops the hook's own entry.
+		let holder = id_to_account(9);
+		assert!(!frame_system::Account::<Test>::contains_key(&holder));
+		let held = pallet_scarcity::Pallet::<Test>::do_mint(
+			alice.clone(),
+			collection,
+			item,
+			holder.clone(),
+			alloc::vec![],
+		)
+		.unwrap();
+		assert!(<Test as pallet_revive::Config>::AddressMapper::is_mapped(&holder));
+		Balances::make_free_balance_be(&holder, 1_000_000);
+		Balances::make_free_balance_be(&holder, 0);
+		assert!(!<Test as pallet_revive::Config>::AddressMapper::is_mapped(&holder));
+
+		let data = call_ok(
+			&alice,
+			target,
+			IScarcityCollection::ownerOfCall { tokenId: U256::from(held) }.abi_encode(),
+		);
+		let reported = IScarcityCollection::ownerOfCall::abi_decode_returns(&data).unwrap();
+		let fallback = account_of::<Test>(&reported);
+		assert_ne!(fallback, holder);
+
+		let data = call_ok(
+			&alice,
+			target,
+			IScarcityCollection::mintCall {
+				item,
+				to: reported,
+				keys: alloc::vec![],
+				values: alloc::vec![],
+			}
+			.abi_encode(),
+		);
+		let stranded = IScarcityCollection::mintCall::abi_decode_returns(&data).unwrap();
+
+		assert_eq!(NftsByOwner::<Test>::get(&holder).unwrap().instance, held);
+		assert_eq!(U256::from(NftsByOwner::<Test>::get(&fallback).unwrap().instance), stranded);
+
+		// The fallback account is eth-derived, so `to_address` maps it back to the same address
+		// the purse key reports. Both instances then name one address, and `balanceOf` sees only
+		// the fallback.
+		let owner_of = |token: U256| {
+			let data = call_ok(
+				&alice,
+				target,
+				IScarcityCollection::ownerOfCall { tokenId: token }.abi_encode(),
+			);
+			IScarcityCollection::ownerOfCall::abi_decode_returns(&data).unwrap()
+		};
+		assert_eq!(owner_of(U256::from(held)), reported);
+		assert_eq!(owner_of(stranded), reported);
+		let data = call_ok(
+			&alice,
+			target,
+			IScarcityCollection::balanceOfCall { owner: reported }.abi_encode(),
+		);
+		assert_eq!(
+			IScarcityCollection::balanceOfCall::abi_decode_returns(&data).unwrap(),
+			U256::ONE
+		);
+
+		// No key signs for the fallback account, but the collection owner keeps force authority
+		// over the instance, so the stranding is recoverable without destroying it.
+		let (rescue_address, rescue) = purse(0xDD);
+		call_ok(
+			&alice,
+			target,
+			IScarcityCollection::forceTransferCall {
+				tokenId: stranded,
+				to: rescue_address.0.into(),
+			}
+			.abi_encode(),
+		);
+		assert!(!NftsByOwner::<Test>::contains_key(&fallback));
+		assert_eq!(U256::from(NftsByOwner::<Test>::get(&rescue).unwrap().instance), stranded);
+		assert_eq!(NftsByOwner::<Test>::get(&holder).unwrap().instance, held);
 	});
 }
 
@@ -2058,15 +2160,16 @@ fn occupying_a_purse_key_makes_a_zero_balance_holder_addressable() {
 		assert!(<Test as pallet_revive::Config>::AddressMapper::is_mapped(&moved_to));
 		assert_eq!(balance_of(&moved_to), U256::ONE);
 
-		// Not reached: reaping unmaps a key that still holds an instance, whoever registered it.
-		let funded = id_to_account(10);
-		Balances::make_free_balance_be(&funded, 1_000_000);
-		let (_, funded_balance) = read(&funded);
-		assert_eq!(funded_balance, U256::ONE);
-		Balances::make_free_balance_be(&funded, 0);
-		assert!(!<Test as pallet_revive::Config>::AddressMapper::is_mapped(&funded));
-		assert!(NftsByOwner::<Test>::contains_key(&funded));
-		assert_eq!(balance_of(&funded), U256::ZERO);
+		// Not reached: reaping unmaps a key that still holds an instance. The mint here precedes
+		// the funding, so the entry reaping removes is the one this hook wrote.
+		let reaped = id_to_account(10);
+		let (_, reaped_balance) = read(&reaped);
+		assert_eq!(reaped_balance, U256::ONE);
+		Balances::make_free_balance_be(&reaped, 1_000_000);
+		Balances::make_free_balance_be(&reaped, 0);
+		assert!(!<Test as pallet_revive::Config>::AddressMapper::is_mapped(&reaped));
+		assert!(NftsByOwner::<Test>::contains_key(&reaped));
+		assert_eq!(balance_of(&reaped), U256::ZERO);
 	});
 }
 
