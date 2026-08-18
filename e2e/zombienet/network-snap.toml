@@ -1,0 +1,109 @@
+# Copyright (C) Parity Technologies (UK) Ltd.
+# This file is part of Individuality.
+# SPDX-License-Identifier: Apache-2.0
+
+# Snapshot-restoring variant of network.toml. Used by 06-spawn-from-snapshot.sh.
+# Mirrors network.toml exactly, plus one `db_snapshot = "./.tools/snapshot/<node>.tgz"`
+# line under each node so zombienet-sdk restores the captured post-bootstrap DB
+# rather than running the 29-script initial-setup bootstrap.
+#
+# Relative `db_snapshot` paths are resolved against the spawn CWD (verified against
+# zombienet-sdk source — values are passed verbatim to filesystem.copy, not rebased
+# to the TOML dir). 06-spawn-from-snapshot.sh runs from this directory, so the
+# `./.tools/snapshot/...` paths land at e2e/zombienet/.tools/snapshot/.
+#
+# UNLIKE network.toml, the relay pins chain_spec_path to the captured relay spec
+# (05-snapshot.sh / fetch-snapshot). Its fast-runtime WASM is not byte-identical across
+# build hosts, so a snapshot regenerated on another machine boots a mismatched relay
+# genesis and stalls at #0 (see 05-snapshot.sh 4b). Pinning the captured spec keeps
+# every relay node on the snapshot's genesis. The parachains pin raw specs too, but
+# their genesis is reproducible from the repo's runtime.
+#
+# INVARIANT: keep node names + para IDs + RPC ports in sync with network.toml.
+
+[settings]
+timeout = 1000
+node_spawn_timeout = 300
+
+[relaychain]
+chain = "rococo-local"
+default_command = "polkadot"
+default_args = ["--network-backend=libp2p", "--rpc-max-response-size=50"]
+# Pinned relay genesis (see header). No [relaychain.genesis] patch: the EccRfc163
+# executor_params overlay is already baked into the captured raw spec.
+chain_spec_path = "./.tools/snapshot/rococo-local.raw.json"
+
+[[relaychain.nodes]]
+name = "alice-relay-validator"
+db_snapshot = "./.tools/snapshot/alice-relay-validator.tgz"
+validator = true
+rpc_port = 10000
+p2p_port = 30336
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "bob-relay-validator"
+db_snapshot = "./.tools/snapshot/bob-relay-validator.tgz"
+validator = true
+rpc_port = 9955
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "charlie-relay-validator"
+db_snapshot = "./.tools/snapshot/charlie-relay-validator.tgz"
+validator = true
+rpc_port = 9956
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "dave-relay-validator"
+db_snapshot = "./.tools/snapshot/dave-relay-validator.tgz"
+validator = true
+rpc_port = 9957
+balance = 1000000000000000
+
+# ----- People chain (para 1502) -----
+[[parachains]]
+id = 1502
+cumulus_based = true
+chain = "people-local"
+chain_spec_path = "./specs/people-local.raw.json"
+
+[[parachains.collators]]
+name = "people-collator"
+db_snapshot = "./.tools/snapshot/people-collator.tgz"
+rpc_port = 10010
+p2p_port = 30335
+command = "polkadot-omni-node"
+args = [
+	"--authoring=slot-based",
+	"--enable-statement-store",
+	"--force-authoring",
+	"--network-backend=libp2p",
+	"--rpc-max-connections=500",
+	"--rpc-max-response-size=50",
+	"-lxcm=debug",
+]
+
+# ----- Asset Hub (para 1500) -----
+[[parachains]]
+id = 1500
+cumulus_based = true
+chain = "asset-hub-local"
+chain_spec_path = "./specs/ah-local.raw.json"
+
+[[parachains.collators]]
+name = "ah-collator"
+db_snapshot = "./.tools/snapshot/ah-collator.tgz"
+rpc_port = 10020
+p2p_port = 30337
+command = "polkadot-omni-node"
+args = [
+	"--authoring=slot-based",
+	"--enable-statement-store",
+	"--force-authoring",
+	"--network-backend=libp2p",
+	"--rpc-max-connections=500",
+	"--rpc-max-response-size=50",
+	"-lxcm=debug",
+]

@@ -21,7 +21,6 @@
 //! balance (Expendable preservation) without paying any fee.
 
 use super::*;
-use indiv_pallet_coinage::Config as CoinageConfig;
 
 /// Build an extrinsic using the `InfallibleUnpaidSigned` extension.
 fn build_infallible_unpaid_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsic {
@@ -88,9 +87,9 @@ fn infallible_unpaid_load_expendable_drains_balance() {
 		let bob_pair = Sr25519Keyring::Bob.pair();
 		let bob_account = pair_to_account_id(&bob_pair);
 
-		let coin_value: i8 = 1;
-		let asset_unit: Balance = <Runtime as CoinageConfig>::UnderlyingAssetUnit::get();
-		let asset_amount = asset_unit.checked_shl(coin_value as u32).unwrap();
+		let denomination: i8 = 1;
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
+		let asset_amount = asset_unit.checked_shl(denomination as u32).unwrap();
 
 		// Fund Bob with exactly the asset amount (no extra for existential deposit).
 		FungibleExternalAsset::mint_into(&bob_account, asset_amount).unwrap();
@@ -103,8 +102,9 @@ fn infallible_unpaid_load_expendable_drains_balance() {
 
 		let call = RuntimeCall::Coinage(
 			indiv_pallet_coinage::Call::load_recycler_with_external_asset_unpaid {
+				instance_id: COINAGE_INSTANCE_ID,
 				preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-				value: coin_value,
+				value: denomination,
 				member_key: recycler_member,
 				proof_of_ownership,
 			},
@@ -121,6 +121,68 @@ fn infallible_unpaid_load_expendable_drains_balance() {
 		),);
 
 		// Entire external-asset balance was consumed, no fee charged.
+		assert_eq!(FungibleExternalAsset::balance(&bob_account), 0);
+	});
+}
+
+/// A batched unpaid load loads several recyclers in one transaction through the real
+/// `InfallibleUnpaidSigned` tx-extension tuple, consuming the aggregate cost with no fee.
+#[test]
+fn infallible_unpaid_load_batch_drains_balance() {
+	new_test_ext().execute_with(|| {
+		advance_block();
+
+		let bob_pair = Sr25519Keyring::Bob.pair();
+		let bob_account = pair_to_account_id(&bob_pair);
+
+		let denomination: i8 = 1;
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
+		let asset_amount = asset_unit.checked_shl(denomination as u32).unwrap();
+
+		// Two inner items, each with a distinct member key, funded with exactly the aggregate cost.
+		let n = 2u32;
+		let total_cost = asset_amount * n as Balance;
+		FungibleExternalAsset::mint_into(&bob_account, total_cost).unwrap();
+
+		let members: Vec<_> = (0..n)
+			.map(|i| {
+				let secret = Crypto::new_secret([i as u8; 32]);
+				let member = Crypto::member_from_secret(&secret);
+				let proof_of_ownership = Crypto::sign(&secret, &bob_account.encode()).unwrap();
+				(member, proof_of_ownership)
+			})
+			.collect();
+
+		let items = members
+			.iter()
+			.map(|(member, proof)| indiv_pallet_coinage::UnpaidLoadInput {
+				preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
+				value: denomination,
+				member_key: *member,
+				proof_of_ownership: *proof,
+			})
+			.collect::<Vec<_>>()
+			.try_into()
+			.expect("two items fit within MaxBatchUnpaidLoad");
+
+		let call = RuntimeCall::Coinage(
+			indiv_pallet_coinage::Call::load_recycler_with_external_asset_unpaid_batch {
+				instance_id: COINAGE_INSTANCE_ID,
+				items,
+			},
+		);
+
+		let uxt = build_infallible_unpaid_ext(&bob_pair, call);
+		Executive::apply_extrinsic(uxt)
+			.expect("transaction is valid")
+			.expect("dispatch succeeds");
+
+		// Every member key was loaded into a recycler by the single batch transaction.
+		for (member, _) in &members {
+			assert!(indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::contains_key(member));
+		}
+
+		// The aggregate cost of the whole batch was consumed, no fee charged.
 		assert_eq!(FungibleExternalAsset::balance(&bob_account), 0);
 	});
 }

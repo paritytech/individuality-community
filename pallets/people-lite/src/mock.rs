@@ -31,9 +31,8 @@ use frame_support::{
 };
 use frame_system::EnsureRoot;
 use indiv_support::traits::{
-	AppendOnlyMembers, BatchProofItem, Context, ContextualAlias, Identifier, MembershipProver,
-	RevisedContextualAlias, RevisionIndex, RingExponent, RingIndex, RingMode, RingPosition,
-	RingStatus,
+	AppendOnlyMembers, Context, ContextualAlias, Identifier, MembershipProver, RevisionIndex,
+	RingExponent, RingIndex, RingMembershipProof, RingMode, RingPosition, RingStatus,
 };
 use sp_runtime::{
 	testing::UintAuthorityId,
@@ -121,6 +120,17 @@ impl crate::BenchmarkHelper<u64, UintAuthorityId> for Helper {
 	}
 }
 
+/// Extra context accepted alongside [`crate::LITE_PEOPLE_AUTH_CONTEXT`], used to exercise the
+/// multi-context [`crate::Config::AccountContexts`] gating.
+pub const OTHER_LITE_CONTEXT: &indiv_support::traits::Context = b"pop:polkadot.network/plite-other";
+
+pub struct LiteAccountContexts;
+impl frame_support::traits::Contains<indiv_support::traits::Context> for LiteAccountContexts {
+	fn contains(context: &indiv_support::traits::Context) -> bool {
+		context == crate::LITE_PEOPLE_AUTH_CONTEXT || context == OTHER_LITE_CONTEXT
+	}
+}
+
 impl crate::Config for Test {
 	type WeightInfo = ();
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
@@ -130,6 +140,7 @@ impl crate::Config for Test {
 	type LiteOnboardingSize = LiteOnboardingSizeConst;
 	type AttestationSignature = UintAuthorityId;
 	type LiteConsumerRegistrar = ();
+	type AccountContexts = LiteAccountContexts;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = Helper;
 }
@@ -195,48 +206,30 @@ impl MembershipProver for MockMemberService {
 		identifier: &Identifier,
 		proof: &<Self::Crypto as verifiable::GenerateVerifiable>::Proof,
 		_ring_index: RingIndex,
+		_revision: RevisionIndex,
 		context: Context,
 		msg: &[u8],
-	) -> Result<RevisedContextualAlias, DispatchError> {
+	) -> Result<ContextualAlias, DispatchError> {
 		let members = mock_member_service_members(identifier);
 		if proof == &verifiable::mock::MockProof::default() && !members.is_empty() {
-			return Ok(RevisedContextualAlias {
-				revision: mock_member_service_revision(identifier),
-				ring: 0,
-				ca: ContextualAlias { alias: [0u8; 32], context },
-			});
+			return Ok(ContextualAlias { alias: [0u8; 32], context });
 		}
 		let members =
 			members.try_into().map_err(|_| DispatchError::Other("mock members overflow"))?;
 		let alias = Mock::validate((), proof, &members, &context[..], msg)
 			.map_err(|_| DispatchError::Other("mock invalid proof"))?;
-		Ok(RevisedContextualAlias {
-			revision: mock_member_service_revision(identifier),
-			ring: 0,
-			ca: ContextualAlias { alias, context },
-		})
-	}
-
-	fn verify_membership_at_rev(
-		identifier: &Identifier,
-		proof: &<Self::Crypto as verifiable::GenerateVerifiable>::Proof,
-		ring_index: RingIndex,
-		_revision: RevisionIndex,
-		context: Context,
-		msg: &[u8],
-	) -> Result<ContextualAlias, DispatchError> {
-		Self::verify_membership(identifier, proof, ring_index, context, msg).map(|alias| alias.ca)
+		Ok(ContextualAlias { alias, context })
 	}
 
 	fn verify_memberships_in_ring(
 		identifier: &Identifier,
 		_ring_index: RingIndex,
-		items: &[BatchProofItem<<Self::Crypto as verifiable::GenerateVerifiable>::Proof>],
-	) -> Result<Vec<RevisedContextualAlias>, DispatchError> {
+		_revision: RevisionIndex,
+		items: &[RingMembershipProof<<Self::Crypto as verifiable::GenerateVerifiable>::Proof>],
+	) -> Result<Vec<ContextualAlias>, DispatchError> {
 		let members = mock_member_service_members(identifier);
 		let members =
 			members.try_into().map_err(|_| DispatchError::Other("mock members overflow"))?;
-		let revision = mock_member_service_revision(identifier);
 		items
 			.iter()
 			.map(|item| {
@@ -247,23 +240,9 @@ impl MembershipProver for MockMemberService {
 					.map_err(|_| DispatchError::Other("mock invalid context"))?;
 				let alias = Mock::validate((), &item.proof, &members, &item.context, &item.message)
 					.map_err(|_| DispatchError::Other("mock invalid proof"))?;
-				Ok(RevisedContextualAlias {
-					revision,
-					ring: 0,
-					ca: ContextualAlias { alias, context },
-				})
+				Ok(ContextualAlias { alias, context })
 			})
 			.collect()
-	}
-
-	fn verify_memberships_in_ring_at_rev(
-		identifier: &Identifier,
-		ring_index: RingIndex,
-		_revision: RevisionIndex,
-		items: &[BatchProofItem<<Self::Crypto as verifiable::GenerateVerifiable>::Proof>],
-	) -> Result<Vec<ContextualAlias>, DispatchError> {
-		Self::verify_memberships_in_ring(identifier, ring_index, items)
-			.map(|v| v.into_iter().map(|rca| rca.ca).collect())
 	}
 
 	fn ring_revision(identifier: &Identifier, _ring_index: RingIndex) -> Option<RevisionIndex> {
@@ -447,6 +426,12 @@ impl From<InvalidTransaction> for TransactionExecutionError {
 
 /// Execute a bare extrinsic with the given call.
 pub fn exec_tx(x: Extrinsic) -> Result<(), TransactionExecutionError> {
+	exec_tx_post(x).map(|_| ())
+}
+
+pub fn exec_tx_post(
+	x: Extrinsic,
+) -> Result<frame_support::dispatch::PostDispatchInfo, TransactionExecutionError> {
 	let info = x.get_dispatch_info();
 	let len = x.encoded_size();
 
@@ -460,9 +445,9 @@ pub fn exec_tx(x: Extrinsic) -> Result<(), TransactionExecutionError> {
 	})
 	.unwrap()?;
 
-	checked.apply::<Test>(&info, len)??;
+	let post_info = checked.apply::<Test>(&info, len)??;
 
-	Ok(())
+	Ok(post_info)
 }
 
 /// Execute a signed extrinsic with the given call.
@@ -515,15 +500,41 @@ pub fn exec_as_lite_alias_with_proof_tx(
 	proof: crate::ProofOf<Test>,
 	ring_index: RingIndex,
 ) -> Result<(), TransactionExecutionError> {
+	let revision = <MockMemberService as MembershipProver>::ring_revision(
+		crate::LITE_PEOPLE_MEMBER_IDENTIFIER,
+		ring_index,
+	)
+	.unwrap_or(0);
 	let x = Extrinsic::new_transaction(
 		call,
 		PeopleLiteAuth::<Test>::new(Some(crate::PeopleLiteAuthData::AsLiteAliasWithProof(
 			proof,
 			ring_index,
+			revision,
 			*crate::LITE_PEOPLE_AUTH_CONTEXT,
 		))),
 	);
 	exec_tx(x)
+}
+
+/// Like [`exec_as_lite_alias_with_proof_tx`] but uses the caller-provided revision and returns
+/// the post-dispatch info so tests can assert whether fees were charged.
+pub fn exec_as_lite_alias_with_proof_tx_at_rev(
+	call: RuntimeCall,
+	proof: crate::ProofOf<Test>,
+	ring_index: RingIndex,
+	revision: RevisionIndex,
+) -> Result<frame_support::dispatch::PostDispatchInfo, TransactionExecutionError> {
+	let x = Extrinsic::new_transaction(
+		call,
+		PeopleLiteAuth::<Test>::new(Some(crate::PeopleLiteAuthData::AsLiteAliasWithProof(
+			proof,
+			ring_index,
+			revision,
+			*crate::LITE_PEOPLE_AUTH_CONTEXT,
+		))),
+	);
+	exec_tx_post(x)
 }
 
 pub fn exec_as_lite_alias_with_account_revised_tx(
@@ -533,6 +544,11 @@ pub fn exec_as_lite_alias_with_account_revised_tx(
 	proof: crate::ProofOf<Test>,
 	ring_index: RingIndex,
 ) -> Result<(), TransactionExecutionError> {
+	let revision = <MockMemberService as MembershipProver>::ring_revision(
+		crate::LITE_PEOPLE_MEMBER_IDENTIFIER,
+		ring_index,
+	)
+	.unwrap_or(0);
 	let x = Extrinsic::new_signed(
 		call,
 		signer,
@@ -542,6 +558,7 @@ pub fn exec_as_lite_alias_with_account_revised_tx(
 				nonce,
 				proof,
 				ring_index,
+				revision,
 				*crate::LITE_PEOPLE_AUTH_CONTEXT,
 			),
 		)),

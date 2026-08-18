@@ -58,7 +58,7 @@ runtime-benchmarks = [
 	"indiv-pallet-members/runtime-benchmarks",
 	"indiv-support/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
-	"verifiable/no-std-prover",
+	"verifiable/insecure-deterministic-prover",
 ]
 try-runtime = [
 	"frame-support/try-runtime",

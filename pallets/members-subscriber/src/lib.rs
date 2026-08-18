@@ -51,7 +51,7 @@ pub use pallet::*;
 pub use types::*;
 pub use weights::WeightInfo;
 
-use verifiable::GenerateVerifiable;
+use verifiable::{BatchProofItem, GenerateVerifiable};
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -65,9 +65,13 @@ pub mod pallet {
 		offchain::{CreateAuthorizedTransaction, SubmitTransaction},
 		pallet_prelude::*,
 	};
-	use indiv_support::traits::{
-		BatchProofItem, Context, ContextualAlias, MembershipMultiProver, MembershipProver,
-		RevisedContextualAlias, RingExponent,
+	use indiv_support::{
+		traits::{
+			Context, ContextualAlias, MembershipMultiProver, MembershipProver, RingExponent,
+			RingMembershipProof,
+		},
+		tx_priority,
+		weight_budget::OcwWeightBudget,
 	};
 	use xcm::v5::{Location, SendXcm};
 
@@ -116,8 +120,6 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxRingRootsPerCollection: Get<u32>;
 
-		// TODO: look for a way to check for XCM origin
-		// as per this comment: https://github.com/paritytech/individuality/pull/523#discussion_r2720568424
 		/// Origin check for XCM messages from the notifier.
 		type EnsureNotifierOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
@@ -160,6 +162,13 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxRecentRootsPerRing: Get<u32>;
 
+		/// Duration in seconds that a superseded ring root remains accepted for proof
+		/// verification, measured from its successor's source time. The newest root of a ring
+		/// never expires. Bounds how long a member removed from a ring can keep proving
+		/// membership against a pre-removal root.
+		#[pallet::constant]
+		type OldRootRetentionDuration: Get<u64>;
+
 		/// Block interval between offchain worker executions.
 		#[pallet::constant]
 		type OffchainWorkerInterval: Get<BlockNumberFor<Self>>;
@@ -169,8 +178,11 @@ pub mod pallet {
 
 	/// Recent ring roots received from the notifier.
 	/// Maps (identifier, ring_index) to a sliding window of ring roots.
-	/// Proofs built against any root in the window are accepted. The oldest root
-	/// is evicted when the window reaches `MaxRecentRootsPerRing`.
+	/// Proofs are accepted against any root in the window that has not expired: a
+	/// superseded root expires once `OldRootRetentionDuration` has passed since its
+	/// successor's source time. The oldest root is evicted when the window reaches
+	/// `MaxRecentRootsPerRing`, so expired roots may remain stored until then but are
+	/// rejected during verification.
 	#[pallet::storage]
 	pub type RingRoots<T: Config> = StorageDoubleMap<
 		_,
@@ -277,6 +289,8 @@ pub mod pallet {
 		InvalidRingExponent,
 		/// Requested revision is not present in the stored sliding window.
 		RevisionNotFound,
+		/// Requested revision has been superseded for longer than the retention duration.
+		RevisionExpired,
 	}
 
 	// ========== Hooks ==========
@@ -378,23 +392,13 @@ pub mod pallet {
 			// `replay_missing_roots` is submitted by offchain worker as an authorized transaction.
 			// If weight exceeds Normal.max_extrinsic, it is silently dropped and the
 			// replay flow stalls.
-			let block_weights = <T as frame_system::Config>::BlockWeights::get();
-			let normal_max = block_weights
-				.per_class
-				.get(DispatchClass::Normal)
-				.max_extrinsic
-				.expect("Normal class must have max_extrinsic configured");
-
 			let replay_weight = Self::replay_missing_roots_worst_case_weight().saturating_add(
 				T::WeightInfo::authorize_replay_missing_roots(
 					T::MaxMissingRootsPerCollection::get(),
 				),
 			);
-			assert!(
-				replay_weight.all_lte(normal_max),
-				"`replay_missing_roots` worst-case weight {replay_weight:?} exceeds \
-				 Normal max_extrinsic {normal_max:?} — lower MaxMissingRootsPerCollection",
-			);
+			OcwWeightBudget::from_normal_max::<T>()
+				.assert_fits("replay_missing_roots", replay_weight);
 		}
 	}
 
@@ -643,6 +647,7 @@ pub mod pallet {
 				.and_provides(identifier)
 				.longevity(3)
 				.propagate(false)
+				.priority(tx_priority::BACKGROUND_PROGRESS)
 				.into();
 			Ok((validity, T::WeightInfo::authorize_replay_missing_roots(indices.len() as u32)))
 		}
@@ -956,6 +961,31 @@ pub mod pallet {
 			let roots = RingRoots::<T>::get(identifier, ring_index).ok_or(Error::<T>::NoRoot)?;
 			Ok((capacity, roots))
 		}
+
+		/// Whether the window entry at `index` is still accepted for proof verification.
+		/// The newest root of a ring never expires. A superseded root expires once
+		/// [`Config::OldRootRetentionDuration`] has passed since its successor's source
+		/// time, the moment it stopped being the latest on the source chain.
+		fn is_window_record_retained(roots: &[RingCommitmentRecord<T>], index: usize) -> bool {
+			let Some(successor) = roots.get(index.saturating_add(1)) else {
+				return true;
+			};
+			let now = T::UnixTime::now().as_secs();
+			now < successor.source_time.saturating_add(T::OldRootRetentionDuration::get())
+		}
+
+		/// Resolves the window entry for `revision`, rejecting evicted and expired revisions.
+		fn find_retained_record(
+			roots: &[RingCommitmentRecord<T>],
+			revision: RevisionIndex,
+		) -> Result<&RingCommitmentRecord<T>, DispatchError> {
+			let index = roots
+				.iter()
+				.position(|r| r.revision == revision)
+				.ok_or(Error::<T>::RevisionNotFound)?;
+			ensure!(Self::is_window_record_retained(roots, index), Error::<T>::RevisionExpired);
+			Ok(&roots[index])
+		}
 	}
 
 	impl<T: Config> MembershipProver for Pallet<T> {
@@ -965,38 +995,12 @@ pub mod pallet {
 			identifier: &Identifier,
 			proof: &<T::Crypto as GenerateVerifiable>::Proof,
 			ring_index: RingIndex,
-			context: Context,
-			msg: &[u8],
-		) -> Result<RevisedContextualAlias, DispatchError> {
-			let (capacity, roots) = Self::ring_proving_information(identifier, ring_index)?;
-
-			for record in roots.iter().rev() {
-				if let Ok(alias) =
-					T::Crypto::validate(capacity, proof, &record.root, &context[..], msg)
-				{
-					return Ok(RevisedContextualAlias {
-						revision: record.revision,
-						ring: ring_index,
-						ca: ContextualAlias { alias, context },
-					});
-				}
-			}
-			Err(Error::<T>::InvalidProof.into())
-		}
-
-		fn verify_membership_at_rev(
-			identifier: &Identifier,
-			proof: &<T::Crypto as GenerateVerifiable>::Proof,
-			ring_index: RingIndex,
 			revision: RevisionIndex,
 			context: Context,
 			msg: &[u8],
 		) -> Result<ContextualAlias, DispatchError> {
 			let (capacity, roots) = Self::ring_proving_information(identifier, ring_index)?;
-			let record = roots
-				.iter()
-				.find(|r| r.revision == revision)
-				.ok_or(Error::<T>::RevisionNotFound)?;
+			let record = Self::find_retained_record(&roots, revision)?;
 			let alias = T::Crypto::validate(capacity, proof, &record.root, &context[..], msg)
 				.map_err(|_| Error::<T>::InvalidProof)?;
 			Ok(ContextualAlias { alias, context })
@@ -1005,46 +1009,27 @@ pub mod pallet {
 		fn verify_memberships_in_ring(
 			identifier: &Identifier,
 			ring_index: RingIndex,
-			items: &[BatchProofItem<<T::Crypto as GenerateVerifiable>::Proof>],
-		) -> Result<Vec<RevisedContextualAlias>, DispatchError> {
-			let (capacity, roots) = Self::ring_proving_information(identifier, ring_index)?;
-
-			for record in roots.iter().rev() {
-				let Ok(aliases) = T::Crypto::batch_validate(capacity, &record.root, items) else {
-					continue;
-				};
-				debug_assert_eq!(aliases.len(), items.len());
-				return aliases
-					.into_iter()
-					.zip(items.iter().map(|item| item.context.as_slice()))
-					.map(|(alias, context_bytes)| {
-						let context: Context =
-							context_bytes.try_into().map_err(|_| Error::<T>::InvalidProof)?;
-						Ok(RevisedContextualAlias {
-							revision: record.revision,
-							ring: ring_index,
-							ca: ContextualAlias { alias, context },
-						})
-					})
-					.collect::<Result<Vec<_>, DispatchError>>();
-			}
-			Err(Error::<T>::InvalidProof.into())
-		}
-
-		fn verify_memberships_in_ring_at_rev(
-			identifier: &Identifier,
-			ring_index: RingIndex,
 			revision: RevisionIndex,
-			items: &[BatchProofItem<<T::Crypto as GenerateVerifiable>::Proof>],
+			items: &[RingMembershipProof<<T::Crypto as GenerateVerifiable>::Proof>],
 		) -> Result<Vec<ContextualAlias>, DispatchError> {
 			let (capacity, roots) = Self::ring_proving_information(identifier, ring_index)?;
-			let record = roots
-				.iter()
-				.find(|r| r.revision == revision)
-				.ok_or(Error::<T>::RevisionNotFound)?;
+			let record = Self::find_retained_record(&roots, revision)?;
 
-			let aliases = T::Crypto::batch_validate(capacity, &record.root, items)
-				.map_err(|_| Error::<T>::InvalidProof)?;
+			// All items in the batch share the ring selected above, so fill each with the same
+			// config and members before delegating to the crypto batch verifier.
+			let proofs = items
+				.iter()
+				.map(|item| BatchProofItem {
+					proof: item.proof.clone(),
+					config: capacity,
+					members: record.root.clone(),
+					context: item.context.clone(),
+					message: item.message.clone(),
+				})
+				.collect::<Vec<_>>();
+
+			let aliases =
+				T::Crypto::batch_validate(&proofs).map_err(|_| Error::<T>::InvalidProof)?;
 
 			debug_assert_eq!(aliases.len(), items.len());
 
@@ -1071,7 +1056,10 @@ pub mod pallet {
 			let Some(roots) = RingRoots::<T>::get(identifier, ring_index) else {
 				return false;
 			};
-			roots.iter().any(|r| r.revision == revision)
+			roots
+				.iter()
+				.position(|r| r.revision == revision)
+				.is_some_and(|index| Self::is_window_record_retained(&roots, index))
 		}
 
 		fn revision_source_time(
@@ -1091,48 +1079,12 @@ pub mod pallet {
 			identifier: &Identifier,
 			proof: &<T::Crypto as GenerateVerifiable>::Proof,
 			ring_index: RingIndex,
-			contexts: &[Context],
-			msg: &[u8],
-		) -> Result<Vec<RevisedContextualAlias>, DispatchError> {
-			let (capacity, roots) = Self::ring_proving_information(identifier, ring_index)?;
-			let context_slices: Vec<&[u8]> = contexts.iter().map(|c| &c[..]).collect();
-
-			for record in roots.iter().rev() {
-				if let Ok(aliases) = T::Crypto::validate_multi_context(
-					capacity,
-					proof,
-					&record.root,
-					&context_slices,
-					msg,
-				) {
-					debug_assert_eq!(aliases.len(), contexts.len());
-					return Ok(aliases
-						.into_iter()
-						.zip(contexts.iter().copied())
-						.map(|(alias, context)| RevisedContextualAlias {
-							revision: record.revision,
-							ring: ring_index,
-							ca: ContextualAlias { alias, context },
-						})
-						.collect());
-				}
-			}
-			Err(Error::<T>::InvalidProof.into())
-		}
-
-		fn verify_membership_multi_context_at_rev(
-			identifier: &Identifier,
-			proof: &<T::Crypto as GenerateVerifiable>::Proof,
-			ring_index: RingIndex,
 			revision: RevisionIndex,
 			contexts: &[Context],
 			msg: &[u8],
 		) -> Result<Vec<ContextualAlias>, DispatchError> {
 			let (capacity, roots) = Self::ring_proving_information(identifier, ring_index)?;
-			let record = roots
-				.iter()
-				.find(|r| r.revision == revision)
-				.ok_or(Error::<T>::RevisionNotFound)?;
+			let record = Self::find_retained_record(&roots, revision)?;
 
 			let context_slices: Vec<&[u8]> = contexts.iter().map(|c| &c[..]).collect();
 			let aliases = T::Crypto::validate_multi_context(

@@ -15,29 +15,34 @@
 // limitations under the License.
 
 use crate::{mock::*, types::Recognition::*, *};
-use codec::Encode;
+use codec::{Decode, Encode};
 use frame_support::{
 	assert_noop, assert_ok,
 	pallet_prelude::BoundedVec,
 	traits::{
 		fungible::{Inspect, InspectHold, Mutate, MutateHold},
-		Get, Hooks,
+		Authorize, Get, Hooks,
 	},
-	weights::WeightMeter,
+	weights::{Weight, WeightMeter},
 };
 use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
 use indiv_support::traits::{
 	AppendOnlyMembers, ContextualAlias, RevisedContextualAlias, RingExponent, RingMode,
 	RingPosition,
 };
+use sp_core::offchain::{
+	testing::{TestOffchainExt, TestTransactionPoolExt},
+	OffchainDbExt, OffchainWorkerExt, TransactionPoolExt,
+};
 use sp_runtime::{
-	transaction_validity::InvalidTransaction,
+	transaction_validity::{
+		InvalidTransaction, TransactionSource, TransactionValidityError, UnknownTransaction,
+		ValidTransaction,
+	},
 	DispatchError::{self, Token},
 	TokenError::{BelowMinimum, FundsUnavailable},
 };
 use verifiable::{mock::Mock, GenerateVerifiable};
-
-// TODO: later test that offchain worker is working
 
 // Mint some balance into the Score pot also add existential deposit if needed.
 fn fund_score_pot(amount: u64) {
@@ -249,7 +254,9 @@ fn start_new_round_fails_if_no_schedule() {
 	new_test_ext().execute_with(|| {
 		// No schedules in storage by default
 		assert_noop!(
-			exec_bare_tx(Call::transition_round { round_index: CurrentRoundIndex::<Test>::get() }),
+			exec_authorized_tx(Call::transition_round {
+				round_index: CurrentRoundIndex::<Test>::get()
+			}),
 			InvalidTransaction::Future,
 		);
 	});
@@ -260,12 +267,14 @@ fn start_new_round_fails_if_round_already_started() {
 	new_test_ext().execute_with(|| {
 		fund_score_pot(1000);
 		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
 		assert_noop!(
-			exec_bare_tx(Call::transition_round { round_index: CurrentRoundIndex::<Test>::get() }),
+			exec_authorized_tx(Call::transition_round {
+				round_index: CurrentRoundIndex::<Test>::get()
+			}),
 			InvalidTransaction::Future,
 		);
 	});
@@ -277,13 +286,13 @@ fn start_new_round_fails_if_round_in_arg_is_not_current_round() {
 		fund_score_pot(1000);
 		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
 		assert_noop!(
-			exec_bare_tx(Call::transition_round {
+			exec_authorized_tx(Call::transition_round {
 				round_index: CurrentRoundIndex::<Test>::get() + 1
 			}),
 			InvalidTransaction::Future,
 		);
 
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 	});
@@ -321,7 +330,7 @@ fn transition_round_succeeds_and_cleans_up_previous_round() {
 		);
 
 		// Start the round 2, it includes the pending points automatically
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 		System::assert_has_event(Event::RoundTransitioned { round_index: starting_round }.into());
@@ -334,7 +343,7 @@ fn transition_round_succeeds_and_cleans_up_previous_round() {
 		advance_to(11);
 
 		// Start the round 3, it starts the round 2 payout.
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
@@ -348,7 +357,7 @@ fn transition_round_succeeds_and_cleans_up_previous_round() {
 		assert_eq!(round_payout.point_price, amount_per_round / participant_points as u64);
 		assert_eq!(round_payout.remaining_balance, amount_per_round);
 
-		assert_ok!(exec_bare_tx(Call::operate_payout_round {
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round {
 			round_index: starting_round,
 			limit: 10,
 		}));
@@ -409,21 +418,27 @@ fn operate_payout_round_works() {
 			round_count,
 			round_duration,
 		));
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 		// advance & start a new round to trigger round 0 payout
 		advance_to(2);
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
 		// The round has point_price = 55 / 27 = 2, leftover = 1
 
 		// operate_payout_round => tries to process a chunk of participants
-		assert_ok!(exec_bare_tx(Call::operate_payout_round { round_index: first_round, limit: 2 }));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round {
+			round_index: first_round,
+			limit: 2
+		}));
 		System::assert_has_event(Event::PayoutRoundOperated { round_index: first_round }.into());
-		assert_ok!(exec_bare_tx(Call::operate_payout_round { round_index: first_round, limit: 2 }));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round {
+			round_index: first_round,
+			limit: 2
+		}));
 
 		// The code processes up to 4 participants, so all 3 should be converted
 		assert!(RoundPayouts::<Test>::get(first_round).is_none()); // we're done
@@ -438,7 +453,10 @@ fn operate_payout_round_works() {
 
 		// calling operate_payout_round again is a no-op (round finished)
 		assert_noop!(
-			exec_bare_tx(Call::operate_payout_round { round_index: first_round, limit: 1000 }),
+			exec_authorized_tx(Call::operate_payout_round {
+				round_index: first_round,
+				limit: 1000
+			}),
 			InvalidTransaction::Stale,
 		);
 
@@ -453,9 +471,199 @@ fn operate_payout_round_works() {
 fn operate_payout_round_fails_if_no_round() {
 	new_test_ext().execute_with(|| {
 		assert_noop!(
-			exec_bare_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }),
+			exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }),
 			InvalidTransaction::Future,
 		);
+	});
+}
+
+#[test]
+fn round_task_authorization_advertises_expected_validity() {
+	new_test_ext().execute_with(|| {
+		fund_score_pot(1_000);
+		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
+
+		let round_index = CurrentRoundIndex::<Test>::get();
+		let call = Call::<Test>::transition_round { round_index };
+		let (validity, refund) = call
+			.authorize(TransactionSource::External)
+			.expect("transition_round must provide authorization")
+			.expect("transition_round authorization must be valid");
+		let expected = ValidTransaction::with_tag_prefix("indiv-pallet-score")
+			.and_provides(("TransitionRound", round_index))
+			.propagate(true)
+			.priority(tx_priority::BACKGROUND_PROGRESS)
+			.build()
+			.expect("expected validity builds");
+		assert_eq!(validity, expected);
+		assert_eq!(refund, Weight::zero());
+
+		let payout_round = 0;
+		RoundPayouts::<Test>::insert(
+			payout_round,
+			RoundPayout { remaining_balance: 100, point_price: 1, remainder: 0, total_points: 100 },
+		);
+		let call = Call::<Test>::operate_payout_round { round_index: payout_round, limit: 1_000 };
+		let (validity, refund) = call
+			.authorize(TransactionSource::External)
+			.expect("operate_payout_round must provide authorization")
+			.expect("operate_payout_round authorization must be valid");
+		let expected = ValidTransaction::with_tag_prefix("indiv-pallet-score")
+			.and_provides(("PayoutRound", payout_round))
+			.propagate(true)
+			.priority(tx_priority::BACKGROUND_PROGRESS)
+			.build()
+			.expect("expected validity builds");
+		assert_eq!(validity, expected);
+		assert_eq!(refund, Weight::zero());
+	});
+}
+
+#[test]
+fn round_task_authorization_rejects_far_future_rounds() {
+	new_test_ext().execute_with(|| {
+		let far_future_round = CurrentRoundIndex::<Test>::get() + 2;
+		let call = Call::<Test>::transition_round { round_index: far_future_round };
+		let err = call
+			.authorize(TransactionSource::External)
+			.expect("transition_round must provide authorization")
+			.expect_err("far future transition must be invalid");
+		assert_eq!(err, TransactionValidityError::Invalid(InvalidTransaction::Custom(87)));
+
+		let call =
+			Call::<Test>::operate_payout_round { round_index: far_future_round, limit: 1_000 };
+		let err = call
+			.authorize(TransactionSource::External)
+			.expect("operate_payout_round must provide authorization")
+			.expect_err("far future payout operation must be invalid");
+		assert_eq!(err, TransactionValidityError::Invalid(InvalidTransaction::Custom(87)));
+	});
+}
+
+#[test]
+fn round_tasks_reject_bare_extrinsics_without_authorize_extension() {
+	new_test_ext().execute_with(|| {
+		fund_score_pot(1_000);
+		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
+		let round_index = CurrentRoundIndex::<Test>::get();
+
+		assert_noop!(
+			exec_tx(Extrinsic::new_bare(Call::transition_round { round_index }.into())),
+			TransactionExecutionError::Validity(TransactionValidityError::Unknown(
+				UnknownTransaction::NoUnsignedValidator
+			)),
+		);
+
+		let payout_round = 0;
+		RoundPayouts::<Test>::insert(
+			payout_round,
+			RoundPayout { remaining_balance: 100, point_price: 1, remainder: 0, total_points: 100 },
+		);
+		assert_noop!(
+			exec_tx(Extrinsic::new_bare(
+				Call::operate_payout_round { round_index: payout_round, limit: 1_000 }.into()
+			)),
+			TransactionExecutionError::Validity(TransactionValidityError::Unknown(
+				UnknownTransaction::NoUnsignedValidator
+			)),
+		);
+	});
+}
+
+#[test]
+fn offchain_worker_submits_authorized_transition_round_transaction() {
+	let mut ext = new_test_ext();
+	let (offchain, _state) = TestOffchainExt::new();
+	let (pool, state) = TestTransactionPoolExt::new();
+	ext.register_extension(OffchainDbExt::new(offchain.clone()));
+	ext.register_extension(OffchainWorkerExt::new(offchain));
+	ext.register_extension(TransactionPoolExt::new(pool));
+
+	ext.execute_with(|| {
+		fund_score_pot(1_000);
+		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
+
+		let round_index = CurrentRoundIndex::<Test>::get();
+		let block = <Test as Config>::OffchainWorkInterval::get();
+		System::set_block_number(block);
+		PalletScore::offchain_worker(block);
+
+		assert_eq!(state.read().transactions.len(), 1);
+		let raw_tx = state.write().transactions.pop().expect("one transaction was submitted");
+		let tx = Extrinsic::decode(&mut &raw_tx[..]).expect("submitted transaction decodes");
+		match tx.function {
+			RuntimeCall::PalletScore(Call::transition_round { round_index: submitted_round }) =>
+				assert_eq!(submitted_round, round_index),
+			call => panic!("unexpected call: {call:?}"),
+		}
+
+		assert_ok!(exec_tx(tx));
+		assert!(RoundPlanning::<Test>::get().is_some());
+		System::assert_has_event(Event::RoundTransitioned { round_index }.into());
+	});
+}
+
+#[test]
+fn offchain_worker_submits_authorized_operate_payout_round_transaction() {
+	let mut ext = new_test_ext();
+	let (offchain, _state) = TestOffchainExt::new();
+	let (pool, state) = TestTransactionPoolExt::new();
+	ext.register_extension(OffchainDbExt::new(offchain.clone()));
+	ext.register_extension(OffchainWorkerExt::new(offchain));
+	ext.register_extension(TransactionPoolExt::new(pool));
+
+	ext.execute_with(|| {
+		// Set up a round that has already been transitioned to payout.
+		let user = 70u64;
+		PalletScore::onboard_for_recognition(&user).unwrap();
+		let key = AccountOrPerson::Account(user);
+		for _ in 0..3 {
+			assert_ok!(PalletScore::set_attendance(&key, true, 0));
+		}
+		assert_ok!(PalletScore::cash_out(RuntimeOrigin::signed(user)));
+
+		fund_score_pot(200);
+		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 50, 1, 2));
+		// Transition: plans round 0
+		assert_ok!(exec_authorized_tx(Call::transition_round {
+			round_index: CurrentRoundIndex::<Test>::get()
+		}));
+		// Advance past the round and transition again to move round 0 to payout
+		advance_to(System::block_number() + 2);
+		assert_ok!(exec_authorized_tx(Call::transition_round {
+			round_index: CurrentRoundIndex::<Test>::get()
+		}));
+		assert!(RoundPayouts::<Test>::get(0).is_some());
+
+		// Clear any previously submitted transactions
+		state.write().transactions.clear();
+
+		// Run the offchain worker; it should submit an operate_payout_round transaction
+		let block = <Test as Config>::OffchainWorkInterval::get();
+		System::set_block_number(block);
+		PalletScore::offchain_worker(block);
+
+		let raw_tx = state
+			.write()
+			.transactions
+			.pop()
+			.expect("operate_payout_round transaction was submitted");
+		let tx = Extrinsic::decode(&mut &raw_tx[..]).expect("submitted transaction decodes");
+		match tx.function {
+			RuntimeCall::PalletScore(Call::operate_payout_round {
+				round_index: submitted_round,
+				limit,
+			}) => {
+				assert_eq!(submitted_round, 0);
+				assert_eq!(limit, 1000);
+			},
+			call => panic!("unexpected call: {call:?}"),
+		}
+
+		assert_ok!(exec_tx(tx));
+		// Round should be fully operated (only one participant)
+		assert!(RoundPayouts::<Test>::get(0).is_none());
+		System::assert_has_event(Event::PayoutRoundOperated { round_index: 0 }.into());
 	});
 }
 
@@ -589,14 +797,14 @@ fn redeem_credit_works() {
 			2,
 			1,
 		));
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 		advance_to(2);
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
-		assert_ok!(exec_bare_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
 
 		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), amount_per_round,);
 		assert_eq!(Participants::<Test>::get(&user_key).unwrap().credit, amount_per_round,);
@@ -699,19 +907,19 @@ fn payout_for_offboarded_participant_is_recycled() {
 		// 5. Schedule 1 round of 60; start and transition the round:
 		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 60, 1, 10));
 		//    We call `transition_round` once to plan round 0:
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
 		// 6. Advance enough blocks so that the round transitions to a payout round:
 		advance_to(11);
 		//    Call `transition_round` again, which moves round 0 to a payout state:
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
 		// 7. Operate the payout for round 0:
-		assert_ok!(exec_bare_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
 
 		// 8. Verify what happened:
 		//
@@ -781,14 +989,14 @@ fn participant_origin_can_cash_out_and_redeem_credit() {
 		//    Let's schedule 1 round with credit=50, start it, and operate it.
 		fund_score_pot(200);
 		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 50, 1, 2));
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 		advance_to(2);
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
-		assert_ok!(exec_bare_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
 
 		// Assert participant received credit=50.
 		let p = Participants::<Test>::get(&key).unwrap();
@@ -1019,7 +1227,7 @@ fn round_planning_is_cleared_after_last_schedule() {
 		assert!(RoundPlanning::<Test>::get().is_none());
 
 		// 1) First transition: plan round 0.
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 		let plan0 = RoundPlanning::<Test>::get().expect("round 0 should be planned");
@@ -1028,7 +1236,7 @@ fn round_planning_is_cleared_after_last_schedule() {
 		//    - moves round 0 to payout
 		//    - plans round 1 (remaining schedule goes from 1 -> 0 and is removed)
 		advance_to(plan0.finish_at);
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 		let plan1 = RoundPlanning::<Test>::get().expect("round 1 should be planned");
@@ -1038,7 +1246,7 @@ fn round_planning_is_cleared_after_last_schedule() {
 		//    - moves round 1 to payout
 		//    - no schedules remain, so no new planning should be created
 		advance_to(plan1.finish_at);
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
@@ -1087,12 +1295,12 @@ fn remainder_distribution_works_even() {
 		CurrentRoundPoints::<Test>::put(30);
 
 		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 1, 1));
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
 		advance_to(2);
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
@@ -1101,7 +1309,7 @@ fn remainder_distribution_works_even() {
 		assert_eq!(round_payout.total_points, 30);
 		assert_eq!(round_payout.remainder, 10);
 
-		assert_ok!(exec_bare_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
 
 		let part1 = Participants::<Test>::get(AccountOrPerson::Account(person_1)).unwrap();
 		let part2 = Participants::<Test>::get(AccountOrPerson::Account(person_2)).unwrap();
@@ -1155,12 +1363,12 @@ fn remainder_distribution_works_odd_equal_participants() {
 		CurrentRoundPoints::<Test>::put(30);
 
 		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), total_credit, 1, 1));
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
 		advance_to(2);
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
@@ -1169,7 +1377,7 @@ fn remainder_distribution_works_odd_equal_participants() {
 		assert_eq!(round_payout.total_points, 30);
 		assert_eq!(round_payout.remainder, 11);
 
-		assert_ok!(exec_bare_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
 
 		let part1 = Participants::<Test>::get(AccountOrPerson::Account(person_1)).unwrap();
 		let part2 = Participants::<Test>::get(AccountOrPerson::Account(person_2)).unwrap();
@@ -1228,12 +1436,12 @@ fn remainder_distribution_works_odd_unequal_participants() {
 		CurrentRoundPoints::<Test>::put(30);
 
 		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), total_credit, 1, 1));
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
 		advance_to(2);
-		assert_ok!(exec_bare_tx(Call::transition_round {
+		assert_ok!(exec_authorized_tx(Call::transition_round {
 			round_index: CurrentRoundIndex::<Test>::get()
 		}));
 
@@ -1242,7 +1450,7 @@ fn remainder_distribution_works_odd_unequal_participants() {
 		assert_eq!(round_payout.total_points, 30);
 		assert_eq!(round_payout.remainder, 11);
 
-		assert_ok!(exec_bare_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
 
 		let part1 = Participants::<Test>::get(AccountOrPerson::Account(person_1)).unwrap();
 		let part2 = Participants::<Test>::get(AccountOrPerson::Account(person_2)).unwrap();
@@ -2219,9 +2427,76 @@ fn schedule_relaxation_saves_participant_next_session() {
 	});
 }
 
-// TODO: add a test for the full cycle: onboard, attend, cash_out, redeem_credit.
-// TODO: integration test that test the whole process can be completed for free with
-// invitation.
+// Full cycle: onboard → attend → cash_out → transition/operate round → redeem_credit.
+// Verifies that a participant can convert attendance into tokens end-to-end.
+#[test]
+fn full_cycle_onboard_attend_cash_out_redeem_credit() {
+	new_test_ext().execute_with(|| {
+		advance_to(1);
+		let user = 50u64;
+		let destination = 51u64;
+
+		// 1) Onboard
+		assert_ok!(PalletScore::onboard_for_recognition(&user));
+		let key = AccountOrPerson::Account(user);
+
+		// 2) Attend several times to build up a score
+		PalletScore::start_attendance_report_session().unwrap();
+		for _ in 0..4 {
+			assert_ok!(PalletScore::set_attendance(&key, true, 0));
+		}
+		PalletScore::end_attendance_report_session().unwrap();
+		People::on_poll(System::block_number(), &mut WeightMeter::new());
+		assert_eq!(Participants::<Test>::get(&key).unwrap().score, 10);
+
+		// 3) Cash out: halves the score and awards payout points
+		assert_ok!(PalletScore::cash_out(RuntimeOrigin::signed(user)));
+		let p = Participants::<Test>::get(&key).unwrap();
+		assert_eq!(p.score, 5);
+		assert!(p.cashed_out);
+		let points = RoundsPointsForParticipant::<Test>::get(0, &key);
+		assert_eq!(points, 5);
+
+		// 4) Fund the pot, schedule a round, transition, advance past the round, transition again
+		//    (moves round 0 to payout), then operate the payout round.
+		let amount_per_round = 100u64;
+		fund_score_pot(amount_per_round + ExistentialDeposit::get());
+		assert_ok!(PalletScore::schedule_payout_rounds(
+			RuntimeOrigin::root(),
+			amount_per_round,
+			1,
+			2
+		));
+		// Transition: plans round 0
+		assert_ok!(exec_authorized_tx(Call::transition_round {
+			round_index: CurrentRoundIndex::<Test>::get()
+		}));
+		// Advance past the round duration
+		advance_to(System::block_number() + 2);
+		// Transition again: moves round 0 to payout
+		assert_ok!(exec_authorized_tx(Call::transition_round {
+			round_index: CurrentRoundIndex::<Test>::get()
+		}));
+		// Operate payout round: distributes credit to participants
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1000 }));
+
+		// The participant should now have credit equal to the full round amount
+		// (they are the sole participant).
+		let p = Participants::<Test>::get(&key).unwrap();
+		assert_eq!(p.credit, amount_per_round);
+
+		// 5) Redeem credit: transfers the balance to the destination account
+		let balance_before = Balances::balance(&destination);
+		assert_ok!(PalletScore::redeem_credit(RuntimeOrigin::signed(user), destination));
+		let p = Participants::<Test>::get(&key).unwrap();
+		assert_eq!(p.credit, 0);
+		assert_eq!(Balances::balance(&destination), balance_before + amount_per_round);
+	});
+}
+
+// The invitation integration test (onboard for free via game invite, then cash_out and
+// redeem_credit for free via ScoreAsParticipant) lives in the runtime integration tests:
+// runtimes/next-people-paseo/src/integration_tests/score_game_invitation_flow.rs
 
 // =====================================================================
 // set_personhood_threshold_schedule
@@ -2241,7 +2516,7 @@ fn default_personhood_schedule() -> PersonhoodThresholdTiers {
 }
 
 /// Helper: a flat single-tier schedule with the given threshold.
-fn flat_personhood_schedule(score_threshold: u32) -> PersonhoodThresholdTiers {
+fn flat_personhood_schedule(score_threshold: u8) -> PersonhoodThresholdTiers {
 	BoundedVec::try_from(vec![PersonhoodThresholdTier {
 		population_size_threshold: u32::MAX,
 		score_threshold,
@@ -2672,7 +2947,7 @@ fn default_personhood_curve_matches_calculate_at_session_start() {
 		);
 		// Cycle through every default tier boundary.
 		for (active, expected) in [
-			(0u32, 1u32),
+			(0u32, 1u8),
 			(5_000, 1),
 			(5_001, 3),
 			(10_000, 3),
@@ -2691,5 +2966,15 @@ fn default_personhood_curve_matches_calculate_at_session_start() {
 				"default curve at active={active} expected {expected}",
 			);
 		}
+	});
+}
+
+/// Verify that the default mock configuration passes all integrity checks,
+/// including the OCW block-fit assertions for `transition_round` and
+/// `operate_payout_round`.
+#[test]
+fn integrity_test_passes() {
+	new_test_ext().execute_with(|| {
+		<Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }

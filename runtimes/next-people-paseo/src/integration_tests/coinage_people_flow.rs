@@ -24,10 +24,7 @@ use indiv_pallet_coinage::{
 };
 use indiv_support::traits::RingIndex;
 use sp_core::Pair;
-use sp_runtime::{
-	bounded_vec,
-	transaction_validity::{InvalidTransaction, TransactionValidityError},
-};
+use sp_runtime::bounded_vec;
 
 struct UnloadRequest<'a> {
 	person_secret: &'a VrfSecret,
@@ -85,8 +82,11 @@ fn build_unload_common(request: &UnloadRequest<'_>, call: RuntimeCall) -> Unchec
 	// 3. Generate Alias Proofs (Recycler RingVRF) — must be created before the people proof
 	// because the people proof signs over the alias proofs.
 	let mut alias_proofs_vec = Vec::new();
-	let ring_members =
-		indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(request.value, request.index);
+	let ring_members = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(
+		COINAGE_INSTANCE_ID,
+		request.value,
+		request.index,
+	);
 
 	for secret in request.recycler_secrets.iter() {
 		let member = Crypto::member_from_secret(secret);
@@ -148,11 +148,18 @@ fn build_unload_common(request: &UnloadRequest<'_>, call: RuntimeCall) -> Unchec
 		&intent_msg[..],
 	)
 	.unwrap();
+	let person_revision = indiv_pallet_members::Root::<Runtime>::get(
+		*indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER,
+		request.person_ring_index,
+	)
+	.map(|root| root.revision)
+	.expect("personhood ring root must exist for unload proofs");
 
-	// Wrap it in the runtime-specific PeopleProof struct (defined in people.rs)
-	let unload_token_proof = crate::people::PeopleProof {
+	// Wrap it in pallet-people's `MembershipProof`.
+	let unload_token_proof = indiv_pallet_people::MembershipProof::<Runtime> {
 		proof: unload_token_vrf_proof,
 		ring: request.person_ring_index,
+		revision: person_revision,
 	};
 
 	// 5. Construct the AsCoinageInfo
@@ -175,6 +182,7 @@ fn build_unload_ext(request: UnloadRequest<'_>, to: AccountId32) -> UncheckedExt
 	// Construct the specific call payload
 	let call =
 		RuntimeCall::Coinage(indiv_pallet_coinage::Call::<Runtime>::unload_recycler_into_coin {
+			instance_id: COINAGE_INSTANCE_ID,
 			aliases: aliases_vec.clone().try_into().unwrap(),
 			value: request.value,
 			index: request.index,
@@ -194,11 +202,13 @@ fn build_unload_external_asset_ext(
 	// Construct the specific call payload
 	let call = RuntimeCall::Coinage(
 		indiv_pallet_coinage::Call::<Runtime>::unload_recycler_into_external_asset {
+			instance_id: COINAGE_INSTANCE_ID,
 			aliases: aliases_vec.clone().try_into().unwrap(),
 			value: request.value,
 			index: request.index,
 			revision: request.revision,
 			to,
+			max_fee: 0,
 		},
 	);
 
@@ -218,15 +228,13 @@ fn coinage_full_story() {
 		// Define Alice and values
 		let alice_pair = Sr25519Keyring::Alice.pair();
 		let alice_external_asset_address = pair_to_account_id(&alice_pair);
-		// Story values: Start with $4 (exponent 1), split to $2 (exponent 0).
-		let coin_value_initial: i8 = 2;
-		let coin_value_split: i8 = 1;
+		// Story values: Start with $4 (exponent 2), split to $2 (exponent 1).
+		let denomination_initial: i8 = 2;
+		let denomination_split: i8 = 1;
 
-		// Determine the actual asset amount based on the runtime configuration
-		// (UnderlyingAssetUnit).
-		let asset_unit: Balance = <Runtime as CoinageConfig>::UnderlyingAssetUnit::get();
-		let asset_amount_initial = asset_unit.checked_shl(coin_value_initial as u32).unwrap();
-		let asset_amount_split = asset_unit.checked_shl(coin_value_split as u32).unwrap();
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
+		let asset_amount_initial = asset_unit.checked_shl(denomination_initial as u32).unwrap();
+		let asset_amount_split = asset_unit.checked_shl(denomination_split as u32).unwrap();
 
 		// Fund Alice's external-asset address with the external asset.
 		FungibleExternalAsset::mint_into(&alice_external_asset_address, asset_amount_initial)
@@ -277,8 +285,9 @@ fn coinage_full_story() {
 
 		// Alice calls put_asset_in_recycler (load_recycler_with_external_asset)
 		let load_call = CoinageCall::<Runtime>::load_recycler_with_external_asset {
+			instance_id: COINAGE_INSTANCE_ID,
 			preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-			value: coin_value_initial,
+			value: denomination_initial,
 			member_key: alice_ring_vrf_key_0,
 			proof_of_ownership,
 		};
@@ -289,14 +298,15 @@ fn coinage_full_story() {
 		assert_eq!(FungibleExternalAsset::balance(&alice_external_asset_address), 0);
 
 		// Key put in the recycler pending queue.
-		let r_coin_value =
+		let (_, r_denomination) =
 			indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(alice_ring_vrf_key_0)
 				.unwrap();
-		assert_eq!(r_coin_value, coin_value_initial);
+		assert_eq!(r_denomination, denomination_initial);
 
 		// Override onboarding size so the ring can be built with just 1 member.
 		let recycler_id = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
-			coin_value_initial,
+			COINAGE_INSTANCE_ID,
+			denomination_initial,
 		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id, 1u32);
 
@@ -322,7 +332,8 @@ fn coinage_full_story() {
 		// Get ring index and revision after build
 		let r_index_1: u32 = 0;
 		let r_revision_1 = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
-			coin_value_initial,
+			COINAGE_INSTANCE_ID,
+			denomination_initial,
 			r_index_1,
 		)
 		.unwrap();
@@ -335,7 +346,7 @@ fn coinage_full_story() {
 				period,
 				counter,
 				recycler_secrets: slice::from_ref(&alice_ring_vrf_key_0_secret),
-				value: coin_value_initial,
+				value: denomination_initial,
 				index: r_index_1,
 				revision: r_revision_1,
 			},
@@ -349,7 +360,7 @@ fn coinage_full_story() {
 		// On-chain verification:
 		let coin0 =
 			indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&shielded_alice_coin_0).unwrap();
-		assert_eq!(coin0.value, coin_value_initial);
+		assert_eq!(coin0.value, denomination_initial);
 		assert_eq!(coin0.age, 0);
 
 		// ─────────────────────────────────────
@@ -365,7 +376,7 @@ fn coinage_full_story() {
 		let split_call = CoinageCall::<Runtime>::split {
 			// Split value 2 into two coins of value 1 ($2)
 			split_into: bounded_vec![(
-				coin_value_split,
+				denomination_split,
 				bounded_vec![shielded_alice_coin_1.clone(), shielded_alice_coin_2.clone()],
 			)],
 		};
@@ -379,11 +390,11 @@ fn coinage_full_story() {
 		);
 		let coin1 =
 			indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&shielded_alice_coin_1).unwrap();
-		assert_eq!(coin1.value, coin_value_split);
+		assert_eq!(coin1.value, denomination_split);
 		assert_eq!(coin1.age, 1);
 		let coin2 =
 			indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&shielded_alice_coin_2).unwrap();
-		assert_eq!(coin2.value, coin_value_split);
+		assert_eq!(coin2.value, denomination_split);
 		assert_eq!(coin2.age, 1);
 
 		// ─────────────────────────────────────
@@ -408,7 +419,7 @@ fn coinage_full_story() {
 		);
 		let bob_coin =
 			indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&shielded_bob_coin_0).unwrap();
-		assert_eq!(bob_coin.value, coin_value_split);
+		assert_eq!(bob_coin.value, denomination_split);
 		assert_eq!(bob_coin.age, 2); // Age was 1, now 2.
 
 		// ─────────────────────────────────────
@@ -416,7 +427,7 @@ fn coinage_full_story() {
 		// ─────────────────────────────────────
 
 		// Define the value for the split coins: 1 -> 0 + 0
-		let coin_value_split_smaller: i8 = coin_value_split - 1;
+		let denomination_split_smaller: i8 = denomination_split - 1;
 
 		// 1. (Setup) Split Alice's remaining coin (value=1) into two smaller coins (value=0)
 		let shielded_alice_split_1_pair = sr25519::Pair::from_seed(&[141u8; 32]);
@@ -427,7 +438,7 @@ fn coinage_full_story() {
 		let split_call = CoinageCall::<Runtime>::split {
 			// Split value 1 into two coins of value 0
 			split_into: bounded_vec![(
-				coin_value_split_smaller,
+				denomination_split_smaller,
 				bounded_vec![shielded_alice_split_1.clone(), shielded_alice_split_2.clone()]
 			)],
 		};
@@ -436,7 +447,7 @@ fn coinage_full_story() {
 
 		let coin_s1 =
 			indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&shielded_alice_split_1).unwrap();
-		assert_eq!(coin_s1.value, coin_value_split_smaller);
+		assert_eq!(coin_s1.value, denomination_split_smaller);
 
 		// 3. Consolidate the two split coins.
 
@@ -465,19 +476,20 @@ fn coinage_full_story() {
 		exec_as_coin(&shielded_alice_split_2_pair, load_coin_call_2.into());
 
 		// Verification
-		let val_3 =
+		let (_, val_3) =
 			indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(alice_recycler_member_3)
 				.unwrap();
-		let val_4 =
+		let (_, val_4) =
 			indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(alice_recycler_member_4)
 				.unwrap();
-		assert_eq!(val_3, coin_value_split_smaller);
-		assert_eq!(val_4, coin_value_split_smaller);
+		assert_eq!(val_3, denomination_split_smaller);
+		assert_eq!(val_4, denomination_split_smaller);
 
 		// Override onboarding size for the new recycler collection
 		let recycler_id_smaller =
 			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
-				coin_value_split_smaller,
+				COINAGE_INSTANCE_ID,
+				denomination_split_smaller,
 			);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_smaller, 1u32);
 
@@ -500,7 +512,8 @@ fn coinage_full_story() {
 		// Get ring index and revision after build
 		let r_idx_3: u32 = 0;
 		let r_rev_3 = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
-			coin_value_split_smaller,
+			COINAGE_INSTANCE_ID,
+			denomination_split_smaller,
 			r_idx_3,
 		)
 		.unwrap();
@@ -515,7 +528,7 @@ fn coinage_full_story() {
 					alice_recycler_secret_3.clone(),
 					alice_recycler_secret_4.clone(),
 				],
-				value: coin_value_split_smaller,
+				value: denomination_split_smaller,
 				index: r_idx_3,
 				revision: r_rev_3,
 			},
@@ -528,7 +541,7 @@ fn coinage_full_story() {
 		let consolidated_coin =
 			indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&shielded_alice_coin_consolidated)
 				.unwrap();
-		assert_eq!(consolidated_coin.value, coin_value_split);
+		assert_eq!(consolidated_coin.value, denomination_split);
 		assert_eq!(consolidated_coin.age, 0);
 
 		// ─────────────────────────────────────
@@ -556,16 +569,17 @@ fn coinage_full_story() {
 		exec_as_coin(&shielded_alice_coin_final_pair, load_coin_call.into());
 
 		// Verification
-		let c_val_off = indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(
+		let (_, c_val_off) = indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(
 			alice_recycler_member_offboard,
 		)
 		.unwrap();
-		assert_eq!(c_val_off, coin_value_split); // value 1
+		assert_eq!(c_val_off, denomination_split); // value 1
 
 		// Override onboarding size for the recycler collection (value 1)
 		let recycler_id_split =
 			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
-				coin_value_split,
+				COINAGE_INSTANCE_ID,
+				denomination_split,
 			);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_split, 1u32);
 
@@ -587,7 +601,9 @@ fn coinage_full_story() {
 		// Get ring index and revision after build
 		let r_idx_off: u32 = 0;
 		let r_rev_off = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
-			c_val_off, r_idx_off,
+			COINAGE_INSTANCE_ID,
+			c_val_off,
+			r_idx_off,
 		)
 		.unwrap();
 
@@ -627,18 +643,18 @@ fn coinage_full_story() {
 // How the test works:
 // * Bootstrap Alice as a recognized person so unload-token proofs are valid.
 // * Case A (age == 0): onboard external asset -> unload to coin -> direct offboard succeeds.
-// * Case B (age > 0): onboard -> unload -> age the coin -> direct offboard fails with
-//   FreshCoinRequired.
-// * Case B fallback: offboard the aged coin through recycler unload into external asset.
+// * Case B (age > 0): onboard -> unload -> age the coin -> offboard through recycler unload into
+//   external asset (the privacy-preserving route).
+// * Case C (age > 0): onboard -> unload -> age the coin -> direct offboard succeeds.
 #[test]
 fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 	new_test_ext().execute_with(|| {
 		let alice_pair = Sr25519Keyring::Alice.pair();
 		let alice_external_asset_address = pair_to_account_id(&alice_pair);
-		let coin_value: i8 = 1;
+		let denomination: i8 = 1;
 
-		let asset_unit: Balance = <Runtime as CoinageConfig>::UnderlyingAssetUnit::get();
-		let expected_asset_amount = asset_unit.checked_shl(coin_value as u32).unwrap();
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
+		let expected_asset_amount = asset_unit.checked_shl(denomination as u32).unwrap();
 		let period_duration: u32 =
 			<Runtime as CoinageConfig>::UnloadTokenTimePeriodPeopleLitePeople::get();
 
@@ -681,24 +697,30 @@ fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 		exec_signed(
 			&alice_pair,
 			CoinageCall::<Runtime>::load_recycler_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-				value: coin_value,
+				value: denomination,
 				member_key: recycler_member_a,
 				proof_of_ownership: proof_a,
 			}
 			.into(),
 		);
 
-		let recycler_id_a =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(coin_value);
+		let recycler_id_a = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination,
+		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_a, 1u32);
 		// Onboarding and ring building happen in separate blocks.
 		advance_block();
 		advance_block();
 		let idx_a: u32 = 0;
-		let rev_a =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(coin_value, idx_a)
-				.unwrap();
+		let rev_a = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
+			COINAGE_INSTANCE_ID,
+			denomination,
+			idx_a,
+		)
+		.unwrap();
 
 		let coin_a_pair = sr25519::Pair::from_seed(&[99u8; 32]);
 		let coin_a_account = pair_to_account_id(&coin_a_pair);
@@ -714,7 +736,7 @@ fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 				period,
 				counter,
 				recycler_secrets: slice::from_ref(&recycler_secret_a),
-				value: coin_value,
+				value: denomination,
 				index: idx_a,
 				revision: rev_a,
 			},
@@ -745,7 +767,7 @@ fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 		);
 
 		// ---------------------------------------------------------------------
-		// Case B: age > 0 direct offboard is rejected, but recycler offboard works.
+		// Case B: age > 0 offboard through the recycler (the privacy-preserving route).
 		// ---------------------------------------------------------------------
 		FungibleExternalAsset::mint_into(&alice_external_asset_address, expected_asset_amount)
 			.unwrap();
@@ -758,24 +780,30 @@ fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 		exec_signed(
 			&alice_pair,
 			CoinageCall::<Runtime>::load_recycler_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-				value: coin_value,
+				value: denomination,
 				member_key: recycler_member_b,
 				proof_of_ownership: proof_b,
 			}
 			.into(),
 		);
 
-		let recycler_id_b =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(coin_value);
+		let recycler_id_b = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination,
+		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_b, 1u32);
 		// Onboarding and ring building happen in separate blocks.
 		advance_block();
 		advance_block();
 		let idx_b: u32 = 0;
-		let rev_b =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(coin_value, idx_b)
-				.unwrap();
+		let rev_b = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
+			COINAGE_INSTANCE_ID,
+			denomination,
+			idx_b,
+		)
+		.unwrap();
 
 		let coin_b_pair = sr25519::Pair::from_seed(&[100u8; 32]);
 		let coin_b_account = pair_to_account_id(&coin_b_pair);
@@ -792,7 +820,7 @@ fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 				period,
 				counter,
 				recycler_secrets: slice::from_ref(&recycler_secret_b),
-				value: coin_value,
+				value: denomination,
 				index: idx_b,
 				revision: rev_b,
 			},
@@ -802,7 +830,7 @@ fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 			.expect("tx valid")
 			.expect("dispatch success");
 
-		// Age this coin once to test age > 0 rejection.
+		// Age this coin once so the recycler offboard operates on a coin with non-zero age.
 		let next_pair = sr25519::Pair::from_seed(&[110u8; 32]);
 		let aged_account = pair_to_account_id(&next_pair);
 		exec_as_coin(
@@ -812,23 +840,9 @@ fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 		let aged_pair = next_pair;
 
 		let aged_coin = indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&aged_account).unwrap();
-		assert!(aged_coin.age > 0);
+		assert_eq!(aged_coin.age, 1);
 
-		let direct_offboard_aged_call = RuntimeCall::Coinage(
-			CoinageCall::<Runtime>::direct_offboard_coin_into_external_asset {
-				to: alice_external_asset_address.clone(),
-			},
-		);
-		let uxt = build_as_coin_ext(&aged_pair, direct_offboard_aged_call);
-		assert_eq!(
-			Executive::apply_extrinsic(uxt),
-			Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(
-				indiv_pallet_coinage::pallet::CustomInvalidity::FreshCoinRequired as u8
-			)))
-		);
-		assert!(indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&aged_account).is_some());
-
-		// Existing recycler offboard path should still work for non-age-0 coins.
+		// Offboard the aged coin through the recycler.
 		let recycler_secret_off = Crypto::new_secret([44u8; 32]);
 		let recycler_member_off = Crypto::member_from_secret(&recycler_secret_off);
 		let proof_off = Crypto::sign(&recycler_secret_off, &aged_account.encode()).unwrap();
@@ -842,19 +856,25 @@ fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 			.into(),
 		);
 
-		let v_off =
+		let (_, v_off) =
 			indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(recycler_member_off)
 				.unwrap();
 		let recycler_id_off =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(v_off);
+			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+				COINAGE_INSTANCE_ID,
+				v_off,
+			);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_off, 1u32);
 		// Onboarding and ring building happen in separate blocks.
 		advance_block();
 		advance_block();
 		let idx_off: u32 = 0;
-		let rev_off =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(v_off, idx_off)
-				.unwrap();
+		let rev_off = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
+			COINAGE_INSTANCE_ID,
+			v_off,
+			idx_off,
+		)
+		.unwrap();
 
 		let now_secs = Timestamp::now().as_secs() as u32;
 		let current_period = now_secs / period_duration;
@@ -884,6 +904,118 @@ fn coinage_direct_offboard_age0_and_age_gt_0_paths() {
 		assert_eq!(
 			FungibleExternalAsset::balance(&alice_external_asset_address),
 			balance_before_recycler_off + expected_offboard_amount
+		);
+
+		// ---------------------------------------------------------------------
+		// Case C: age > 0 direct offboard succeeds.
+		// ---------------------------------------------------------------------
+		FungibleExternalAsset::mint_into(&alice_external_asset_address, expected_asset_amount)
+			.unwrap();
+
+		let recycler_secret_c = Crypto::new_secret([45u8; 32]);
+		let recycler_member_c = Crypto::member_from_secret(&recycler_secret_c);
+		let proof_c =
+			Crypto::sign(&recycler_secret_c, &alice_external_asset_address.encode()).unwrap();
+
+		exec_signed(
+			&alice_pair,
+			CoinageCall::<Runtime>::load_recycler_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
+				preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
+				value: denomination,
+				member_key: recycler_member_c,
+				proof_of_ownership: proof_c,
+			}
+			.into(),
+		);
+
+		let recycler_id_c = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination,
+		);
+		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_c, 1u32);
+		// Onboarding and ring building happen in separate blocks.
+		advance_block();
+		advance_block();
+		let idx_c: u32 = 0;
+		let rev_c = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
+			COINAGE_INSTANCE_ID,
+			denomination,
+			idx_c,
+		)
+		.unwrap();
+
+		let coin_c_pair = sr25519::Pair::from_seed(&[101u8; 32]);
+		let coin_c_account = pair_to_account_id(&coin_c_pair);
+
+		let now_secs = Timestamp::now().as_secs() as u32;
+		let period_c = now_secs / period_duration;
+		let counter_c = if period_c == current_period { counter_off + 1 } else { 0 };
+
+		let unload_c = build_unload_ext(
+			UnloadRequest {
+				person_secret: &alice_person_secret,
+				person_ring_index: alice_person_ring_index,
+				period: period_c,
+				counter: counter_c,
+				recycler_secrets: slice::from_ref(&recycler_secret_c),
+				value: denomination,
+				index: idx_c,
+				revision: rev_c,
+			},
+			coin_c_account.clone(),
+		);
+		Executive::apply_extrinsic(unload_c)
+			.expect("tx valid")
+			.expect("dispatch success");
+
+		// Age this coin once so the direct offboard operates on a coin with non-zero age.
+		let aged_c_pair = sr25519::Pair::from_seed(&[111u8; 32]);
+		let aged_c_account = pair_to_account_id(&aged_c_pair);
+		exec_as_coin(
+			&coin_c_pair,
+			CoinageCall::<Runtime>::transfer { to: aged_c_account.clone() }.into(),
+		);
+
+		let aged_c_coin =
+			indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&aged_c_account).unwrap();
+		assert_eq!(aged_c_coin.age, 1);
+
+		let balance_before_direct_aged =
+			FungibleExternalAsset::balance(&alice_external_asset_address);
+		let consumed_tokens_before_direct =
+			indiv_pallet_coinage::ConsumedFreeUnloadTokens::<Runtime>::iter_prefix(period_c)
+				.count();
+
+		exec_as_coin(
+			&aged_c_pair,
+			CoinageCall::<Runtime>::direct_offboard_coin_into_external_asset {
+				to: alice_external_asset_address.clone(),
+			}
+			.into(),
+		);
+
+		crate::System::assert_has_event(
+			indiv_pallet_coinage::Event::<Runtime>::CoinOffboardedIntoExternalAsset {
+				instance_id: COINAGE_INSTANCE_ID,
+				to: alice_external_asset_address.clone(),
+				value: denomination,
+				amount: expected_asset_amount,
+			}
+			.into(),
+		);
+
+		// Direct offboarding bypasses recyclers, so it must not consume a free unload token.
+		assert_eq!(
+			indiv_pallet_coinage::ConsumedFreeUnloadTokens::<Runtime>::iter_prefix(period_c)
+				.count(),
+			consumed_tokens_before_direct,
+		);
+
+		assert!(indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&aged_c_account).is_none());
+		assert_eq!(
+			FungibleExternalAsset::balance(&alice_external_asset_address),
+			balance_before_direct_aged + expected_asset_amount
 		);
 	});
 }

@@ -38,8 +38,7 @@ async function main() {
         game_play_time: playTime,
         rounds: ROUNDS,
         max_group_size: MAX_GROUP_SIZE,
-        // `airdrop_prize` is Option<AirdropPrize> (the asset is an XCM Location).
-        // Omit it to schedule a game with no per-game airdrop.
+        airdrops: [],
       },
     ];
 

@@ -62,6 +62,8 @@ The security policy and procedures can be found in Parity's [SECURITY.md](https:
 
 This repository **does not accept external pull requests at this time** — it is a public mirror that receives releases in waves. Bug reports, questions, and suggestions are welcome as [issues](https://github.com/paritytech/individuality-community/issues). See the [contribution guidelines](./docs/contributor/CONTRIBUTING.md) for details.
 
+Comments in the code cite open work as `paritytech/individuality#NNN`. That is Parity's internal tracker for this project, and those issues are not yet publicly readable. We will gradually port these issues out of the private repo and update the references.
+
 In every interaction and contribution, this project adheres to the [Contributor Covenant Code of Conduct](./docs/contributor/CODE_OF_CONDUCT.md).
 
 ## 📝 License

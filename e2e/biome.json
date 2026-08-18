@@ -1,0 +1,74 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.3.2/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true, "defaultBranch": "main" },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "tests/**/*.ts",
+      "packages/*/src/**/*.ts",
+      "suites/*/src/**/*.ts",
+      "packages/*/scripts/**/*.mjs",
+      "zombienet/scripts/**/*.mjs"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 110
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": {
+          "level": "on",
+          "options": {
+            "groups": [
+              ["vitest", "vitest/**"],
+              ":BLANK_LINE:",
+              ["polkadot-api", "polkadot-api/**", "@polkadot-api/**", "@polkadot/**"],
+              ":BLANK_LINE:",
+              ["@acala-network/**"],
+              ":BLANK_LINE:",
+              [":LOCAL:"],
+              ":BLANK_LINE:"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noThenProperty": "off"
+      },
+      "nursery": {
+        "noFloatingPromises": "warn"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "noParameterAssign": "off",
+        "useConst": "warn",
+        "noUnusedTemplateLiteral": "warn"
+      },
+      "complexity": {
+        "noForEach": "off",
+        "useLiteralKeys": "off"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "asNeeded",
+      "bracketSpacing": true
+    }
+  }
+}

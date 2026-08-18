@@ -79,3 +79,56 @@ quote_native_for_exact() {
   [ -z "$quote" ] || [ "$quote" = "null" ] || [ "$quote" = "undefined" ] && return 1
   echo "$quote"
 }
+
+# Runs a command with a portable timeout. Returns 124 on timeout.
+run_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+
+  if [ "$timeout_seconds" -le 0 ]; then
+    "$@" || return $?
+    return 0
+  fi
+
+  "$@" &
+  local pid=$!
+  local deadline=$((SECONDS + timeout_seconds))
+  local status=0
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "ERROR: command timed out after ${timeout_seconds}s: $1 ..." >&2
+      kill "$pid" 2>/dev/null || true
+      kill -KILL "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    sleep 1
+  done
+
+  wait "$pid" || status=$?
+  return "$status"
+}
+
+print_chain_progress() {
+  local chain best_header finalized_hash finalized_header
+
+  for chain in relay people asset-hub; do
+    echo "== $chain progress =="
+    best_header=$(dot "$chain.rpc.chain_getHeader" 2>&1 || true)
+    finalized_hash=$(dot "$chain.rpc.chain_getFinalizedHead" 2>&1 || true)
+    finalized_hash=$(echo "$finalized_hash" | tr -d '"')
+
+    echo "best header:"
+    echo "$best_header"
+    echo "finalized hash:"
+    echo "$finalized_hash"
+
+    if [[ "$finalized_hash" == 0x* ]]; then
+      finalized_header=$(dot "$chain.rpc.chain_getHeader" "$finalized_hash" 2>&1 || true)
+      echo "finalized header:"
+      echo "$finalized_header"
+    fi
+    echo
+  done
+}

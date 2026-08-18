@@ -1,0 +1,6 @@
+packages:
+  - "packages/*"
+  # The generated descriptors package (name: @polkadot-api/descriptors). A workspace member so it is
+  # symlinked LIVE into consumers — a `file:` dep here gets injected/packed (peer dep) and goes stale.
+  - "packages/descriptors/.papi/descriptors"
+  - "suites/*"

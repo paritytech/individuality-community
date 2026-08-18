@@ -23,7 +23,6 @@
 //! Also tests the fee-from-output flow where the fee is deducted from the unloaded amount.
 
 use super::*;
-use frame_support::traits::fungibles::Inspect as _;
 use indiv_pallet_coinage::{
 	Call as CoinageCall, Config as CoinageConfig, FeeCurrency, UnloadRecyclerInput,
 	UNLOADING_RECYCLER_CONTEXT,
@@ -67,22 +66,21 @@ fn build_unload_fee_from_output_ext(
 		tx_ext.0 .9.clone(),
 	);
 
-	let (msg_hash, encoded_implications) = {
-		let implication_base = (0u8, &call);
-		let implication_explicit = &rest_ext_for_implication;
-		let implication_implicit = &rest_ext_for_implication.implicit().unwrap();
-		let encoded_implications =
-			(implication_base, implication_explicit, implication_implicit).encode();
-		let msg_hash = sp_io::hashing::blake2_256(&encoded_implications);
-		(msg_hash, encoded_implications)
-	};
+	let implication_base = (0u8, &call);
+	let implication_explicit = &rest_ext_for_implication;
+	let implication_implicit = rest_ext_for_implication.implicit().unwrap();
+	let inherited_implication = (implication_base, implication_explicit, &implication_implicit);
+	let msg_hash = inherited_implication.using_encoded(sp_io::hashing::blake2_256);
 
 	// 2. Generate the other alias proofs (all secrets except the first)
 	let mut other_alias_proofs_vec = Vec::new();
 	for (secret, (value, index)) in secrets[1..].iter().zip(recycler_info[1..].iter()) {
 		let member = Crypto::member_from_secret(secret);
-		let ring_members =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(*value, *index);
+		let ring_members = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(
+			COINAGE_INSTANCE_ID,
+			*value,
+			*index,
+		);
 
 		let commitment = Crypto::open(recycler_ring_size(), &member, ring_members.into_iter())
 			.expect("Recycler member should be in the recycler ring");
@@ -98,14 +96,16 @@ fn build_unload_fee_from_output_ext(
 		other_alias_proofs_vec.push(proof);
 	}
 
-	// 2b. Generate first alias proof signing (other_alias_proofs ++ inherited_implication)
+	// 2b. Generate first alias proof signing the other proofs, retry counter, and inherited
+	// implication.
 	let (fee_recycler_value, fee_recycler_index) = recycler_info[0];
-	let intent_msg = sp_io::hashing::blake2_256(
-		&[other_alias_proofs_vec.encode(), encoded_implications].concat(),
-	);
+	let retry_counter = 0u8;
+	let intent_msg = (&other_alias_proofs_vec, retry_counter, &inherited_implication)
+		.using_encoded(sp_io::hashing::blake2_256);
 	let first_alias_proof = {
 		let member = Crypto::member_from_secret(secrets[0]);
 		let ring_members = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(
+			COINAGE_INSTANCE_ID,
 			fee_recycler_value,
 			fee_recycler_index,
 		);
@@ -134,6 +134,7 @@ fn build_unload_fee_from_output_ext(
 		fee_recycler_value,
 		fee_recycler_index,
 		fee_recycler_revision,
+		retry_counter,
 		alias_proofs,
 	};
 
@@ -162,15 +163,13 @@ fn coinage_non_anonymous_native_fee() {
 		let alice_account = pair_to_account_id(&alice_pair);
 
 		// Values
-		let coin_value: i8 = 1; // $2
-		let asset_unit: Balance = <Runtime as CoinageConfig>::UnderlyingAssetUnit::get();
-		let asset_amount = asset_unit.checked_shl(coin_value as u32).unwrap();
+		let denomination: i8 = 1; // $2
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
+		let asset_amount = asset_unit.checked_shl(denomination as u32).unwrap();
 
 		// Fund Alice with the external asset (only for loading into recycler, fee is paid in
 		// native)
-		let min_balance = <Runtime as CoinageConfig>::Fungibles::minimum_balance(
-			Coinage::underlying_asset_id().unwrap(),
-		);
+		let min_balance = FungibleExternalAsset::minimum_balance();
 		FungibleExternalAsset::mint_into(&alice_account, asset_amount + min_balance).unwrap();
 
 		// Fund Alice with native balance to pay the fee
@@ -189,8 +188,9 @@ fn coinage_non_anonymous_native_fee() {
 			Crypto::sign(&alice_recycler_secret, &alice_account.encode()).unwrap();
 
 		let load_call = CoinageCall::<Runtime>::load_recycler_with_external_asset {
+			instance_id: COINAGE_INSTANCE_ID,
 			preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-			value: coin_value,
+			value: denomination,
 			member_key: alice_recycler_member,
 			proof_of_ownership,
 		};
@@ -199,7 +199,7 @@ fn coinage_non_anonymous_native_fee() {
 		// Verify loading
 		let r_val =
 			indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(alice_recycler_member);
-		assert_eq!(r_val, Some(coin_value));
+		assert_eq!(r_val, Some((COINAGE_INSTANCE_ID, denomination)));
 		let r_idx: u32 = 0;
 
 		// ─────────────────────────────────────
@@ -207,17 +207,22 @@ fn coinage_non_anonymous_native_fee() {
 		// ─────────────────────────────────────
 
 		// Override onboarding size so the ring can be built with just 1 member
-		let recycler_id =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(coin_value);
+		let recycler_id = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination,
+		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id, 1u32);
 		// Onboarding and ring building happen in separate blocks
 		advance_block();
 		advance_block();
 
 		// Verify recycler was built
-		let r_rev =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(coin_value, r_idx)
-				.expect("Recycler ring should exist");
+		let r_rev = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
+			COINAGE_INSTANCE_ID,
+			denomination,
+			r_idx,
+		)
+		.expect("Recycler ring should exist");
 
 		// ─────────────────────────────────────
 		// Action 3: Unload using Non-Anonymous Method
@@ -227,8 +232,11 @@ fn coinage_non_anonymous_native_fee() {
 		let dest_account = alice_account.clone();
 
 		// Get ring members for proof creation
-		let ring_members =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(coin_value, r_idx);
+		let ring_members = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(
+			COINAGE_INSTANCE_ID,
+			denomination,
+			r_idx,
+		);
 
 		// Calculate alias
 		let alias: Alias =
@@ -238,7 +246,7 @@ fn coinage_non_anonymous_native_fee() {
 		// Build input for unified proven_msg format
 		let revision = r_rev;
 		let input = UnloadRecyclerInput {
-			value: coin_value,
+			value: denomination,
 			index: r_idx,
 			revision,
 			aliases: bounded_vec![alias],
@@ -247,7 +255,8 @@ fn coinage_non_anonymous_native_fee() {
 
 		// Calculate proven_msg (unified format with
 		// unload_recyclers_into_external_asset_non_anonymous)
-		let proven_msg = blake2_256(&(&inputs, &dest_account, &alice_account).encode());
+		let proven_msg =
+			blake2_256(&(COINAGE_INSTANCE_ID, &inputs, &dest_account, &alice_account).encode());
 
 		// Create proof
 		let member = Crypto::member_from_secret(&alice_recycler_secret);
@@ -269,10 +278,12 @@ fn coinage_non_anonymous_native_fee() {
 		// Execute non-anonymous unload with native fee
 		let unload_call =
 			CoinageCall::<Runtime>::unload_recycler_into_external_asset_non_anonymous {
+				instance_id: COINAGE_INSTANCE_ID,
 				input,
 				alias_proofs,
 				to: dest_account.clone(),
 				fee_currency: FeeCurrency::Native,
+				max_fee: unload_token_fee_in_native(),
 			};
 		exec_signed(&alice_pair, unload_call.into());
 
@@ -299,9 +310,7 @@ fn coinage_non_anonymous_external_asset_fee() {
 		// Fund FeeDestination with minimum external asset balance so it can receive external asset
 		// fees
 		let fee_dest = <Runtime as CoinageConfig>::FeeDestination::get();
-		let min_balance = <Runtime as CoinageConfig>::Fungibles::minimum_balance(
-			Coinage::underlying_asset_id().unwrap(),
-		);
+		let min_balance = FungibleExternalAsset::minimum_balance();
 		FungibleExternalAsset::mint_into(&fee_dest, min_balance).unwrap();
 
 		advance_block();
@@ -309,15 +318,14 @@ fn coinage_non_anonymous_external_asset_fee() {
 		let alice_pair = Sr25519Keyring::Alice.pair();
 		let alice_account = pair_to_account_id(&alice_pair);
 
-		let coin_value: i8 = 2; // $4 (larger than fee)
-		let asset_unit: Balance = <Runtime as CoinageConfig>::UnderlyingAssetUnit::get();
-		let asset_amount = asset_unit.checked_shl(coin_value.max(0) as u32).unwrap();
+		let denomination: i8 = 2; // $4 (larger than fee)
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
+		let asset_amount = asset_unit.checked_shl(denomination.max(0) as u32).unwrap();
 
 		// Fund Alice with extra external asset balance for the fee
-		let fee_amount: u128 = Coinage::get_paid_unload_token_fee_in_asset().unwrap();
-		let min_balance = <Runtime as CoinageConfig>::Fungibles::minimum_balance(
-			Coinage::underlying_asset_id().unwrap(),
-		);
+		let fee_amount: u128 =
+			Coinage::get_paid_unload_token_fee_in_asset(COINAGE_INSTANCE_ID).unwrap();
+		let min_balance = FungibleExternalAsset::minimum_balance();
 		FungibleExternalAsset::mint_into(
 			&alice_account,
 			asset_amount + fee_amount * 2 + min_balance,
@@ -334,8 +342,9 @@ fn coinage_non_anonymous_external_asset_fee() {
 			Crypto::sign(&alice_recycler_secret, &alice_account.encode()).unwrap();
 
 		let load_call = CoinageCall::<Runtime>::load_recycler_with_external_asset {
+			instance_id: COINAGE_INSTANCE_ID,
 			preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-			value: coin_value,
+			value: denomination,
 			member_key: alice_recycler_member,
 			proof_of_ownership,
 		};
@@ -348,16 +357,21 @@ fn coinage_non_anonymous_external_asset_fee() {
 		// ─────────────────────────────────────
 
 		// Override onboarding size so the ring can be built with just 1 member
-		let recycler_id =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(coin_value);
+		let recycler_id = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination,
+		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id, 1u32);
 		// Onboarding and ring building happen in separate blocks
 		advance_block();
 		advance_block();
 
-		let r_rev =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(coin_value, r_idx)
-				.expect("Recycler ring should exist after build");
+		let r_rev = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
+			COINAGE_INSTANCE_ID,
+			denomination,
+			r_idx,
+		)
+		.expect("Recycler ring should exist after build");
 
 		// ─────────────────────────────────────
 		// Action 3: Unload with ExternalAsset Fee
@@ -365,8 +379,11 @@ fn coinage_non_anonymous_external_asset_fee() {
 
 		let dest_account = alice_account.clone(); // Unload to self
 
-		let ring_members =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(coin_value, r_idx);
+		let ring_members = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(
+			COINAGE_INSTANCE_ID,
+			denomination,
+			r_idx,
+		);
 
 		let alias: Alias =
 			Crypto::alias_in_context(&alice_recycler_secret, &UNLOADING_RECYCLER_CONTEXT[..])
@@ -375,7 +392,7 @@ fn coinage_non_anonymous_external_asset_fee() {
 		// Build input for unified proven_msg format
 		let revision = r_rev;
 		let input = UnloadRecyclerInput {
-			value: coin_value,
+			value: denomination,
 			index: r_idx,
 			revision,
 			aliases: bounded_vec![alias],
@@ -383,7 +400,8 @@ fn coinage_non_anonymous_external_asset_fee() {
 		let inputs = vec![input.clone()];
 
 		// Calculate proven_msg (unified format)
-		let proven_msg = blake2_256(&(&inputs, &dest_account, &alice_account).encode());
+		let proven_msg =
+			blake2_256(&(COINAGE_INSTANCE_ID, &inputs, &dest_account, &alice_account).encode());
 
 		let member = Crypto::member_from_secret(&alice_recycler_secret);
 		let commitment =
@@ -403,10 +421,12 @@ fn coinage_non_anonymous_external_asset_fee() {
 		// Execute non-anonymous unload with external asset fee
 		let unload_call =
 			CoinageCall::<Runtime>::unload_recycler_into_external_asset_non_anonymous {
+				instance_id: COINAGE_INSTANCE_ID,
 				input,
 				alias_proofs,
 				to: dest_account.clone(),
 				fee_currency: FeeCurrency::ExternalAsset,
+				max_fee: unload_token_fee_in_asset(),
 			};
 		exec_signed(&alice_pair, unload_call.into());
 
@@ -442,18 +462,16 @@ fn coinage_non_anonymous_multi_recycler() {
 		let alice_account = pair_to_account_id(&alice_pair);
 
 		// Load two coins of different values
-		let coin_value_1: i8 = 0; // $1
-		let coin_value_2: i8 = 1; // $2
-		let asset_unit: Balance = <Runtime as CoinageConfig>::UnderlyingAssetUnit::get();
+		let denomination_1: i8 = 0; // $1
+		let denomination_2: i8 = 1; // $2
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
 		let asset_amount_1 = asset_unit; // $1
 		let asset_amount_2 = asset_unit * 2; // $2
 		let total_amount = asset_amount_1 + asset_amount_2; // $3
 
 		// Fund Alice with the external asset (only for loading into recyclers, fee is paid in
 		// native)
-		let min_balance = <Runtime as CoinageConfig>::Fungibles::minimum_balance(
-			Coinage::underlying_asset_id().unwrap(),
-		);
+		let min_balance = FungibleExternalAsset::minimum_balance();
 		FungibleExternalAsset::mint_into(&alice_account, total_amount + min_balance).unwrap();
 
 		// Fund Alice with native balance to pay the fee
@@ -472,8 +490,9 @@ fn coinage_non_anonymous_multi_recycler() {
 		exec_signed(
 			&alice_pair,
 			CoinageCall::<Runtime>::load_recycler_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-				value: coin_value_1,
+				value: denomination_1,
 				member_key: alice_member_1,
 				proof_of_ownership: proof_1,
 			}
@@ -490,8 +509,9 @@ fn coinage_non_anonymous_multi_recycler() {
 		exec_signed(
 			&alice_pair,
 			CoinageCall::<Runtime>::load_recycler_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-				value: coin_value_2,
+				value: denomination_2,
 				member_key: alice_member_2,
 				proof_of_ownership: proof_2,
 			}
@@ -505,23 +525,29 @@ fn coinage_non_anonymous_multi_recycler() {
 		// ─────────────────────────────────────
 
 		// Override onboarding size so the ring can be built with just 1 member
-		let recycler_id_1 =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(coin_value_1);
+		let recycler_id_1 = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination_1,
+		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_1, 1u32);
-		let recycler_id_2 =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(coin_value_2);
+		let recycler_id_2 = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination_2,
+		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_2, 1u32);
 		// Onboarding and ring building happen in separate blocks
 		advance_block();
 		advance_block();
 
 		let rev_1 = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
-			coin_value_1,
+			COINAGE_INSTANCE_ID,
+			denomination_1,
 			idx_1,
 		)
 		.expect("Recycler 1 ring should exist");
 		let rev_2 = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
-			coin_value_2,
+			COINAGE_INSTANCE_ID,
+			denomination_2,
 			idx_2,
 		)
 		.expect("Recycler 2 ring should exist");
@@ -541,13 +567,13 @@ fn coinage_non_anonymous_multi_recycler() {
 
 		let inputs = vec![
 			indiv_pallet_coinage::UnloadRecyclerInput {
-				value: coin_value_1,
+				value: denomination_1,
 				index: idx_1,
 				revision: rev_1,
 				aliases: bounded_vec![alias_1],
 			},
 			indiv_pallet_coinage::UnloadRecyclerInput {
-				value: coin_value_2,
+				value: denomination_2,
 				index: idx_2,
 				revision: rev_2,
 				aliases: bounded_vec![alias_2],
@@ -555,11 +581,15 @@ fn coinage_non_anonymous_multi_recycler() {
 		];
 
 		// Compute proven_msg for multi-recycler call
-		let proven_msg = blake2_256(&(&inputs, &dest_account, &alice_account).encode());
+		let proven_msg =
+			blake2_256(&(COINAGE_INSTANCE_ID, &inputs, &dest_account, &alice_account).encode());
 
 		// Create proofs
-		let ring_members_1 =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(coin_value_1, idx_1);
+		let ring_members_1 = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(
+			COINAGE_INSTANCE_ID,
+			denomination_1,
+			idx_1,
+		);
 		let member_1 = Crypto::member_from_secret(&alice_secret_1);
 		let commitment_1 =
 			Crypto::open(recycler_ring_size(), &member_1, ring_members_1.into_iter()).unwrap();
@@ -571,8 +601,11 @@ fn coinage_non_anonymous_multi_recycler() {
 		)
 		.unwrap();
 
-		let ring_members_2 =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(coin_value_2, idx_2);
+		let ring_members_2 = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(
+			COINAGE_INSTANCE_ID,
+			denomination_2,
+			idx_2,
+		);
 		let member_2 = Crypto::member_from_secret(&alice_secret_2);
 		let commitment_2 =
 			Crypto::open(recycler_ring_size(), &member_2, ring_members_2.into_iter()).unwrap();
@@ -591,10 +624,13 @@ fn coinage_non_anonymous_multi_recycler() {
 		// Execute multi-recycler non-anonymous unload
 		let unload_call =
 			CoinageCall::<Runtime>::unload_recyclers_into_external_asset_non_anonymous {
+				instance_id: COINAGE_INSTANCE_ID,
 				inputs,
 				alias_proofs,
 				to: dest_account.clone(),
 				fee_currency: FeeCurrency::Native,
+				// One fee per recycler, and this call unloads two.
+				max_fee: unload_token_fee_in_native() * 2,
 			};
 		exec_signed(&alice_pair, unload_call.into());
 
@@ -613,9 +649,7 @@ fn coinage_fee_from_output() {
 	new_test_ext().execute_with(|| {
 		// Fund FeeDestination with minimum external asset balance so it can receive fees
 		let fee_dest = <Runtime as CoinageConfig>::FeeDestination::get();
-		let min_balance = <Runtime as CoinageConfig>::Fungibles::minimum_balance(
-			Coinage::underlying_asset_id().unwrap(),
-		);
+		let min_balance = FungibleExternalAsset::minimum_balance();
 		FungibleExternalAsset::mint_into(&fee_dest, min_balance).unwrap();
 
 		advance_block();
@@ -623,11 +657,12 @@ fn coinage_fee_from_output() {
 		let alice_pair = Sr25519Keyring::Alice.pair();
 		let alice_account = pair_to_account_id(&alice_pair);
 
-		// Use a larger coin value to ensure it covers the fee
-		let coin_value: i8 = 2; // $4 (should be larger than fee)
-		let asset_unit: Balance = <Runtime as CoinageConfig>::UnderlyingAssetUnit::get();
-		let asset_amount = asset_unit.checked_shl(coin_value.max(0) as u32).unwrap();
-		let fee_amount: u128 = Coinage::get_paid_unload_token_fee_in_asset().unwrap();
+		// Use a larger denomination to ensure it covers the fee
+		let denomination: i8 = 2; // $4 (should be larger than fee)
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
+		let asset_amount = asset_unit.checked_shl(denomination.max(0) as u32).unwrap();
+		let fee_amount: u128 =
+			Coinage::get_paid_unload_token_fee_in_asset(COINAGE_INSTANCE_ID).unwrap();
 
 		// Fund Alice with the external asset for loading
 		FungibleExternalAsset::mint_into(&alice_account, asset_amount + min_balance).unwrap();
@@ -642,8 +677,9 @@ fn coinage_fee_from_output() {
 			Crypto::sign(&alice_recycler_secret, &alice_account.encode()).unwrap();
 
 		let load_call = CoinageCall::<Runtime>::load_recycler_with_external_asset {
+			instance_id: COINAGE_INSTANCE_ID,
 			preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-			value: coin_value,
+			value: denomination,
 			member_key: alice_recycler_member,
 			proof_of_ownership,
 		};
@@ -656,16 +692,21 @@ fn coinage_fee_from_output() {
 		// ─────────────────────────────────────
 
 		// Override onboarding size so the ring can be built with just 1 member
-		let recycler_id =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(coin_value);
+		let recycler_id = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination,
+		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id, 1u32);
 		// Onboarding and ring building happen in separate blocks
 		advance_block();
 		advance_block();
 
-		let revision =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(coin_value, r_idx)
-				.expect("Recycler ring should exist after build");
+		let revision = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
+			COINAGE_INSTANCE_ID,
+			denomination,
+			r_idx,
+		)
+		.expect("Recycler ring should exist after build");
 
 		// ─────────────────────────────────────
 		// Action 3: Unload using Fee-From-Output Method
@@ -680,21 +721,25 @@ fn coinage_fee_from_output() {
 		let aliases = bounded_vec![alias];
 
 		let dest_external_asset_before = FungibleExternalAsset::balance(&dest_account);
-		let fee_dest_external_asset_before = FungibleExternalAsset::balance(&fee_dest);
+		let pool = fee_conversion_pool_account();
+		let pool_asset_before = FungibleExternalAsset::balance(&pool);
+		let fee_dest_native_before = Balances::free_balance(&fee_dest);
 
 		// Build the unload call
 		let unload_call = CoinageCall::<Runtime>::unload_recycler_into_external_asset {
+			instance_id: COINAGE_INSTANCE_ID,
 			aliases,
-			value: coin_value,
+			value: denomination,
 			index: r_idx,
 			revision,
 			to: dest_account.clone(),
+			max_fee: unload_token_fee_in_asset(),
 		};
 
 		// Build and execute the transaction with fee-from-output extension
 		let uxt = build_unload_fee_from_output_ext(
 			&[&alice_recycler_secret], // All secrets (just one)
-			&[(coin_value, r_idx)],    // Recycler info for each secret
+			&[(denomination, r_idx)],  // Recycler info for each secret
 			revision,                  // Fee recycler revision
 			unload_call.into(),
 		);
@@ -706,9 +751,12 @@ fn coinage_fee_from_output() {
 		// Verify Results
 		// ─────────────────────────────────────
 
-		// Fee should be transferred to fee destination
-		let fee_dest_external_asset_after = FungibleExternalAsset::balance(&fee_dest);
-		assert_eq!(fee_dest_external_asset_after - fee_dest_external_asset_before, fee_amount);
+		// The asset the fee cost went into the pool, and the fee destination was paid in native.
+		assert_eq!(FungibleExternalAsset::balance(&pool) - pool_asset_before, fee_amount);
+		assert_eq!(
+			Balances::free_balance(&fee_dest) - fee_dest_native_before,
+			Coinage::get_paid_unload_token_fee_in_native()
+		);
 
 		// Destination should receive (asset_amount - fee)
 		let dest_external_asset_after = FungibleExternalAsset::balance(&dest_account);
@@ -728,9 +776,7 @@ fn coinage_fee_from_output_multi_recycler() {
 	new_test_ext().execute_with(|| {
 		// Fund FeeDestination with minimum external asset balance so it can receive fees
 		let fee_dest = <Runtime as CoinageConfig>::FeeDestination::get();
-		let min_balance = <Runtime as CoinageConfig>::Fungibles::minimum_balance(
-			Coinage::underlying_asset_id().unwrap(),
-		);
+		let min_balance = FungibleExternalAsset::minimum_balance();
 		FungibleExternalAsset::mint_into(&fee_dest, min_balance).unwrap();
 
 		advance_block();
@@ -739,13 +785,14 @@ fn coinage_fee_from_output_multi_recycler() {
 		let alice_account = pair_to_account_id(&alice_pair);
 
 		// Load two coins of different values
-		let coin_value_1: i8 = 1; // $2
-		let coin_value_2: i8 = 2; // $4
-		let asset_unit: Balance = <Runtime as CoinageConfig>::UnderlyingAssetUnit::get();
-		let asset_amount_1 = asset_unit.checked_shl(coin_value_1.max(0) as u32).unwrap(); // $2
-		let asset_amount_2 = asset_unit.checked_shl(coin_value_2.max(0) as u32).unwrap(); // $4
+		let denomination_1: i8 = 1; // $2
+		let denomination_2: i8 = 2; // $4
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
+		let asset_amount_1 = asset_unit.checked_shl(denomination_1.max(0) as u32).unwrap(); // $2
+		let asset_amount_2 = asset_unit.checked_shl(denomination_2.max(0) as u32).unwrap(); // $4
 		let total_amount = asset_amount_1 + asset_amount_2; // $6
-		let fee_amount: u128 = Coinage::get_paid_unload_token_fee_in_asset().unwrap();
+		let fee_amount: u128 =
+			Coinage::get_paid_unload_token_fee_in_asset(COINAGE_INSTANCE_ID).unwrap();
 
 		// Fund Alice with the external asset for loading both coins
 		FungibleExternalAsset::mint_into(&alice_account, total_amount + min_balance).unwrap();
@@ -762,8 +809,9 @@ fn coinage_fee_from_output_multi_recycler() {
 		exec_signed(
 			&alice_pair,
 			CoinageCall::<Runtime>::load_recycler_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-				value: coin_value_1,
+				value: denomination_1,
 				member_key: alice_member_1,
 				proof_of_ownership: proof_1,
 			}
@@ -780,8 +828,9 @@ fn coinage_fee_from_output_multi_recycler() {
 		exec_signed(
 			&alice_pair,
 			CoinageCall::<Runtime>::load_recycler_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-				value: coin_value_2,
+				value: denomination_2,
 				member_key: alice_member_2,
 				proof_of_ownership: proof_2,
 			}
@@ -795,23 +844,29 @@ fn coinage_fee_from_output_multi_recycler() {
 		// ─────────────────────────────────────
 
 		// Override onboarding size so the ring can be built with just 1 member
-		let recycler_id_1 =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(coin_value_1);
+		let recycler_id_1 = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination_1,
+		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_1, 1u32);
-		let recycler_id_2 =
-			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(coin_value_2);
+		let recycler_id_2 = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
+			COINAGE_INSTANCE_ID,
+			denomination_2,
+		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_2, 1u32);
 		// Onboarding and ring building happen in separate blocks
 		advance_block();
 		advance_block();
 
 		let revision_1 = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
-			coin_value_1,
+			COINAGE_INSTANCE_ID,
+			denomination_1,
 			idx_1,
 		)
 		.expect("Recycler 1 ring should exist");
 		let revision_2 = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
-			coin_value_2,
+			COINAGE_INSTANCE_ID,
+			denomination_2,
 			idx_2,
 		)
 		.expect("Recycler 2 ring should exist");
@@ -823,23 +878,27 @@ fn coinage_fee_from_output_multi_recycler() {
 		let dest_account = alice_account.clone();
 
 		let dest_external_asset_before = FungibleExternalAsset::balance(&dest_account);
-		let fee_dest_external_asset_before = FungibleExternalAsset::balance(&fee_dest);
+		let pool = fee_conversion_pool_account();
+		let pool_asset_before = FungibleExternalAsset::balance(&pool);
+		let fee_dest_native_before = Balances::free_balance(&fee_dest);
 
 		// ── Unload First Recycler ──
 		let alias_1: Alias =
 			Crypto::alias_in_context(&alice_secret_1, &UNLOADING_RECYCLER_CONTEXT[..]).unwrap();
 
 		let unload_call_1 = CoinageCall::<Runtime>::unload_recycler_into_external_asset {
+			instance_id: COINAGE_INSTANCE_ID,
 			aliases: bounded_vec![alias_1],
-			value: coin_value_1,
+			value: denomination_1,
 			index: idx_1,
 			revision: revision_1,
 			to: dest_account.clone(),
+			max_fee: unload_token_fee_in_asset(),
 		};
 
 		let uxt_1 = build_unload_fee_from_output_ext(
 			&[&alice_secret_1],
-			&[(coin_value_1, idx_1)],
+			&[(denomination_1, idx_1)],
 			revision_1,
 			unload_call_1.into(),
 		);
@@ -852,16 +911,18 @@ fn coinage_fee_from_output_multi_recycler() {
 			Crypto::alias_in_context(&alice_secret_2, &UNLOADING_RECYCLER_CONTEXT[..]).unwrap();
 
 		let unload_call_2 = CoinageCall::<Runtime>::unload_recycler_into_external_asset {
+			instance_id: COINAGE_INSTANCE_ID,
 			aliases: bounded_vec![alias_2],
-			value: coin_value_2,
+			value: denomination_2,
 			index: idx_2,
 			revision: revision_2,
 			to: dest_account.clone(),
+			max_fee: unload_token_fee_in_asset(),
 		};
 
 		let uxt_2 = build_unload_fee_from_output_ext(
 			&[&alice_secret_2],
-			&[(coin_value_2, idx_2)],
+			&[(denomination_2, idx_2)],
 			revision_2,
 			unload_call_2.into(),
 		);
@@ -873,9 +934,12 @@ fn coinage_fee_from_output_multi_recycler() {
 		// Verify Results
 		// ─────────────────────────────────────
 
-		// Fee should be transferred to fee destination (paid twice, once per unload)
-		let fee_dest_external_asset_after = FungibleExternalAsset::balance(&fee_dest);
-		assert_eq!(fee_dest_external_asset_after - fee_dest_external_asset_before, fee_amount * 2);
+		// The asset both fees cost went into the pool, and the fee destination was paid in native.
+		assert_eq!(FungibleExternalAsset::balance(&pool) - pool_asset_before, fee_amount * 2);
+		assert_eq!(
+			Balances::free_balance(&fee_dest) - fee_dest_native_before,
+			Coinage::get_paid_unload_token_fee_in_native() * 2
+		);
 
 		// Destination should receive (total_amount - 2*fee)
 		let dest_external_asset_after = FungibleExternalAsset::balance(&dest_account);

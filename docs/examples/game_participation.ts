@@ -42,7 +42,8 @@ async function main() {
     } else {
       const signUpTx = api.tx.Game.sign_up_with_account({
         identifier_key: COMMS_KEY,
-        airdrop: undefined, // Option<…> — None: don't enter this game's airdrop draw
+        // Option<AirdropVrfs>: for airdrops, undefined to skip them.
+        airdrops: undefined,
       });
       console.log("Signing up ...");
       const r = await submitSigned(signUpTx, "sign_up_with_account");

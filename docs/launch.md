@@ -2,7 +2,7 @@
 
 This guide covers building the Individuality runtime and running it as a local network, intended to be used by whoever wishes to deploy the code in this repository.
 
-> **Scope:** this guide sets up the relay chain and the People parachain only. AssetHub and Bulletin (each via their own configs) must be set up separately.
+> **Scope:** this guide focuses on the relay chain and the People parachain. A maintained config that also runs a companion **Asset Hub** (so you can exercise cross-chain ring-root delivery) is described in [Option 3](#option-3-people--asset-hub) below. Bulletin must still be set up separately via its own config.
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@ You need a working Rust toolchain and the standard Polkadot SDK build dependenci
 
 ## Build dependencies: solc & resolc
 
-Upstream `pallet-revive` (used here by `precompiles/personhood`, `runtimes/next-asset-hub-paseo`, and `paseo-support/system-parachains-constants`) transitively depends on `pallet-revive-fixtures`, which compiles Solidity fixtures at build time. This requires `solc` and `resolc` to be on your `PATH`.
+Upstream `pallet-revive` (used here by `precompiles/personhood`, `precompiles/scarcity`, `runtimes/next-asset-hub-paseo`, and `paseo-support/system-parachains-constants`) transitively depends on `pallet-revive-fixtures`, which compiles Solidity fixtures at build time. This requires `solc` and `resolc` to be on your `PATH`.
 
 If you see this during a build:
 
@@ -167,5 +167,17 @@ zombienet spawn people-network.toml --provider native
 If you prefer the scripted path, `docs/examples/package.json` wraps the same flow as `pnpm run node:people`.
 
 The current example uses a `rococo-local` relay chain alias in `people-network.toml`, while still running the `next-people-paseo-runtime` parachain runtime from this repository.
+
+## Option 3: People + Asset Hub
+
+To also run a companion Asset Hub that subscribes to the People chain's ring-root updates (needed for the cross-chain examples and the members-notifier soak harness), the repository ships a maintained dual-chain config at `docs/examples/assethub-network.toml`, spawned via `pnpm run node:assethub`:
+
+```bash
+cd docs/examples
+pnpm run setup          # generate descriptors + install deps
+pnpm run node:assethub  # build both runtimes, generate both chain specs, spawn relay + People + AH
+```
+
+After it is up, open the People↔Asset Hub HRMP channels at runtime and subscribe Asset Hub to ring-root updates with `pnpm run hrmp` / `pnpm run chunks` / `pnpm run subscribe:assethub` (or `pnpm run bootstrap:assethub`). Full instructions — including the additional `solc`/`resolc` and pinned-node-binary prerequisites the Asset Hub runtime needs — are in [`docs/examples/README.md`](examples/README.md#people--asset-hub-dual-chain).
 
 See [this](https://docs.polkadot.com/parachains/testing/run-a-parachain-network/) and [this](https://paritytech.github.io/polkadot-sdk/master/polkadot_sdk_docs/guides/your_first_node/index.html) guide in the Polkadot documentation for more details.

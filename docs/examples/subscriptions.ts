@@ -4,28 +4,43 @@
  * Call: MembersNotifier.subscribe(...), wrapped in Sudo.sudo because it
  * requires a manager origin (backed by sudo on this chain).
  *
- *   pnpm run subscriptions
+ *   pnpm run subscriptions                                  # people-lite -> para 1000
+ *   COLLECTION=people SUBSCRIBER_PARA_ID=1500 pnpm run subscribe   # full people -> AH
  *
  * After this call the chain does the rest on its own: an offchain worker sends paged
  * initial ring roots to the subscriber over XCM, then keeps sending
  * updates as rings change.
+ *
+ * Tunables (env):
+ *   COLLECTION            `people-lite` (default) or `people` (the full collection).
+ *   SUBSCRIBER_PARA_ID    subscriber para id (default 1000; the soak uses 1500 for AH).
+ *   SUBSCRIBER_PALLET_INDEX  members-subscriber pallet index on the subscriber (default 97).
+ *   RING_EXPONENT         override the ring exponent (default depends on COLLECTION).
  */
 import { Enum, FixedSizeBinary } from "polkadot-api";
 import { connectPeople, customSignedExtensions, devSigner } from "./lib/client";
 import { sudoSubmitter } from "./lib/submit";
+import { PEOPLE_IDENTIFIER, PEOPLE_RING_EXPONENT } from "./lib/constants";
 
 // The companion Asset Hub's para id — `AssetHubParaId` in the People runtime
-// (runtimes/next-people-paseo/src/lib.rs:1510).
-const SUBSCRIBER_PARA_ID = 1000;
-// Index of `members-subscriber` in the Asset Hub runtime's construct_runtime
-// (`MembersSubscriber: indiv_pallet_members_subscriber = 97`,
-// runtimes/next-asset-hub-paseo/src/lib.rs:2298).
-const SUBSCRIBER_PALLET_INDEX = 97;
+// (runtimes/next-people-paseo/src/lib.rs). Default 1000 keeps the original
+// people-lite example; the soak overrides it to 1500.
+const SUBSCRIBER_PARA_ID = Number(process.env.SUBSCRIBER_PARA_ID ?? 1000);
+// Index of `members-subscriber` in the subscriber's construct_runtime
+// (`MembersSubscriber: indiv_pallet_members_subscriber = 97`).
+const SUBSCRIBER_PALLET_INDEX = Number(process.env.SUBSCRIBER_PALLET_INDEX ?? 97);
 
-// The collection to share: people-lite, with its ring exponent as configured
-// on this chain (2^10 rings).
-const PEOPLE_LITE = FixedSizeBinary.fromText("pop:polkadot.network/people-lite");
-const RING_EXPONENT = Enum("R2e10");
+// Which collection to share. `people-lite` (2^10 rings) is the documented
+// default; `people` is the full collection the soak drives (2^9 rings).
+const COLLECTION = process.env.COLLECTION ?? "people-lite";
+const { identifier, ringExponent } =
+  COLLECTION === "people"
+    ? { identifier: PEOPLE_IDENTIFIER, ringExponent: PEOPLE_RING_EXPONENT }
+    : {
+        identifier: FixedSizeBinary.fromText("pop:polkadot.network/people-lite"),
+        ringExponent: Enum("R2e10"),
+      };
+const RING_EXPONENT = process.env.RING_EXPONENT ? Enum(process.env.RING_EXPONENT as any) : ringExponent;
 
 async function main() {
   const { client, api } = connectPeople();
@@ -43,10 +58,10 @@ async function main() {
     // Governance subscribes the parachain.
     const subscribeTx = api.tx.MembersNotifier.subscribe({
       subscriber_parachain_id: SUBSCRIBER_PARA_ID,
-      members_collections: [[PEOPLE_LITE, RING_EXPONENT]],
+      members_collections: [[identifier, RING_EXPONENT]],
       pallet_index: SUBSCRIBER_PALLET_INDEX,
     });
-    console.log(`Subscribing para ${SUBSCRIBER_PARA_ID} to ring-root updates ...`);
+    console.log(`Subscribing para ${SUBSCRIBER_PARA_ID} to ${COLLECTION} ring-root updates ...`);
     const result = await sudo(subscribeTx.decodedCall, "MembersNotifier.subscribe");
     console.log(`Subscribed in block ${result.block.hash}`);
 

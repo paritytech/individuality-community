@@ -17,7 +17,7 @@
 use super::*;
 use codec::Encode;
 use core::slice;
-use frame_support::traits::{fungibles::Inspect as _, UnixTime};
+use frame_support::traits::UnixTime;
 use indiv_pallet_coinage::{
 	Call as CoinageCall, Config as CoinageConfig, PAID_UNLOAD_TOKEN_CONTEXT_BASE,
 	UNLOADING_RECYCLER_CONTEXT,
@@ -70,7 +70,11 @@ fn build_unload_paid_ext(
 	// 2. Generate Alias Proofs (Recycler RingVRF) — must be created before the paid token proof
 	// because the paid token proof signs over the alias proofs.
 	let mut alias_proofs_vec = Vec::new();
-	let ring_members = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(value, index);
+	let ring_members = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_members(
+		COINAGE_INSTANCE_ID,
+		value,
+		index,
+	);
 
 	for secret in recycler_secrets.iter() {
 		let member = Crypto::member_from_secret(secret);
@@ -155,17 +159,16 @@ fn coinage_paid_full_story() {
 		let alice_external_asset_address = pair_to_account_id(&alice_pair);
 
 		// Values
-		let coin_value_initial: i8 = 1; // $2
-		let coin_value_split: i8 = 0; // $1
-		let asset_unit: Balance = <Runtime as CoinageConfig>::UnderlyingAssetUnit::get();
-		let asset_amount_initial = asset_unit.checked_shl(coin_value_initial as u32).unwrap();
+		let denomination_initial: i8 = 1; // $2
+		let denomination_split: i8 = 0; // $1
+		let asset_unit: Balance = COINAGE_ASSET_UNIT;
+		let asset_amount_initial = asset_unit.checked_shl(denomination_initial as u32).unwrap();
 
 		// Fund Alice's external-asset address.
 		// She needs enough for the deposit + 3 fees (Initial unload, Consolidation, Offboard).
-		let fee_amount: u128 = Coinage::get_paid_unload_token_fee_in_asset().unwrap();
-		let min_balance = <Runtime as CoinageConfig>::Fungibles::minimum_balance(
-			Coinage::underlying_asset_id().unwrap(),
-		);
+		let fee_amount: u128 =
+			Coinage::get_paid_unload_token_fee_in_asset(COINAGE_INSTANCE_ID).unwrap();
+		let min_balance = FungibleExternalAsset::minimum_balance();
 		FungibleExternalAsset::mint_into(
 			&alice_external_asset_address,
 			asset_amount_initial + fee_amount * 3 + min_balance,
@@ -182,22 +185,24 @@ fn coinage_paid_full_story() {
 			Crypto::sign(&alice_recycler_secret_0, &alice_external_asset_address.encode()).unwrap();
 
 		let load_call = CoinageCall::<Runtime>::load_recycler_with_external_asset {
+			instance_id: COINAGE_INSTANCE_ID,
 			preservation: indiv_pallet_coinage::CodecPreservation::Expendable,
-			value: coin_value_initial,
+			value: denomination_initial,
 			member_key: alice_recycler_member_0,
 			proof_of_ownership,
 		};
 		exec_signed(&alice_pair, load_call.into());
 
 		// Verification
-		let r_val =
+		let (_, r_val) =
 			indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(alice_recycler_member_0)
 				.unwrap();
-		assert_eq!(r_val, coin_value_initial);
+		assert_eq!(r_val, denomination_initial);
 
 		// Override onboarding size so the ring can be built with just 1 member
 		let recycler_id = indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
-			coin_value_initial,
+			COINAGE_INSTANCE_ID,
+			denomination_initial,
 		);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id, 1u32);
 
@@ -213,8 +218,10 @@ fn coinage_paid_full_story() {
 
 		let pay_fee_call =
 			CoinageCall::<Runtime>::pay_for_recycler_unload_fee_token_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				member_key: alice_payment_member_1,
 				proof_of_ownership: payment_proof_1,
+				max_fee: unload_token_fee_in_asset(),
 			};
 		exec_signed(&alice_pair, pay_fee_call.into());
 
@@ -245,7 +252,8 @@ fn coinage_paid_full_story() {
 		// Get ring index and revision after build
 		let r_idx_0: u32 = 0; // First ring for this value
 		let r_rev_0 = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
-			coin_value_initial,
+			COINAGE_INSTANCE_ID,
+			denomination_initial,
 			r_idx_0,
 		)
 		.unwrap();
@@ -263,8 +271,9 @@ fn coinage_paid_full_story() {
 
 		let unload_call = RuntimeCall::Coinage(
 			indiv_pallet_coinage::Call::<Runtime>::unload_recycler_into_coin {
+				instance_id: COINAGE_INSTANCE_ID,
 				aliases: aliases_vec.try_into().unwrap(),
-				value: coin_value_initial,
+				value: denomination_initial,
 				index: r_idx_0,
 				revision: r_rev_0,
 				to: shielded_alice_coin_0.clone(),
@@ -276,7 +285,7 @@ fn coinage_paid_full_story() {
 			payment_ring_index,
 			period,
 			slice::from_ref(&alice_recycler_secret_0),
-			coin_value_initial,
+			denomination_initial,
 			r_idx_0,
 			unload_call,
 		);
@@ -288,7 +297,7 @@ fn coinage_paid_full_story() {
 		// Verify coin created
 		let coin0 =
 			indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&shielded_alice_coin_0).unwrap();
-		assert_eq!(coin0.value, coin_value_initial);
+		assert_eq!(coin0.value, denomination_initial);
 
 		// ─────────────────────────────────────
 		// Action 5: Split ($2 -> $1 + $1)
@@ -300,7 +309,7 @@ fn coinage_paid_full_story() {
 
 		let split_call = CoinageCall::<Runtime>::split {
 			split_into: bounded_vec![(
-				coin_value_split,
+				denomination_split,
 				bounded_vec![shielded_alice_coin_1.clone(), shielded_alice_coin_2.clone()],
 			)],
 		};
@@ -352,16 +361,19 @@ fn coinage_paid_full_story() {
 		exec_signed(
 			&alice_pair,
 			CoinageCall::<Runtime>::pay_for_recycler_unload_fee_token_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				member_key: alice_payment_member_2,
 				proof_of_ownership: payment_proof_2,
+				max_fee: unload_token_fee_in_asset(),
 			}
 			.into(),
 		);
 
-		// Override onboarding size for the coin_value_split recycler collection
+		// Override onboarding size for the denomination_split recycler collection
 		let recycler_id_split =
 			indiv_pallet_coinage::Pallet::<Runtime>::recycler_collection_identifier(
-				coin_value_split,
+				COINAGE_INSTANCE_ID,
+				denomination_split,
 			);
 		indiv_pallet_members::OnboardingSize::<Runtime>::insert(recycler_id_split, 1u32);
 
@@ -370,13 +382,16 @@ fn coinage_paid_full_story() {
 		advance_block();
 
 		// Unload (Consolidate 2 x $1 -> $2)
-		let val_cons =
+		let (_, val_cons) =
 			indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(alice_recycler_member_1)
 				.unwrap();
 		let idx_cons: u32 = 0;
-		let rev_cons =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(val_cons, idx_cons)
-				.unwrap();
+		let rev_cons = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
+			COINAGE_INSTANCE_ID,
+			val_cons,
+			idx_cons,
+		)
+		.unwrap();
 
 		let shielded_consolidated_pair = sr25519::Pair::from_seed(&[150u8; 32]);
 		let shielded_consolidated = pair_to_account_id(&shielded_consolidated_pair);
@@ -392,6 +407,7 @@ fn coinage_paid_full_story() {
 
 		let unload_call = RuntimeCall::Coinage(
 			indiv_pallet_coinage::Call::<Runtime>::unload_recycler_into_coin {
+				instance_id: COINAGE_INSTANCE_ID,
 				aliases: aliases_vec.try_into().unwrap(),
 				value: val_cons,
 				index: idx_cons,
@@ -415,7 +431,7 @@ fn coinage_paid_full_story() {
 
 		let consolidated_coin =
 			indiv_pallet_coinage::CoinsByOwner::<Runtime>::get(&shielded_consolidated).unwrap();
-		assert_eq!(consolidated_coin.value, coin_value_initial); // $2
+		assert_eq!(consolidated_coin.value, denomination_initial); // $2
 
 		// ─────────────────────────────────────
 		// Action 7: Offboard (Paid Flow)
@@ -449,8 +465,10 @@ fn coinage_paid_full_story() {
 		exec_signed(
 			&alice_pair,
 			CoinageCall::<Runtime>::pay_for_recycler_unload_fee_token_with_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				member_key: alice_payment_member_3,
 				proof_of_ownership: payment_proof_3,
+				max_fee: unload_token_fee_in_asset(),
 			}
 			.into(),
 		);
@@ -460,14 +478,17 @@ fn coinage_paid_full_story() {
 		advance_block();
 
 		// Offboard to the external asset
-		let val_off = indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(
+		let (_, val_off) = indiv_pallet_coinage::RecyclersCoinToRecycler::<Runtime>::get(
 			alice_recycler_member_offboard,
 		)
 		.unwrap();
 		let idx_off: u32 = 0;
-		let rev_off =
-			indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(val_off, idx_off)
-				.unwrap();
+		let rev_off = indiv_pallet_coinage::Pallet::<Runtime>::get_recycler_ring_revision(
+			COINAGE_INSTANCE_ID,
+			val_off,
+			idx_off,
+		)
+		.unwrap();
 
 		let aliases_vec: Vec<Alias> = slice::from_ref(&alice_recycler_secret_offboard)
 			.iter()
@@ -478,11 +499,13 @@ fn coinage_paid_full_story() {
 
 		let unload_call = RuntimeCall::Coinage(
 			indiv_pallet_coinage::Call::<Runtime>::unload_recycler_into_external_asset {
+				instance_id: COINAGE_INSTANCE_ID,
 				aliases: aliases_vec.try_into().unwrap(),
 				value: val_off,
 				index: idx_off,
 				revision: rev_off,
 				to: alice_external_asset_address.clone(),
+				max_fee: 0,
 			},
 		);
 

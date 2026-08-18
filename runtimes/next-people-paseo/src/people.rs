@@ -15,37 +15,50 @@
 // limitations under the License.
 
 use super::*;
-use assets_common::local_and_foreign_assets::ForeignAssetReserveData;
-use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use assets_common::local_and_foreign_assets::TargetFromLeft;
+use codec::{Decode, Encode};
 use cumulus_primitives_core::Junction::{GeneralIndex, PalletInstance, Parachain};
 use frame_support::{
 	pallet_prelude::PhantomData,
 	parameter_types,
 	traits::{
 		fungible::{HoldConsideration, ItemOf},
-		ConstU128, ConstU32, ConstUint, Get, LinearStoragePrice, Randomness,
+		ConstU128, ConstU32, ConstU8, ConstUint, Footprint, Get, LinearStoragePrice, Randomness,
 	},
 };
 #[cfg(feature = "runtime-benchmarks")]
 use indiv_support::traits::PersonalId;
+#[cfg(feature = "runtime-benchmarks")]
+use indiv_support::traits::{Alias, RingIndex};
 use indiv_support::{
 	fungibles::CombineAssetsWithHolder,
-	traits::{Alias, AllocateStorage, Context, RingIndex},
+	traits::{AllocateStorage, Context, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER},
 	utils::TypedGetToGet,
 };
-use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
-use scale_info::TypeInfo;
+use paseo_runtime_constants::system_parachain::{
+	NextAssetHubParaId, ASSET_HUB_ID, NEXT_ASSET_HUB_ID,
+};
 #[cfg(feature = "runtime-benchmarks")]
 use sp_runtime::BoundedVec;
 use sp_runtime::{
 	traits::{AccountIdConversion, ConstI8, ConstU16},
-	Debug, DispatchResult, MultiSignature, MultiSigner, Percent,
+	DispatchResult, MultiSignature, MultiSigner, Percent, SaturatedConversion,
 };
 use sp_statement_store::StatementAllowance;
-use verifiable::GenerateVerifiable;
 use xcm::v5::{Location, WeightLimit};
 
-use crate::paseo_constants::{CENTS, UNITS};
+use crate::{
+	parameters::{
+		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePersonStatementLimit,
+		LiteStmtStoreSlotsPerPeriod, LongTermStorageAllowanceForLitePeople,
+		LongTermStorageAllowanceForPeople, LongTermStorageClaimsPerPeriod,
+		LongTermStorageCleanupLimit, LongTermStorageGraceWindow, LongTermStoragePeriodDuration,
+		NotificationAllowance, NotificationPeriodDuration, NotificationSlotsPerPeriod,
+		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow,
+		StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
+	},
+	paseo_constants::{CENTS, UNITS},
+};
 
 /// Asset id of the external asset as registered on Paseo Asset Hub.
 pub const EXTERNAL_ASSET_ID: u32 = 50_000_413;
@@ -61,8 +74,33 @@ parameter_types! {
 /// The full featured fungibles implementation with both regular and hold functionality.
 pub type AssetsWithHolder = CombineAssetsWithHolder<Assets, AssetsHolder>;
 
+/// Native plus assets, with the native token under the parent location.
+pub type NativeAndAssets = frame_support::traits::fungible::UnionOf<
+	Balances,
+	AssetsWithHolder,
+	TargetFromLeft<crate::xcm_config::RelayLocation, Location>,
+	Location,
+	AccountId,
+>;
+
 /// A fungible implementation using the external asset id from Asset Hub.
 pub type FungibleExternalAsset = ItemOf<AssetsWithHolder, ExternalAssetLocation, AccountId>;
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct BenchmarkClock;
+#[cfg(feature = "runtime-benchmarks")]
+impl frame_support::traits::UnixTime for BenchmarkClock {
+	fn now() -> core::time::Duration {
+		let now = pallet_timestamp::Now::<Runtime>::get();
+		core::time::Duration::from_millis(now)
+	}
+}
+
+/// Wall-clock source used by pallet `Config`s in this runtime.
+#[cfg(not(feature = "runtime-benchmarks"))]
+pub type RuntimeClock = Timestamp;
+#[cfg(feature = "runtime-benchmarks")]
+pub type RuntimeClock = BenchmarkClock;
 
 // The `AccountContexts` type, which must implement `trait Contains` and return true only for the
 // contexts the runtime supports.
@@ -76,7 +114,7 @@ impl frame_support::traits::Contains<Context> for AccountContexts {
 }
 
 use indiv_pallet_game::PhaseDurationValues;
-use verifiable::ring::bandersnatch::BandersnatchVrfVerifiable;
+use indiv_support::crypto::{BandersnatchVrfVerifiable, GenerateVerifiable};
 
 parameter_types! {
 	/// Controls the ring size for the people members collection, used for anonymous ring VRF
@@ -117,10 +155,10 @@ impl indiv_pallet_chunks_manager::Config for Runtime {
 
 impl indiv_pallet_members::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_members::WeightInfo<Runtime>;
-	type Crypto = verifiable::ring::bandersnatch::BandersnatchVrfVerifiable;
+	type Crypto = BandersnatchVrfVerifiable;
 	type Location = xcm::v5::Location;
 	type ChunksManager = ChunksManager;
-	type Clock = Timestamp;
+	type Clock = RuntimeClock;
 	type MaxCollections = ConstU32<100>;
 	type OnboardingQueuePageSize = ConstU32<255>;
 	type MaxFlexibleRingExponent = MembersFlexibleRingExponent;
@@ -384,7 +422,7 @@ impl indiv_pallet_mob_rule::Config for Runtime {
 	type Currency = FungibleExternalAsset;
 	type CurrencyLocationInfo = ExternalAssetLocation;
 	// 24 hours
-	type Clock = Timestamp;
+	type Clock = RuntimeClock;
 	type EnsurePerson = indiv_pallet_people::EnsurePersonalAliasInContext<Runtime>;
 	type MaxVoteClaimDuration = ConstU64<86_400>;
 	type MinCaseDuration = ConstU32<{ 10 * 60 }>;
@@ -436,7 +474,7 @@ pub struct PoIBenchmarkHelper;
 use indiv_pallet_proof_of_ink::ReferralTicket;
 
 #[cfg(feature = "runtime-benchmarks")]
-use alloc::vec;
+use alloc::{boxed::Box, vec};
 
 #[cfg(feature = "runtime-benchmarks")]
 impl indiv_pallet_proof_of_ink::BenchmarkHelper<Runtime> for PoIBenchmarkHelper {
@@ -492,7 +530,10 @@ impl indiv_pallet_proof_of_ink::Config for Runtime {
 	type Ticket = AccountId;
 	type Oracle = MobRule;
 	type Randomness = SubjectBlockRandommess<Runtime>;
+	#[cfg(not(feature = "runtime-benchmarks"))]
 	type DataStore = BulletinDataStore;
+	#[cfg(feature = "runtime-benchmarks")]
+	type DataStore = BenchmarkBulletinDataStore;
 	type MaxActiveReferrals = ConstU32<10>;
 	type MaxRetryAttempts = ConstU32<1>;
 	type MaxReimbursementValues = ConstU32<50>;
@@ -541,7 +582,7 @@ parameter_types! {
 	pub const PlayDepositReason: RuntimeHoldReason =
 		RuntimeHoldReason::Game(indiv_pallet_game::HoldReason::PlayDeposit);
 	pub const PlayDepositDefault: Balance = 2 * UNITS;
-	// TODO: Find a reasonable value
+	// TODO(paritytech/individuality#1124): find a reasonable value.
 	pub PlayerStatementLimit: StatementAllowance = StatementAllowance {
 		max_size: 1_000_000,
 		max_count: 1_000_000,
@@ -552,11 +593,23 @@ parameter_types! {
 impl indiv_pallet_game::Config for Runtime {
 	const TESTNET: bool = true;
 	type WeightInfo = weights::indiv_pallet_game::WeightInfo<Runtime>;
+	// The game benchmarks sweep `1..=MaxGroupSize` and `1..=MaxRounds` for their linear
+	// regressions. The production bounds (6/3) are too small to fit accurate per-player and
+	// per-round slopes, so the benchmarking build widens them to 10. The fitted weight
+	// formulas stay valid at the production bounds, which only interpolate within the measured
+	// range.
+	#[cfg(not(feature = "runtime-benchmarks"))]
 	type MaxGroupSize = ConstU32<6>;
-	type UnixTime = Timestamp;
+	#[cfg(feature = "runtime-benchmarks")]
+	type MaxGroupSize = ConstU32<10>;
+	type UnixTime = RuntimeClock;
+	#[cfg(not(feature = "runtime-benchmarks"))]
 	type MaxRounds = ConstU32<3>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type MaxRounds = ConstU32<10>;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type InviteIssuer = EnsureRoot<Self::AccountId>;
+	type EnsureLiteAlias = indiv_pallet_people_lite::EnsureLiteAliasInContext<Runtime>;
 	type NonPlayingKickoutTime = ConstU32<{ 90 * DAYS }>;
 	type NativeFungible = Balances;
 	type PlayDeposit = HoldConsideration<
@@ -570,6 +623,7 @@ impl indiv_pallet_game::Config for Runtime {
 	type TicketSignature = MultiSignature;
 	type MaxGameSchedules = ConstU32<12>;
 	type MaxAttendanceHistoryDepth = ConstU32<12>;
+	type NftClaimCredits = NftCredits;
 	type DefaultPhaseDurations = GamePhaseDurations;
 	type AccountSignature = Signature;
 	type PlayerStatementLimit = PlayerStatementLimit;
@@ -583,6 +637,101 @@ impl indiv_pallet_game::Config for Runtime {
 	type AirdropSource = GameAirdropSource;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = GamePalletBenchmarkHelper;
+}
+
+/// What the credits benchmarks cannot set up themselves: only the runtime knows how its HRMP
+/// channels are made.
+#[cfg(feature = "runtime-benchmarks")]
+pub struct NftCreditsBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl indiv_pallet_nft_credits::benchmarking::BenchmarkHelper for NftCreditsBenchmarkHelper {
+	fn open_nft_claims_channel(max_message_size: u32) {
+		use cumulus_pallet_parachain_system::RelevantMessagingState;
+		use cumulus_primitives_core::relay_chain::AbridgedHrmpChannel;
+
+		let channel = AbridgedHrmpChannel {
+			max_capacity: 1000,
+			max_total_size: 1_000_000,
+			max_message_size,
+			msg_count: 0,
+			total_size: 0,
+			mqc_head: None,
+		};
+		let claims_chain = <Runtime as indiv_pallet_nft_credits::Config>::NftClaimsParaId::get();
+		let mut messaging_state = RelevantMessagingState::<Runtime>::get().unwrap_or(
+			cumulus_pallet_parachain_system::relay_state_snapshot::MessagingStateSnapshot {
+				dmq_mqc_head: Default::default(),
+				relay_dispatch_queue_remaining_capacity: Default::default(),
+				ingress_channels: Vec::new(),
+				egress_channels: Vec::new(),
+			},
+		);
+		messaging_state.egress_channels.retain(|(id, _)| *id != claims_chain);
+		messaging_state.egress_channels.push((claims_chain, channel));
+		messaging_state.egress_channels.sort_by_key(|(id, _)| *id);
+		RelevantMessagingState::<Runtime>::put(messaging_state);
+	}
+}
+
+impl indiv_pallet_nft_credits::Config for Runtime {
+	type WeightInfo = weights::indiv_pallet_nft_credits::WeightInfo<Runtime>;
+	// Sized above what one block can award, so no `report` awards a credit the block has no room
+	// for, which would be committed to no root and lost. A worst-case report awards
+	// `(MaxGroupSize - 1) * MaxRounds = 15` credits and is charged the awards entry's
+	// `MaxEncodedLen` of `2 + 65 * MaxCreditsPerBlock` bytes, so at 1200 about 65 reports fit the
+	// 7,864,320-byte `Normal` proof budget, awarding 975 credits together. The game pallet's
+	// `integrity_test` recomputes that floor from the block limits and the generated `report`
+	// weight, so a value below it fails `runtime_integrity_tests`.
+	//
+	// The remaining fifth is margin against a regeneration that makes a report cheaper, fitting
+	// more per block and lifting the floor. It is cheap, since the charge that buys it lowers the
+	// floor in turn: at 1080 the floor was 1050, thin enough that any regeneration would have
+	// moved it past.
+	type MaxCreditsPerBlock = ConstU32<1200>;
+	type XcmRouter = crate::xcm_config::XcmRouter;
+	type NftClaimsParaId = NextAssetHubParaId;
+	// Matches the `NftClaims` index in next-asset-hub-paseo's `construct_runtime!`.
+	type NftClaimsPalletIndex = ConstU8<96>;
+	type ChannelInfo = ParachainSystem;
+	// One tree per block at most, and the offchain worker ships them every block, so the queue
+	// only fills while delivery to Asset Hub is down. Matched to `MaxRetainedAwardBlocks`, which
+	// counts the same award blocks: the oldest tree still queued is then one whose awards are
+	// also still in state, so a delivery that outlasts the outage needs no proof rebuilt from
+	// events. Eight full messages drain it.
+	//
+	// An entry is 12 bytes and the queue is read at the value's `MaxEncodedLen`, so
+	// `authorize_send_credit_trees` pays about 3 KB of the `Normal` proof budget for it. A tree
+	// past the bound is dropped from delivery, not lost: its root stays on chain for
+	// `replay_credit_trees`.
+	type MaxQueuedCreditTrees = ConstU32<256>;
+	type MaxCreditTreesPerMessage = ConstU32<32>;
+	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
+	// Entries are the distinct blocks a claimant was awarded in, not a window of consecutive
+	// ones, so the bound counts games rather than time. One game awards a claimant at most
+	// `(MaxGroupSize - 1) * MaxRounds = 15` credits, one per co-player that reported `Person`
+	// on them, plus the attendance backfill, which awards the rest in a single call. Those
+	// land in 16 distinct blocks only if no two reports ever share one, out of the 300 blocks
+	// the 10-minute reporting phase spans; reports cluster, so a few per game is the norm.
+	//
+	// A game cycle runs 17.5 minutes, so back to back games fill this in about two hours at
+	// the usual few entries each, and in two games if both hit the worst case. That is the
+	// intended horizon: the index is a lookup aid for trees recent enough to still be worth
+	// minting against, not a record for the chain's lifetime, and the oldest block drops out
+	// once it is full.
+	type MaxCreditBlocksPerClaimant = ConstU32<32>;
+	// The window in which a claim is provable from state alone, counted in award blocks. Reports
+	// cluster inside a game's 10-minute reporting phase, so a game contributes a few dozen award
+	// blocks and this covers several games, well past the two hours the per-claimant index spans.
+	//
+	// It is also the state the chain carries for them: at most this many entries of
+	// `MaxCreditsPerBlock` awards, an award being 65 bytes, so about 17 MB were every retained
+	// block saturated, and proportional to the mints actually outstanding otherwise. A block that
+	// drops out delays no mint, its root staying on chain, but its awards then have to come from
+	// the block's events.
+	type MaxRetainedAwardBlocks = ConstU32<256>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = NftCreditsBenchmarkHelper;
 }
 
 parameter_types! {
@@ -675,33 +824,22 @@ impl indiv_pallet_airdrop::Config for Runtime {
 	type Fungibles = AssetsWithHolder;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type PalletId = AirdropPalletId;
-	type UnixTime = Timestamp;
-	type Randomness = ParentHashRandomness<Runtime>;
+	type UnixTime = RuntimeClock;
+	// The relay block randomness is known by the validator producing it as soon as the previous
+	// epoch ends. This pallet is used alongside indiv-pallet-game. Therefore new player can
+	// register with new keys while knowing the randomness if the validator shared it to them.
+	// If there is less than 5K players, they can then reach personhood and win, if there is more
+	// than 5K players they can't reach personhood but prevent others from winning.
+	//
+	// Alternatively we can use the relay one epoch ago randomness, this would result in waiting one
+	// epoch after closing registration before drawing the winners.
+	type Randomness = indiv_pallet_relay_randomness::RelayBlockRandomness<Runtime>;
 	type AccountIdToPublic = AccountIdToSr25519Public;
 	type ClearLimit = ConstU32<100>;
 	type DrawLimit = ConstU32<100>;
 	type OffchainWorkerInterval = ConstU32<1>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = AirdropBenchmarkHelper;
-}
-
-/// Placeholder [`indiv_support::traits::CurrentBlockRandomness`] using the parent block
-/// hash. **Not** the relay-chain per-block VRF the trait documents — the parent hash is
-/// chosen by the parachain block author and is grindable. Acceptable as a stand-in until
-/// the proper relay-chain randomness adapter is wired up; revisit before mainnet.
-// TODO: Make the proper implementation.
-pub struct ParentHashRandomness<R>(core::marker::PhantomData<R>);
-impl<R> indiv_support::traits::CurrentBlockRandomness for ParentHashRandomness<R>
-where
-	R: frame_system::Config,
-	[u8; 32]: From<<R as frame_system::Config>::Hash>,
-{
-	fn randomness() -> Option<[u8; 32]> {
-		Some(frame_system::Pallet::<R>::parent_hash().into())
-	}
-
-	#[cfg(feature = "runtime-benchmarks")]
-	fn setup_randomness() {}
 }
 
 /// Direct byte-level reinterpretation of an `AccountId32` as an sr25519 public key.
@@ -753,19 +891,18 @@ impl indiv_pallet_airdrop::benchmarking::BenchmarkHelper<Runtime> for AirdropBen
 		member_seed: u32,
 	) -> (indiv_pallet_airdrop::ProofOf<Runtime>, indiv_support::traits::Alias) {
 		use indiv_support::{
+			crypto::BandersnatchSuite,
 			genesis::ring_verifier_builder_params,
 			traits::{RingMode, PEOPLE_IDENTIFIER},
 		};
-		use verifiable::ring::{
-			ark_vrf::suites::bandersnatch::BandersnatchSha512Ell2, RingDomainSize,
-		};
+		use verifiable::ring::RingDomainSize;
 
 		type Crypto = BandersnatchVrfVerifiable;
 
 		let ring_exponent = MembersFlexibleRingExponent::get();
 		let domain: RingDomainSize =
 			ring_exponent.try_into().expect("RingExponent → RingDomainSize");
-		let chunks = ring_verifier_builder_params::<BandersnatchSha512Ell2>(domain);
+		let chunks = ring_verifier_builder_params::<BandersnatchSuite>(domain);
 
 		let mut entropy = [0u8; 32];
 		entropy[..4].copy_from_slice(&member_seed.to_le_bytes());
@@ -781,7 +918,7 @@ impl indiv_pallet_airdrop::benchmarking::BenchmarkHelper<Runtime> for AirdropBen
 		.expect("push_members for single bench member");
 		let members = Crypto::finish_members(intermediate.clone());
 
-		// Seed the Members pallet so `verify_membership_at_rev(PEOPLE_IDENTIFIER, 0, 0, ...)`
+		// Seed the Members pallet so `verify_membership(PEOPLE_IDENTIFIER, 0, 0, ...)`
 		// works.
 		if indiv_pallet_members::Collections::<Runtime>::get(PEOPLE_IDENTIFIER).is_none() {
 			indiv_pallet_members::Collections::<Runtime>::insert(
@@ -895,6 +1032,21 @@ impl
 	}
 }
 
+parameter_types! {
+	/// Upper bound on what one credit tree of a `receive_credit_trees` batch costs to execute on
+	/// the NFT claims chain. Charged to the caller of `replay_credit_trees`, so a repair pays for
+	/// the remote work it causes, and the only thing bounding how much replay traffic anyone can
+	/// cause.
+	///
+	/// Derived from the marginal per-tree cost of `receive_credit_trees` on Asset Hub: one
+	/// `CreditTrees` read and write, the per-tree execution term, and the `max_size` of a
+	/// `CreditTrees` entry in proof. Rounded up, and both dimensions carried, since a batch that
+	/// only paid `ref_time` would push a proof no one was charged for. Re-derive it whenever the
+	/// claims chain's `indiv_pallet_nft_claims` weights are regenerated; `integrity_test` holds
+	/// the whole `replay_credit_trees` charge, surcharge included, to the block's budget.
+	pub NftClaimsRemoteWeight: Weight = Weight::from_parts(150_000_000, 2_600);
+}
+
 pub struct GamePhaseDurations;
 impl Get<PhaseDurationValues> for GamePhaseDurations {
 	fn get() -> PhaseDurationValues {
@@ -904,7 +1056,6 @@ impl Get<PhaseDurationValues> for GamePhaseDurations {
 			post_shuffle_margin: 30,
 			reporting: 10 * 60,
 			player_process: 60,
-			airdrop_claim_window: 3 * 24 * 60 * 60,
 		}
 	}
 }
@@ -912,71 +1063,36 @@ impl Get<PhaseDurationValues> for GamePhaseDurations {
 /// Parachain ID of the Bulletin Chain used for data storage via XCM.
 pub const BULLETIN_CHAIN_PARA_ID: u32 = 1501;
 
+#[cfg(feature = "runtime-benchmarks")]
+pub struct BenchNoopXcmSender;
+#[cfg(feature = "runtime-benchmarks")]
+impl xcm::v5::SendXcm for BenchNoopXcmSender {
+	type Ticket = ();
+
+	fn validate(
+		_destination: &mut Option<Location>,
+		_message: &mut Option<xcm::v5::Xcm<()>>,
+	) -> xcm::v5::SendResult<Self::Ticket> {
+		Ok(((), xcm::v5::Assets::new()))
+	}
+
+	fn deliver(_ticket: Self::Ticket) -> Result<xcm::v5::XcmHash, xcm::v5::SendError> {
+		Ok([0u8; 32])
+	}
+}
+
 parameter_types! {
-	pub StorageInitializationFundingAccount: AccountId =
-		AccountId::from(hex_literal::hex!("d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d"));
-	pub StorageInitializationInviteRecipient: AccountId =
-		AccountId::from(hex_literal::hex!("8eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a48"));
-	pub PeopleChainSovereignAccount: AccountId = {
-		parachain_info::Pallet::<Runtime>::parachain_id().into_account_truncating()
-	};
-	pub PeopleChainParaId: ParaId = parachain_info::Pallet::<Runtime>::parachain_id();
 	/// XCM destination location for the Bulletin Chain.
 	pub BulletinChainLocation: Location = Location::new(1, [Parachain(BULLETIN_CHAIN_PARA_ID)]);
 }
 
-impl indiv_pallet_storage_initialization::Config for Runtime {
-	type WeightInfo = weights::indiv_pallet_storage_initialization::WeightInfo<Runtime>;
-	type Assets = Assets;
-	type ReserveData = ForeignAssetReserveData;
-	type ReserveSetter = Assets;
-	type InvitesRecipient = StorageInitializationInviteRecipient;
-	type AssetsDestAccount = PeopleChainSovereignAccount;
-	type AssetHubTransferAmount = ConstU128<5_000_000_000_000>;
-	type XcmTimeout = ConstU32<100>;
-	#[cfg(not(feature = "runtime-benchmarks"))]
-	type XcmSender = crate::xcm_config::XcmRouter;
-	#[cfg(feature = "runtime-benchmarks")]
-	type XcmSender = bench_xcm_sender::BenchXcmSender;
-	type ParachainInfo = PeopleChainParaId;
-	type TransferAssetForeignId = ExternalAssetLocation;
-}
-
-#[cfg(feature = "runtime-benchmarks")]
-pub struct StorageInitBenchmarkHelper;
-#[cfg(feature = "runtime-benchmarks")]
-impl indiv_pallet_storage_initialization::benchmarking::BenchmarkHelper
-	for StorageInitBenchmarkHelper
-{
-	fn set_unix_time(d: core::time::Duration) {
-		pallet_timestamp::Now::<Runtime>::put(d.as_millis() as u64);
-	}
-}
-
-#[cfg(feature = "runtime-benchmarks")]
-mod bench_xcm_sender {
-	use xcm::prelude::*;
-
-	/// Bench-only `SendXcm` that proxies `validate` to the real `XcmRouter` (so
-	/// the router's version-discovery / fee-factor reads are still captured in
-	/// the measured weight) but short-circuits `deliver` to always succeed —
-	/// the real `deliver` fails in the bench harness because there's no relay /
-	/// HRMP routing set up, which would cause the success-path writes
-	/// (`OnPollStatus`, `XcmTransferInitiatedAt`) to be missed.
-	pub struct BenchXcmSender;
-	impl SendXcm for BenchXcmSender {
-		type Ticket = <crate::xcm_config::XcmRouter as SendXcm>::Ticket;
-
-		fn validate(
-			dest: &mut Option<Location>,
-			xcm: &mut Option<Xcm<()>>,
-		) -> SendResult<Self::Ticket> {
-			<crate::xcm_config::XcmRouter as SendXcm>::validate(dest, xcm)
-		}
-
-		fn deliver(_ticket: Self::Ticket) -> Result<XcmHash, SendError> {
-			Ok([0u8; 32])
-		}
+// The contexts in which lite people may set up account aliases. The pallet's own authentication
+// context, and the score context, in which a lite person can designate an account to play the game.
+pub struct LitePeopleAccountContexts;
+impl frame_support::traits::Contains<Context> for LitePeopleAccountContexts {
+	fn contains(l: &Context) -> bool {
+		l == indiv_pallet_people_lite::LITE_PEOPLE_AUTH_CONTEXT ||
+			l == &indiv_pallet_score::SCORE_CONTEXT
 	}
 }
 
@@ -989,62 +1105,21 @@ impl indiv_pallet_people_lite::Config for Runtime {
 	type LiteOnboardingSize = LitePeopleOnboardingSize;
 	type AttestationSignature = Signature;
 	type LiteConsumerRegistrar = Resources;
+	type AccountContexts = LitePeopleAccountContexts;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();
 }
 
 parameter_types! {
-	pub const MaxUsernameLength: u32 = 32;
 	pub const MinUsernameLength: u32 = 6;
 	pub const PersonAuthDuration: u32 = 2 * 24 * 60 * 60; // 2 days
 	pub const MinPersonAuthUpdateInterval: u32 = 24 * 60 * 60; // 1 day
-	pub const FriendRequestSlotsPerPeriod: u8 = 16;
-	pub const LiteFriendRequestSlotsPerPeriod: u8 = 8;
-	pub const FriendRequestPeriodDuration: u32 = 24 * 60 * 60; // 1 day
-	pub const FriendRequestGraceWindow: u32 = 60 * 60; // 1 hour
-	pub const LongTermStorageGraceWindow: u32 = 60 * 60; // 1 hour
-	pub const FriendRequestRetentionDuration: u64 = 7 * 24 * 60 * 60; // 1 week
 	pub const MaxReservationQueueLength: u32 = 10;
-	pub const StmtStoreSlotsPerPeriod: u32 = 20;
-	pub const LiteStmtStoreSlotsPerPeriod: u32 = 10;
-	pub const StmtStoreCleanupLimit: u32 = 50;
-	pub const StmtStoreReplacementCooldown: u32 = 60; // 1 minute
-	pub const StmtStoreGraceWindow: u32 = 2 * 24 * 60 * 60; // 2 days
-	pub AccountsApiAllowance: StatementAllowance = StatementAllowance {
-		max_size: 500 * 1024, // 500 KiB
-		max_count: 2,
-	};
-	pub FriendRequestAllowance: StatementAllowance = StatementAllowance {
-		max_size: 10 * 1024, // 10 KiB
-		max_count: 1,
-	};
-	pub LitePersonStatementLimit: StatementAllowance = StatementAllowance {
-		max_size: 500 * 1024, // 500 KiB
-		max_count: 50,
-	};
-	pub PersonStatementLimit: StatementAllowance = StatementAllowance {
-		max_size: 1024 * 1024, // 1 MiB
-		max_count: 200,
-	};
-	pub const LongTermStoragePeriodDuration: u32 = 14 * 24 * 60 * 60; // 2 weeks
-	pub const LongTermStorageClaimsPerPeriod: u8 = 100;
-	pub const LongTermStorageCleanupLimit: u32 = 20;
-	pub LongTermStorageAllowanceForPeople: indiv_pallet_resources::types::LongTermStorageAllocation =
-		indiv_pallet_resources::types::LongTermStorageAllocation {
-			transactions: 100,
-			bytes: 8 * 1024 * 1024, // 8 MiB
-		};
-	pub LongTermStorageAllowanceForLitePeople: indiv_pallet_resources::types::LongTermStorageAllocation =
-		indiv_pallet_resources::types::LongTermStorageAllocation {
-			transactions: 10,
-			bytes: 4 * 1024 * 1024, // 4 MiB
-		};
 }
 
 impl indiv_pallet_resources::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_resources::WeightInfo<Runtime>;
 	type MemberService = Members;
-	type MaxUsernameLength = MaxUsernameLength;
 	type MinUsernameLength = MinUsernameLength;
 	type PersonAuthDuration = PersonAuthDuration;
 	type AccountsApiAllowance = AccountsApiAllowance;
@@ -1053,17 +1128,15 @@ impl indiv_pallet_resources::Config for Runtime {
 	type StmtStoreCleanupLimit = StmtStoreCleanupLimit;
 	type StmtStoreReplacementCooldown = StmtStoreReplacementCooldown;
 	type StmtStoreGraceWindow = StmtStoreGraceWindow;
-	type FriendRequestAllowance = FriendRequestAllowance;
-	type FriendRequestSlotsPerPeriod = FriendRequestSlotsPerPeriod;
-	type LiteFriendRequestSlotsPerPeriod = LiteFriendRequestSlotsPerPeriod;
-	type FriendRequestPeriodDuration = FriendRequestPeriodDuration;
-	type FriendRequestGraceWindow = FriendRequestGraceWindow;
-	type FriendRequestRetentionDuration = FriendRequestRetentionDuration;
+	type NotificationAllowance = NotificationAllowance;
+	type NotificationSlotsPerPeriod = NotificationSlotsPerPeriod;
+	type LiteNotificationSlotsPerPeriod = LiteNotificationSlotsPerPeriod;
+	type NotificationPeriodDuration = NotificationPeriodDuration;
 	type OffchainWorkerInterval = ConstU32<1>;
 	type MinPersonAuthUpdateInterval = MinPersonAuthUpdateInterval;
 	type EnsurePerson = indiv_pallet_people::EnsurePersonalAliasInContext<Runtime>;
 	type EnsureLitePerson = indiv_pallet_people_lite::EnsureLitePerson<Runtime>;
-	type Clock = Timestamp;
+	type Clock = RuntimeClock;
 	type OffchainSignature = Signature;
 	type LitePersonStatementLimit = LitePersonStatementLimit;
 	type PersonStatementLimit = PersonStatementLimit;
@@ -1074,7 +1147,10 @@ impl indiv_pallet_resources::Config for Runtime {
 	type LongTermStorageClaimsPerPeriod = LongTermStorageClaimsPerPeriod;
 	type LongTermStorageAllowanceForPeople = LongTermStorageAllowanceForPeople;
 	type LongTermStorageAllowanceForLitePeople = LongTermStorageAllowanceForLitePeople;
+	#[cfg(not(feature = "runtime-benchmarks"))]
 	type LongTermStorageDataStore = BulletinDataStore;
+	#[cfg(feature = "runtime-benchmarks")]
+	type LongTermStorageDataStore = BenchmarkBulletinDataStore;
 	type LongTermStorageCleanupLimit = LongTermStorageCleanupLimit;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = benchmark_utils::ResourcesBenchHelper;
@@ -1082,56 +1158,22 @@ impl indiv_pallet_resources::Config for Runtime {
 
 parameter_types! {
 	pub const CoinagePalletId: PalletId = PalletId(*b"coinage ");
-	pub CoinageCollectionOwner: Location = Location::new(0, [PalletInstance(68)]);
 }
 
-#[derive(
-	Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, MaxEncodedLen,
-)]
-pub struct LitePeopleProof {
-	pub proof: <BandersnatchVrfVerifiable as GenerateVerifiable>::Proof,
-	pub ring: RingIndex,
-}
-impl indiv_pallet_coinage::ValidateProof for LitePeopleProof {
-	type Proof = LitePeopleProof;
-	fn validate_proof(proof: &Self::Proof, context: &[u8], msg: &[u8]) -> Result<Alias, ()> {
-		use indiv_support::traits::MembershipProver;
-		let context_arr: [u8; 32] = context.try_into().map_err(|_| ())?;
-		let result = Members::verify_membership(
-			indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER,
-			&proof.proof,
-			proof.ring,
-			context_arr,
-			msg,
-		)
-		.map_err(|_| ())?;
-		Ok(result.ca.alias)
+/// The asset amount of a coin of denomination zero. The asset has 6 decimals, so this is $0.01.
+#[cfg(any(test, feature = "runtime-benchmarks"))]
+pub const COINAGE_ASSET_UNIT: Balance = 10u128.pow(4);
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct BenchmarkBulletinDataStore;
+#[cfg(feature = "runtime-benchmarks")]
+impl AllocateStorage<AccountId> for BenchmarkBulletinDataStore {
+	fn allocate_storage(_who: &AccountId, _len: u64, _count: u32) -> DispatchResult {
+		Ok(())
 	}
-}
 
-// TODO: move this in pallet-people
-// Runtime-local full-people proof wrapper for coinage integration
-#[derive(
-	Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, MaxEncodedLen,
-)]
-pub struct PeopleProof {
-	pub proof: <BandersnatchVrfVerifiable as GenerateVerifiable>::Proof,
-	pub ring: RingIndex,
-}
-impl indiv_pallet_coinage::ValidateProof for PeopleProof {
-	type Proof = PeopleProof;
-	fn validate_proof(proof: &Self::Proof, context: &[u8], msg: &[u8]) -> Result<Alias, ()> {
-		use indiv_support::traits::MembershipProver;
-		let context_arr: [u8; 32] = context.try_into().map_err(|_| ())?;
-		let result = Members::verify_membership(
-			indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER,
-			&proof.proof,
-			proof.ring,
-			context_arr,
-			msg,
-		)
-		.map_err(|_| ())?;
-		Ok(result.ca.alias)
+	fn refresh_allocation(_who: &AccountId) -> DispatchResult {
+		Ok(())
 	}
 }
 
@@ -1141,30 +1183,130 @@ pub struct CoinageBenchHelper;
 #[cfg(feature = "runtime-benchmarks")]
 impl indiv_pallet_coinage::BenchmarkHelper<Runtime> for CoinageBenchHelper {
 	fn setup_assets() {
+		use frame_support::traits::fungibles::{Inspect, Mutate};
 		benchmark_utils::ensure_external_asset_exists();
-		if !indiv_pallet_coinage::UnderlyingAssetId::<Runtime>::exists() {
-			indiv_pallet_coinage::UnderlyingAssetId::<Runtime>::put(ExternalAssetLocation::get());
+		if indiv_pallet_coinage::AssetToInstance::<Runtime>::iter_key_prefix(
+			ExternalAssetLocation::get(),
+		)
+		.next()
+		.is_none()
+		{
+			// What governance is expected to do before creating an instance: give the pallet
+			// account a balance buffer so fee flows that empty its free balance cannot kill it.
+			<AssetsWithHolder as Mutate<_>>::mint_into(
+				ExternalAssetLocation::get(),
+				&indiv_pallet_coinage::Pallet::<Runtime>::pallet_account(),
+				<AssetsWithHolder as Inspect<_>>::minimum_balance(ExternalAssetLocation::get()),
+			)
+			.expect("minting the pallet account buffer should succeed");
+			Coinage::create_sufficient_instance(
+				RuntimeOrigin::root(),
+				ExternalAssetLocation::get(),
+				COINAGE_ASSET_UNIT,
+			)
+			.expect("create_sufficient_instance should succeed");
 		}
 	}
+
+	fn setup_asset_without_instance() -> Location {
+		use frame_support::traits::fungibles::{Inspect, Mutate};
+		benchmark_utils::ensure_external_asset_exists();
+		// What governance does before `create_sufficient_instance`: the pallet account's balance
+		// buffer.
+		<AssetsWithHolder as Mutate<_>>::mint_into(
+			ExternalAssetLocation::get(),
+			&indiv_pallet_coinage::Pallet::<Runtime>::pallet_account(),
+			<AssetsWithHolder as Inspect<_>>::minimum_balance(ExternalAssetLocation::get()),
+		)
+		.expect("minting the pallet account buffer should succeed");
+		ExternalAssetLocation::get()
+	}
+
 	fn fund_account(who: &AccountId, amount: u128) {
 		use frame_support::traits::fungibles::Mutate;
 		<AssetsWithHolder as Mutate<_>>::mint_into(ExternalAssetLocation::get(), who, amount)
 			.expect("Failed to fund account");
 	}
+
+	fn create_extra_asset(seed: u32, who: &AccountId) -> Location {
+		use frame_support::traits::{
+			fungibles::{Create, Inspect, Mutate},
+			PalletInfoAccess,
+		};
+		let location = Self::extra_asset_id(seed);
+		if !Assets::asset_exists(location.clone()) {
+			<Assets as Create<_>>::create(
+				location.clone(),
+				ParaId::new(<Assets as PalletInfoAccess>::index() as u32).into_account_truncating(),
+				true,
+				1u32.into(),
+			)
+			.expect("Failed to create extra asset");
+		}
+		<AssetsWithHolder as Mutate<_>>::mint_into(location.clone(), who, 1_000_000 * UNITS)
+			.expect("Failed to fund extra asset");
+		location
+	}
+
+	fn extra_asset_id(seed: u32) -> Location {
+		Location::new(
+			1,
+			[
+				Parachain(ASSET_HUB_ID),
+				PalletInstance(50),
+				GeneralIndex(1_000_000u128 + seed as u128),
+			],
+		)
+	}
 	fn set_time(now: core::time::Duration) {
 		pallet_timestamp::Now::<Runtime>::put(now.as_millis() as u64);
 	}
-	fn setup_conversion_rate() {
-		use sp_runtime::FixedU128;
-		// Native has 10 decimals, external asset has 6 decimals.
-		// 1 raw external asset ($10^-6) = 10^4 raw native ($10^-10), so rate = 10^4.
-		pallet_asset_rate::ConversionRateToNative::<Runtime>::insert(
-			ExternalAssetLocation::get(),
-			FixedU128::from_u32(10_000),
-		);
+	fn setup_fee_conversion() {
+		use frame_support::traits::fungible::Mutate as _;
+
+		let native = crate::xcm_config::RelayLocation::get();
+		let asset = ExternalAssetLocation::get();
+		if pallet_asset_conversion::Pools::<Runtime>::contains_key((native.clone(), asset.clone()))
+		{
+			return;
+		}
+
+		// Native has 10 decimals, the external asset has 6, and 1 raw asset ($10^-6) is worth
+		// 10^4 raw native ($10^-10), so the pool holds that ratio. The depth is far above any
+		// benchmarked fee so that the conversions do not move the price.
+		let native_liquidity: Balance = 1_000 * UNITS;
+		let asset_liquidity: Balance = native_liquidity / 10_000;
+
+		let provider: AccountId = [42u8; 32].into();
+		Balances::mint_into(&provider, native_liquidity.saturating_mul(2))
+			.expect("failed to fund the liquidity provider with native");
+		Self::fund_account(&provider, asset_liquidity.saturating_mul(2));
+
+		let origin = RuntimeOrigin::signed(provider.clone());
+		crate::AssetConversion::create_pool(
+			origin.clone(),
+			Box::new(native.clone()),
+			Box::new(asset.clone()),
+		)
+		.expect("failed to create the fee conversion pool");
+		crate::AssetConversion::add_liquidity(
+			origin,
+			Box::new(native),
+			Box::new(asset),
+			native_liquidity,
+			asset_liquidity,
+			1,
+			1,
+			provider,
+		)
+		.expect("failed to add liquidity to the fee conversion pool");
 	}
 
-	fn create_people_proof(context: &[u8], msg: &[u8], _alias: Alias) -> PeopleProof {
+	fn create_people_proof(
+		context: &[u8],
+		msg: &[u8],
+		_alias: Alias,
+	) -> indiv_pallet_people::MembershipProof<Runtime> {
 		use frame_support::dispatch::RawOrigin;
 		use indiv_support::traits::{AddOnlyPeopleTrait, AppendOnlyMembers};
 		use verifiable::ring::RingDomainSize;
@@ -1211,10 +1353,14 @@ impl indiv_pallet_coinage::BenchmarkHelper<Runtime> for CoinageBenchHelper {
 		let (proof, _alias) = BandersnatchVrfVerifiable::create(commitment, &secret, context, msg)
 			.expect("should create proof");
 
-		PeopleProof { proof, ring: ring_index }
+		indiv_pallet_people::MembershipProof { proof, ring: ring_index, revision: 0 }
 	}
 
-	fn create_lite_people_proof(context: &[u8], msg: &[u8], _alias: Alias) -> LitePeopleProof {
+	fn create_lite_people_proof(
+		context: &[u8],
+		msg: &[u8],
+		_alias: Alias,
+	) -> indiv_pallet_people::MembershipProof<Runtime> {
 		use indiv_support::traits::AppendOnlyMembers as _;
 		use sp_core::Pair;
 		use sp_runtime::traits::IdentifyAccount;
@@ -1275,44 +1421,69 @@ impl indiv_pallet_coinage::BenchmarkHelper<Runtime> for CoinageBenchHelper {
 		let (proof, _) = BandersnatchVrfVerifiable::create(commitment, &ring_secret, context, msg)
 			.expect("should create lite proof");
 
-		LitePeopleProof { proof, ring: ring_index }
+		indiv_pallet_people::MembershipProof { proof, ring: ring_index, revision: 0 }
 	}
+}
+
+/// Prices the permanent footprint of a sponsored coinage instance.
+pub struct CoinageInstanceCreationPrice;
+impl sp_runtime::traits::Convert<Footprint, Balance> for CoinageInstanceCreationPrice {
+	fn convert(footprint: Footprint) -> Balance {
+		deposit(footprint.count.saturated_into(), footprint.size.saturated_into())
+	}
+}
+
+parameter_types! {
+	pub const CoinageInstanceCreationHoldReason: RuntimeHoldReason =
+		RuntimeHoldReason::Coinage(indiv_pallet_coinage::HoldReason::InstanceCreationDeposit);
+	pub storage CoinageLoadDeposit: (Location, Balance) =
+		(crate::xcm_config::RelayLocation::get(), deposit(4, 300));
+	pub storage CoinageEnablePermissionless: bool = true;
 }
 
 impl indiv_pallet_coinage::Config for Runtime {
 	type MemberService = Members;
-	type CollectionOwner = CoinageCollectionOwner;
 	type RecyclerRingExponent = RecyclerRingExponent;
 	type PaidUnloadTokenRingExponent = PaidUnloadTokenRingExponent;
-	type UnixTime = Timestamp;
+	type UnixTime = RuntimeClock;
 	type PalletId = CoinagePalletId;
 	type WeightInfo = weights::indiv_pallet_coinage::WeightInfo<Runtime>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = CoinageBenchHelper;
 	type MaximumAge = ConstU16<16>;
 	type NativeFungible = Balances;
-	type Fungibles = AssetsWithHolder;
-	type UnderlyingAssetIdManager = EnsureRoot<AccountId>;
+	type Fungibles = NativeAndAssets;
+	type AdminOrigin = EnsureRoot<AccountId>;
+	type SponsorOrigin = frame_system::EnsureSigned<AccountId>;
+	type EnablePermissionless = CoinageEnablePermissionless;
+	type LoadDeposit = CoinageLoadDeposit;
+	type InstanceCreationDeposit = HoldConsideration<
+		AccountId,
+		Balances,
+		CoinageInstanceCreationHoldReason,
+		CoinageInstanceCreationPrice,
+	>;
 	type MinimumExponent = ConstI8<0>;
 	type MaximumExponent = ConstI8<14>;
 	type MinimumExponentForOutputUnloadFee = ConstI8<0>;
 	type MaxSplitOutputs = ConstU32<32>;
 	type MaxConsolidation = ConstU32<64>;
 	type MaxBatchUnpaidLoad = ConstU32<10>;
-	type UnderlyingAssetUnit = ConstUint<{ 10u128.pow(4) }>; // $0.01, the unit is 10^6.
 	type RecyclerExpirationTime = ConstU32<{ 90 * 24 * 60 * 60 }>; // ~3 months
 	type UnloadTokenTimePeriodPeopleLitePeople = ConstU32<{ 24 * 60 * 60 }>; // 1 day
 
-	// Allowance of $2 per time period (fee is dynamic based on multiplier)
-	type UnloadTokenAllowancePerTimePeriodForPeople = ConstU128<{ 200 * 10u128.pow(4) }>;
-	// Allowance of $0.5 per time period (fee is dynamic based on multiplier)
-	type UnloadTokenAllowancePerTimePeriodForLitePeople = ConstU128<{ 50 * 10u128.pow(4) }>;
+	// Allowance of 20 whole native tokens per time period (fee is dynamic based on multiplier)
+	// (Usage is also capped by `MaxFreeUnloadTokensPerTimePeriod`)
+	type UnloadTokenAllowancePerTimePeriodForPeople = ConstU128<{ 20 * UNITS }>;
+	// Allowance of 10 whole native tokens per time period (fee is dynamic based on multiplier)
+	// (Usage is also capped by `MaxFreeUnloadTokensPerTimePeriod`)
+	type UnloadTokenAllowancePerTimePeriodForLitePeople = ConstU128<{ 10 * UNITS }>;
 	// Bumped temporarily; revisit once the wallet handles `maxFee` and the
 	// "user ran out of free unloads" UX.
 	type MaxFreeUnloadTokensPerTimePeriod = ConstU32<1000>;
-	type LitePeopleProof = LitePeopleProof;
-	type PeopleProof = PeopleProof;
-	type ConversionToAssetBalance = AssetRate;
+	type MembershipProof = People;
+	type FeeConversion = crate::AssetConversion;
+	type NativeAssetKind = crate::xcm_config::RelayLocation;
 	type WeightToFee = TransactionPayment;
 	type PaidUnloadTokenTimePeriod = ConstU32<{ 3 * 24 * 60 * 60 }>; // 3 days
 	type PaidUnloadTokenRingExpirationTime = ConstU32<{ 4 * 24 * 60 * 60 }>; // 4 days
@@ -1347,7 +1518,7 @@ impl indiv_pallet_members_notifier::Config for Runtime {
 	type EnsureSubscriberOrigin = EnsureSiblingParachain;
 	type Crypto = BandersnatchVrfVerifiable;
 	type RingRootsProvider = Members;
-	type Clock = Timestamp;
+	type Clock = RuntimeClock;
 	type MaxSubscribers = ConstU32<10>;
 	type MaxUpdatesPerBatch = ConstU32<10>;
 	type MaxCollectionsPerSubscriber = ConstU32<3>;
@@ -1364,6 +1535,31 @@ impl indiv_pallet_members_notifier::Config for Runtime {
 
 parameter_types! {
 	pub ConstantWeight: Weight = Weight::from_parts(10_000, 0);
+}
+
+parameter_types! {
+	pub AssetHubSubscriptionWhitelist:
+		alloc::vec::Vec<indiv_pallet_members_notifier::GenesisWhitelistEntry> =
+			asset_hub_subscription_whitelist();
+}
+
+/// Pallet index of `MembersSubscriber` in next-asset-hub-paseo's `construct_runtime!`.
+pub const NEXT_ASSET_HUB_MEMBERS_SUBSCRIBER_INDEX: u8 = 97;
+
+/// Subscription whitelist seeded into `MembersNotifier` at genesis.
+///
+/// permissionlessly one-shot, afterwards only a governance call may re-activate
+/// the subscription. Identifiers are required to be sorted ascending.
+pub fn asset_hub_subscription_whitelist(
+) -> alloc::vec::Vec<indiv_pallet_members_notifier::GenesisWhitelistEntry> {
+	alloc::vec![indiv_pallet_members_notifier::GenesisWhitelistEntry {
+		para_id: ParaId::from(NEXT_ASSET_HUB_ID),
+		collections: alloc::vec![
+			(*PEOPLE_IDENTIFIER, MembersFlexibleRingExponent::get().exponent()),
+			(*PEOPLE_LITE_IDENTIFIER, LitePeopleRingExponent::get().exponent()),
+		],
+		pallet_index: NEXT_ASSET_HUB_MEMBERS_SUBSCRIBER_INDEX,
+	}]
 }
 
 pub struct SubjectBlockRandommess<Runtime>(PhantomData<Runtime>);
@@ -1390,17 +1586,15 @@ where
 	}
 }
 
-/// A type containing the encoding of the Bulletin Chain pallets in its runtime. Used to construct
-/// remote calls. The codec index must correspond to the index of `TransactionStorage` in the
-/// `construct_runtime` of the remote chain.
+/// Encoding of Bulletin runtime pallets used to construct remote calls.
 #[derive(Encode, Decode)]
 enum BulletinPallets<AccountId: Encode> {
-	// transaction storage: 40
+	/// The Bulletin TransactionStorage pallet.
 	#[codec(index = 40)]
 	TransactionStorage(TransactionStorageCalls<AccountId>),
 }
 
-/// Call encoding for the bulletin TransactionStorage calls invoked over XCM.
+/// Call encoding for Bulletin TransactionStorage calls invoked over XCM.
 #[derive(Encode, Decode)]
 enum TransactionStorageCalls<AccountId: Encode> {
 	// call index: 3
@@ -1421,90 +1615,54 @@ enum TransactionStorageCalls<AccountId: Encode> {
 	RefreshAccountAuthorization(AccountId),
 }
 
+/// XCM router used by `BulletinDataStore`. Under `runtime-benchmarks` it swaps to a
+/// no-op sender so benchmarks don't drive `xcmp_queue` (which emits `Deliver error
+/// NoChannel` WARN lines) for messages destined to a chain that isn't reachable from
+/// the benchmark state.
+#[cfg(feature = "runtime-benchmarks")]
+type BulletinXcmRouter = BenchNoopXcmSender;
+#[cfg(not(feature = "runtime-benchmarks"))]
+type BulletinXcmRouter = xcm_config::XcmRouter;
+
 #[allow(unused)]
 pub struct BulletinDataStore;
 impl AllocateStorage<AccountId> for BulletinDataStore {
 	fn allocate_storage(who: &AccountId, len: u64, count: u32) -> DispatchResult {
-		use crate::people::TransactionStorageCalls::AuthorizeAccount;
-
-		let destination = BulletinChainLocation::get();
-		let authorize = BulletinPallets::<AccountId>::TransactionStorage(AuthorizeAccount(
-			who.clone(),
-			count,
-			len,
-		));
-
-		// The program to execute on the Bulletin Chain.
-		let program = alloc::vec![
-			UnpaidExecution { weight_limit: WeightLimit::Unlimited, check_origin: None },
-			Transact {
-				origin_kind: OriginKind::Xcm,
-				fallback_max_weight: None,
-				call: authorize.encode().into(),
-			},
-		]
-		.into();
-
-		// send
-		#[allow(clippy::bind_instead_of_map)]
-		send_xcm::<xcm_config::XcmRouter>(destination, program)
-			.map(|_| ())
-			.or_else(|e| {
-				// Ignore errors during benchmarks.
-				// TODO: maybe revisit
-				#[cfg(feature = "runtime-benchmarks")]
-				{
-					let _ = e;
-					Ok::<(), ()>(())
-				}
-
-				#[cfg(not(feature = "runtime-benchmarks"))]
-				{
-					Err(e)
-				}
-			})
-			.map_err(|_| pallet_xcm::Error::<Runtime>::SendFailure)?;
-
-		Ok(())
+		Self::send(
+			BulletinPallets::TransactionStorage(TransactionStorageCalls::AuthorizeAccount(
+				who.clone(),
+				count,
+				len,
+			))
+			.encode(),
+		)
 	}
 
 	fn refresh_allocation(who: &AccountId) -> DispatchResult {
-		use crate::people::TransactionStorageCalls::RefreshAccountAuthorization;
+		Self::send(
+			BulletinPallets::TransactionStorage(
+				TransactionStorageCalls::RefreshAccountAuthorization(who.clone()),
+			)
+			.encode(),
+		)
+	}
+}
 
-		let destination = BulletinChainLocation::get();
-		let refresh = BulletinPallets::<AccountId>::TransactionStorage(
-			RefreshAccountAuthorization(who.clone()),
-		);
+impl BulletinDataStore {
+	/// The long-term storage protocol has a fixed sibling-parachain destination.
+	fn bulletin_chain_location() -> Location {
+		BulletinChainLocation::get()
+	}
 
-		// The program to execute on the Bulletin Chain.
+	fn send(call: alloc::vec::Vec<u8>) -> DispatchResult {
 		let program = alloc::vec![
 			UnpaidExecution { weight_limit: WeightLimit::Unlimited, check_origin: None },
-			Transact {
-				origin_kind: OriginKind::Xcm,
-				fallback_max_weight: None,
-				call: refresh.encode().into(),
-			},
+			Transact { origin_kind: OriginKind::Xcm, fallback_max_weight: None, call: call.into() },
 		]
 		.into();
 
-		// send
-		#[allow(clippy::bind_instead_of_map)]
-		send_xcm::<xcm_config::XcmRouter>(destination, program)
+		send_xcm::<BulletinXcmRouter>(Self::bulletin_chain_location(), program)
 			.map(|_| ())
-			.or_else(|e| {
-				// Ignore errors during benchmarks.
-				// TODO: maybe revisit
-				#[cfg(feature = "runtime-benchmarks")]
-				{
-					let _ = e;
-					Ok::<(), ()>(())
-				}
-
-				#[cfg(not(feature = "runtime-benchmarks"))]
-				{
-					Err(e)
-				}
-			})
 			.map_err(|_| pallet_xcm::Error::<Runtime>::SendFailure)?;
 		Ok(())
 	}

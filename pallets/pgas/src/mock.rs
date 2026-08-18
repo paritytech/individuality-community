@@ -31,8 +31,8 @@ use frame_system::{
 	AuthorizeCall,
 };
 use indiv_support::traits::{
-	Alias, BatchProofItem, Context, ContextualAlias, Identifier, MembershipProver,
-	RevisedContextualAlias, RevisionIndex, RingIndex,
+	Alias, Context, ContextualAlias, Identifier, MembershipProver, RevisedContextualAlias,
+	RevisionIndex, RingIndex, RingMembershipProof,
 };
 use scale_info::TypeInfo;
 use sp_core::ConstU32;
@@ -297,19 +297,6 @@ impl GenerateVerifiable for TestVerifiable {
 		}
 	}
 
-	fn batch_validate(
-		capacity: Self::Config,
-		members: &Self::Members,
-		proofs: &[verifiable::BatchProofItem<Self::Proof>],
-	) -> Result<Vec<Alias>, VerifiableError> {
-		proofs
-			.iter()
-			.map(|item| {
-				Self::validate(capacity, &item.proof, members, &item.context, &item.message)
-			})
-			.collect()
-	}
-
 	fn sign(secret: &Self::Secret, message: &[u8]) -> Result<Self::Signature, VerifiableError> {
 		Ok(TestSignature { member: Self::member_from_secret(secret), message: message.to_vec() })
 	}
@@ -397,44 +384,22 @@ impl MembershipProver for MockProver {
 		identifier: &Identifier,
 		proof: &<Self::Crypto as GenerateVerifiable>::Proof,
 		ring_index: RingIndex,
-		context: Context,
-		msg: &[u8],
-	) -> Result<RevisedContextualAlias, DispatchError> {
-		let members = Self::members_for(identifier, ring_index)
-			.ok_or(DispatchError::Other("ring not registered"))?;
-		let alias = TestVerifiable::validate((), proof, &members, &context[..], msg)
-			.map_err(|_| DispatchError::Other("invalid proof"))?;
-		Ok(RevisedContextualAlias {
-			revision: 0,
-			ring: ring_index,
-			ca: ContextualAlias { alias, context },
-		})
-	}
-
-	fn verify_membership_at_rev(
-		identifier: &Identifier,
-		proof: &<Self::Crypto as GenerateVerifiable>::Proof,
-		ring_index: RingIndex,
 		_revision: RevisionIndex,
 		context: Context,
 		msg: &[u8],
 	) -> Result<ContextualAlias, DispatchError> {
-		Self::verify_membership(identifier, proof, ring_index, context, msg).map(|r| r.ca)
+		let members = Self::members_for(identifier, ring_index)
+			.ok_or(DispatchError::Other("ring not registered"))?;
+		let alias = TestVerifiable::validate((), proof, &members, &context[..], msg)
+			.map_err(|_| DispatchError::Other("invalid proof"))?;
+		Ok(ContextualAlias { alias, context })
 	}
 
 	fn verify_memberships_in_ring(
 		_identifier: &Identifier,
 		_ring_index: RingIndex,
-		_items: &[BatchProofItem<<Self::Crypto as GenerateVerifiable>::Proof>],
-	) -> Result<Vec<RevisedContextualAlias>, DispatchError> {
-		unimplemented!("pgas mock does not use batch verification")
-	}
-
-	fn verify_memberships_in_ring_at_rev(
-		_identifier: &Identifier,
-		_ring_index: RingIndex,
 		_revision: RevisionIndex,
-		_items: &[BatchProofItem<<Self::Crypto as GenerateVerifiable>::Proof>],
+		_items: &[RingMembershipProof<<Self::Crypto as GenerateVerifiable>::Proof>],
 	) -> Result<Vec<ContextualAlias>, DispatchError> {
 		unimplemented!("pgas mock does not use batch verification")
 	}

@@ -1,0 +1,81 @@
+# Optional `just` wrapper around the e2e/ shell scripts and pnpm workspace commands.
+# Run from e2e/: `just <recipe>` (for example `just net-up`, `just bootstrap`).
+#
+# Install just: https://just.systems/ (CI pins JUST_VERSION in ../.github/env).
+
+set shell := ["bash", "-c"]
+
+zn := justfile_directory() / "zombienet"
+ts := justfile_directory()
+
+# list recipes
+default:
+    @just --list
+
+# ---- network harness (zombienet/ — bash) ----
+
+# build/download the pinned node binaries into .tools/ (first run builds polkadot ~30-60 min)
+install-binaries:
+    "{{zn}}/scripts/00-install-binaries.sh"
+
+# build the People + Asset Hub runtime WASM
+build-runtimes:
+    "{{zn}}/scripts/01-build-runtimes.sh"
+
+# generate the chain specs from the runtime WASM
+gen-specs:
+    "{{zn}}/scripts/02-gen-specs.sh"
+
+# spawn the network (foreground; leave running)
+spawn:
+    "{{zn}}/scripts/03-spawn.sh"
+
+# initialise a freshly spawned network (scripts/initial-setup)
+bootstrap:
+    "{{zn}}/scripts/04-bootstrap.sh"
+
+# capture the post-bootstrap state -> .tools/snapshot
+snapshot:
+    "{{zn}}/scripts/05-snapshot.sh"
+
+# spawn from a captured/fetched snapshot (no bootstrap)
+spawn-snap:
+    "{{zn}}/scripts/06-spawn-from-snapshot.sh"
+
+# download the CI-published snapshot into .tools/snapshot
+fetch-snapshot:
+    "{{zn}}/scripts/07-fetch-snapshot.sh"
+
+# remove .tools/bin + .tools/cache (multi-GB; restore with `just install-binaries`, ~30–60 min cold)
+clean-binaries:
+    rm -rf "{{zn}}/.tools/bin" "{{zn}}/.tools/cache"
+    @echo "removed .tools/bin and .tools/cache. Run 'just install-binaries' to restore."
+
+# install-binaries + build-runtimes + gen-specs + spawn (spawn stays foreground)
+net-up: install-binaries build-runtimes gen-specs spawn
+
+# ---- TypeScript tests (pnpm workspace at e2e/) ----
+
+# install the JS workspace
+install:
+    cd "{{ts}}" && pnpm install --frozen-lockfile
+
+# (re)generate PAPI descriptors from the built runtime WASM
+descriptors:
+    cd "{{ts}}" && pnpm run descriptors:update
+
+# run the init-state test suite (needs a running, bootstrapped network)
+test-init:
+    cd "{{ts}}" && pnpm run test:init-state
+
+# run the runtime-upgrade suite
+test-runtime-upgrade:
+    cd "{{ts}}" && pnpm run test:runtime-upgrade
+
+# typecheck the workspace
+typecheck:
+    cd "{{ts}}" && pnpm run typecheck
+
+# lint the workspace
+lint:
+    cd "{{ts}}" && pnpm run lint

@@ -17,7 +17,10 @@
 //! Integration-style tests for the next-people-paseo runtime.
 
 use crate::{
-	people::{ExternalAssetLocation, FungibleExternalAsset, GameAirdropSource, PlayDepositDefault},
+	people::{
+		ExternalAssetLocation, FungibleExternalAsset, GameAirdropSource, PlayDepositDefault,
+		COINAGE_ASSET_UNIT,
+	},
 	Address, Balances, Executive, Runtime, RuntimeCall, TransactionExtension, UncheckedExtrinsic,
 	*,
 };
@@ -34,13 +37,16 @@ use indiv_pallet_airdrop::{
 	types::{AirdropPrize, RegistrationEntry, Status},
 	vrf::transcript_for_event,
 };
-use indiv_pallet_game::{AirdropVrf, GameTimes};
+use indiv_pallet_game::{AirdropVrfs, GameTimes};
 use indiv_pallet_score::{AccountOrPerson, SCORE_CONTEXT};
-use indiv_support::traits::{
-	Alias, AppendOnlyMembers as _, Callback, Judgement, JudgementContext, RevisionIndex, RingIndex,
-	Statement, StatementOracle, Truth,
+use indiv_support::{
+	crypto::{BandersnatchVrfVerifiable as Crypto, GenerateVerifiable},
+	traits::{
+		Alias, AppendOnlyMembers as _, Callback, Context, Judgement, JudgementContext,
+		RevisionIndex, RingIndex, Statement, StatementOracle, Truth,
+	},
 };
-use sp_core::{ed25519, sr25519, Pair as _};
+use sp_core::{sr25519, Pair as _};
 use sp_io::TestExternalities;
 use sp_keyring::Sr25519Keyring;
 use sp_runtime::{
@@ -56,9 +62,8 @@ use std::{
 	cell::{Cell, RefCell},
 	sync::Arc,
 };
-use verifiable::{ring::bandersnatch::BandersnatchVrfVerifiable as Crypto, GenerateVerifiable};
 
-// TODO: bring back key_migration_flow - tests old migration API removed in Members refactor
+// TODO(paritytech/individuality#1127): bring back key_migration_flow - tests old migration API removed in Members refactor
 // mod key_migration_flow;
 mod coinage_fee_sanity;
 mod coinage_infallible_unpaid_load;
@@ -68,12 +73,16 @@ mod coinage_people_flow;
 mod coinage_token_allowance;
 mod external_asset_teleport;
 mod lite_people_free_tx;
+mod lite_people_game_flow;
+mod members_notifier_whitelist;
+mod migrations;
+mod parameters;
 mod score_game_deposit_flow;
 mod score_game_invitation_flow;
 mod score_game_person_flow;
 mod statement_allowance;
+mod transaction_era;
 mod tx_payment_external_asset;
-mod value_transfer_auth_key;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
 
@@ -222,20 +231,19 @@ fn register_lite_person_for_integration(
 		)
 		.and_then(|status| status.ring_index())
 		.is_some(),
-		"lite person ring member must be included before building friend-request proofs"
+		"lite person ring member must be included before building notification proofs"
 	);
 
 	target_secret.expect("target lite secret must be recorded")
 }
 
-fn run_people_lite_on_poll() {
-	let current = frame_system::Pallet::<Runtime>::block_number();
-	let mut wm_people_lite = WeightMeter::with_limit(Weight::MAX);
-	indiv_pallet_people_lite::Pallet::<Runtime>::on_poll(current, &mut wm_people_lite);
+fn create_lite_people_collection() {
+	use frame_support::traits::OnRuntimeUpgrade;
+	indiv_pallet_people_lite::migration::CreateLitePeopleCollection::<Runtime>::on_runtime_upgrade(
+	);
 }
 
 fn new_test_ext() -> TestExternalities {
-	install_test_authorization_pubkey_override();
 	let alice = Sr25519Keyring::Alice.to_account_id();
 	let storage = crate::RuntimeGenesisConfig {
 		system: frame_system::GenesisConfig::default(),
@@ -243,6 +251,11 @@ fn new_test_ext() -> TestExternalities {
 		balances: pallet_balances::GenesisConfig {
 			balances: vec![(alice, 10_000_000_000_000)],
 			dev_accounts: None,
+		},
+		// Same whitelist the genesis presets seed, so the tests exercise the shipped config.
+		members_notifier: indiv_pallet_members_notifier::GenesisConfig {
+			subscription_whitelist: crate::people::asset_hub_subscription_whitelist(),
+			_phantom: Default::default(),
 		},
 		..Default::default()
 	}
@@ -313,7 +326,7 @@ fn new_test_ext() -> TestExternalities {
 	ext.execute_with(|| {
 		frame_system::Pallet::<Runtime>::set_block_number(1);
 		pallet_timestamp::Now::<Runtime>::put(1_000u64);
-		run_people_lite_on_poll();
+		create_lite_people_collection();
 		setup_external_asset();
 	});
 
@@ -329,55 +342,7 @@ fn exec_unsigned(call: RuntimeCall) {
 		.expect("dispatch succeeds");
 }
 
-fn test_authorization_pair() -> ed25519::Pair {
-	ed25519::Pair::from_seed(&[0x42u8; 32])
-}
-
-fn install_test_authorization_pubkey_override() {
-	paseo_runtime_constants::auth_keys::set_value_transfer_authorization_pubkey_override(Some(
-		test_authorization_pair().public(),
-	));
-}
-
-fn finalize_uxt(call: RuntimeCall, mut tx_ext: TransactionExtension) -> UncheckedExtrinsic {
-	let rest_ext = (
-		(
-			tx_ext.0 .0 .1.clone(),
-			tx_ext.0 .0 .2.clone(),
-			tx_ext.0 .0 .3.clone(),
-			tx_ext.0 .0 .4.clone(),
-			tx_ext.0 .0 .5.clone(),
-			tx_ext.0 .0 .6.clone(),
-			tx_ext.0 .0 .7.clone(),
-			tx_ext.0 .0 .8.clone(),
-			tx_ext.0 .0 .9.clone(),
-			tx_ext.0 .0 .10.clone(),
-		),
-		tx_ext.0 .1.clone(),
-		tx_ext.0 .2.clone(),
-		tx_ext.0 .3.clone(),
-		tx_ext.0 .4.clone(),
-		tx_ext.0 .5.clone(),
-		tx_ext.0 .6.clone(),
-		tx_ext.0 .7.clone(),
-		tx_ext.0 .8.clone(),
-		tx_ext.0 .9.clone(),
-	);
-
-	let msg = {
-		let implication_base = (0u8, &call);
-		let implication_explicit = &rest_ext;
-		let implication_implicit = &rest_ext.implicit().unwrap();
-		let encoded = (implication_base, implication_explicit, implication_implicit).encode();
-		sp_io::hashing::blake2_256(&encoded)
-	};
-
-	let sig = test_authorization_pair().sign(&msg);
-	tx_ext.0 .0 .0 = indiv_pallet_value_transfer_auth::extension::AuthorizeValueTransfer::<
-		Runtime,
-		paseo_runtime_constants::ValueTransferAuthorizationPubkey,
-	>(Some(sig), core::marker::PhantomData);
-
+fn finalize_uxt(call: RuntimeCall, tx_ext: TransactionExtension) -> UncheckedExtrinsic {
 	UncheckedExtrinsic::new_transaction(call, tx_ext)
 }
 
@@ -385,10 +350,7 @@ fn finalize_uxt(call: RuntimeCall, mut tx_ext: TransactionExtension) -> Unchecke
 fn base_tx_ext(_call: RuntimeCall) -> TransactionExtension {
 	(
 		(
-			indiv_pallet_value_transfer_auth::extension::AuthorizeValueTransfer::<
-				Runtime,
-				paseo_runtime_constants::ValueTransferAuthorizationPubkey,
-			>::default(),
+			(),
 			pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
 			indiv_pallet_people::extension::AsPerson::<Runtime>::new(None),
 			indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipant::<Runtime>::new(None),
@@ -415,6 +377,15 @@ fn base_tx_ext(_call: RuntimeCall) -> TransactionExtension {
 		>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None)),
 	)
 		.into()
+}
+
+fn ring_revision(
+	identifier: &indiv_support::traits::Identifier,
+	ring_index: RingIndex,
+) -> RevisionIndex {
+	indiv_pallet_members::Root::<Runtime>::get(*identifier, ring_index)
+		.map(|root| root.revision)
+		.expect("ring root should exist in runtime integration tests")
 }
 
 fn build_as_alias_with_proof_ext(
@@ -472,10 +443,11 @@ fn build_as_alias_with_proof_ext(
 		Crypto::open(verifiable::ring::RingDomainSize::Domain11, &member, members.into_iter())
 			.unwrap();
 	let proof = Crypto::create(commitment, who_secret, &context[..], &msg[..]).unwrap().0;
+	let revision = ring_revision(indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER, ring_index);
 
 	tx_ext.0 .0 .2 = indiv_pallet_people::extension::AsPerson::new(Some(
 		indiv_pallet_people::extension::AsPersonInfo::AsPersonalAliasWithProof(
-			proof, ring_index, context,
+			proof, ring_index, revision, context,
 		),
 	));
 
@@ -489,7 +461,7 @@ fn exec_as_alias_with_proof(who_secret: &VrfSecret, context: [u8; 32], call: Run
 		.expect("dispatch succeeds");
 }
 
-fn build_friend_request_registration_ext(
+fn build_notification_registration_ext(
 	who_secret: &VrfSecret,
 	period: u32,
 	seq: u8,
@@ -497,7 +469,7 @@ fn build_friend_request_registration_ext(
 ) -> UncheckedExtrinsic {
 	let mut tx_ext = base_tx_ext(call.clone());
 	let context =
-		Resources::friend_request_context(indiv_pallet_resources::types::FriendRequestReference {
+		Resources::notification_context(indiv_pallet_resources::types::NotificationReference {
 			period,
 			seq,
 		});
@@ -541,17 +513,18 @@ fn build_friend_request_registration_ext(
 		Crypto::open(verifiable::ring::RingDomainSize::Domain11, &member, members.into_iter())
 			.unwrap();
 	let proof = Crypto::create(commitment, who_secret, &context[..], &msg[..]).unwrap().0;
+	let revision = ring_revision(indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER, ring_index);
 
 	tx_ext.0 .0 .9 = indiv_pallet_resources::extension::AsResources::new(Some(
-		indiv_pallet_resources::extension::AsResourcesInfo::RegisterFriendRequestWithProof(
-			proof, ring_index,
+		indiv_pallet_resources::extension::AsResourcesInfo::RegisterNotificationWithProof(
+			proof, ring_index, revision,
 		),
 	));
 
 	finalize_uxt(call, tx_ext)
 }
 
-fn build_friend_request_for_collection_ext(
+fn build_notification_for_collection_ext(
 	who_secret: &VrfSecret,
 	period: u32,
 	seq: u8,
@@ -561,7 +534,7 @@ fn build_friend_request_for_collection_ext(
 ) -> UncheckedExtrinsic {
 	let mut tx_ext = base_tx_ext(call.clone());
 	let context =
-		Resources::friend_request_context(indiv_pallet_resources::types::FriendRequestReference {
+		Resources::notification_context(indiv_pallet_resources::types::NotificationReference {
 			period,
 			seq,
 		});
@@ -598,23 +571,24 @@ fn build_friend_request_for_collection_ext(
 		Crypto::open(verifiable::ring::RingDomainSize::Domain11, &member, members.into_iter())
 			.unwrap();
 	let proof = Crypto::create(commitment, who_secret, &context[..], &msg[..]).unwrap().0;
+	let revision = ring_revision(identifier, ring_index);
 
 	tx_ext.0 .0 .9 = indiv_pallet_resources::extension::AsResources::new(Some(
-		indiv_pallet_resources::extension::AsResourcesInfo::RegisterFriendRequestForCollection(
-			proof, ring_index, collection,
+		indiv_pallet_resources::extension::AsResourcesInfo::RegisterNotificationForCollection(
+			proof, ring_index, revision, collection,
 		),
 	));
 
 	finalize_uxt(call, tx_ext)
 }
 
-fn build_lite_friend_request_registration_ext(
+fn build_lite_notification_registration_ext(
 	who_secret: &VrfSecret,
 	period: u32,
 	seq: u8,
 	call: RuntimeCall,
 ) -> UncheckedExtrinsic {
-	build_friend_request_for_collection_ext(
+	build_notification_for_collection_ext(
 		who_secret,
 		period,
 		seq,
@@ -624,13 +598,13 @@ fn build_lite_friend_request_registration_ext(
 	)
 }
 
-fn exec_friend_request_registration_with_proof(
+fn exec_notification_registration_with_proof(
 	who_secret: &VrfSecret,
 	period: u32,
 	seq: u8,
 	call: RuntimeCall,
 ) {
-	let uxt = build_friend_request_registration_ext(who_secret, period, seq, call);
+	let uxt = build_notification_registration_ext(who_secret, period, seq, call);
 	Executive::apply_extrinsic(uxt)
 		.expect("transaction is valid")
 		.expect("dispatch succeeds");
@@ -835,12 +809,13 @@ fn build_signed_as_alias_with_account_revised_ext(
 			Crypto::open(verifiable::ring::RingDomainSize::Domain11, &member, members.into_iter())
 				.unwrap();
 		let proof = Crypto::create(commitment, who_secret, &context[..], &msg[..]).unwrap().0;
+		let revision = ring_revision(indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER, ring_index);
 
 		assert_eq!(ring_index, ca.ring);
 
 		tx_ext.0 .0 .2 = indiv_pallet_people::extension::AsPerson::new(Some(
 			indiv_pallet_people::extension::AsPersonInfo::AsPersonalAliasWithAccountRevised(
-				nonce, proof, ring_index, context,
+				nonce, proof, ring_index, revision, context,
 			),
 		));
 	}
@@ -1128,6 +1103,123 @@ fn exec_signed_game_invited(who: &sr25519::Pair, ticket: &sr25519::Pair, call: R
 		.expect("dispatch succeeds");
 }
 
+/// Build a transaction dispatching `call` from the lite alias of `lite_secret` in `context`, with
+/// a fresh membership proof of the lite people collection and no signer.
+fn build_as_lite_alias_with_proof_ext(
+	lite_secret: &VrfSecret,
+	context: Context,
+	call: RuntimeCall,
+) -> UncheckedExtrinsic {
+	let mut tx_ext = base_tx_ext(call.clone());
+
+	// The implication of the `PeopleLiteAuth` extension: every extension after it.
+	let rest_ext = (
+		(
+			tx_ext.0 .0 .7.clone(),
+			tx_ext.0 .0 .8.clone(),
+			tx_ext.0 .0 .9.clone(),
+			tx_ext.0 .0 .10.clone(),
+		),
+		tx_ext.0 .1.clone(),
+		tx_ext.0 .2.clone(),
+		tx_ext.0 .3.clone(),
+		tx_ext.0 .4.clone(),
+		tx_ext.0 .5.clone(),
+		tx_ext.0 .6.clone(),
+		tx_ext.0 .7.clone(),
+		tx_ext.0 .8.clone(),
+		tx_ext.0 .9.clone(),
+	);
+
+	let msg = {
+		let implication_base = (0u8, &call);
+		let implication_explicit = &rest_ext;
+		let implication_implicit = &rest_ext.implicit().unwrap();
+		let encoded_implications =
+			(implication_base, implication_explicit, implication_implicit).encode();
+		sp_io::hashing::blake2_256(&encoded_implications)
+	};
+
+	let identifier = indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER;
+	let member = Crypto::member_from_secret(lite_secret);
+	let ring_index = indiv_pallet_members::Pallet::<Runtime>::member_status(identifier, &member)
+		.and_then(|status| status.ring_index())
+		.expect("the lite person is included in a ring");
+	let members = indiv_pallet_members::RingKeys::<Runtime>::get((identifier, ring_index, 0u32));
+	let commitment =
+		Crypto::open(verifiable::ring::RingDomainSize::Domain11, &member, members.into_iter())
+			.expect("the lite member can open a commitment");
+	let proof = Crypto::create(commitment, lite_secret, &context[..], &msg[..])
+		.expect("the lite member can create a proof")
+		.0;
+	let revision = ring_revision(identifier, ring_index);
+
+	tx_ext.0 .0 .6 = indiv_pallet_people_lite::extension::PeopleLiteAuth::<Runtime>::new(Some(
+		indiv_pallet_people_lite::PeopleLiteAuthData::AsLiteAliasWithProof(
+			proof, ring_index, revision, context,
+		),
+	));
+
+	finalize_uxt(call, tx_ext)
+}
+
+/// Build a transaction dispatching `call` through the `PeopleLiteAuth` extension with `auth_data`,
+/// signed by `who` at its current nonce. Serves every `PeopleLiteAuthData` variant that
+/// authenticates with a signed account and a nonce.
+fn build_people_lite_auth_ext(
+	who: &sr25519::Pair,
+	auth_data: impl FnOnce(u32) -> indiv_pallet_people_lite::extension::PeopleLiteAuthDataOf<Runtime>,
+	call: RuntimeCall,
+) -> UncheckedExtrinsic {
+	let mut tx_ext = base_tx_ext(call.clone());
+	let who_account = pair_to_account_id(who);
+	let nonce = frame_system::Pallet::<Runtime>::account_nonce(&who_account);
+
+	tx_ext.0 .7 = frame_system::CheckNonce::<Runtime>::from(nonce);
+	tx_ext.0 .0 .6 =
+		indiv_pallet_people_lite::extension::PeopleLiteAuth::<Runtime>::new(Some(auth_data(nonce)));
+
+	// The implication of the `VerifySignature` extension: every extension after it.
+	let rest_ext = (
+		(
+			tx_ext.0 .0 .2.clone(),
+			tx_ext.0 .0 .3.clone(),
+			tx_ext.0 .0 .4.clone(),
+			tx_ext.0 .0 .5.clone(),
+			tx_ext.0 .0 .6.clone(),
+			tx_ext.0 .0 .7.clone(),
+			tx_ext.0 .0 .8.clone(),
+			tx_ext.0 .0 .9.clone(),
+			tx_ext.0 .0 .10.clone(),
+		),
+		tx_ext.0 .1.clone(),
+		tx_ext.0 .2.clone(),
+		tx_ext.0 .3.clone(),
+		tx_ext.0 .4.clone(),
+		tx_ext.0 .5.clone(),
+		tx_ext.0 .6.clone(),
+		tx_ext.0 .7.clone(),
+		tx_ext.0 .8.clone(),
+		tx_ext.0 .9.clone(),
+	);
+
+	let msg = {
+		let implication_base = (0u8, &call);
+		let implication_explicit = &rest_ext;
+		let implication_implicit = &rest_ext.implicit().unwrap();
+		let encoded_implications =
+			(implication_base, implication_explicit, implication_implicit).encode();
+		sp_io::hashing::blake2_256(&encoded_implications)
+	};
+
+	tx_ext.0 .0 .1 = pallet_verify_signature::VerifySignature::<Runtime>::new_with_signature(
+		MultiSignature::from(who.sign(&msg)),
+		who_account,
+	);
+
+	finalize_uxt(call, tx_ext)
+}
+
 fn build_signed_as_participant_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsic {
 	let mut tx_ext = base_tx_ext(call.clone());
 
@@ -1291,9 +1383,16 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 			&Default::default(),
 		);
 
+		// Simulate the parachain-system inherent refreshing the relay randomness, with a
+		// value that varies per block like the relay per-block VRF does.
+		indiv_pallet_relay_randomness::Randomness::<Runtime>::mutate(|values| {
+			values.block = Some(indiv_pallet_relay_randomness::RandomnessEntry {
+				randomness: sp_io::hashing::blake2_256(&next.encode()),
+				moment: next,
+			})
+		});
+
 		// Run on_poll for pallets that drive state forward
-		let mut wm_people_lite = WeightMeter::with_limit(Weight::MAX);
-		indiv_pallet_people_lite::Pallet::<Runtime>::on_poll(next, &mut wm_people_lite);
 		let mut wm_people = WeightMeter::with_limit(Weight::MAX);
 		indiv_pallet_people::Pallet::<Runtime>::on_poll(next, &mut wm_people);
 		let mut wm_game = WeightMeter::with_limit(Weight::MAX);
@@ -1337,6 +1436,9 @@ fn set_time(secs: u64) {
 	pallet_timestamp::Now::<Runtime>::put(secs * 1000);
 }
 
+/// The coinage instance created by [`setup_external_asset`].
+const COINAGE_INSTANCE_ID: indiv_pallet_coinage::InstanceId = 0;
+
 /// Setup the external asset used by many pallets.
 fn setup_external_asset() {
 	Assets::force_create(
@@ -1358,9 +1460,90 @@ fn setup_external_asset() {
 	)
 	.expect("create asset rate should work");
 
-	// That operation mirrors the post-upgrade sudo step that operators will run on live chains.
-	Coinage::set_underlying_asset_id(RuntimeOrigin::root(), ExternalAssetLocation::get())
-		.expect("set_underlying_asset_id should succeed");
+	setup_fee_conversion_pool();
+
+	// These operations mirror the post-upgrade sudo steps that operators will run on live chains:
+	// the pallet account is given the asset's minimum balance as a buffer against being dusted,
+	// which `create_sufficient_instance` requires of it, and only then is the instance created.
+	Assets::mint(
+		RuntimeOrigin::signed(pair_to_account_id(&Sr25519Keyring::Alice.pair())),
+		ExternalAssetLocation::get(),
+		sp_runtime::MultiAddress::Id(Coinage::pallet_account()),
+		<Assets as frame_support::traits::fungibles::Inspect<AccountId>>::minimum_balance(
+			ExternalAssetLocation::get(),
+		),
+	)
+	.expect("mint the pallet account's buffer should work");
+
+	Coinage::create_sufficient_instance(
+		RuntimeOrigin::root(),
+		ExternalAssetLocation::get(),
+		COINAGE_ASSET_UNIT,
+	)
+	.expect("create_sufficient_instance should succeed");
+}
+
+/// The account holding the native/external-asset pool's reserves, which is where the asset a fee
+/// costs ends up once it is converted.
+fn fee_conversion_pool_account() -> AccountId32 {
+	use pallet_asset_conversion::PoolLocator;
+	<<Runtime as pallet_asset_conversion::Config>::PoolLocator>::pool_address(
+		&crate::xcm_config::RelayLocation::get(),
+		&ExternalAssetLocation::get(),
+	)
+	.expect("the fee conversion pool is seeded")
+}
+
+/// The asset amount that pays exactly one unload token fee at the current price, as tests pass it
+/// for `max_fee`.
+fn unload_token_fee_in_asset() -> Balance {
+	Coinage::get_paid_unload_token_fee_in_asset(COINAGE_INSTANCE_ID)
+		.expect("the fee conversion pool is seeded")
+}
+
+/// The native amount that pays exactly one unload token fee at the current fee multiplier, as tests
+/// paying in [`FeeCurrency::Native`] pass it for `max_fee`.
+fn unload_token_fee_in_native() -> Balance {
+	Coinage::get_paid_unload_token_fee_in_native()
+}
+
+/// Seed the native/external-asset pool that coinage converts through to pay a fee with the asset.
+///
+/// Mirrors the operational step that has to be done before the runtime starts charging fees this
+/// way: without a pool, every asset-denominated fee path is unavailable.
+fn setup_fee_conversion_pool() {
+	use frame_support::traits::fungible::Mutate as _;
+
+	// The pool holds the same 10^4 ratio as the asset rate above, deep enough that a fee-sized
+	// conversion does not move the price noticeably.
+	let native_liquidity: Balance = 10_000 * UNITS;
+	let asset_liquidity: Balance = native_liquidity / 10_000;
+
+	let provider = pair_to_account_id(&Sr25519Keyring::Ferdie.pair());
+	Balances::mint_into(&provider, native_liquidity.saturating_mul(2))
+		.expect("mint native to the liquidity provider should work");
+	FungibleExternalAsset::mint_into(&provider, asset_liquidity.saturating_mul(2))
+		.expect("mint the asset to the liquidity provider should work");
+
+	let native = crate::xcm_config::RelayLocation::get();
+	let asset = ExternalAssetLocation::get();
+	AssetConversion::create_pool(
+		RuntimeOrigin::signed(provider.clone()),
+		alloc::boxed::Box::new(native.clone()),
+		alloc::boxed::Box::new(asset.clone()),
+	)
+	.expect("create pool should work");
+	AssetConversion::add_liquidity(
+		RuntimeOrigin::signed(provider.clone()),
+		alloc::boxed::Box::new(native),
+		alloc::boxed::Box::new(asset),
+		native_liquidity,
+		asset_liquidity,
+		1,
+		1,
+		provider,
+	)
+	.expect("add liquidity should work");
 }
 
 /// Set up `count` people using `DummyDim`.
@@ -1417,7 +1600,6 @@ fn reduce_game_phase_durations() {
 			post_shuffle_margin: durations.post_shuffle_margin / GAME_PHASE_SPEEDUP,
 			reporting: durations.reporting / GAME_PHASE_SPEEDUP,
 			player_process: durations.player_process / GAME_PHASE_SPEEDUP,
-			airdrop_claim_window: durations.airdrop_claim_window / GAME_PHASE_SPEEDUP,
 		},
 	)
 	.unwrap();
@@ -1441,7 +1623,7 @@ fn setup_airdrop_prize_asset(max_winners: u32) {
 		.expect("enable_asset should succeed for the external asset");
 }
 
-/// Build the `airdrop_prize` value to attach to a `GameSchedule` for the integration tests.
+/// Build the prize of one [`game_airdrops`] entry for the integration tests.
 fn airdrop_prize_for(
 	max_winners: u32,
 ) -> AirdropPrize<<Runtime as pallet_assets::Config>::AssetId, Balance> {
@@ -1453,36 +1635,72 @@ fn airdrop_prize_for(
 	}
 }
 
-/// Re-implementation of `Pallet::<T>::airdrop_event_id` for the integration tests: the
-/// 32-byte event id is the 28-byte ASCII base concatenated with `game_index.to_be_bytes()`.
-fn airdrop_event_id_for(game_index: u32) -> [u8; 32] {
+/// Claim window used by every airdrop the integration tests schedule, aligned with the reduced
+/// game phase durations.
+const AIRDROP_CLAIM_WINDOW: u32 = 3 * 24 * 60 * 60 / GAME_PHASE_SPEEDUP;
+
+/// Build the `airdrops` value to attach to a `GameSchedule`: one airdrop per entry in
+/// `draw_offsets` (seconds after the game play time), each paying `max_winners` winners and
+/// claimable for [`AIRDROP_CLAIM_WINDOW`].
+fn game_airdrops(
+	draw_offsets: &[u32],
+	max_winners: u32,
+) -> frame_support::BoundedVec<
+	indiv_pallet_game::GameAirdrop<<Runtime as pallet_assets::Config>::AssetId, Balance>,
+	frame_support::traits::ConstU32<{ indiv_pallet_game::MAX_GAME_AIRDROPS as u32 }>,
+> {
+	draw_offsets
+		.iter()
+		.map(|&draw_offset| indiv_pallet_game::GameAirdrop {
+			draw_offset,
+			claim_window: AIRDROP_CLAIM_WINDOW,
+			prize: airdrop_prize_for(max_winners),
+		})
+		.collect::<Vec<_>>()
+		.try_into()
+		.expect("draw_offsets is bounded by MAX_GAME_AIRDROPS")
+}
+
+/// Re-implementation of `Pallet::<T>::airdrop_event_id` for the integration tests: the 32-byte
+/// event id is the 27-byte ASCII base concatenated with the airdrop index and
+/// `game_index.to_be_bytes()`. The player's per-event airdrop VRF/proof is bound to this id.
+fn airdrop_event_id_for(game_index: u32, airdrop_index: u8) -> [u8; 32] {
 	let mut event_id = [0u8; 32];
-	event_id[..28].copy_from_slice(b"pop:game:airdrop:           ");
+	event_id[..27].copy_from_slice(b"pop:game:airdrop:          ");
+	event_id[27] = airdrop_index;
 	event_id[28..].copy_from_slice(&game_index.to_be_bytes());
 	event_id
 }
 
-/// Build an `AirdropVrf::Account` VRF for `pair` for the given event. The runtime
-/// reinterprets `AccountId32` bytes as the sr25519 public key, so any sr25519 pair whose
-/// account id matches the signer works here.
-fn build_account_airdrop_vrf(
+/// Build the `AirdropVrfs::Account` value for `pair` with one VRF per event id, each bound to
+/// its own airdrop event id. The runtime reinterprets `AccountId32` bytes as the sr25519 public
+/// key, so any sr25519 pair whose account id matches the signer works here.
+fn build_account_airdrop_vrfs(
 	pair: &sr25519::Pair,
-	event_id: [u8; 32],
-) -> AirdropVrf<indiv_pallet_airdrop::ProofOf<Runtime>> {
+	event_ids: &[[u8; 32]],
+) -> AirdropVrfs<indiv_pallet_airdrop::ProofOf<Runtime>> {
 	use sp_core::crypto::VrfSecret as _;
 	let public = pair.public();
-	let sign_data = transcript_for_event(&event_id, &public).into_sign_data();
-	let signature = pair.vrf_sign(&sign_data);
-	AirdropVrf::Account(signature)
+	let vrfs = event_ids
+		.iter()
+		.map(|event_id| {
+			let sign_data = transcript_for_event(event_id, &public).into_sign_data();
+			pair.vrf_sign(&sign_data)
+		})
+		.collect::<Vec<_>>()
+		.try_into()
+		.expect("event_ids is bounded by MAX_GAME_AIRDROPS");
+	AirdropVrfs::Account(vrfs)
 }
 
-/// Build an `AirdropVrf::Alias` ring proof for a recognized player. The membership ring used is
-/// the people ring, since alias-based signups go through `ensure_person`.
-fn build_alias_airdrop_vrf(
+/// Build the `AirdropVrfs::Alias` value for a recognized player with one ring proof per event
+/// id, each bound to its own airdrop event id. The membership ring used is the people ring,
+/// since alias-based signups go through `ensure_person`.
+fn build_alias_airdrop_vrfs(
 	who_secret: &VrfSecret,
-	event_id: [u8; 32],
+	event_ids: &[[u8; 32]],
 	participant_origin: RegistrationEntry<AccountId32>,
-) -> AirdropVrf<indiv_pallet_airdrop::ProofOf<Runtime>> {
+) -> AirdropVrfs<indiv_pallet_airdrop::ProofOf<Runtime>> {
 	let member = Crypto::member_from_secret(who_secret);
 	let identifier = indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
 	let ring_index: RingIndex =
@@ -1494,16 +1712,27 @@ fn build_alias_airdrop_vrf(
 		indiv_pallet_members::Root::<Runtime>::get(identifier, ring_index)
 			.map(|root| root.revision)
 			.unwrap_or_default();
-	let members = indiv_pallet_members::RingKeys::<Runtime>::get((identifier, ring_index, 0u32));
-	let commitment =
-		Crypto::open(verifiable::ring::RingDomainSize::Domain11, &member, members.into_iter())
-			.expect("opening the ring commitment for the alias signer must succeed");
-	let context = context_for_event(&event_id);
 	let msg = participant_origin.encode();
-	let proof = Crypto::create(commitment, who_secret, &context[..], &msg[..])
-		.expect("creating the alias airdrop proof must succeed")
-		.0;
-	AirdropVrf::Alias { proof, ring_index, revision }
+	let proofs = event_ids
+		.iter()
+		.map(|event_id| {
+			let members =
+				indiv_pallet_members::RingKeys::<Runtime>::get((identifier, ring_index, 0u32));
+			let commitment = Crypto::open(
+				verifiable::ring::RingDomainSize::Domain11,
+				&member,
+				members.into_iter(),
+			)
+			.expect("opening the ring commitment for the alias signer must succeed");
+			let context = context_for_event(event_id);
+			Crypto::create(commitment, who_secret, &context[..], &msg[..])
+				.expect("creating the alias airdrop proof must succeed")
+				.0
+		})
+		.collect::<Vec<_>>()
+		.try_into()
+		.expect("event_ids is bounded by MAX_GAME_AIRDROPS");
+	AirdropVrfs::Alias { proofs, ring_index, revision }
 }
 
 /// Advance blocks until the airdrop event reaches `Status::Registering`. Tolerates the

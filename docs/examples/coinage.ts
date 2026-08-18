@@ -15,13 +15,16 @@
  *   - `load` / `unload` require real ring membership and an ownership-proof
  *     signature, which can't be fabricated.
  *
- * `CoinValue` is an `i8` (a coin denomination), not a raw token balance.
+ * The `value` fields below take a `Denomination`: an `i8` exponent, not a raw
+ * token balance.
  */
 import { Enum, FixedSizeBinary } from "polkadot-api";
 import { connectPeople } from "./lib/client";
 
 const ALICE = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
-const COIN_VALUE = 3; // i8
+const DENOMINATION = 3; // i8
+// Coinage wraps each underlying asset in an instance.
+const INSTANCE_ID = 0;
 
 // Placeholder 32-byte ring member key.
 const MEMBER_KEY = FixedSizeBinary.fromHex("0x" + "00".repeat(32));
@@ -34,14 +37,14 @@ async function main() {
   const { client, api } = connectPeople();
 
   try {
-    // Coinage only works once an operator has set the underlying asset
-    // (see operations.md → set_underlying_asset_id).
-    const underlying = await api.query.Coinage.UnderlyingAssetId.getValue();
-    console.log("Coinage underlying asset configured:", underlying ? "yes" : "no");
+    // Coinage only works once an operator has created an instance
+    // (see operations.md → create_sufficient_instance).
+    const instance = await api.query.Coinage.Instances.getValue(INSTANCE_ID);
+    console.log("Coinage instance created:", instance ? "yes" : "no");
 
     // Divide the origin coin into new coins assigned to accounts.
     const splitTx = api.tx.Coinage.split({
-      split_into: [[COIN_VALUE, [ALICE]]], // one coin of value 3 -> ALICE
+      split_into: [[DENOMINATION, [ALICE]]], // one coin of denomination 3 -> ALICE
     });
 
     // Move the origin coin to `to`.
@@ -51,18 +54,24 @@ async function main() {
     // ring member, `proof_of_ownership` a signature over that membership.
     const loadTx = api.tx.Coinage.load_recycler_with_external_asset({
       preservation: Enum("Preserve"),
-      value: COIN_VALUE,
+      instance_id: INSTANCE_ID,
+      value: DENOMINATION,
       member_key: MEMBER_KEY,
       proof_of_ownership: PROOF_OF_OWNERSHIP,
     });
 
     // Take value back out to `to`, consolidating `aliases` from ring `index`/`revision`.
+    // `max_fee` bounds how much of the unloaded asset the network fee may consume. It is ignored
+    // here because this unload is paid for with a prepaid unload token, which takes no fee out of
+    // the output.
     const unloadTx = api.tx.Coinage.unload_recycler_into_external_asset({
       aliases: [ALIAS],
-      value: COIN_VALUE,
+      instance_id: INSTANCE_ID,
+      value: DENOMINATION,
       index: 0,
       revision: 0,
       to: ALICE,
+      max_fee: 0n,
     });
 
     const calls = [

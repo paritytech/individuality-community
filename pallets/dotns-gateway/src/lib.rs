@@ -58,7 +58,9 @@ pub use types::*;
 pub use weights::WeightInfo;
 
 use frame_support::traits::{OriginTrait, UnixTime};
-use indiv_support::traits::{Alias, Context, MembershipProver, RingExponent, RingIndex};
+use indiv_support::traits::{
+	Alias, Context, MembershipProver, RevisionIndex, RingExponent, RingIndex,
+};
 use sp_runtime::traits::{IdentifyAccount, Verify};
 use verifiable::GenerateVerifiable;
 
@@ -496,7 +498,7 @@ pub mod pallet {
 	// ========== Internal Functions ==========
 
 	impl<T: Config> Pallet<T> {
-		/// Builds the payload the candidate signs to authorise a
+		/// Builds the payload the candidate signs to authorize a
 		/// name reservation.
 		pub(crate) fn construct_reservation_message(
 			candidate: &T::AccountId,
@@ -543,6 +545,7 @@ pub mod pallet {
 		pub(crate) fn verify_proof(
 			collection: &Collection,
 			ring_index: RingIndex,
+			revision: RevisionIndex,
 			proof: &ProofOf<T>,
 			message: &[u8],
 		) -> Result<Alias, DispatchError> {
@@ -551,10 +554,11 @@ pub mod pallet {
 				identifier,
 				proof,
 				ring_index,
+				revision,
 				DOTNS_GATEWAY_CONTEXT,
 				message,
 			)?;
-			Ok(validated.ca.alias)
+			Ok(validated.alias)
 		}
 
 		/// Extracts the alias carried by [`Origin::PersonRegistration`], fails for any other

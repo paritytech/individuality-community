@@ -1,1 +1,4 @@
 .papi/descriptors/
+chunks/
+# pnpm writes this when it wants a build-script decision; it is local tooling state.
+pnpm-workspace.yaml

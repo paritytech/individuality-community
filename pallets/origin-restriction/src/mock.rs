@@ -343,6 +343,25 @@ pub fn exec_signed_tx_disabled(
 	exec_tx(tx)
 }
 
+/// Run only the `validate` step of the transaction extension pipeline for the given origin and
+/// call, without `prepare` or dispatch, and without rolling back. This exposes any storage
+/// mutation performed by `validate` to the caller, so a test can assert that `validate` leaves
+/// storage untouched.
+pub fn validate_only_signed_tx(
+	who: u64,
+	call: impl Into<RuntimeCall>,
+) -> Result<(), TransactionExecutionError> {
+	let tx_ext = (RestrictOrigin::<Test>::new(true),);
+	let tx = UncheckedExtrinsic::new_signed(call.into(), who, UintAuthorityId(who), tx_ext);
+	let info = tx.get_dispatch_info();
+	let len = tx.encoded_size();
+
+	let checked = Checkable::check(tx, &frame_system::ChainContext::<Test>::default())?;
+	checked.validate::<Test>(TransactionSource::External, &info, len)?;
+
+	Ok(())
+}
+
 /// Execute a transaction with the given origin, call and transaction extension.
 pub fn exec_tx(tx: UncheckedExtrinsic) -> Result<(), TransactionExecutionError> {
 	let info = tx.get_dispatch_info();

@@ -60,7 +60,7 @@ runtime-benchmarks = [
 	"pallet-balances/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
 	"verifiable/builder-params",
-	"verifiable/no-std-prover",
+	"verifiable/insecure-deterministic-prover",
 ]
 try-runtime = [
 	"frame-executive/try-runtime",

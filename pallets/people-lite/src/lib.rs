@@ -17,9 +17,9 @@
 //! People lite.
 //!
 //! Warning: This pallet must be configured with some spam prevention mechanism.
-//! The spam prevention mechanism must limit how many calls the origin
-//! `LitePerson` can do.
-//! The recommended approach is to use pallet-origins-restriction.
+//! The spam prevention mechanism must limit how many calls the origins
+//! `LitePerson` and `LiteAlias` can do.
+//! The recommended approach is to use pallet-origin-restriction.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::borrowed_box)]
@@ -30,10 +30,13 @@ use frame_support::{
 	dispatch::{DispatchResultWithPostInfo, PostDispatchInfo},
 	traits::IsSubType,
 };
-use indiv_support::traits::{
-	Alias, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar, Context, ContextualAlias,
-	CountedMembers, Identifier, MembershipProver, RevisedContextualAlias, RingExponent, RingMode,
-	Username, PEOPLE_LITE_IDENTIFIER,
+use indiv_support::{
+	traits::{
+		Alias, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar, Context,
+		ContextualAlias, CountedMembers, Identifier, MembershipProver, RevisedContextualAlias,
+		RingExponent, RingMode, Username, PEOPLE_LITE_IDENTIFIER,
+	},
+	tx_priority,
 };
 use sp_runtime::{
 	traits::{Dispatchable, IdentifyAccount, Verify},
@@ -48,6 +51,7 @@ use verifiable::GenerateVerifiable;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
+pub mod migration;
 pub mod types;
 pub mod weights;
 
@@ -63,7 +67,10 @@ pub use weights::WeightInfo;
 #[frame_support::pallet]
 pub mod pallet {
 	use super::*;
-	use frame_support::{pallet_prelude::*, traits::EnsureOriginWithArg};
+	use frame_support::{
+		pallet_prelude::*,
+		traits::{Contains, EnsureOriginWithArg},
+	};
 	use frame_system::pallet_prelude::*;
 
 	pub const MSG_PREFIX: &[u8; 30] = b"pop:people-lite:register using";
@@ -73,10 +80,18 @@ pub mod pallet {
 	/// intentional padding.
 	pub const LITE_PEOPLE_AUTH_CONTEXT: &Context = b"pop:polkadot.network/plite-auth ";
 
-	const LOG_TARGET: &str = "runtime::indiv-pallet-people-lite";
-
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
+
+	#[pallet::hooks]
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		fn integrity_test() {
+			assert!(
+				T::LiteOnboardingSize::get() <= T::LiteRingExponent::get().ring_capacity(),
+				"LiteOnboardingSize must not exceed the lite ring capacity"
+			);
+		}
+	}
 
 	#[pallet::config]
 	pub trait Config:
@@ -120,6 +135,11 @@ pub mod pallet {
 		/// Lite personhood consumer service. Lite people can be automatically registered when
 		/// attested.
 		type LiteConsumerRegistrar: ConsumerRegistrar<Self::AccountId, Error: Into<DispatchError>>;
+
+		/// List of contexts a lite person may set up account aliases in.
+		///
+		/// It limits the contexts the `LiteAlias` origin can dispatch in.
+		type AccountContexts: Contains<Context>;
 
 		/// A set of helper functions for benchmarking.
 		///
@@ -186,6 +206,8 @@ pub mod pallet {
 		AliasAccountSet { alias: ContextualAlias, account: T::AccountId },
 		/// An alias-to-account mapping was removed.
 		AliasAccountUnset { alias: ContextualAlias, account: T::AccountId },
+		/// The lite people member collection was created.
+		CollectionCreated,
 	}
 
 	#[pallet::extra_constants]
@@ -220,18 +242,6 @@ pub mod pallet {
 		InvalidAliasContext,
 		/// The lite people member collection has not been initialized yet.
 		LitePeopleCollectionNotCreated,
-	}
-
-	#[pallet::hooks]
-	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		fn on_poll(_n: BlockNumberFor<T>, weight: &mut frame_support::weights::WeightMeter) {
-			// Use at most 50% of available weight to be cautious about weight
-			// underestimates.
-			let budget = weight.remaining() / 2;
-			let mut meter = frame_support::weights::WeightMeter::with_limit(budget);
-			Self::do_on_poll(&mut meter);
-			weight.consume(meter.consumed());
-		}
 	}
 
 	#[pallet::call]
@@ -294,7 +304,9 @@ pub mod pallet {
 		/// - stores lite registration data in `LitePeople`,
 		/// - adds the user's ring VRF key to the lite member collection.
 		///
-		/// The lite member collection must already have been initialized by `on_poll`.
+		/// The lite member collection must already have been created (via the
+		/// `migration::CreateLitePeopleCollection` runtime upgrade or
+		/// [`Call::create_lite_people_collection`]).
 		///
 		/// - `candidate`: The candidate to be recognized as a lite person.
 		/// - `candidate_signature`: The signature, provided by the candidate, to allow the attester
@@ -399,6 +411,16 @@ pub mod pallet {
 		///
 		/// The call is valid from `valid_at_block` until
 		/// `valid_at_block + account_setup_block_tolerance`.
+		///
+		/// This call is authorized through the `AsLiteAliasWithProof` variant of the
+		/// `PeopleLiteAuth` transaction extension, which provides no nonce-based replay
+		/// protection. Replay is only prevented for as long as the alias still points at the
+		/// account this call sets. As soon as the alias is pointed at a different account (by
+		/// another `set_alias_account`), this call becomes replayable again until its validity
+		/// period elapses. Consequently, if 2 such transactions setting 2 different accounts have
+		/// overlapping validity periods, they can be replayed against each other indefinitely for
+		/// the duration of the overlap. To avoid this, the caller must not have 2 such
+		/// transactions alive (within their validity period) at the same time.
 		#[pallet::call_index(6)]
 		#[pallet::weight(<T as Config>::WeightInfo::set_alias_account())]
 		pub fn set_alias_account(
@@ -415,7 +437,7 @@ pub mod pallet {
 				Error::<T>::CallBlockOutOfRange
 			);
 			ensure!(
-				rev_ca.ca.context == *LITE_PEOPLE_AUTH_CONTEXT,
+				T::AccountContexts::contains(&rev_ca.ca.context),
 				Error::<T>::InvalidAliasContext
 			);
 			ensure!(!LitePeople::<T>::contains_key(&account), Error::<T>::AccountInUse);
@@ -423,7 +445,7 @@ pub mod pallet {
 			let old_account = AliasToAccount::<T>::get(&rev_ca.ca);
 			let old_rev_ca = old_account.as_ref().and_then(AccountToAlias::<T>::get);
 			let needs_revision = old_rev_ca.is_some_and(|old_rev_ca| {
-				old_rev_ca.revision != rev_ca.revision || old_rev_ca.ring != rev_ca.ring
+				old_rev_ca.ring != rev_ca.ring || old_rev_ca.revision < rev_ca.revision
 			});
 
 			ensure!(
@@ -470,31 +492,43 @@ pub mod pallet {
 			Self::deposit_event(Event::AliasAccountUnset { alias: rev_ca.ca, account });
 			Ok(())
 		}
+
+		/// Create the lite people collection.
+		///
+		/// This call is valid only if the collection doesn't exist yet. Once created,
+		/// this call cannot be executed again.
+		///
+		/// The collection is created with a fixed configuration:
+		/// - Owner: Configured via `CollectionOwner` type
+		/// - Onboarding size: `LiteOnboardingSize`
+		/// - Mode: `AppendOnly`
+		/// - Ring size: `LiteRingExponent`
+		#[pallet::call_index(8)]
+		#[pallet::authorize(Pallet::<T>::authorize_create_lite_people_collection)]
+		#[pallet::weight(<T as Config>::WeightInfo::create_lite_people_collection())]
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_create_lite_people_collection())]
+		pub fn create_lite_people_collection(origin: OriginFor<T>) -> DispatchResult {
+			ensure_authorized(origin)?;
+			Self::do_create_lite_people_collection()
+		}
 	}
 
 	impl<T: Config> Pallet<T> {
-		/// Inner body of `on_poll`. Driven by an inner `WeightMeter` capped at 50% of the
-		/// outer remaining budget; the outer meter consumes whatever this body actually
-		/// uses.
-		fn do_on_poll(weight: &mut frame_support::weights::WeightMeter) {
-			if weight.try_consume(T::WeightInfo::on_poll_initialize_check_condition()).is_err() {
-				return;
-			}
-
+		/// Validates that the lite people collection can be created.
+		///
+		/// Returns a valid transaction if the collection doesn't exist yet,
+		/// or `InvalidTransaction::Call` if it already exists.
+		pub fn authorize_create_lite_people_collection(
+			_source: TransactionSource,
+		) -> TransactionValidityWithRefund {
 			if LitePeopleCollectionCreated::<T>::get() {
-				return;
+				return Err(InvalidTransaction::Call.into());
 			}
-
-			if weight.try_consume(T::WeightInfo::on_poll_initialize()).is_err() {
-				return;
-			}
-
-			if let Err(e) = Self::ensure_lite_collection_exists() {
-				log::warn!(
-					target: LOG_TARGET,
-					"failed to initialize lite people collection during on_poll: {e:?}",
-				);
-			}
+			let validity = ValidTransaction::with_tag_prefix("pallet-people-lite")
+				.and_provides("create_lite_people_collection")
+				.priority(tx_priority::PROTOCOL_LIVENESS)
+				.into();
+			Ok((validity, Weight::zero()))
 		}
 
 		/// Register a lite person as a consumer by calling into the `LiteConsumerRegistrar`
@@ -531,12 +565,11 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Ensure the one-time lite people member collection exists.
-		pub(crate) fn ensure_lite_collection_exists() -> DispatchResult {
-			if LitePeopleCollectionCreated::<T>::get() {
-				return Ok(());
-			}
-
+		/// Create the lite people collection and emit [`Event::CollectionCreated`].
+		///
+		/// Shared between the [`Call::create_lite_people_collection`] extrinsic and the
+		/// [`migration::CreateLitePeopleCollection`] runtime upgrade.
+		pub(crate) fn do_create_lite_people_collection() -> DispatchResult {
 			T::MemberService::create_collection(
 				T::CollectionOwner::get(),
 				LITE_PEOPLE_MEMBER_IDENTIFIER,
@@ -546,16 +579,44 @@ pub mod pallet {
 				None,
 			)?;
 			LitePeopleCollectionCreated::<T>::put(true);
+			Self::deposit_event(Event::<T>::CollectionCreated);
 			Ok(())
 		}
 
-		/// Ensure the lite people member collection was already initialized by `on_poll`.
+		/// Ensure the lite people member collection was already created.
 		pub(crate) fn ensure_lite_collection_created() -> DispatchResult {
 			ensure!(
 				LitePeopleCollectionCreated::<T>::get(),
 				Error::<T>::LitePeopleCollectionNotCreated
 			);
 			Ok(())
+		}
+	}
+
+	#[pallet::genesis_config]
+	pub struct GenesisConfig<T: Config> {
+		/// Whether to create the lite people collection at genesis.
+		///
+		/// Chains that start from genesis need this, since
+		/// [`migration::CreateLitePeopleCollection`] only runs on an actual runtime upgrade.
+		pub create_collection: bool,
+		#[serde(skip)]
+		pub _phantom: PhantomData<T>,
+	}
+
+	impl<T: Config> Default for GenesisConfig<T> {
+		fn default() -> Self {
+			Self { create_collection: false, _phantom: Default::default() }
+		}
+	}
+
+	#[pallet::genesis_build]
+	impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+		fn build(&self) {
+			if self.create_collection {
+				Pallet::<T>::do_create_lite_people_collection()
+					.expect("couldn't create the lite people collection at genesis");
+			}
 		}
 	}
 
@@ -619,6 +680,32 @@ pub mod pallet {
 			match o.clone().into_caller().try_into() {
 				Ok(Origin::LiteAlias(rev_ca)) if &rev_ca.ca.context == arg =>
 					Ok((rev_ca.ca.alias, *PEOPLE_LITE_IDENTIFIER)),
+				_ => Err(o),
+			}
+		}
+
+		#[cfg(feature = "runtime-benchmarks")]
+		fn try_successful_origin(context: &Context) -> Result<OriginFor<T>, ()> {
+			Ok(Origin::LiteAlias(RevisedContextualAlias {
+				revision: 0,
+				ring: 0,
+				ca: ContextualAlias { alias: [1; 32], context: *context },
+			})
+			.into())
+		}
+	}
+
+	/// Guard yielding the alias when the origin is a lite alias matching the supplied context.
+	///
+	/// This lets another pallet act on behalf of a lite person without learning who they are: the
+	/// alias is unlinkable from the lite person's account.
+	pub struct EnsureLiteAliasInContext<T>(PhantomData<T>);
+	impl<T: Config> EnsureOriginWithArg<OriginFor<T>, Context> for EnsureLiteAliasInContext<T> {
+		type Success = Alias;
+
+		fn try_origin(o: OriginFor<T>, arg: &Context) -> Result<Self::Success, OriginFor<T>> {
+			match o.clone().into_caller().try_into() {
+				Ok(Origin::LiteAlias(rev_ca)) if &rev_ca.ca.context == arg => Ok(rev_ca.ca.alias),
 				_ => Err(o),
 			}
 		}

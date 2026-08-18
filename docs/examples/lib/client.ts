@@ -43,6 +43,23 @@ export function connectAssetHub() {
   return { client, api: client.getTypedApi(assethub) };
 }
 
+/** Relay chain RPC endpoint (alice validator). Override with `RELAY_RPC=…`. */
+export const RELAY_RPC = process.env.RELAY_RPC ?? "ws://127.0.0.1:10000";
+
+/**
+ * Connect to the relay chain with an *untyped* API.
+ *
+ * The relay is only used to open HRMP channels (`Hrmp` + `Sudo`, both stock
+ * pallets), and it is deliberately not part of the committed PAPI descriptors —
+ * adding it would require committing relay metadata and break the offline
+ * `papi generate` in `pnpm run setup`. The unsafe API resolves calls by name at
+ * runtime, which is all `open-hrmp.ts` needs.
+ */
+export function connectRelay() {
+  const client = createClient(withPolkadotSdkCompat(getWsProvider(RELAY_RPC)));
+  return { client, api: client.getUnsafeApi() };
+}
+
 /**
  * A dev signer derived from the well-known dev phrase (`//Alice` by default).
  * In real operations this would be your manager-origin / sudo key instead.

@@ -23,13 +23,13 @@ use frame_benchmarking::v2::{benchmarks, *};
 use frame_support::{
 	assert_ok,
 	dispatch::{DispatchInfo, RawOrigin},
-	traits::{Get, Hooks},
-	weights::WeightMeter,
+	traits::Get,
 };
 use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::traits::AppendOnlyMembers;
-use sp_runtime::traits::{
-	AsSystemOriginSigner, AsTransactionAuthorizedOrigin, DispatchTransaction,
+use sp_runtime::{
+	traits::{AsSystemOriginSigner, AsTransactionAuthorizedOrigin, DispatchTransaction},
+	transaction_validity::TransactionSource,
 };
 use verifiable::GenerateVerifiable;
 
@@ -75,6 +75,15 @@ mod benches {
 		Ok((proof, ContextualAlias { alias, context: *crate::LITE_PEOPLE_AUTH_CONTEXT }))
 	}
 
+	/// Make sure the lite collection exists, whether or not the genesis preset created it.
+	fn ensure_lite_collection<T: Config>() -> Result<(), BenchmarkError> {
+		if crate::LitePeopleCollectionCreated::<T>::get() {
+			return Ok(());
+		}
+		Pallet::<T>::do_create_lite_people_collection()
+			.map_err(|_| BenchmarkError::Stop("failed to create the lite collection"))
+	}
+
 	fn setup_lite_auth<T: Config>(
 		lite_account: &T::AccountId,
 		label: &'static [u8],
@@ -82,11 +91,7 @@ mod benches {
 	where
 		CapacityOf<T>: TryFrom<indiv_support::traits::RingExponent>,
 	{
-		let mut meter = WeightMeter::new();
-		Pallet::<T>::on_poll(frame_system::Pallet::<T>::block_number(), &mut meter);
-		Pallet::<T>::ensure_lite_collection_created().map_err(|_| {
-			BenchmarkError::Stop("lite collection should be initialized by on_poll")
-		})?;
+		ensure_lite_collection::<T>()?;
 		T::MemberService::initialize_chunks(T::LiteRingExponent::get());
 
 		let (lite_secret, lite_member) = lite_member_from::<T>(label, 0);
@@ -220,6 +225,7 @@ mod benches {
 			crate::PeopleLiteAuth::<T>::new(Some(crate::PeopleLiteAuthData::AsLiteAliasWithProof(
 				proof,
 				0,
+				0,
 				*crate::LITE_PEOPLE_AUTH_CONTEXT,
 			)));
 
@@ -292,6 +298,7 @@ mod benches {
 				nonce,
 				proof,
 				0,
+				current_revision,
 				*crate::LITE_PEOPLE_AUTH_CONTEXT,
 			),
 		));
@@ -385,11 +392,7 @@ mod benches {
 	#[benchmark]
 	fn attest() -> Result<(), BenchmarkError> {
 		let attester: T::AccountId = whitelisted_caller();
-		let mut meter = WeightMeter::new();
-		Pallet::<T>::on_poll(frame_system::Pallet::<T>::block_number(), &mut meter);
-		Pallet::<T>::ensure_lite_collection_created().map_err(|_| {
-			BenchmarkError::Stop("lite collection should be initialized by on_poll")
-		})?;
+		ensure_lite_collection::<T>()?;
 
 		let (att, _) = T::BenchmarkHelper::sign_message(b"mock");
 		let sk = CryptoOf::<T>::new_secret([12; 32]);
@@ -506,33 +509,27 @@ mod benches {
 		Ok(())
 	}
 
-	// ============================================================================
-	// Hooks
-	// ============================================================================
-
 	#[benchmark]
-	fn on_poll_initialize_check_condition() -> Result<(), BenchmarkError> {
-		crate::LitePeopleCollectionCreated::<T>::put(true);
+	fn create_lite_people_collection() -> Result<(), BenchmarkError> {
+		#[extrinsic_call]
+		_(frame_system::Origin::<T>::Authorized);
 
-		#[block]
-		{
-			let _ = crate::LitePeopleCollectionCreated::<T>::get();
-		}
+		// Verify the collection was created
+		assert!(crate::LitePeopleCollectionCreated::<T>::get());
+
+		frame_system::Pallet::<T>::assert_last_event(crate::Event::<T>::CollectionCreated.into());
 
 		Ok(())
 	}
 
 	#[benchmark]
-	fn on_poll_initialize() -> Result<(), BenchmarkError> {
-		crate::LitePeopleCollectionCreated::<T>::kill();
-
+	fn authorize_create_lite_people_collection() -> Result<(), BenchmarkError> {
 		#[block]
 		{
-			Pallet::<T>::ensure_lite_collection_exists()
-				.map_err(|_| BenchmarkError::Stop("failed to initialize lite collection"))?;
+			Pallet::<T>::authorize_create_lite_people_collection(TransactionSource::InBlock)
+				.expect("authorization must succeed when collection is not yet created");
 		}
 
-		assert!(crate::LitePeopleCollectionCreated::<T>::get());
 		Ok(())
 	}
 

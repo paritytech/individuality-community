@@ -1,0 +1,116 @@
+# Copyright (C) Parity Technologies (UK) Ltd.
+# This file is part of Individuality.
+# SPDX-License-Identifier: Apache-2.0
+
+# Zombienet spec for the e2e zombienet suite: a local relay with the
+# next-people-paseo (para 1502) and next-asset-hub-paseo (para 1500) chains.
+# The People<->AH HRMP channels are opened at runtime by the initial-setup
+# bootstrap (scripts/initial-setup 01b), NOT declared here — see the note below.
+#
+# Para IDs are the canonical paseo values (paseo-runtime-constants):
+#   PEOPLE_ID / NEXT_PEOPLE_ID = 1502
+#   ASSET_HUB_ID / NEXT_ASSET_HUB_ID = 1500
+#
+# RPC ports match scripts/initial-setup/config-local.env so the bootstrap runs
+# unmodified: relay :10000, People :10010, Asset Hub :10020.
+#
+# Spawn via: `bash scripts/03-spawn.sh` (the pinned `polkadot` bundle and
+# `polkadot-omni-node` installed by `scripts/00-install-binaries.sh` are put on PATH).
+
+[settings]
+timeout = 1000
+node_spawn_timeout = 300
+
+[relaychain]
+chain = "rococo-local"
+default_command = "polkadot"
+default_args = ["--network-backend=libp2p", "--rpc-max-response-size=50"]
+
+# The People runtime uses RFC-163 ECC host calls during PVF validation when the ZK
+# chunk payloads are decoded. Enable them in relay genesis so validators don't reject
+# those candidates with missing `ext_host_calls_*` functions. Applied as a genesis
+# overlay (not a prebuilt chain_spec_path) so zombienet still generates the relay spec
+# itself (prevent node-derived validator keys being injects into the keystores).
+[relaychain.genesis.runtimeGenesis.patch.configuration.config]
+executor_params = [{ EnabledHostFunction = "EccRfc163" }]
+
+[[relaychain.nodes]]
+name = "alice-relay-validator"
+validator = true
+rpc_port = 10000
+p2p_port = 30336
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "bob-relay-validator"
+validator = true
+rpc_port = 9955
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "charlie-relay-validator"
+validator = true
+rpc_port = 9956
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "dave-relay-validator"
+validator = true
+rpc_port = 9957
+balance = 1000000000000000
+
+# ----- People chain (para 1502) -----
+[[parachains]]
+id = 1502
+cumulus_based = true
+chain = "people-local"
+chain_spec_path = "./specs/people-local.raw.json"
+
+[[parachains.collators]]
+name = "people-collator"
+rpc_port = 10010
+p2p_port = 30335
+command = "polkadot-omni-node"
+args = [
+	"--authoring=slot-based",
+	"--enable-statement-store",
+	"--force-authoring",
+	"--network-backend=libp2p",
+	"--rpc-max-connections=500",
+	"--rpc-max-response-size=50",
+	"-lxcm=debug",
+]
+
+# ----- Asset Hub (para 1500) -----
+[[parachains]]
+id = 1500
+cumulus_based = true
+chain = "asset-hub-local"
+chain_spec_path = "./specs/ah-local.raw.json"
+
+[[parachains.collators]]
+name = "ah-collator"
+rpc_port = 10020
+p2p_port = 30337
+command = "polkadot-omni-node"
+args = [
+	"--authoring=slot-based",
+	"--enable-statement-store",
+	"--force-authoring",
+	"--network-backend=libp2p",
+	"--rpc-max-connections=500",
+	"--rpc-max-response-size=50",
+	"-lxcm=debug",
+]
+
+# NOTE: HRMP channels are intentionally NOT declared here.
+#
+# Declaring `[[hrmp_channels]]` makes zombienet preopen them at genesis, which on
+# this polkadot-sdk produces an inconsistent relay DMQ head — the parachain then
+# panics in cumulus-pallet-parachain-system ("DMQ head mismatch" →
+# "Missing required set_validation_data inherent") and never produces a block
+# (polkadot-sdk#1616).
+#
+# Instead the People<->AH channels are force-opened *at runtime* (after genesis)
+# by the initial-setup bootstrap (scripts/initial-setup 01b), which avoids the
+# genesis DMQ computation entirely. Run `bash scripts/04-bootstrap.sh` after spawn.

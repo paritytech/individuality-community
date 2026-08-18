@@ -32,7 +32,12 @@ signatures, parameters, and behavior, read the pallet docs (see [Reference](#ref
 - `schedule_event` / `remove_scheduled_event` — manage airdrop events
 
 **Coinage** (`pallets/coinage`)
-- `set_underlying_asset_id` — set the underlying asset (one-time, permanent)
+- `create_sufficient_instance` — wrap an underlying asset in a coinage instance. (Without requiring
+  the funding of a pot to cover loads until unloads).
+- `create_sponsored_instance` — wrap an underlying asset in a coinage instance whose loads requires
+  a deposit held from a pot until unloads. Permissionless. The pot is also funded permissionlessly.
+- `funt_pot` / `withdraw_pot_funds` — manage the pot that covers the load-side costs of a sponsored
+  instance.
 
 **PeopleLite** (`pallets/people-lite`)
 - `increase_attestation_allowance` / `clear_attestation_allowance` — manage a
@@ -65,8 +70,29 @@ These are sensible starting points, not the only valid flows.
 3. `schedule_event`. The event lifecycle then runs automatically.
 
 ## Enable coinage
-1. Create the asset (`Assets::force_create`) and mint the supply.
-2. `set_underlying_asset_id` to bind it. This is permanent.
+
+### A sufficient instance
+The chain absorbs the load-side costs, so creating one takes the admin origin.
+
+1. Create an asset (`Assets::force_create`) and mint the supply.
+2. Prepare the pallet account — `Coinage::pallet_account()`, for the instance's asset id.
+   For a non-sufficient instance it must be touched first so the pallet account can hold funds for
+   this asset id, and funded with minimum balance of this asset id.
+3. `create_sufficient_instance` with the asset and the amount of a coin of denomination zero.
+
+### A sponsored instance
+The creator and the sponsors pay instead, permissionless.
+
+1. Create an asset (`Assets::force_create`) and mint the supply.
+2. The funded creator calls `create_sponsored_instance` with the asset, the coin unit and an
+   optional initial pot funding.
+3. Sponsors keep the instance's pot funded if needed with `fund_pot`; loads are refused while the
+   pot cannot cover the deposit.
+
+### Fees in the underlying asset
+For either kind of instance, to let users pay unload fees in the underlying asset instead of the
+native currency, create an `AssetConversion` pool for the native/asset pair and add liquidity to
+it.
 
 ## Connect a subscriber chain
 1. Open HRMP channels between the chains in both directions (part of initial

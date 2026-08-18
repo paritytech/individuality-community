@@ -18,7 +18,6 @@
 
 use super::*;
 use crate::{
-	extension::{AsRingAlias, AsRingAliasInfo},
 	pallet::{AccountToAlias, AliasFee, AliasToAccount, BalanceOf},
 	types::{AliasAccountInfo, ContextualAlias, ProofOf},
 };
@@ -31,10 +30,7 @@ use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::traits::{
 	Alias, Context, Identifier, RevisionIndex, RingIndex, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER,
 };
-use sp_runtime::{
-	traits::{DispatchTransaction, Dispatchable},
-	Saturating,
-};
+use sp_runtime::{traits::Dispatchable, Saturating};
 
 // ============================================================================
 // Local BenchmarkHelper
@@ -415,42 +411,6 @@ mod benches {
 		assert_eq!(AliasFee::<T>::get(), Some(fee));
 
 		frame_system::Pallet::<T>::assert_last_event(Event::<T>::AliasFeeSet { fee }.into());
-
-		Ok(())
-	}
-
-	// ==================== Transaction extension benchmarks ====================
-
-	#[benchmark]
-	fn as_ring_alias_info_with_account() -> Result<(), BenchmarkError> {
-		let collection: Identifier = *PEOPLE_IDENTIFIER;
-		let ring: RingIndex = 0;
-
-		let (stored_revision, source_time) = setup_full_window_worst_case::<T>(collection, ring);
-		// Clock is `source_time` so the revision is still in grace and the
-		// extension's validate succeeds.
-		<T as BenchmarkHelper<T>>::set_time(source_time);
-
-		let alias_info = make_alias_info::<T>(collection, ring, stored_revision, 5);
-		let holder: T::AccountId = account("with_account_holder", 0, 0);
-		insert_mapping::<T>(&holder, &alias_info);
-
-		let nonce: T::Nonce = Default::default();
-		let tx_ext = AsRingAlias::<T>::new(Some(AsRingAliasInfo::WithAccount(nonce)));
-
-		let call: <T as frame_system::Config>::RuntimeCall =
-			frame_system::Call::<T>::remark { remark: alloc::vec![] }.into();
-
-		let origin: <T as frame_system::Config>::RuntimeOrigin =
-			frame_system::RawOrigin::Signed(holder).into();
-
-		#[block]
-		{
-			tx_ext
-				.test_run(origin, &call, &Default::default(), 0, 0, |_| Ok(Default::default()))
-				.expect("validate must succeed for the WithAccount path")
-				.map_err(|_| BenchmarkError::Stop("inner call failed"))?;
-		}
 
 		Ok(())
 	}

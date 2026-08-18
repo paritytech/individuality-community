@@ -17,10 +17,11 @@
 use crate::{mock::*, *};
 use frame_support::{assert_noop, assert_ok};
 use indiv_support::traits::{
-	AppendOnlyMembers, FlexibleMembers, MembershipProver, RingExponent, RingStatus,
+	AppendOnlyMembers, FlexibleMembers, MembershipProver, RingExponent, RingMembershipProof,
+	RingStatus,
 };
 use sp_runtime::transaction_validity::InvalidTransaction;
-use verifiable::{BatchProofItem, GenerateVerifiable};
+use verifiable::GenerateVerifiable;
 
 /// Generate members with a distinct first byte to avoid collisions with standard
 /// `generate_members` calls. Returns (member, secret) pairs.
@@ -1127,6 +1128,7 @@ mod verify_membership_tests {
 				&TEST_IDENTIFIER,
 				&dummy_proof,
 				99, // nonexistent ring
+				0,
 				context,
 				message,
 			);
@@ -1911,6 +1913,7 @@ mod collection_deletion_tests {
 			let result = <MembersPallet as MembershipProver>::verify_membership(
 				&DELETION_IDENTIFIER,
 				&dummy_proof,
+				0,
 				0,
 				context,
 				b"test",
@@ -3102,17 +3105,20 @@ mod end_to_end_tests {
 				MockCrypto::create(commitment, secret, &context, message).unwrap();
 
 			// Verify membership through the pallet
+			let revision =
+				<MembersPallet as MembershipProver>::ring_revision(&identifier, ring_index)
+					.unwrap();
 			let result = <MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof,
 				ring_index,
+				revision,
 				context,
 				message,
 			);
 			assert!(result.is_ok());
-			let revised_alias = result.unwrap();
-			assert_eq!(revised_alias.ring, ring_index);
-			assert_eq!(revised_alias.ca.context, context);
+			let alias = result.unwrap();
+			assert_eq!(alias.context, context);
 		});
 	}
 
@@ -3383,11 +3389,16 @@ mod end_to_end_tests {
 			let (proof_a, _) =
 				MockCrypto::create(commitment_a, secret, &context_a, message).unwrap();
 
+			let revision =
+				<MembersPallet as MembershipProver>::ring_revision(&identifier, ring_index)
+					.unwrap();
+
 			// Verify in context_a
 			let result_a = <MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_a,
 				ring_index,
+				revision,
 				context_a,
 				message,
 			);
@@ -3404,6 +3415,7 @@ mod end_to_end_tests {
 				&identifier,
 				&proof_b,
 				ring_index,
+				revision,
 				context_b,
 				message,
 			);
@@ -3414,9 +3426,9 @@ mod end_to_end_tests {
 			// Note: With the Simple mock crypto, the alias is always the public key
 			// regardless of context, so this test verifies the structural flow. In production
 			// with real Bandersnatch ring-VRF, these would be unlinkable.
-			assert_eq!(alias_a.ca.context, context_a);
-			assert_eq!(alias_b.ca.context, context_b);
-			assert_ne!(alias_a.ca.context, alias_b.ca.context);
+			assert_eq!(alias_a.context, context_a);
+			assert_eq!(alias_b.context, context_b);
+			assert_ne!(alias_a.context, alias_b.context);
 
 			// Create another proof in context_a — should yield same alias
 			let commitment_a2 = MockCrypto::open((), member, ring_members.iter().cloned()).unwrap();
@@ -3427,6 +3439,7 @@ mod end_to_end_tests {
 				&identifier,
 				&proof_a2,
 				ring_index,
+				revision,
 				context_a,
 				message,
 			);
@@ -3434,7 +3447,7 @@ mod end_to_end_tests {
 			let alias_a2 = result_a2.unwrap();
 
 			// Same context → same alias (deterministic)
-			assert_eq!(alias_a.ca.alias, alias_a2.ca.alias);
+			assert_eq!(alias_a.alias, alias_a2.alias);
 		});
 	}
 
@@ -3502,307 +3515,6 @@ mod end_to_end_tests {
 					<MembersPallet as AppendOnlyMembers>::member_status(&identifier, member);
 				assert!(matches!(status.unwrap(), RingPosition::Included { .. }));
 			}
-		});
-	}
-}
-
-mod verify_memberships_in_ring_tests {
-	use super::*;
-
-	const BATCH_IDENTIFIER: Identifier = [77u8; 32];
-
-	fn verification_item(
-		proof: &<MockCrypto as GenerateVerifiable>::Proof,
-		message: &[u8],
-		context: Context,
-	) -> BatchProofItem<<MockCrypto as GenerateVerifiable>::Proof> {
-		BatchProofItem {
-			proof: proof.clone(),
-			context: context.to_vec(),
-			message: message.to_vec(),
-		}
-	}
-
-	/// Helper: create collection, add members, onboard all, build ring 0.
-	fn setup_ring(
-		identifier: Identifier,
-		onboarding_size: u32,
-		member_count: u8,
-	) -> Vec<(MemberOf<Test>, SecretOf<Test>)> {
-		create_test_collection(identifier, onboarding_size);
-		let members = generate_members(identifier, 1, member_count);
-
-		while MembersPallet::onboard_members(&identifier, false) == Ok(true) {}
-
-		loop {
-			let maybe = MembersPallet::should_build_ring(&identifier, 0, member_count as u32);
-			if let Some(to_include) = maybe {
-				assert_ok!(MembersPallet::build_ring(&identifier, 0, to_include));
-			} else {
-				break;
-			}
-		}
-
-		members
-	}
-
-	/// Helper: create a valid proof for a member in a ring.
-	fn make_proof(
-		identifier: &Identifier,
-		ring_index: RingIndex,
-		member: &MemberOf<Test>,
-		secret: &SecretOf<Test>,
-		context: &[u8; 32],
-		message: &[u8],
-	) -> <MockCrypto as GenerateVerifiable>::Proof {
-		let ring_members =
-			<MembersPallet as AppendOnlyMembers>::ring_members(identifier, ring_index);
-		let commitment = MockCrypto::open((), member, ring_members.into_iter()).unwrap();
-		MockCrypto::create(commitment, secret, context, message).unwrap().0
-	}
-
-	// Verifies batch verification returns one alias per proof and preserves input order.
-	#[test]
-	fn valid_batch_returns_aliases_in_input_order() {
-		TestExt::new().execute_with(|| {
-			let members = setup_ring(BATCH_IDENTIFIER, 5, 10);
-			let ring_index = 0;
-			let context = [0xAA; 32];
-			let message = b"batch test msg!!";
-
-			// Build proofs for several members and submit them in one batch.
-			let proofs = members[0..3]
-				.iter()
-				.map(|(member, secret)| {
-					make_proof(&BATCH_IDENTIFIER, ring_index, member, secret, &context, message)
-				})
-				.collect::<Vec<_>>();
-			let items = proofs
-				.iter()
-				.map(|proof| verification_item(proof, message, context))
-				.collect::<Vec<_>>();
-
-			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
-				&BATCH_IDENTIFIER,
-				ring_index,
-				&items,
-			);
-			assert!(results.is_ok());
-			let aliases = results.unwrap();
-			assert_eq!(aliases.len(), 3);
-
-			// Verify each alias matches what single verify_membership would return.
-			for (i, (member, secret)) in members[0..3].iter().enumerate() {
-				let proof =
-					make_proof(&BATCH_IDENTIFIER, ring_index, member, secret, &context, message);
-				let single = <MembersPallet as MembershipProver>::verify_membership(
-					&BATCH_IDENTIFIER,
-					&proof,
-					ring_index,
-					context,
-					message,
-				)
-				.unwrap();
-				assert_eq!(aliases[i].ca.alias, single.ca.alias);
-				assert_eq!(aliases[i].ca.context, context);
-				assert_eq!(aliases[i].ring, ring_index);
-				assert_eq!(aliases[i].revision, single.revision);
-			}
-		});
-	}
-
-	// Verifies a single invalid proof rejects the entire batch even after a valid item.
-	#[test]
-	fn invalid_proof_fails_whole_batch() {
-		TestExt::new().execute_with(|| {
-			let members = setup_ring(BATCH_IDENTIFIER, 5, 10);
-			let ring_index = 0;
-			let context = [0xBB; 32];
-			let message = b"batch fail test!";
-
-			// Put one valid proof and one invalid proof in the same batch.
-			let (member0, secret0) = &members[0];
-			let valid_proof =
-				make_proof(&BATCH_IDENTIFIER, ring_index, member0, secret0, &context, message);
-			let dummy_proof = verifiable::mock::MockProof::default();
-
-			let items = vec![
-				verification_item(&valid_proof, message, context),
-				verification_item(&dummy_proof, message, context),
-			];
-
-			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
-				&BATCH_IDENTIFIER,
-				ring_index,
-				&items,
-			);
-			assert_eq!(result.unwrap_err(), Error::<Test>::InvalidProof.into());
-		});
-	}
-
-	// Verifies the batch aborts when item 0 is invalid even if item 1 is valid.
-	#[test]
-	fn invalid_first_proof_fails_whole_batch_even_if_later_items_are_valid() {
-		TestExt::new().execute_with(|| {
-			let members = setup_ring(BATCH_IDENTIFIER, 5, 10);
-			let ring_index = 0;
-			let context = [0xBC; 32];
-			let message = b"batch fail first!";
-
-			// Put the invalid proof first and a valid proof second.
-			let (member1, secret1) = &members[1];
-			let valid_proof =
-				make_proof(&BATCH_IDENTIFIER, ring_index, member1, secret1, &context, message);
-			let dummy_proof = verifiable::mock::MockProof::default();
-
-			let items = vec![
-				verification_item(&dummy_proof, message, context),
-				verification_item(&valid_proof, message, context),
-			];
-
-			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
-				&BATCH_IDENTIFIER,
-				ring_index,
-				&items,
-			);
-			assert_eq!(result.unwrap_err(), Error::<Test>::InvalidProof.into());
-		});
-	}
-
-	// Verifies a batch can contain proofs for distinct messages under the same context.
-	#[test]
-	fn mixed_messages_work() {
-		TestExt::new().execute_with(|| {
-			let members = setup_ring(BATCH_IDENTIFIER, 5, 10);
-			let ring_index = 0;
-			let context = [0xCC; 32];
-			let msg_a = b"message alpha--!";
-			let msg_b = b"message bravo--!";
-
-			// Create proofs for two different messages under the same context.
-			let (member_a, secret_a) = &members[0];
-			let (member_b, secret_b) = &members[1];
-
-			let proof_a =
-				make_proof(&BATCH_IDENTIFIER, ring_index, member_a, secret_a, &context, msg_a);
-			let proof_b =
-				make_proof(&BATCH_IDENTIFIER, ring_index, member_b, secret_b, &context, msg_b);
-
-			let items = vec![
-				verification_item(&proof_a, msg_a, context),
-				verification_item(&proof_b, msg_b, context),
-			];
-
-			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
-				&BATCH_IDENTIFIER,
-				ring_index,
-				&items,
-			);
-			assert!(results.is_ok());
-			assert_eq!(results.unwrap().len(), 2);
-		});
-	}
-
-	// Verifies a batch can contain proofs for distinct contexts with the same message.
-	#[test]
-	fn mixed_contexts_work() {
-		TestExt::new().execute_with(|| {
-			let members = setup_ring(BATCH_IDENTIFIER, 5, 10);
-			let ring_index = 0;
-			let ctx_a = [0xDD; 32];
-			let ctx_b = [0xEE; 32];
-			let message = b"same message!!!!";
-
-			// Create proofs for the same message under two different contexts.
-			let (member_a, secret_a) = &members[0];
-			let (member_b, secret_b) = &members[1];
-
-			let proof_a =
-				make_proof(&BATCH_IDENTIFIER, ring_index, member_a, secret_a, &ctx_a, message);
-			let proof_b =
-				make_proof(&BATCH_IDENTIFIER, ring_index, member_b, secret_b, &ctx_b, message);
-
-			let items = vec![
-				verification_item(&proof_a, message, ctx_a),
-				verification_item(&proof_b, message, ctx_b),
-			];
-
-			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
-				&BATCH_IDENTIFIER,
-				ring_index,
-				&items,
-			);
-			assert!(results.is_ok());
-			let aliases = results.unwrap();
-			assert_eq!(aliases.len(), 2);
-			assert_eq!(aliases[0].ca.context, ctx_a);
-			assert_eq!(aliases[1].ca.context, ctx_b);
-		});
-	}
-
-	// Verifies batch verification fails when the collection does not exist.
-	#[test]
-	fn missing_collection_fails() {
-		TestExt::new().execute_with(|| {
-			let dummy_proof = verifiable::mock::MockProof::default();
-			let items = vec![verification_item(&dummy_proof, b"msg!msg!msg!msg!", [0u8; 32])];
-
-			// Attempt batch verification against a collection that does not exist.
-			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
-				&NONEXISTENT_IDENTIFIER,
-				0,
-				&items,
-			);
-			assert_eq!(result.unwrap_err(), Error::<Test>::CollectionNotFound.into());
-		});
-	}
-
-	// Verifies batch verification fails when the requested ring root does not exist.
-	#[test]
-	fn missing_ring_fails() {
-		TestExt::new().execute_with(|| {
-			create_test_collection(BATCH_IDENTIFIER, 5);
-			let dummy_proof = verifiable::mock::MockProof::default();
-			let items = vec![verification_item(&dummy_proof, b"msg!msg!msg!msg!", [0u8; 32])];
-
-			// Attempt batch verification against a ring root that was never built.
-			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
-				&BATCH_IDENTIFIER,
-				99, // nonexistent ring
-				&items,
-			);
-			assert_eq!(result.unwrap_err(), Error::<Test>::NoRoot.into());
-		});
-	}
-
-	// Verifies batch verification returns the current ring revision in the aliases.
-	#[test]
-	fn returned_revision_metadata_is_correct() {
-		TestExt::new().execute_with(|| {
-			let members = setup_ring(BATCH_IDENTIFIER, 5, 10);
-			let ring_index = 0;
-			let context = [0xFF; 32];
-			let message = b"revision test!!!";
-
-			let expected_revision =
-				<MembersPallet as MembershipProver>::ring_revision(&BATCH_IDENTIFIER, ring_index)
-					.unwrap();
-
-			// Verify the returned alias metadata carries the current ring revision.
-			let (member, secret) = &members[0];
-			let proof =
-				make_proof(&BATCH_IDENTIFIER, ring_index, member, secret, &context, message);
-			let items = vec![verification_item(&proof, message, context)];
-
-			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
-				&BATCH_IDENTIFIER,
-				ring_index,
-				&items,
-			)
-			.unwrap();
-
-			assert_eq!(results[0].revision, expected_revision);
-			assert_eq!(results[0].ring, ring_index);
 		});
 	}
 }
@@ -4103,7 +3815,7 @@ mod self_inclusion_tests {
 	}
 }
 
-mod verify_memberships_in_ring_at_rev_tests {
+mod verify_memberships_in_ring_tests {
 	use super::*;
 
 	const BATCH_AT_REV_IDENTIFIER: Identifier = [78u8; 32];
@@ -4112,8 +3824,8 @@ mod verify_memberships_in_ring_at_rev_tests {
 		proof: &<MockCrypto as GenerateVerifiable>::Proof,
 		message: &[u8],
 		context: Context,
-	) -> BatchProofItem<<MockCrypto as GenerateVerifiable>::Proof> {
-		BatchProofItem {
+	) -> RingMembershipProof<<MockCrypto as GenerateVerifiable>::Proof> {
+		RingMembershipProof {
 			proof: proof.clone(),
 			context: context.to_vec(),
 			message: message.to_vec(),
@@ -4156,6 +3868,7 @@ mod verify_memberships_in_ring_at_rev_tests {
 		MockCrypto::create(commitment, secret, context, message).unwrap().0
 	}
 
+	// Verifies batch verification returns one alias per proof and preserves input order.
 	#[test]
 	fn works_for_current_and_old_revision_preserving_input_order() {
 		TestExt::new().execute_with(|| {
@@ -4202,18 +3915,18 @@ mod verify_memberships_in_ring_at_rev_tests {
 					.unwrap();
 			assert!(current_revision > old_revision);
 
-			let old_results =
-				<MembersPallet as MembershipProver>::verify_memberships_in_ring_at_rev(
-					&BATCH_AT_REV_IDENTIFIER,
-					ring_index,
-					old_revision,
-					&old_items,
-				)
-				.unwrap();
+			let old_results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				old_revision,
+				&old_items,
+			)
+			.unwrap();
 			assert_eq!(old_results.len(), old_items.len());
 
+			// Verify each alias matches what single verify_membership would return.
 			for (result, proof) in old_results.iter().zip(old_proofs.iter()) {
-				let single = <MembersPallet as MembershipProver>::verify_membership_at_rev(
+				let single = <MembersPallet as MembershipProver>::verify_membership(
 					&BATCH_AT_REV_IDENTIFIER,
 					proof,
 					ring_index,
@@ -4246,18 +3959,18 @@ mod verify_memberships_in_ring_at_rev_tests {
 				.map(|proof| verification_item(proof, current_message, current_context))
 				.collect::<Vec<_>>();
 
-			let current_results =
-				<MembersPallet as MembershipProver>::verify_memberships_in_ring_at_rev(
-					&BATCH_AT_REV_IDENTIFIER,
-					ring_index,
-					current_revision,
-					&current_items,
-				)
-				.unwrap();
+			let current_results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				current_revision,
+				&current_items,
+			)
+			.unwrap();
 			assert_eq!(current_results.len(), current_items.len());
 
+			// Verify each alias matches what single verify_membership would return.
 			for (result, proof) in current_results.iter().zip(current_proofs.iter()) {
-				let single = <MembersPallet as MembershipProver>::verify_membership_at_rev(
+				let single = <MembersPallet as MembershipProver>::verify_membership(
 					&BATCH_AT_REV_IDENTIFIER,
 					proof,
 					ring_index,
@@ -4269,6 +3982,219 @@ mod verify_memberships_in_ring_at_rev_tests {
 				assert_eq!(result.alias, single.alias);
 				assert_eq!(result.context, current_context);
 			}
+		});
+	}
+
+	// Verifies a single invalid proof rejects the entire batch even after a valid item.
+	#[test]
+	fn invalid_proof_fails_whole_batch() {
+		TestExt::new().execute_with(|| {
+			let members = setup_ring(BATCH_AT_REV_IDENTIFIER, 5, 10);
+			let ring_index = 0;
+			let revision =
+				<MembersPallet as MembershipProver>::ring_revision(&BATCH_AT_REV_IDENTIFIER, 0)
+					.unwrap();
+			let context = [0xBB; 32];
+			let message = b"batch fail test!";
+
+			let (member0, secret0) = &members[0];
+			let valid_proof = make_proof(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				member0,
+				secret0,
+				&context,
+				message,
+			);
+			let dummy_proof = verifiable::mock::MockProof::default();
+
+			// Put one valid proof and one invalid proof in the same batch.
+			let items = vec![
+				verification_item(&valid_proof, message, context),
+				verification_item(&dummy_proof, message, context),
+			];
+
+			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				revision,
+				&items,
+			);
+			assert_eq!(result.unwrap_err(), Error::<Test>::InvalidProof.into());
+		});
+	}
+
+	// Verifies the batch aborts when item 0 is invalid even if item 1 is valid.
+	#[test]
+	fn invalid_first_proof_fails_whole_batch_even_if_later_items_are_valid() {
+		TestExt::new().execute_with(|| {
+			let members = setup_ring(BATCH_AT_REV_IDENTIFIER, 5, 10);
+			let ring_index = 0;
+			let revision =
+				<MembersPallet as MembershipProver>::ring_revision(&BATCH_AT_REV_IDENTIFIER, 0)
+					.unwrap();
+			let context = [0xBC; 32];
+			let message = b"batch fail first!";
+
+			let (member1, secret1) = &members[1];
+			let valid_proof = make_proof(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				member1,
+				secret1,
+				&context,
+				message,
+			);
+			let dummy_proof = verifiable::mock::MockProof::default();
+
+			// Put the invalid proof first and a valid proof second.
+			let items = vec![
+				verification_item(&dummy_proof, message, context),
+				verification_item(&valid_proof, message, context),
+			];
+
+			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				revision,
+				&items,
+			);
+			assert_eq!(result.unwrap_err(), Error::<Test>::InvalidProof.into());
+		});
+	}
+
+	// Verifies a batch can contain proofs for distinct messages under the same context.
+	#[test]
+	fn mixed_messages_work() {
+		TestExt::new().execute_with(|| {
+			let members = setup_ring(BATCH_AT_REV_IDENTIFIER, 5, 10);
+			let ring_index = 0;
+			let revision =
+				<MembersPallet as MembershipProver>::ring_revision(&BATCH_AT_REV_IDENTIFIER, 0)
+					.unwrap();
+			let context = [0xCC; 32];
+			let msg_a = b"message alpha--!";
+			let msg_b = b"message bravo--!";
+
+			// Create proofs for two different messages under the same context.
+			let (member_a, secret_a) = &members[0];
+			let (member_b, secret_b) = &members[1];
+			let proof_a = make_proof(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				member_a,
+				secret_a,
+				&context,
+				msg_a,
+			);
+			let proof_b = make_proof(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				member_b,
+				secret_b,
+				&context,
+				msg_b,
+			);
+			let items = vec![
+				verification_item(&proof_a, msg_a, context),
+				verification_item(&proof_b, msg_b, context),
+			];
+
+			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				revision,
+				&items,
+			)
+			.unwrap();
+			assert_eq!(results.len(), 2);
+		});
+	}
+
+	// Verifies a batch can contain proofs for distinct contexts with the same message.
+	#[test]
+	fn mixed_contexts_work() {
+		TestExt::new().execute_with(|| {
+			let members = setup_ring(BATCH_AT_REV_IDENTIFIER, 5, 10);
+			let ring_index = 0;
+			let revision =
+				<MembersPallet as MembershipProver>::ring_revision(&BATCH_AT_REV_IDENTIFIER, 0)
+					.unwrap();
+			let ctx_a = [0xDD; 32];
+			let ctx_b = [0xEE; 32];
+			let message = b"same message!!!!";
+
+			// Create proofs for the same message under two different contexts.
+			let (member_a, secret_a) = &members[0];
+			let (member_b, secret_b) = &members[1];
+			let proof_a = make_proof(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				member_a,
+				secret_a,
+				&ctx_a,
+				message,
+			);
+			let proof_b = make_proof(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				member_b,
+				secret_b,
+				&ctx_b,
+				message,
+			);
+			let items = vec![
+				verification_item(&proof_a, message, ctx_a),
+				verification_item(&proof_b, message, ctx_b),
+			];
+
+			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
+				&BATCH_AT_REV_IDENTIFIER,
+				ring_index,
+				revision,
+				&items,
+			)
+			.unwrap();
+			assert_eq!(results.len(), 2);
+			assert_eq!(results[0].context, ctx_a);
+			assert_eq!(results[1].context, ctx_b);
+		});
+	}
+
+	// Verifies batch verification fails when the collection does not exist.
+	#[test]
+	fn missing_collection_fails() {
+		TestExt::new().execute_with(|| {
+			let dummy_proof = verifiable::mock::MockProof::default();
+			let items = vec![verification_item(&dummy_proof, b"msg!msg!msg!msg!", [0u8; 32])];
+
+			// Attempt batch verification against a collection that does not exist.
+			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
+				&NONEXISTENT_IDENTIFIER,
+				0,
+				1,
+				&items,
+			);
+			assert_eq!(result.unwrap_err(), Error::<Test>::CollectionNotFound.into());
+		});
+	}
+
+	// Verifies batch verification fails when the requested ring root does not exist.
+	#[test]
+	fn missing_ring_fails() {
+		TestExt::new().execute_with(|| {
+			create_test_collection(BATCH_AT_REV_IDENTIFIER, 5);
+			let dummy_proof = verifiable::mock::MockProof::default();
+			let items = vec![verification_item(&dummy_proof, b"msg!msg!msg!msg!", [0u8; 32])];
+
+			// Attempt batch verification against a ring root that was never built.
+			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
+				&BATCH_AT_REV_IDENTIFIER,
+				99,
+				1,
+				&items,
+			);
+			assert_eq!(result.unwrap_err(), Error::<Test>::NoRoot.into());
 		});
 	}
 
@@ -4307,7 +4233,7 @@ mod verify_memberships_in_ring_at_rev_tests {
 
 			advance_time(601);
 
-			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring_at_rev(
+			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
 				&BATCH_AT_REV_IDENTIFIER,
 				ring_index,
 				old_revision,
@@ -4347,7 +4273,7 @@ mod verify_memberships_in_ring_at_rev_tests {
 				.collect::<Vec<_>>();
 
 			// Verify batch works before removal
-			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring_at_rev(
+			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
 				&BATCH_AT_REV_IDENTIFIER,
 				ring_index,
 				revision,
@@ -4366,7 +4292,7 @@ mod verify_memberships_in_ring_at_rev_tests {
 			));
 
 			// Verify batch fails after removal (instantly expired)
-			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring_at_rev(
+			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
 				&BATCH_AT_REV_IDENTIFIER,
 				ring_index,
 				revision,
@@ -4406,7 +4332,7 @@ mod verify_memberships_in_ring_at_rev_tests {
 				.collect::<Vec<_>>();
 
 			// Verify batch works before deletion
-			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring_at_rev(
+			let results = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
 				&BATCH_AT_REV_IDENTIFIER,
 				ring_index,
 				revision,
@@ -4423,7 +4349,7 @@ mod verify_memberships_in_ring_at_rev_tests {
 			));
 
 			// Verify batch fails after deletion
-			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring_at_rev(
+			let result = <MembersPallet as MembershipProver>::verify_memberships_in_ring(
 				&BATCH_AT_REV_IDENTIFIER,
 				ring_index,
 				revision,
@@ -4439,7 +4365,6 @@ mod ocw_tests {
 
 	const OCW_IDENTIFIER: Identifier = [50u8; 32];
 
-	// TODO: Add coverage for merging onboarding queue pages.
 	#[test]
 	fn ocw_full_flow() {
 		TestExt::new().execute_with(|| {
@@ -4482,11 +4407,9 @@ mod ocw_tests {
 			assert!(!MembersPallet::should_remove_suspended_keys(&identifier, 0, true));
 			assert_eq!(RingKeysStatus::<Test>::get(identifier, 0).total, 9);
 
-			// Add the suspended member back to the collection.
-			assert_ok!(<MembersPallet as AppendOnlyMembers>::add_members(
-				&identifier,
-				suspended_member
-			));
+			// The suspended member leaves an orphaned `Members` entry (its key was skipped, not
+			// removed, by `remove_suspended_keys`).
+			assert!(Members::<Test>::get(identifier, members[0].0).is_some());
 
 			// Advance to ring 1 and remove ring 0.
 			manually_advance_to_ring(&identifier, 1);
@@ -4515,10 +4438,119 @@ mod ocw_tests {
 			assert!(!SuspendedCollections::<Test>::contains_key(identifier));
 			assert!(!Collections::<Test>::contains_key(identifier));
 
-			// All members deleted.
+			// All members deleted, including the orphaned suspended one (drained by the
+			// bounded `remove_orphaned_members_authorized` step before finalization).
 			for (member, _) in &members {
 				assert!(Members::<Test>::get(identifier, member).is_none());
 			}
+		});
+	}
+
+	#[test]
+	fn remove_orphaned_members_drains_and_gates_finalization() {
+		TestExt::new().execute_with(|| {
+			System::set_block_number(1);
+			let identifier: Identifier = [61u8; 32];
+
+			// A suspended collection with no rings, ring pages, or onboarding queue, but with
+			// orphaned `Members` entries (as left behind by suspended members).
+			create_test_collection(identifier, 1);
+			let info = Collections::<Test>::take(identifier).unwrap();
+			SuspendedCollections::<Test>::insert(identifier, info);
+
+			for i in 1u8..=5 {
+				let secret = MockCrypto::new_secret([0x60 + i; 32]);
+				let member = MockCrypto::member_from_secret(&secret);
+				Members::<Test>::insert(identifier, member, RingPosition::Suspended);
+			}
+
+			// Finalization is gated while orphans remain; orphan removal is permitted.
+			assert!(MembersPallet::ensure_can_finalize_collection_deletion(&identifier).is_err());
+			assert!(MembersPallet::ensure_can_remove_orphaned_members(&identifier).is_ok());
+
+			// Drain the orphans.
+			assert_ok!(MembersPallet::remove_orphaned_members_authorized(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				identifier,
+			));
+
+			// All orphaned entries removed.
+			assert!(Members::<Test>::iter_prefix(identifier).next().is_none());
+
+			// Now finalization is allowed, and there is nothing left to drain.
+			assert!(MembersPallet::ensure_can_finalize_collection_deletion(&identifier).is_ok());
+			assert!(MembersPallet::ensure_can_remove_orphaned_members(&identifier).is_err());
+		});
+	}
+
+	#[test]
+	fn remove_orphaned_members_is_bounded_per_call() {
+		TestExt::new().execute_with(|| {
+			let identifier: Identifier = [62u8; 32];
+
+			create_test_collection(identifier, 1);
+			let info = Collections::<Test>::take(identifier).unwrap();
+			SuspendedCollections::<Test>::insert(identifier, info);
+
+			// Seed more orphans than a single call can drain.
+			let total = ORPHANED_MEMBERS_REMOVAL_LIMIT + 5;
+			for i in 0..total {
+				let mut seed = [0xABu8; 32];
+				seed[0..4].copy_from_slice(&i.to_le_bytes());
+				let secret = MockCrypto::new_secret(seed);
+				let member = MockCrypto::member_from_secret(&secret);
+				Members::<Test>::insert(identifier, member, RingPosition::Suspended);
+			}
+
+			// First call drains exactly `ORPHANED_MEMBERS_REMOVAL_LIMIT`, leaving the rest.
+			assert_ok!(MembersPallet::remove_orphaned_members_authorized(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				identifier,
+			));
+			assert_eq!(
+				Members::<Test>::iter_prefix(identifier).count() as u32,
+				total - ORPHANED_MEMBERS_REMOVAL_LIMIT,
+			);
+			// Finalization still gated until the remainder is drained.
+			assert!(MembersPallet::ensure_can_finalize_collection_deletion(&identifier).is_err());
+
+			// A second call drains the remainder.
+			assert_ok!(MembersPallet::remove_orphaned_members_authorized(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				identifier,
+			));
+			assert!(Members::<Test>::iter_prefix(identifier).next().is_none());
+			assert!(MembersPallet::ensure_can_finalize_collection_deletion(&identifier).is_ok());
+		});
+	}
+
+	#[test]
+	fn ocw_drains_large_orphan_set_across_blocks_then_finalizes() {
+		TestExt::new().execute_with(|| {
+			let identifier: Identifier = [63u8; 32];
+
+			// A suspended collection (no rings/ring-pages/onboarding queue) with more orphaned
+			// `Members` entries than a single `remove_orphaned_members_authorized` call can drain.
+			create_test_collection(identifier, 1);
+			let info = Collections::<Test>::take(identifier).unwrap();
+			SuspendedCollections::<Test>::insert(identifier, info);
+
+			let total = ORPHANED_MEMBERS_REMOVAL_LIMIT + 5;
+			for i in 0..total {
+				let mut seed = [0xCDu8; 32];
+				seed[0..4].copy_from_slice(&i.to_le_bytes());
+				let secret = MockCrypto::new_secret(seed);
+				let member = MockCrypto::member_from_secret(&secret);
+				Members::<Test>::insert(identifier, member, RingPosition::Suspended);
+			}
+
+			// The OCW submits a bounded `remove_orphaned_members_authorized` per block until the
+			// prefix is empty, then finalizes — so a >LIMIT set is drained across several blocks.
+			advance_to_block(6);
+
+			assert!(Members::<Test>::iter_prefix(identifier).next().is_none());
+			assert!(!SuspendedCollections::<Test>::contains_key(identifier));
+			assert!(!Collections::<Test>::contains_key(identifier));
 		});
 	}
 }
@@ -4701,12 +4733,12 @@ mod old_roots_tests {
 	}
 
 	// Test for:
-	// - `verify_membership_at_rev` works for old revision
-	// - `verify_membership_at_rev` works for the current revision
-	// - after the retention period expires, `verify_membership_at_rev` no longer works for the old
+	// - `verify_membership` works for old revision
+	// - `verify_membership` works for the current revision
+	// - after the retention period expires, `verify_membership` no longer works for the old
 	//   revision
 	#[test]
-	fn verify_membership_at_rev_works_for_old_revision() {
+	fn verify_membership_works_for_old_revision() {
 		TestExt::new().execute_with(|| {
 			let identifier = TEST_IDENTIFIER;
 
@@ -4727,16 +4759,7 @@ mod old_roots_tests {
 			let (proof_rev0, _alias) =
 				create_proof_for_member(&identifier, 0, member, secret, context, message);
 
-			// Verify membership at current revision works
 			<MembersPallet as MembershipProver>::verify_membership(
-				&identifier,
-				&proof_rev0,
-				0,
-				context,
-				message,
-			)
-			.expect("Proof should verify against current revision");
-			<MembersPallet as MembershipProver>::verify_membership_at_rev(
 				&identifier,
 				&proof_rev0,
 				0,
@@ -4775,16 +4798,7 @@ mod old_roots_tests {
 			let (proof_rev1, _) =
 				MockCrypto::create(new_commitment, new_secret, &context, message_rev1).unwrap();
 
-			// Verify new proof works with current revision
 			<MembersPallet as MembershipProver>::verify_membership(
-				&identifier,
-				&proof_rev1,
-				0,
-				context,
-				message_rev1,
-			)
-			.expect("New proof should verify against current revision");
-			<MembersPallet as MembershipProver>::verify_membership_at_rev(
 				&identifier,
 				&proof_rev1,
 				0,
@@ -4794,8 +4808,8 @@ mod old_roots_tests {
 			)
 			.expect("New proof should verify against current revision");
 
-			// Verify old proof works with verify_membership_at_rev for rev 0
-			<MembersPallet as MembershipProver>::verify_membership_at_rev(
+			// Verify old proof works with verify_membership for rev 0
+			<MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_rev0,
 				0,
@@ -4804,8 +4818,8 @@ mod old_roots_tests {
 				message,
 			)
 			.expect("Old proof should verify at old revision");
-			// Verify new proof works with verify_membership_at_rev for rev 0
-			<MembersPallet as MembershipProver>::verify_membership_at_rev(
+			// Verify new proof works with verify_membership for rev 0
+			<MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_rev1,
 				0,
@@ -4819,7 +4833,7 @@ mod old_roots_tests {
 			advance_time(601);
 
 			// Verify old proof no longer verifies at revision 0
-			let result = <MembersPallet as MembershipProver>::verify_membership_at_rev(
+			let result = <MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_rev0,
 				0,
@@ -4864,6 +4878,30 @@ mod old_roots_tests {
 				OldRoots::<Test>::get((identifier, 0u32, BigEndianU32(0u32))).is_some(),
 				"Old root should still exist"
 			);
+		});
+	}
+
+	/// Old-root cleanup is pure storage reclamation — correctness never depends on it running —
+	/// so its authorized transaction carries the lowest priority tier, `CLEANUP`.
+	#[test]
+	fn clean_up_old_roots_has_cleanup_priority() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+
+			// Build a ring then rebuild it, leaving an old root at revision 0.
+			setup_collection_and_build_ring(identifier, 5, 10);
+			let _ = generate_members_with_offset(identifier, 11, 15, 100);
+			assert_ok!(MembersPallet::onboard_members(&identifier, false));
+			if let Some(to_include) = MembersPallet::should_build_ring(&identifier, 0, 255) {
+				assert_ok!(MembersPallet::build_ring(&identifier, 0, to_include));
+			}
+			assert!(OldRoots::<Test>::get((identifier, 0u32, BigEndianU32(0u32))).is_some());
+
+			// Past expiration, the cleanup authorizes and must advertise the CLEANUP tier.
+			advance_time(601);
+			let (valid, _) = MembersPallet::ensure_can_clean_up_old_roots(&identifier, 0)
+				.expect("cleanup authorizes after expiration");
+			assert_eq!(valid.priority, indiv_support::tx_priority::CLEANUP);
 		});
 	}
 
@@ -5086,7 +5124,7 @@ mod old_roots_tests {
 	}
 
 	#[test]
-	fn verify_membership_at_rev_fails_when_ring_is_deleted() {
+	fn verify_membership_fails_when_ring_is_deleted() {
 		TestExt::new().execute_with(|| {
 			let identifier = TEST_IDENTIFIER;
 
@@ -5110,8 +5148,8 @@ mod old_roots_tests {
 				assert_ok!(MembersPallet::build_ring(&identifier, 0, to_include));
 			}
 
-			// Verify old proof works with verify_membership_at_rev for rev 0
-			<MembersPallet as MembershipProver>::verify_membership_at_rev(
+			// Verify old proof works with verify_membership for rev 0
+			<MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_rev0,
 				0,
@@ -5128,7 +5166,7 @@ mod old_roots_tests {
 			assert_ok!(<MembersPallet as AppendOnlyMembers>::remove_ring(&identifier, 0));
 
 			// Verify that proofs fail when the ring is removed (instantly expired).
-			<MembersPallet as MembershipProver>::verify_membership_at_rev(
+			<MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_rev0,
 				0,
@@ -5141,7 +5179,7 @@ mod old_roots_tests {
 	}
 
 	#[test]
-	fn verify_membership_at_rev_fails_when_collection_is_deleted() {
+	fn verify_membership_fails_when_collection_is_deleted() {
 		TestExt::new().execute_with(|| {
 			let identifier = TEST_IDENTIFIER;
 
@@ -5165,8 +5203,8 @@ mod old_roots_tests {
 				assert_ok!(MembersPallet::build_ring(&identifier, 0, to_include));
 			}
 
-			// Verify old proof works with verify_membership_at_rev for rev 0
-			<MembersPallet as MembershipProver>::verify_membership_at_rev(
+			// Verify old proof works with verify_membership for rev 0
+			<MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_rev0,
 				0,
@@ -5181,7 +5219,7 @@ mod old_roots_tests {
 			assert_ok!(<MembersPallet as AppendOnlyMembers>::delete_collection(owner, &identifier));
 
 			// Verify old proof no longer verifies at revision 0 (CollectionNotFound)
-			let result = <MembersPallet as MembershipProver>::verify_membership_at_rev(
+			let result = <MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_rev0,
 				0,
@@ -5232,8 +5270,8 @@ mod old_roots_tests {
 			assert!(old_root_entry.is_some(), "Old root should be stored after suspending keys");
 			assert_eq!(old_root_entry.unwrap().root, root_before);
 
-			// Verify old proof works with verify_membership_at_rev for rev 0
-			<MembersPallet as MembershipProver>::verify_membership_at_rev(
+			// Verify old proof works with verify_membership for rev 0
+			<MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_rev0,
 				0,
@@ -5249,9 +5287,9 @@ mod old_roots_tests {
 				assert_ok!(MembersPallet::build_ring(&identifier, 0, to_include));
 			}
 
-			// Verify the old proof STILL works with verify_membership_at_rev for rev 0 after
+			// Verify the old proof STILL works with verify_membership for rev 0 after
 			// rebuild
-			<MembersPallet as MembershipProver>::verify_membership_at_rev(
+			<MembersPallet as MembershipProver>::verify_membership(
 				&identifier,
 				&proof_rev0,
 				0,
@@ -5548,6 +5586,93 @@ mod tag_collision_tests {
 		});
 	}
 
+	/// `build_ring` is liveness-critical (the protocol cannot recognise members without it), so
+	/// its pooled transaction must carry the highest priority tier, with a per-build bump so larger
+	/// pending cohorts can replace smaller stale retries.
+	#[test]
+	fn build_ring_authorized_has_liveness_priority() {
+		TestExt::new().execute_with(|| {
+			System::set_block_number(1);
+			let id = TEST_IDENTIFIER;
+			create_test_collection(id, 5);
+			let _cohort = generate_members(id, 1, 10);
+			assert_ok!(MembersPallet::onboard_members(&id, false));
+
+			run_offchain_worker(1);
+			let (priority, to_include) = inspect_pool_transactions()
+				.iter()
+				.find_map(|e| match &e.function {
+					RuntimeCall::MembersPallet(crate::Call::build_ring_authorized {
+						identifier,
+						ring_index,
+						ring_exponent,
+						revision,
+						to_include,
+						discriminator: _,
+					}) => {
+						let (valid, _) = MembersPallet::ensure_can_build_ring(
+							identifier,
+							*ring_index,
+							*ring_exponent,
+							*revision,
+							*to_include,
+						)
+						.expect("the pooled build_ring transaction must validate");
+						Some((valid.priority, *to_include))
+					},
+					_ => None,
+				})
+				.expect("round 1 build_ring present");
+			assert_eq!(
+				priority,
+				indiv_support::tx_priority::PROTOCOL_LIVENESS.saturating_add(to_include.into())
+			);
+		});
+	}
+
+	/// `remove_suspended_keys` gates ring rebuilding after member removal, so its pooled
+	/// transaction must use the same liveness priority as ring building.
+	#[test]
+	fn remove_suspended_keys_authorized_has_liveness_priority() {
+		TestExt::new().execute_with(|| {
+			System::set_block_number(1);
+			let id = TEST_IDENTIFIER;
+			create_test_collection(id, 5);
+
+			let members = generate_members(id, 1, 10);
+			assert_ok!(MembersPallet::onboard_members(&id, false));
+			assert_ok!(MembersPallet::build_ring(&id, 0, 10));
+
+			let suspended_member = vec![members[0].0];
+			assert_ok!(<MembersPallet as FlexibleMembers>::start_removal_session(&id));
+			assert_ok!(<MembersPallet as FlexibleMembers>::remove_members(&id, &suspended_member));
+			assert_ok!(<MembersPallet as FlexibleMembers>::end_removal_session(&id));
+
+			run_offchain_worker(1);
+			let priority = inspect_pool_transactions()
+				.iter()
+				.find_map(|e| match &e.function {
+					RuntimeCall::MembersPallet(crate::Call::remove_suspended_keys_authorized {
+						identifier,
+						ring_index,
+						revision,
+						discriminator: _,
+					}) => {
+						let (valid, _) = MembersPallet::ensure_can_remove_suspended_keys(
+							identifier,
+							*ring_index,
+							*revision,
+						)
+						.expect("the pooled remove_suspended_keys transaction must validate");
+						Some(valid.priority)
+					},
+					_ => None,
+				})
+				.expect("remove_suspended_keys transaction present");
+			assert_eq!(priority, indiv_support::tx_priority::PROTOCOL_LIVENESS);
+		});
+	}
+
 	/// Regression test for the tags of `onboard_members_authorized` across two onboarding rounds
 	/// where a page drains while `head == tail` (so `head` stays put).
 	///
@@ -5722,6 +5847,20 @@ mod tag_collision_tests {
 				MembersPallet::ensure_can_remove_suspended_keys(&id, 0, Some(0)),
 				Err(InvalidTransaction::Future.into())
 			);
+		});
+	}
+}
+
+mod integrity_tests {
+	use super::*;
+	use frame_support::traits::Hooks;
+
+	/// Verify that the default mock configuration passes all integrity checks, including the
+	/// block-fit assertions for every offchain-worker-submitted authorized call.
+	#[test]
+	fn integrity_test_passes() {
+		new_test_ext().execute_with(|| {
+			<Pallet<Test> as Hooks<u64>>::integrity_test();
 		});
 	}
 }
