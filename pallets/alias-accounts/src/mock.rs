@@ -29,12 +29,12 @@ use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateTransaction, CreateTransactionBase},
 	AuthorizeCall,
 };
-use indiv_support::traits::{Alias, ContextualAlias, MembershipProver, RevisedContextualAlias};
+use indiv_support::traits::{Alias, ContextualAlias, MembershipProver, RingMembershipProof};
 pub use indiv_support::traits::{Context, Identifier, RevisionIndex, RingExponent, RingIndex};
 use scale_info::TypeInfo;
 use sp_core::ConstU32;
 use sp_runtime::{BoundedVec, BuildStorage, DispatchError};
-use verifiable::{AliasVec, BatchProofItem, Entropy, Error as VerifiableError, GenerateVerifiable};
+use verifiable::{AliasVec, Entropy, Error as VerifiableError, GenerateVerifiable};
 
 use crate::types::AliasAccountInfo;
 
@@ -177,16 +177,6 @@ pub fn push_mock_ring_revision(
 	push_record(identifier, ring_index, MockRingRecord { revision, source_time: now });
 }
 
-/// Appends a new ring root revision with a specific source_time.
-pub fn push_mock_ring_revision_at(
-	identifier: Identifier,
-	ring_index: RingIndex,
-	revision: RevisionIndex,
-	source_time: u64,
-) {
-	push_record(identifier, ring_index, MockRingRecord { revision, source_time });
-}
-
 fn push_record(identifier: Identifier, ring_index: RingIndex, record: MockRingRecord) {
 	MOCK_RING_ROOTS.with(|m| {
 		m.borrow_mut().entry((identifier, ring_index)).or_default().push(record);
@@ -214,28 +204,6 @@ impl MembershipProver for MockMemberService {
 		identifier: &Identifier,
 		proof: &<Self::Crypto as GenerateVerifiable>::Proof,
 		ring_index: RingIndex,
-		context: Context,
-		msg: &[u8],
-	) -> Result<RevisedContextualAlias, DispatchError> {
-		if !collection_is_known(identifier) {
-			return Err(DispatchError::Other("mock collection not configured"));
-		}
-		let records = Self::ring_records(identifier, ring_index)
-			.ok_or(DispatchError::Other("mock ring missing"))?;
-		let latest = records.last().ok_or(DispatchError::Other("mock ring empty"))?;
-		let alias = TestVerifiable::validate((), proof, &BoundedVec::new(), &context[..], msg)
-			.map_err(|_| DispatchError::Other("invalid proof"))?;
-		Ok(RevisedContextualAlias {
-			revision: latest.revision,
-			ring: ring_index,
-			ca: ContextualAlias { alias, context },
-		})
-	}
-
-	fn verify_membership_at_rev(
-		identifier: &Identifier,
-		proof: &<Self::Crypto as GenerateVerifiable>::Proof,
-		ring_index: RingIndex,
 		revision: RevisionIndex,
 		context: Context,
 		msg: &[u8],
@@ -257,16 +225,8 @@ impl MembershipProver for MockMemberService {
 	fn verify_memberships_in_ring(
 		_identifier: &Identifier,
 		_ring_index: RingIndex,
-		_items: &[BatchProofItem<<Self::Crypto as GenerateVerifiable>::Proof>],
-	) -> Result<Vec<RevisedContextualAlias>, DispatchError> {
-		unimplemented!("alias-accounts mock does not use batch verification")
-	}
-
-	fn verify_memberships_in_ring_at_rev(
-		_identifier: &Identifier,
-		_ring_index: RingIndex,
 		_revision: RevisionIndex,
-		_items: &[BatchProofItem<<Self::Crypto as GenerateVerifiable>::Proof>],
+		_items: &[RingMembershipProof<<Self::Crypto as GenerateVerifiable>::Proof>],
 	) -> Result<Vec<ContextualAlias>, DispatchError> {
 		unimplemented!("alias-accounts mock does not use batch verification")
 	}
@@ -567,8 +527,8 @@ impl crate::benchmarking::BenchmarkHelper<Test> for Test {
 		MOCK_RING_ROOTS.with(|m| {
 			m.borrow_mut().remove(&(collection, ring));
 		});
-		for i in 0..revisions {
-			push_mock_ring_revision_at(collection, ring, i, source_time);
+		for revision in 0..revisions {
+			push_record(collection, ring, MockRingRecord { revision, source_time });
 		}
 	}
 }

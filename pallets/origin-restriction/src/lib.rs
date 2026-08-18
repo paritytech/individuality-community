@@ -250,7 +250,12 @@ impl<T> RestrictOrigin<T> {
 /// The info passed between the validate and prepare steps for the `RestrictOrigins` extension.
 #[derive(DebugNoBound)]
 pub enum Val<T: Config> {
-	Charge { fee: BalanceOf<T>, entity: T::RestrictedEntity },
+	Charge {
+		fee: BalanceOf<T>,
+		entity: T::RestrictedEntity,
+		/// The updated usage to persist in `prepare`.
+		usage: Usage<BalanceOf<T>, BlockNumberFor<T>>,
+	},
 	NoCharge,
 }
 
@@ -320,14 +325,12 @@ impl<T: Config> TransactionExtension<T::RuntimeCall> for RestrictOrigin<T> {
 		let fee = extrinsic_fee::<T>(info.total_weight(), len);
 		usage.used = usage.used.saturating_add(fee);
 
-		Usages::<T>::insert(&entity, &usage);
-
 		let allowed_one_time_excess = || {
 			usage_without_new_xt == 0u32.into() &&
 				T::OperationAllowedOneTimeExcess::contains(&entity, call)
 		};
 		if usage.used <= allowance.max || allowed_one_time_excess() {
-			Ok((ValidTransaction::default(), Val::Charge { fee, entity }, origin))
+			Ok((ValidTransaction::default(), Val::Charge { fee, entity, usage }, origin))
 		} else {
 			Err(InvalidTransaction::Payment.into())
 		}
@@ -342,7 +345,14 @@ impl<T: Config> TransactionExtension<T::RuntimeCall> for RestrictOrigin<T> {
 		_len: usize,
 	) -> Result<Self::Pre, TransactionValidityError> {
 		match val {
-			Val::Charge { fee, entity } => Ok(Pre::Charge { fee, entity }),
+			Val::Charge { fee, entity, usage } => {
+				// The value `usage` was calculated in `validate` and is blindly set to the entity
+				// usage here in `prepare`. No other transaction extension, and no other logic
+				// should write into `Usages` for this entity in between `validate` and
+				// `prepare`, otherwise the change would be simply ignored and overwritten.
+				Usages::<T>::insert(&entity, &usage);
+				Ok(Pre::Charge { fee, entity })
+			},
 			Val::NoCharge => Ok(Pre::NoCharge { refund: self.weight(call) }),
 		}
 	}

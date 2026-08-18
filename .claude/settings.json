@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "statusMessage": "Formatting (rustfmt/taplo/zepter)",
+            "timeout": 180,
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in *.rs|*.toml) (cd \"${CLAUDE_PROJECT_DIR:-.}\" && ./scripts/format.sh) ;; esac; } 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

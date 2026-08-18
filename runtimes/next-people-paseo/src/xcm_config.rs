@@ -33,9 +33,6 @@ use frame_support::{
 	},
 };
 use frame_system::EnsureRoot;
-use indiv_pallet_value_transfer_auth::{
-	allow_only_siblings::AllowOnlySiblings, ProtectedAssetTransactor,
-};
 use pallet_collator_selection::StakingPotAccountId;
 use pallet_xcm::XcmPassthrough;
 use parachains_common::{
@@ -45,10 +42,7 @@ use parachains_common::{
 	},
 	TREASURY_PALLET_ID,
 };
-use paseo_runtime_constants::{
-	system_parachain::{ASSET_HUB_ID, COLLECTIVES_ID, NEXT_ASSET_HUB_ID, NEXT_PEOPLE_ID},
-	ProtectedAssetLocation,
-};
+use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, COLLECTIVES_ID, NEXT_ASSET_HUB_ID};
 use polkadot_parachain_primitives::primitives::Sibling;
 use sp_runtime::traits::{AccountIdConversion, TryConvertInto};
 use xcm::latest::prelude::*;
@@ -68,11 +62,6 @@ use xcm_executor::{
 	traits::{Properties, ShouldExecute},
 	XcmExecutor,
 };
-
-parameter_types! {
-	pub NextAssetHubParaId: u32 = NEXT_ASSET_HUB_ID;
-	pub NextPeopleParaId: u32 = NEXT_PEOPLE_ID;
-}
 
 parameter_types! {
 	pub const RootLocation: Location = Location::here();
@@ -183,11 +172,7 @@ pub type ForeignFungiblesTransactor = FungiblesAdapter<
 >;
 
 /// Means for transacting assets on this chain.
-pub type AssetTransactors = ProtectedAssetTransactor<
-	(FungibleTransactor, ForeignFungiblesTransactor),
-	ProtectedAssetLocation,
-	AllowOnlySiblings<NextAssetHubParaId, NextPeopleParaId>,
->;
+pub type AssetTransactors = (FungibleTransactor, ForeignFungiblesTransactor);
 
 /// This is the type we use to convert an (incoming) XCM origin into a local `Origin` instance,
 /// ready for dispatching a transaction with XCM's `Transact`.
@@ -377,13 +362,7 @@ impl xcm_executor::Config for XcmConfig {
 	type MessageExporter = ();
 	type UniversalAliases = Nothing;
 	type CallDispatcher = RuntimeCall;
-	// Inbound XCM `Transact` is bounced through the same protected-asset value-transfer gate as
-	// local dispatch: the block flag defaults to BLOCKED because no
-	// `AuthorizeValueTransfer::prepare` runs for XCM-borne calls, so any protected-asset-touching
-	// call carried inside a `Transact` is rejected before dispatch.
-	type SafeCallFilter = indiv_pallet_value_transfer_auth::BlockValueTransfersWhenFlagSet<
-		crate::value_transfer_filter::PeopleNextValueTransferFilter,
-	>;
+	type SafeCallFilter = Everything;
 	type Aliasers = Nothing;
 	type TransactionalProcessor = FrameTransactionalProcessor;
 	type HrmpNewChannelOpenRequestHandler = ();

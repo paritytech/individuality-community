@@ -14,11 +14,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Resources.
+//! Resource allocation and consumer lifecycle management.
+//!
+//! This pallet registers people as consumers and allocates their statement-store resources.
+//! Anonymous members can claim temporary notification allowances by proving membership in a
+//! context that contains a period and a slot. A period is a fixed-duration window set by
+//! `NotificationPeriodDuration`, and a slot is an allowance identifier valid only within that
+//! period. A notification allowance authorizes a statement account to publish a notification
+//! without revealing the member's identity.
 //!
 //! # Deprecated: username management
 //!
-//! The username-related state and extrinsics in this pallet
+//! Only the username-related state and extrinsics in this pallet
 //! (`register_lite_person`, `register_person`, `remove_expired_username_reservation`,
 //! `set_username_reservation_duration`, plus the `UsernameReservationQueue` /
 //! `UsernameReservationDuration` storage items) are being superseded by the
@@ -56,22 +63,17 @@ use indiv_support::{
 		Alias, AllocateStorage, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar,
 		Context, MembershipProver, RingExponent, Username,
 	},
+	tx_priority,
 	utils::BigEndianU32,
+	weight_budget::OcwWeightBudget,
 };
 use sp_runtime::traits::{IdentifyAccount, Verify};
 use types::{
-	ConsumerInfo, Credibility, FriendRequestReference, LongTermStorageAllocation,
-	MembershipCollection, PersonalUsernameChoice, ReservationQueueEntryOf, StmtStoreAllowanceEntry,
+	ConsumerInfo, Credibility, LongTermStorageAllocation, MembershipCollection,
+	NotificationReference, PersonalUsernameChoice, ReservationQueueEntryOf,
+	StmtStoreAllowanceEntry,
 };
 use verifiable::GenerateVerifiable;
-
-// TODO:
-// - Get rid of the "friend request" naming.
-// - Unify all the different allowances we have for the statement store (account allowance,
-//   (lite)people and friend request), at least use the same grace period, claim time, etc. even if
-//   the allowance amounts are different. Ideally, with the addition of batch claims, people can
-//   claim multiple allowances into the same account all at once and we can use only one allowance
-//   type per resource.
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -84,7 +86,7 @@ pub mod pallet {
 	pub const RESOURCES_CONTEXT: Context = *b"pop:polkadot.network/resources  ";
 
 	const LOG_TARGET: &str = "runtime::indiv-pallet-resources";
-	const FRIEND_REQUEST_CONTEXT_PREFIX: &[u8; 9] = b"FRND_REQ:";
+	const NOTIFICATION_CONTEXT_PREFIX: &[u8; 6] = b"NOTIF:";
 	const STMT_STORE_SLOT_CONTEXT_PREFIX: &[u8; 9] = b"SSS_SLOT:";
 	const LONG_TERM_STORAGE_CONTEXT_BASE: [u8; 24] = *b"pop:polkadot.net/rsc-lts";
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
@@ -126,10 +128,6 @@ pub mod pallet {
 					Config: TryFrom<RingExponent>,
 				>,
 			>;
-
-		/// The maximum length of a username, including any potential trailing digits.
-		#[pallet::constant]
-		type MaxUsernameLength: Get<u32>;
 
 		/// The minimum length of a username.
 		#[pallet::constant]
@@ -181,52 +179,39 @@ pub mod pallet {
 		#[pallet::constant]
 		type StmtStoreGraceWindow: Get<u32>;
 
-		/// The Statement Store allowance for friend request statement registration.
+		/// The Statement Store allowance for notification statement registration.
 		#[pallet::constant]
-		type FriendRequestAllowance: Get<StatementAllowance>;
+		type NotificationAllowance: Get<StatementAllowance>;
 
-		/// Maximum number of friend requests a person can send within one rate-limit period.
+		/// Highest valid notification slot identifier for a person within one period.
 		///
-		/// For example, if this is `8`, each person can send up to 8 friend requests during the
-		/// period selected by `FriendRequestPeriodDuration`. When the period advances, the slots
-		/// reset.
+		/// A period is a fixed-duration window set by `NotificationPeriodDuration`. Each slot can
+		/// be claimed at most once by a person within that period.
+		///
+		/// For example, if this is `8`, the valid slot identifiers are `0..=8`, so each person
+		/// can claim up to 9 notification allowances during the period selected by
+		/// `NotificationPeriodDuration`. When the period advances, the slots reset.
 		#[pallet::constant]
-		type FriendRequestSlotsPerPeriod: Get<u8>;
+		type NotificationSlotsPerPeriod: Get<u8>;
 
-		/// Maximum number of friend requests a lite person can send within one rate-limit period.
+		/// Highest valid notification slot identifier for a lite person within one period.
 		///
-		/// Same semantics as `FriendRequestSlotsPerPeriod` but applied when the proof targets the
+		/// Same semantics as `NotificationSlotsPerPeriod` but applied when the proof targets the
 		/// lite-people collection via `MembershipCollection::LitePeople`.
 		#[pallet::constant]
-		type LiteFriendRequestSlotsPerPeriod: Get<u8>;
+		type LiteNotificationSlotsPerPeriod: Get<u8>;
 
-		/// Rolling time window for rate-limiting friend requests, in seconds.
+		/// Rolling time window for rate-limiting notifications, in seconds.
 		///
 		/// Time is divided into fixed-duration periods. The period index is computed as
-		/// `now_secs / FriendRequestPeriodDuration`.
+		/// `now_secs / NotificationPeriodDuration`.
 		///
 		/// For example, if this is `86_400` (24 hours), period `0` is the first 24 hours since the
 		/// Unix epoch, period `1` is the next 24 hours, and so on. Combined with
-		/// `FriendRequestSlotsPerPeriod`, this defines how many friend requests can be sent in each
+		/// `NotificationSlotsPerPeriod`, this defines how many notifications can be sent in each
 		/// period.
 		#[pallet::constant]
-		type FriendRequestPeriodDuration: Get<u32>;
-
-		/// Extra time, in seconds, during which the previous friend request period is still
-		/// accepted after a rollover.
-		///
-		/// This allows transactions created close to a period boundary to still be included even if
-		/// they are executed just after the next period begins.
-		#[pallet::constant]
-		type FriendRequestGraceWindow: Get<u32>;
-
-		/// Duration for which friend request registrations will be retained. Specified in seconds.
-		///
-		/// A registration is created for a specific period. Once this period ends,
-		/// the registration remains valid for the configured duration, after which
-		/// it can be cleaned up. See `friend_request_expiration_time`.
-		#[pallet::constant]
-		type FriendRequestRetentionDuration: Get<u64>;
+		type NotificationPeriodDuration: Get<u32>;
 
 		/// Number of blocks between offchain-worker maintenance runs.
 		#[pallet::constant]
@@ -274,7 +259,8 @@ pub mod pallet {
 		/// Extra time, in seconds, during which the previous long-term storage period is still
 		/// accepted after a rollover.
 		///
-		/// Same semantics as `FriendRequestGraceWindow` but applied to long-term storage claims.
+		/// Extra time, in seconds, during which the previous long-term storage period is accepted
+		/// after a rollover.
 		#[pallet::constant]
 		type LongTermStorageGraceWindow: Get<u32>;
 
@@ -305,8 +291,8 @@ pub mod pallet {
 		Clone, PartialEq, Eq, Debug, Encode, Decode, MaxEncodedLen, TypeInfo, DecodeWithMemTracking,
 	)]
 	pub enum Origin {
-		/// A friend request alias origin, produced by the `AsResources` transaction extension.
-		FriendRequestAlias(Alias),
+		/// A notification alias origin, produced by the `AsResources` transaction extension.
+		NotificationAlias(Alias),
 		/// A statement store slot alias origin, produced by the `AsResources` transaction
 		/// extension after validating a ring-VRF proof for a specific slot context.
 		StmtStoreAlias(Alias),
@@ -351,19 +337,19 @@ pub mod pallet {
 		OptionQuery,
 	>;
 
-	/// Friend request registration by anonymous alias in friend request context.
+	/// Notification allowance registration by anonymous alias.
 	#[pallet::storage]
-	pub type FriendRequestRegistrationByAlias<T: Config> = StorageMap<
+	pub type NotificationRegistrationByAlias<T: Config> = StorageMap<
 		_,
 		Blake2_128Concat,
 		Alias,
-		types::FriendRequestRegistration<T::AccountId>,
+		types::NotificationRegistration<T::AccountId>,
 		OptionQuery,
 	>;
 
-	/// Reverse lookup from friend request statement account to anonymous alias.
+	/// Reverse lookup from notification statement account to anonymous alias.
 	#[pallet::storage]
-	pub type FriendRequestAliasByAccount<T: Config> =
+	pub type NotificationAliasByAccount<T: Config> =
 		StorageMap<_, Blake2_128Concat, T::AccountId, Alias, OptionQuery>;
 
 	/// Aliases that have already been used to claim long-term storage in a given period.
@@ -422,10 +408,10 @@ pub mod pallet {
 		PersonRegistered { alias: Alias, account: T::AccountId },
 		/// A lite person has registered as a consumer.
 		LitePersonRegistered { account: T::AccountId },
-		/// Friend request statement usage has been assigned for a sequence.
-		FriendRequestStmtUsageSet { alias: Alias, period: u32, seq: u8, account: T::AccountId },
-		/// Friend request statement usage has been removed.
-		FriendRequestStmtUsageRemoved { account: T::AccountId },
+		/// Notification statement usage has been assigned for a sequence.
+		NotificationStmtUsageSet { alias: Alias, period: u32, seq: u8, account: T::AccountId },
+		/// Notification statement usage has been removed.
+		NotificationStmtUsageRemoved { account: T::AccountId },
 		/// A person's authorization was touched.
 		PersonAuthorizationTouched { account: T::AccountId },
 		/// An expired username reservation was removed.
@@ -499,14 +485,14 @@ pub mod pallet {
 		NotInQueue,
 		/// Account already has a reservation for another username.
 		AlreadyHasReservation,
-		/// Friend request sequence is invalid for the consumer.
-		InvalidFriendRequestSequence,
-		/// Friend request period is not the current period.
-		InvalidFriendRequestPeriod,
-		/// Friend request registration is not expired yet.
-		FriendRequestRegistrationNotExpired,
-		/// Friend request registration already exists for the alias/context.
-		FriendRequestRegistrationAlreadyExists,
+		/// Notification sequence is invalid for the consumer.
+		InvalidNotificationSequence,
+		/// Notification period is outside the accepted claim window.
+		InvalidNotificationPeriod,
+		/// Notification registration is not expired yet.
+		NotificationRegistrationNotExpired,
+		/// Notification registration already exists for the alias/context.
+		NotificationRegistrationAlreadyExists,
 		/// The replacement cooldown has not elapsed since the entry was last set.
 		StmtStoreReplacementTooEarly,
 		/// The provided `limit` exceeds `LongTermStorageCleanupLimit`.
@@ -520,16 +506,16 @@ pub mod pallet {
 				return;
 			}
 
-			for registration in FriendRequestRegistrationByAlias::<T>::iter_values() {
-				if !Self::should_clear_friend_request_registration(&registration) {
+			for registration in NotificationRegistrationByAlias::<T>::iter_values() {
+				if !Self::should_clear_notification_registration(&registration) {
 					continue;
 				}
 
-				let call = Call::clear_expired_friend_request_sequence {
+				let call = Call::clear_expired_notification_sequence {
 					account: registration.account_id,
 					seq: registration.reference.seq,
 				};
-				Self::submit_authorized_transaction(call, "Clear expired friend request sequence");
+				Self::submit_authorized_transaction(call, "Clear expired notification sequence");
 			}
 
 			// Clean up stale statement store allowances.
@@ -573,24 +559,25 @@ pub mod pallet {
 
 		fn integrity_test() {
 			assert!(
-				T::FriendRequestSlotsPerPeriod::get() > 0,
-				"FriendRequestSlotsPerPeriod must be non-zero",
+				T::NotificationSlotsPerPeriod::get() > 0,
+				"NotificationSlotsPerPeriod must be non-zero",
 			);
 			assert!(
-				T::LiteFriendRequestSlotsPerPeriod::get() > 0,
-				"LiteFriendRequestSlotsPerPeriod must be non-zero",
+				T::LiteNotificationSlotsPerPeriod::get() > 0,
+				"LiteNotificationSlotsPerPeriod must be non-zero",
 			);
 			assert!(
-				T::LiteFriendRequestSlotsPerPeriod::get() <= T::FriendRequestSlotsPerPeriod::get(),
-				"LiteFriendRequestSlotsPerPeriod must be <= FriendRequestSlotsPerPeriod",
+				T::LiteNotificationSlotsPerPeriod::get() <= T::NotificationSlotsPerPeriod::get(),
+				"LiteNotificationSlotsPerPeriod must be <= NotificationSlotsPerPeriod",
 			);
 			assert!(
-				T::FriendRequestPeriodDuration::get() > 0,
-				"FriendRequestPeriodDuration must be non-zero",
+				T::NotificationPeriodDuration::get() > 0,
+				"NotificationPeriodDuration must be non-zero",
 			);
-			assert!(
-				T::FriendRequestGraceWindow::get() < T::FriendRequestPeriodDuration::get(),
-				"FriendRequestGraceWindow must be smaller than FriendRequestPeriodDuration",
+			assert_eq!(
+				T::NotificationPeriodDuration::get() as u64,
+				SECONDS_PER_DAY,
+				"NotificationPeriodDuration must be one day to match statement store periods",
 			);
 			assert!(
 				T::OffchainWorkerInterval::get() > Zero::zero(),
@@ -633,6 +620,36 @@ pub mod pallet {
 			assert!(
 				T::LongTermStorageCleanupLimit::get() > 0,
 				"LongTermStorageCleanupLimit must be non-zero",
+			);
+
+			// Every OCW-submitted authorized extrinsic must fit in
+			// `Normal.max_extrinsic`, otherwise the transaction is silently dropped at
+			// the transaction-pool level and the cleanup flow stalls forever.
+			let budget = OcwWeightBudget::from_normal_max::<T>();
+
+			budget.assert_fits(
+				"clear_expired_notification_sequence",
+				<T as Config>::WeightInfo::clear_expired_notification_sequence().saturating_add(
+					<T as Config>::WeightInfo::authorize_clear_expired_notification_sequence(),
+				),
+			);
+			budget.assert_fits(
+				"clear_expired_stmt_store_allowances",
+				<T as Config>::WeightInfo::clear_expired_stmt_store_allowances(
+					T::StmtStoreCleanupLimit::get(),
+				)
+				.saturating_add(
+					<T as Config>::WeightInfo::authorize_clear_expired_stmt_store_allowances(),
+				),
+			);
+			budget.assert_fits(
+				"clear_expired_long_term_storage_aliases",
+				<T as Config>::WeightInfo::clear_expired_long_term_storage_aliases(
+					T::LongTermStorageCleanupLimit::get(),
+				)
+				.saturating_add(
+					<T as Config>::WeightInfo::authorize_clear_expired_long_term_storage_aliases(),
+				),
 			);
 		}
 	}
@@ -752,6 +769,7 @@ pub mod pallet {
 			ValidTransaction::with_tag_prefix("PersonhoodResourcesRemoveExpiredReservation")
 				.and_provides(account)
 				.propagate(true)
+				.priority(tx_priority::CLEANUP)
 				.build().map(|valid_tx| (valid_tx, Weight::zero()))
 		})]
 		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::validate_reservation_expiry())]
@@ -833,47 +851,46 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Associate a statement account with a friend request context sequence.
+		/// Associate a statement account with a notification context sequence.
 		///
-		/// The associated account can submit statements while this friend request registration is
+		/// The associated account can submit statements while this notification registration is
 		/// active.
-		/// The origin must be `Origin::FriendRequestAlias`, created by the `AsResources`
-		/// (`RegisterFriendRequestWithProof(..)`) transaction extension after proof validation.
+		/// The origin must be `Origin::NotificationAlias`, created by the `AsResources`
+		/// (`RegisterNotificationWithProof(..)`) transaction extension after proof validation.
 		/// On success, increases statement allowance and stores registration state
 		/// `{account_id, reference}`.
 		///
 		/// Parameters:
-		/// * `reference`: friend request period/sequence pair.
-		///   - `reference.period` must be in the accepted period window: `[period(now -
-		///     FriendRequestGraceWindow), period(now)]`.
-		///   - `reference.seq` must be in `0..=FriendRequestSlotsPerPeriod`.
+		/// * `reference`: notification period/sequence pair.
+		///   - `reference.period` must be the current statement-store period.
+		///   - `reference.seq` must be in `0..=NotificationSlotsPerPeriod`.
 		/// * `account_id`: statement account to authorize. Must not already be used by another
-		///   friend request registration.
+		///   notification registration.
 		#[pallet::call_index(8)]
-		#[pallet::weight(<T as Config>::WeightInfo::set_friend_request_statement_account_for_sequence())]
-		pub fn set_friend_request_statement_account_for_sequence(
+		#[pallet::weight(<T as Config>::WeightInfo::set_notification_statement_account_for_sequence())]
+		pub fn set_notification_statement_account_for_sequence(
 			origin: OriginFor<T>,
-			reference: FriendRequestReference,
+			reference: NotificationReference,
 			account_id: T::AccountId,
 		) -> DispatchResultWithPostInfo {
-			// Ensure this is a friend request alias origin produced by `AsResources`.
-			let alias = Self::ensure_friend_request_alias(origin)?;
+			// Ensure this is a notification alias origin produced by `AsResources`.
+			let alias = Self::ensure_notification_alias(origin)?;
 			// Fail fast if parameters are invalid.
-			Self::validate_friend_request_period(reference.period)?;
+			Self::validate_notification_period(reference.period)?;
 			// `AsResources` enforces the collection-specific slot bound before dispatch. By the
-			// time this call executes, only the broader catch-all friend request bound remains.
-			Self::validate_friend_request_seq(reference.seq)?;
+			// time this call executes, only the broader catch-all notification bound remains.
+			Self::validate_notification_seq(reference.seq)?;
 
-			Self::validate_friend_request_registration(alias, &account_id)?;
+			Self::validate_notification_registration(alias, &account_id)?;
 
-			increase_allowance_by(account_id.clone().into(), T::FriendRequestAllowance::get());
-			FriendRequestRegistrationByAlias::<T>::insert(
+			increase_allowance_by(account_id.clone().into(), T::NotificationAllowance::get());
+			NotificationRegistrationByAlias::<T>::insert(
 				alias,
-				types::FriendRequestRegistration { account_id: account_id.clone(), reference },
+				types::NotificationRegistration { account_id: account_id.clone(), reference },
 			);
-			FriendRequestAliasByAccount::<T>::insert(&account_id, alias);
+			NotificationAliasByAccount::<T>::insert(&account_id, alias);
 
-			Self::deposit_event(Event::FriendRequestStmtUsageSet {
+			Self::deposit_event(Event::NotificationStmtUsageSet {
 				alias,
 				period: reference.period,
 				seq: reference.seq,
@@ -882,34 +899,34 @@ pub mod pallet {
 			Ok(Pays::No.into())
 		}
 
-		/// Clear a stale friend request registration and revoke its statement allowance.
+		/// Clear a stale notification registration and revoke its statement allowance.
 		///
 		/// This is a permissionless call; the origin must be authorized.
 		/// Succeeds only when the registration's period-derived expiry has elapsed.
-		/// On success, removes friend request registration state and decreases statement allowance.
+		/// On success, removes notification registration state and decreases statement allowance.
 		///
 		/// Parameters:
-		/// * `account`: statement account previously associated with a friend request registration.
-		/// * `seq`: friend request sequence to clear. Must match stored registration sequence and
-		///   be in `0..=FriendRequestSlotsPerPeriod`.
+		/// * `account`: statement account previously associated with a notification registration.
+		/// * `seq`: notification sequence to clear. Must match stored registration sequence and be
+		///   in `0..=NotificationSlotsPerPeriod`.
 		#[pallet::call_index(9)]
 		#[pallet::authorize(|source, account, seq| {
-			Self::authorize_clear_expired_friend_request_sequence(source, account, seq)
+			Self::authorize_clear_expired_notification_sequence(source, account, seq)
 		})]
-		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_clear_expired_friend_request_sequence())]
-		#[pallet::weight(<T as Config>::WeightInfo::clear_expired_friend_request_sequence())]
-		pub fn clear_expired_friend_request_sequence(
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_clear_expired_notification_sequence())]
+		#[pallet::weight(<T as Config>::WeightInfo::clear_expired_notification_sequence())]
+		pub fn clear_expired_notification_sequence(
 			origin: OriginFor<T>,
 			account: T::AccountId,
 			_seq: u8,
 		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
-			let alias = Self::friend_request_alias_for_account(&account)?;
-			FriendRequestRegistrationByAlias::<T>::remove(alias);
-			FriendRequestAliasByAccount::<T>::remove(&account);
-			decrease_allowance_by(account.clone().into(), T::FriendRequestAllowance::get());
+			let alias = Self::notification_alias_for_account(&account)?;
+			NotificationRegistrationByAlias::<T>::remove(alias);
+			NotificationAliasByAccount::<T>::remove(&account);
+			decrease_allowance_by(account.clone().into(), T::NotificationAllowance::get());
 
-			Self::deposit_event(Event::FriendRequestStmtUsageRemoved { account });
+			Self::deposit_event(Event::NotificationStmtUsageRemoved { account });
 			Ok(Pays::No.into())
 		}
 
@@ -1127,10 +1144,10 @@ pub mod pallet {
 			Self::stmt_store_slot_context(period, seq)
 		}
 
-		/// Returns the proof context for a friend request registration at the given
+		/// Returns the proof context for a notification registration at the given
 		/// `period` and `seq`.
-		pub fn friend_request_context_for(period: u32, seq: u8) -> Context {
-			Self::friend_request_context(FriendRequestReference { period, seq })
+		pub fn notification_context_for(period: u32, seq: u8) -> Context {
+			Self::notification_context(NotificationReference { period, seq })
 		}
 	}
 
@@ -1143,6 +1160,10 @@ pub mod pallet {
 			ValidTransaction::with_tag_prefix("PersonhoodResourcesDemoteAuthExpired")
 				.and_provides(account)
 				.propagate(true)
+				// Not storage reclamation: this downgrades the account's privileges
+				// (cuts its statement allowance, marks it demoted), a user-visible
+				// transition that should not keep yielding while authorization is expired.
+				.priority(tx_priority::BACKGROUND_PROGRESS)
 				.build()
 				.map(|valid_tx| (valid_tx, Weight::zero()))
 		}
@@ -1161,10 +1182,10 @@ pub mod pallet {
 			}
 		}
 
-		fn should_clear_friend_request_registration(
-			registration: &types::FriendRequestRegistration<T::AccountId>,
+		fn should_clear_notification_registration(
+			registration: &types::NotificationRegistration<T::AccountId>,
 		) -> bool {
-			Self::validate_clear_friend_request_sequence(
+			Self::validate_clear_notification_sequence(
 				&registration.account_id,
 				registration.reference.seq,
 			)
@@ -1181,22 +1202,20 @@ pub mod pallet {
 			}
 		}
 
-		fn authorize_clear_expired_friend_request_sequence(
+		fn authorize_clear_expired_notification_sequence(
 			source: TransactionSource,
 			account: &T::AccountId,
 			seq: &u8,
 		) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
 			Self::ensure_local_source(source)?;
-			Self::validate_clear_friend_request_sequence(account, *seq).map_err(|_| {
-				crate::extension::CustomValidity::InvalidExpiredFriendRequestCleanup
-			})?;
-			ValidTransaction::with_tag_prefix(
-				"PersonhoodResourcesClearExpiredFriendRequestSequence",
-			)
-			.and_provides(account)
-			.propagate(true)
-			.build()
-			.map(|valid_tx| (valid_tx, Weight::zero()))
+			Self::validate_clear_notification_sequence(account, *seq)
+				.map_err(|_| crate::extension::CustomValidity::InvalidExpiredNotificationCleanup)?;
+			ValidTransaction::with_tag_prefix("PersonhoodResourcesClearExpiredNotificationSequence")
+				.and_provides(account)
+				.propagate(true)
+				.priority(tx_priority::CLEANUP)
+				.build()
+				.map(|valid_tx| (valid_tx, Weight::zero()))
 		}
 
 		fn authorize_clear_expired_stmt_store_allowances(
@@ -1222,13 +1241,14 @@ pub mod pallet {
 			ValidTransaction::with_tag_prefix("PersonhoodResourcesClearExpiredStmtStore")
 				.and_provides((period, first_entry))
 				.propagate(true)
+				.priority(tx_priority::CLEANUP)
 				.build()
 				.map(|valid_tx| (valid_tx, Weight::zero()))
 		}
 
-		fn ensure_friend_request_alias(origin: OriginFor<T>) -> Result<Alias, DispatchError> {
+		fn ensure_notification_alias(origin: OriginFor<T>) -> Result<Alias, DispatchError> {
 			match origin.into_caller().try_into() {
-				Ok(Origin::FriendRequestAlias(alias)) => Ok(alias),
+				Ok(Origin::NotificationAlias(alias)) => Ok(alias),
 				_ => Err(DispatchError::BadOrigin),
 			}
 		}
@@ -1259,6 +1279,7 @@ pub mod pallet {
 			)
 			.and_provides(period)
 			.propagate(true)
+			.priority(tx_priority::CLEANUP)
 			.build()
 			.map(|valid_tx| (valid_tx, Weight::zero()))
 		}
@@ -1393,49 +1414,36 @@ pub mod pallet {
 			Ok(Pays::No.into())
 		}
 
-		pub fn friend_request_period_from_timestamp(now_secs: u64) -> u32 {
-			let period_duration = u64::from(T::FriendRequestPeriodDuration::get().max(1));
+		pub fn notification_period_from_timestamp(now_secs: u64) -> u32 {
+			let period_duration = u64::from(T::NotificationPeriodDuration::get().max(1));
 			let period = now_secs.checked_div(period_duration).unwrap_or(0);
 			period.try_into().unwrap_or(u32::MAX)
 		}
 
-		pub fn friend_request_expiration_time(period: u32) -> u64 {
+		pub fn notification_expiration_time(period: u32) -> u64 {
 			let period_end = u64::from(period.saturating_add(1))
-				.saturating_mul(u64::from(T::FriendRequestPeriodDuration::get().max(1)));
-			period_end.saturating_add(T::FriendRequestRetentionDuration::get())
+				.saturating_mul(u64::from(T::NotificationPeriodDuration::get().max(1)));
+			period_end.saturating_add(u64::from(T::StmtStoreGraceWindow::get()))
 		}
 
-		/// Whether a friend request period is currently accepted.
+		/// Whether a notification period is currently accepted.
 		///
-		/// This follows the same current-plus-grace-window pattern as
-		/// `pallet_coinage::Pallet::<T>::current_free_unload_token_periods`.
-		///
-		/// The current period is always accepted. During the grace window immediately after a
-		/// rollover, the previous period is also accepted so transactions created near the boundary
-		/// do not fail just because they were included slightly later.
-		fn is_accepted_friend_request_period(period: u32) -> bool {
+		/// Only the current statement-store period is accepted for new notification claims.
+		fn is_accepted_notification_period(period: u32) -> bool {
 			let now_secs = T::Clock::now().as_secs();
-			let current_period = Self::friend_request_period_from_timestamp(now_secs);
-			if period == current_period {
-				return true;
-			}
-			let now_secs_minus_grace =
-				now_secs.saturating_sub(u64::from(T::FriendRequestGraceWindow::get()));
-			let previous_period_in_grace =
-				Self::friend_request_period_from_timestamp(now_secs_minus_grace);
-			period == previous_period_in_grace
+			period == Self::notification_period_from_timestamp(now_secs)
 		}
 
-		pub fn friend_request_context(reference: FriendRequestReference) -> Context {
+		pub fn notification_context(reference: NotificationReference) -> Context {
 			let mut context = [b' '; 32];
 			let required_len =
-				FRIEND_REQUEST_CONTEXT_PREFIX.len() + size_of::<u32>() + size_of::<u8>();
+				NOTIFICATION_CONTEXT_PREFIX.len() + size_of::<u32>() + size_of::<u8>();
 			debug_assert!(
 				required_len <= context.len(),
-				"friend request context payload does not fit: required={required_len}, len={}",
+				"notification context payload does not fit: required={required_len}, len={}",
 				context.len()
 			);
-			let payload = FRIEND_REQUEST_CONTEXT_PREFIX
+			let payload = NOTIFICATION_CONTEXT_PREFIX
 				.iter()
 				.copied()
 				.chain(reference.period.to_be_bytes())
@@ -1501,12 +1509,12 @@ pub mod pallet {
 			}
 		}
 
-		// Validation functions for friend request registration and clearing.
+		// Validation functions for notification registration and clearing.
 		// These are used both in the dispatchable calls and in the authorization logic.
-		pub(crate) fn validate_friend_request_period(period: u32) -> Result<(), Error<T>> {
+		pub(crate) fn validate_notification_period(period: u32) -> Result<(), Error<T>> {
 			ensure!(
-				Self::is_accepted_friend_request_period(period),
-				Error::<T>::InvalidFriendRequestPeriod
+				Self::is_accepted_notification_period(period),
+				Error::<T>::InvalidNotificationPeriod
 			);
 			Ok(())
 		}
@@ -1514,76 +1522,76 @@ pub mod pallet {
 		// The sequence number is an arbitrary identifier provided by the caller to
 		// distinguish different registrations within the same period.
 		// These are used both in the dispatchable calls and in the authorization logic.
-		fn validate_friend_request_seq_with_limit(seq: u8, limit: u8) -> Result<(), Error<T>> {
-			ensure!(seq <= limit, Error::<T>::InvalidFriendRequestSequence);
+		fn validate_notification_seq_with_limit(seq: u8, limit: u8) -> Result<(), Error<T>> {
+			ensure!(seq <= limit, Error::<T>::InvalidNotificationSequence);
 			Ok(())
 		}
 
-		pub(crate) fn validate_friend_request_seq(seq: u8) -> Result<(), Error<T>> {
-			Self::validate_friend_request_seq_with_limit(seq, T::FriendRequestSlotsPerPeriod::get())
+		pub(crate) fn validate_notification_seq(seq: u8) -> Result<(), Error<T>> {
+			Self::validate_notification_seq_with_limit(seq, T::NotificationSlotsPerPeriod::get())
 		}
 
-		pub(crate) fn validate_lite_friend_request_seq(seq: u8) -> Result<(), Error<T>> {
-			Self::validate_friend_request_seq_with_limit(
+		pub(crate) fn validate_lite_notification_seq(seq: u8) -> Result<(), Error<T>> {
+			Self::validate_notification_seq_with_limit(
 				seq,
-				T::LiteFriendRequestSlotsPerPeriod::get(),
+				T::LiteNotificationSlotsPerPeriod::get(),
 			)
 		}
 
-		// Friend request registration must reject duplicate account and alias registrations.
+		// Notification registrations must reject duplicate account and alias registrations.
 		// This helper is shared by dispatch and pre-dispatch validation.
-		pub(crate) fn validate_friend_request_registration(
+		pub(crate) fn validate_notification_registration(
 			alias: Alias,
 			account_id: &T::AccountId,
 		) -> Result<(), Error<T>> {
 			ensure!(
-				!FriendRequestRegistrationByAlias::<T>::contains_key(alias),
-				Error::<T>::FriendRequestRegistrationAlreadyExists
+				!NotificationRegistrationByAlias::<T>::contains_key(alias),
+				Error::<T>::NotificationRegistrationAlreadyExists
 			);
-			if FriendRequestAliasByAccount::<T>::contains_key(account_id) {
+			if NotificationAliasByAccount::<T>::contains_key(account_id) {
 				log::error!(
 					target: LOG_TARGET,
-					"friend request registration validation found an existing account mapping for a new alias",
+					"notification registration validation found an existing account mapping for a new alias",
 				);
-				return Err(Error::<T>::FriendRequestRegistrationAlreadyExists);
+				return Err(Error::<T>::NotificationRegistrationAlreadyExists);
 			}
 			Ok(())
 		}
 
-		// To clear an expired friend request registration, the caller must provide
+		// To clear an expired notification registration, the caller must provide
 		// the account associated with the registration and the sequence number.
-		fn validate_clear_friend_request_sequence(
+		fn validate_clear_notification_sequence(
 			account: &T::AccountId,
 			seq: u8,
 		) -> Result<Alias, Error<T>> {
-			let alias = Self::friend_request_alias_for_account(account)?;
-			let Some(registration) = FriendRequestRegistrationByAlias::<T>::get(alias) else {
+			let alias = Self::notification_alias_for_account(account)?;
+			let Some(registration) = NotificationRegistrationByAlias::<T>::get(alias) else {
 				log::error!(
 					target: LOG_TARGET,
-					"friend request storage corruption: missing registration for alias {alias:?} mapped from account {account:?}",
+					"notification storage corruption: missing registration for alias {alias:?} mapped from account {account:?}",
 				);
-				return Err(Error::<T>::InvalidFriendRequestSequence);
+				return Err(Error::<T>::InvalidNotificationSequence);
 			};
 			if registration.account_id != *account {
 				log::error!(
 					target: LOG_TARGET,
-					"friend request storage corruption: alias {:?} maps from account {:?} but registration points to {:?}",
+					"notification storage corruption: alias {:?} maps from account {:?} but registration points to {:?}",
 					alias,
 					account,
 					registration.account_id,
 				);
-				return Err(Error::<T>::InvalidFriendRequestSequence);
+				return Err(Error::<T>::InvalidNotificationSequence);
 			}
-			ensure!(registration.reference.seq == seq, Error::<T>::InvalidFriendRequestSequence);
+			ensure!(registration.reference.seq == seq, Error::<T>::InvalidNotificationSequence);
 			let now = T::Clock::now().as_secs();
-			let expires_at = Self::friend_request_expiration_time(registration.reference.period);
-			ensure!(now > expires_at, Error::<T>::FriendRequestRegistrationNotExpired);
+			let expires_at = Self::notification_expiration_time(registration.reference.period);
+			ensure!(now > expires_at, Error::<T>::NotificationRegistrationNotExpired);
 			Ok(alias)
 		}
 
-		fn friend_request_alias_for_account(account: &T::AccountId) -> Result<Alias, Error<T>> {
-			FriendRequestAliasByAccount::<T>::get(account)
-				.ok_or(Error::<T>::InvalidFriendRequestSequence)
+		fn notification_alias_for_account(account: &T::AccountId) -> Result<Alias, Error<T>> {
+			NotificationAliasByAccount::<T>::get(account)
+				.ok_or(Error::<T>::InvalidNotificationSequence)
 		}
 
 		/// Construct the context for a long-term storage claim.
@@ -1639,7 +1647,7 @@ pub mod pallet {
 			// Ensure the username is available.
 			if person {
 				// People can choose any username of minimum length `MinUsernameLength`, as long as
-				// it's lowercase alphanumeric.
+				// it contains lowercase ASCII letters only.
 				ensure!(
 					username.len() >= T::MinUsernameLength::get() as usize,
 					Error::<T>::InvalidUsername

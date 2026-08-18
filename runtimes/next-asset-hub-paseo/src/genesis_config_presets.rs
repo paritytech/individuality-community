@@ -18,7 +18,6 @@
 
 use crate::{xcm_config::UniversalLocation, *};
 use alloc::vec::Vec;
-use pallet_revive::AddressMapper;
 use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
 use sp_core::sr25519;
 use sp_genesis_builder::PresetId;
@@ -103,7 +102,10 @@ fn asset_hub_paseo_genesis(
 			..Default::default()
 		},
 		"revive": ReviveConfig {
-			mapped_accounts: endowed_accounts.iter().filter(|x| !<Runtime as pallet_revive::Config>::AddressMapper::is_eth_derived(x)).cloned().collect(),
+			// `AutoMap = true` already maps endowed native accounts when balances genesis creates
+			// them, so pre-seeding the same accounts here only produces `AccountAlreadyMapped`
+			// benchmark noise.
+			mapped_accounts: Vec::new(),
 			accounts: Vec::new(),
 			debug_settings: None,
 		},
@@ -145,6 +147,9 @@ fn asset_hub_paseo_development_genesis(para_id: ParaId) -> serde_json::Value {
 		testnet_accounts_with([
 			// Make sure `StakingPot` is funded for benchmarking purposes.
 			StakingPot::get(),
+			// Slashes land in the staging account first; funding it above ED keeps benchmark-time
+			// `OnUnbalanced` deposits from tripping DAP's defensive path.
+			Dap::staging_account(),
 		]),
 		para_id,
 		vec![],

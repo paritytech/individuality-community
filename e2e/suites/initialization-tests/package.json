@@ -1,0 +1,19 @@
+{
+  "name": "@individuality-e2e/suite-initialization-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "RUN_ZOMBIENET_TESTS=1 vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint src/"
+  },
+  "dependencies": {
+    "@individuality-e2e/shared": "workspace:*",
+    "@polkadot-api/descriptors": "workspace:*",
+    "polkadot-api": "^2.1.7"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "vitest": "^3.2.4"
+  }
+}

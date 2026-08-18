@@ -48,54 +48,11 @@ fn register_lite_person(
 }
 
 fn build_lite_person_signed_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsic {
-	let mut tx_ext = base_tx_ext(call.clone());
-	let who_account = pair_to_account_id(who);
-	let nonce = frame_system::Pallet::<Runtime>::account_nonce(&who_account);
-
-	tx_ext.0 .7 = frame_system::CheckNonce::<Runtime>::from(nonce);
-	tx_ext.0 .0 .6 = indiv_pallet_people_lite::extension::PeopleLiteAuth::<Runtime>::new(Some(
-		indiv_pallet_people_lite::PeopleLiteAuthData::AsLitePerson(nonce),
-	));
-
-	let rest_ext = (
-		(
-			tx_ext.0 .0 .2.clone(),
-			tx_ext.0 .0 .3.clone(),
-			tx_ext.0 .0 .4.clone(),
-			tx_ext.0 .0 .5.clone(),
-			tx_ext.0 .0 .6.clone(),
-			tx_ext.0 .0 .7.clone(),
-			tx_ext.0 .0 .8.clone(),
-			tx_ext.0 .0 .9.clone(),
-			tx_ext.0 .0 .10.clone(),
-		),
-		tx_ext.0 .1.clone(),
-		tx_ext.0 .2.clone(),
-		tx_ext.0 .3.clone(),
-		tx_ext.0 .4.clone(),
-		tx_ext.0 .5.clone(),
-		tx_ext.0 .6.clone(),
-		tx_ext.0 .7.clone(),
-		tx_ext.0 .8.clone(),
-		tx_ext.0 .9.clone(),
-	);
-
-	let msg = {
-		let implication_base = (0u8, &call);
-		let implication_explicit = &rest_ext;
-		let implication_implicit = &rest_ext.implicit().unwrap();
-		let encoded_implications =
-			(implication_base, implication_explicit, implication_implicit).encode();
-		sp_io::hashing::blake2_256(&encoded_implications)
-	};
-
-	let raw_sig = who.sign(&msg);
-	tx_ext.0 .0 .1 = pallet_verify_signature::VerifySignature::<Runtime>::new_with_signature(
-		MultiSignature::from(raw_sig),
-		who_account,
-	);
-
-	finalize_uxt(call, tx_ext)
+	build_people_lite_auth_ext(
+		who,
+		indiv_pallet_people_lite::PeopleLiteAuthData::AsLitePerson,
+		call,
+	)
 }
 
 #[test]

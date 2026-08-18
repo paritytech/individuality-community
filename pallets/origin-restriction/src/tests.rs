@@ -114,6 +114,29 @@ fn restricted_origin_works() {
 	});
 }
 
+/// Storage mutation happens in `prepare`, not `validate`. Running `validate` on its own must
+/// leave `Usages` untouched; the usage is only recorded once the full pipeline runs `prepare`.
+#[test]
+fn usage_is_mutated_in_prepare_not_validate() {
+	new_test_ext().execute_with(|| {
+		advance_by(1);
+
+		// Running only `validate` for a restricted origin must not write any usage.
+		assert_ok!(validate_only_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+		assert!(
+			Usages::<Test>::get(RuntimeRestrictedEntity::A).is_none(),
+			"`validate` must not mutate storage; the write belongs in `prepare`."
+		);
+
+		// The full pipeline runs `prepare`, which records the usage.
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+		assert!(
+			Usages::<Test>::get(RuntimeRestrictedEntity::A).is_some(),
+			"`prepare` must record the usage."
+		);
+	});
+}
+
 #[test]
 fn one_time_excess_works_and_works_only_one_time() {
 	new_test_ext().execute_with(|| {

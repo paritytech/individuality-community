@@ -19,6 +19,10 @@
 //! exercised there; these tests only cover the runtime-side wiring.
 
 use super::*;
+use crate::parameters::{
+	LitePersonStatementLimit, NotificationAllowance, NotificationPeriodDuration,
+	StmtStoreGraceWindow,
+};
 use frame_support::traits::Authorize;
 use sp_runtime::transaction_validity::{InvalidTransaction, TransactionSource};
 use sp_statement_store::{get_allowance, StatementAllowance};
@@ -39,12 +43,12 @@ fn lite_person_registration_grants_lite_allowance() {
 		.unwrap();
 
 		let allowance = get_allowance(&account);
-		assert_eq!(allowance, crate::people::LitePersonStatementLimit::get());
+		assert_eq!(allowance, LitePersonStatementLimit::get());
 	});
 }
 
 #[test]
-fn friend_request_registration_allowance_lifecycle() {
+fn notification_registration_allowance_lifecycle() {
 	new_test_ext().execute_with(|| {
 		let person_secret = create_unique_secret();
 		let person_member = Crypto::member_from_secret(&person_secret);
@@ -61,13 +65,13 @@ fn friend_request_registration_allowance_lifecycle() {
 		advance_block();
 
 		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
-		let period = Resources::friend_request_period_from_timestamp(now_secs);
+		let period = Resources::notification_period_from_timestamp(now_secs);
 		let seq = 0u8;
-		let reference = indiv_pallet_resources::types::FriendRequestReference { period, seq };
-		let context = Resources::friend_request_context(reference);
+		let reference = indiv_pallet_resources::types::NotificationReference { period, seq };
+		let context = Resources::notification_context(reference);
 
 		let register_call = RuntimeCall::Resources(
-			indiv_pallet_resources::Call::set_friend_request_statement_account_for_sequence {
+			indiv_pallet_resources::Call::set_notification_statement_account_for_sequence {
 				reference,
 				account_id: stmt_account.clone(),
 			},
@@ -76,15 +80,15 @@ fn friend_request_registration_allowance_lifecycle() {
 			build_as_alias_with_proof_ext(&person_secret, context, register_call.clone());
 		assert!(
 			Executive::apply_extrinsic(as_person_uxt).is_err(),
-			"friend request registration should not validate via AsPerson anymore"
+			"notification registration should not validate via AsPerson anymore"
 		);
-		exec_friend_request_registration_with_proof(&person_secret, period, seq, register_call);
+		exec_notification_registration_with_proof(&person_secret, period, seq, register_call);
 
 		let active_allowance = get_allowance(&stmt_account);
-		assert_eq!(active_allowance, crate::people::FriendRequestAllowance::get());
+		assert_eq!(active_allowance, NotificationAllowance::get());
 
 		let cleanup_call =
-			indiv_pallet_resources::Call::<Runtime>::clear_expired_friend_request_sequence {
+			indiv_pallet_resources::Call::<Runtime>::clear_expired_notification_sequence {
 				account: stmt_account.clone(),
 				seq,
 			};
@@ -92,32 +96,30 @@ fn friend_request_registration_allowance_lifecycle() {
 		assert_eq!(
 			cleanup_result,
 			Some(Err(InvalidTransaction::Custom(
-				indiv_pallet_resources::extension::CustomValidity::InvalidExpiredFriendRequestCleanup
+				indiv_pallet_resources::extension::CustomValidity::InvalidExpiredNotificationCleanup
 					as u8
 			)
 			.into()))
 		);
 
-		let period_duration = crate::people::FriendRequestPeriodDuration::get();
-		let grace = crate::people::FriendRequestGraceWindow::get();
-		let period_rollover_time = (period + 1)
-			.saturating_mul(period_duration)
-			.saturating_add(grace)
-			.saturating_add(1);
+		let period_duration = NotificationPeriodDuration::get();
+		let grace = StmtStoreGraceWindow::get();
+		let period_rollover_time =
+			(period + 1).saturating_mul(period_duration).saturating_add(grace);
 		set_time(period_rollover_time as u64);
 		let still_fresh_result = cleanup_call.authorize(TransactionSource::InBlock);
 		assert_eq!(
 			still_fresh_result,
 			Some(Err(InvalidTransaction::Custom(
-				indiv_pallet_resources::extension::CustomValidity::InvalidExpiredFriendRequestCleanup
+				indiv_pallet_resources::extension::CustomValidity::InvalidExpiredNotificationCleanup
 					as u8
 			)
 			.into()))
 		);
 
-		let cleanup_time = Resources::friend_request_expiration_time(period).saturating_add(1);
+		let cleanup_time = Resources::notification_expiration_time(period).saturating_add(1);
 		set_time(cleanup_time);
-		Resources::clear_expired_friend_request_sequence(
+		Resources::clear_expired_notification_sequence(
 			frame_system::RawOrigin::Authorized.into(),
 			stmt_account.clone(),
 			seq,
@@ -130,7 +132,7 @@ fn friend_request_registration_allowance_lifecycle() {
 }
 
 #[test]
-fn validate_collection_based_friend_request_registration() {
+fn validate_collection_based_notification_registration() {
 	new_test_ext().execute_with(|| {
 		let person_secret = create_unique_secret();
 		let person_member = Crypto::member_from_secret(&person_secret);
@@ -147,18 +149,18 @@ fn validate_collection_based_friend_request_registration() {
 		advance_block();
 
 		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
-		let period = Resources::friend_request_period_from_timestamp(now_secs);
+		let period = Resources::notification_period_from_timestamp(now_secs);
 		let seq = 0u8;
-		let reference = indiv_pallet_resources::types::FriendRequestReference { period, seq };
+		let reference = indiv_pallet_resources::types::NotificationReference { period, seq };
 
 		let register_call = RuntimeCall::Resources(
-			indiv_pallet_resources::Call::set_friend_request_statement_account_for_sequence {
+			indiv_pallet_resources::Call::set_notification_statement_account_for_sequence {
 				reference,
 				account_id: stmt_account.clone(),
 			},
 		);
 
-		let uxt = build_friend_request_for_collection_ext(
+		let uxt = build_notification_for_collection_ext(
 			&person_secret,
 			period,
 			seq,
@@ -167,16 +169,16 @@ fn validate_collection_based_friend_request_registration() {
 			indiv_pallet_resources::types::MembershipCollection::People,
 		);
 		Executive::apply_extrinsic(uxt)
-			.expect("collection-based friend request transaction is valid")
-			.expect("collection-based friend request dispatch succeeds");
+			.expect("collection-based notification transaction is valid")
+			.expect("collection-based notification dispatch succeeds");
 
 		let active_allowance = get_allowance(&stmt_account);
-		assert_eq!(active_allowance, crate::people::FriendRequestAllowance::get());
+		assert_eq!(active_allowance, NotificationAllowance::get());
 	});
 }
 
 #[test]
-fn validate_collection_based_lite_friend_request_registration_lifecycle() {
+fn validate_collection_based_lite_notification_registration_lifecycle() {
 	new_test_ext().execute_with(|| {
 		let lite_pair = sr25519::Pair::from_seed(&[89u8; 32]);
 		let lite_secret = register_lite_person_for_integration(&lite_pair);
@@ -184,27 +186,27 @@ fn validate_collection_based_lite_friend_request_registration_lifecycle() {
 		let stmt_account = pair_to_account_id(&stmt_pair);
 
 		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
-		let period = Resources::friend_request_period_from_timestamp(now_secs);
+		let period = Resources::notification_period_from_timestamp(now_secs);
 		let seq = 0u8;
-		let reference = indiv_pallet_resources::types::FriendRequestReference { period, seq };
+		let reference = indiv_pallet_resources::types::NotificationReference { period, seq };
 		let register_call = RuntimeCall::Resources(
-			indiv_pallet_resources::Call::set_friend_request_statement_account_for_sequence {
+			indiv_pallet_resources::Call::set_notification_statement_account_for_sequence {
 				reference,
 				account_id: stmt_account.clone(),
 			},
 		);
 
 		let uxt =
-			build_lite_friend_request_registration_ext(&lite_secret, period, seq, register_call);
+			build_lite_notification_registration_ext(&lite_secret, period, seq, register_call);
 		Executive::apply_extrinsic(uxt)
-			.expect("lite collection-based friend request transaction is valid")
-			.expect("lite collection-based friend request dispatch succeeds");
+			.expect("lite collection-based notification transaction is valid")
+			.expect("lite collection-based notification dispatch succeeds");
 
 		let active_allowance = get_allowance(&stmt_account);
-		assert_eq!(active_allowance, crate::people::FriendRequestAllowance::get());
+		assert_eq!(active_allowance, NotificationAllowance::get());
 
 		let cleanup_call =
-			indiv_pallet_resources::Call::<Runtime>::clear_expired_friend_request_sequence {
+			indiv_pallet_resources::Call::<Runtime>::clear_expired_notification_sequence {
 				account: stmt_account.clone(),
 				seq,
 			};
@@ -212,15 +214,15 @@ fn validate_collection_based_lite_friend_request_registration_lifecycle() {
 		assert_eq!(
 			cleanup_result,
 			Some(Err(InvalidTransaction::Custom(
-				indiv_pallet_resources::extension::CustomValidity::InvalidExpiredFriendRequestCleanup
+				indiv_pallet_resources::extension::CustomValidity::InvalidExpiredNotificationCleanup
 					as u8
 			)
 			.into()))
 		);
 
-		let cleanup_time = Resources::friend_request_expiration_time(period).saturating_add(1);
+		let cleanup_time = Resources::notification_expiration_time(period).saturating_add(1);
 		set_time(cleanup_time);
-		Resources::clear_expired_friend_request_sequence(
+		Resources::clear_expired_notification_sequence(
 			frame_system::RawOrigin::Authorized.into(),
 			stmt_account.clone(),
 			seq,
@@ -233,7 +235,7 @@ fn validate_collection_based_lite_friend_request_registration_lifecycle() {
 }
 
 #[test]
-fn validate_collection_based_friend_request_rejects_lite_proof_with_people_variant() {
+fn validate_collection_based_notification_rejects_lite_proof_with_people_variant() {
 	new_test_ext().execute_with(|| {
 		let lite_pair = sr25519::Pair::from_seed(&[91u8; 32]);
 		let lite_secret = register_lite_person_for_integration(&lite_pair);
@@ -241,17 +243,17 @@ fn validate_collection_based_friend_request_rejects_lite_proof_with_people_varia
 		let stmt_account = pair_to_account_id(&stmt_pair);
 
 		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
-		let period = Resources::friend_request_period_from_timestamp(now_secs);
+		let period = Resources::notification_period_from_timestamp(now_secs);
 		let seq = 0u8;
-		let reference = indiv_pallet_resources::types::FriendRequestReference { period, seq };
+		let reference = indiv_pallet_resources::types::NotificationReference { period, seq };
 		let register_call = RuntimeCall::Resources(
-			indiv_pallet_resources::Call::set_friend_request_statement_account_for_sequence {
+			indiv_pallet_resources::Call::set_notification_statement_account_for_sequence {
 				reference,
 				account_id: stmt_account,
 			},
 		);
 
-		let uxt = build_friend_request_for_collection_ext(
+		let uxt = build_notification_for_collection_ext(
 			&lite_secret,
 			period,
 			seq,
@@ -270,7 +272,7 @@ fn validate_collection_based_friend_request_rejects_lite_proof_with_people_varia
 }
 
 #[test]
-fn validate_collection_based_friend_request_rejects_people_proof_with_lite_variant() {
+fn validate_collection_based_notification_rejects_people_proof_with_lite_variant() {
 	new_test_ext().execute_with(|| {
 		let person_secret = create_unique_secret();
 		let person_member = Crypto::member_from_secret(&person_secret);
@@ -287,17 +289,17 @@ fn validate_collection_based_friend_request_rejects_people_proof_with_lite_varia
 		advance_block();
 
 		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
-		let period = Resources::friend_request_period_from_timestamp(now_secs);
+		let period = Resources::notification_period_from_timestamp(now_secs);
 		let seq = 0u8;
-		let reference = indiv_pallet_resources::types::FriendRequestReference { period, seq };
+		let reference = indiv_pallet_resources::types::NotificationReference { period, seq };
 		let register_call = RuntimeCall::Resources(
-			indiv_pallet_resources::Call::set_friend_request_statement_account_for_sequence {
+			indiv_pallet_resources::Call::set_notification_statement_account_for_sequence {
 				reference,
 				account_id: stmt_account,
 			},
 		);
 
-		let uxt = build_friend_request_for_collection_ext(
+		let uxt = build_notification_for_collection_ext(
 			&person_secret,
 			period,
 			seq,
@@ -359,7 +361,7 @@ fn game_sign_up_grants_player_allowance() {
 			game_play_time,
 			rounds: 1,
 			max_group_size: 3,
-			airdrop_prize: None,
+			airdrops: Default::default(),
 		};
 		Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]).unwrap();
 
@@ -371,7 +373,7 @@ fn game_sign_up_grants_player_allowance() {
 			statement_account: stmt_acc.clone(),
 			sig: stmt_acc_proof,
 			identifier_key: [1u8; 65],
-			airdrop: None,
+			airdrops: None,
 		};
 		exec_signed_as_alias_with_account(&alias_pair, sign_up.into());
 

@@ -159,9 +159,9 @@ pub fn person_origin_for_context(
 	)))
 }
 
-/// Helper to mock the Resources friend request origin.
-pub fn friend_request_origin(alias_id: u64) -> RuntimeOrigin {
-	RuntimeOrigin::from(OriginCaller::Resources(crate::Origin::FriendRequestAlias(id_to_alias(
+/// Helper to mock the Resources notification origin.
+pub fn notification_origin(alias_id: u64) -> RuntimeOrigin {
+	RuntimeOrigin::from(OriginCaller::Resources(crate::Origin::NotificationAlias(id_to_alias(
 		alias_id,
 	))))
 }
@@ -416,6 +416,7 @@ impl indiv_pallet_people_lite::BenchmarkHelper<AccountId32, AccountAuthority> fo
 
 impl indiv_pallet_people_lite::Config for Test {
 	type WeightInfo = ();
+	type AccountContexts = ();
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;
 	type CollectionOwner = MockCollectionOwner;
@@ -454,15 +455,13 @@ parameter_types! {
 		max_size: 1024,
 		max_count: 2,
 	};
-	pub FriendRequestAllowance: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
+	pub NotificationAllowance: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
 		max_size: 512,
 		max_count: 1,
 	};
-	pub const FriendRequestSlotsPerPeriod: u8 = 8;
-	pub const LiteFriendRequestSlotsPerPeriod: u8 = 4;
-	pub const FriendRequestPeriodDuration: u32 = 24 * 60 * 60;
-	pub const FriendRequestGraceWindow: u32 = 60 * 60;
-	pub const FriendRequestRetentionDuration: u64 = 7 * 24 * 60 * 60;
+	pub const NotificationSlotsPerPeriod: u8 = 8;
+	pub const LiteNotificationSlotsPerPeriod: u8 = 4;
+	pub const NotificationPeriodDuration: u32 = 24 * 60 * 60;
 	pub const StmtStoreSlotsPerPeriod: u32 = 8;
 	pub const LiteStmtStoreSlotsPerPeriod: u32 = 4;
 	pub const StmtStoreCleanupLimit: u32 = 10;
@@ -501,7 +500,6 @@ impl benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 impl Config for Test {
 	type WeightInfo = ();
 	type MemberService = Members;
-	type MaxUsernameLength = ConstU32<32>;
 	type MinUsernameLength = ConstU32<7>;
 	type PersonAuthDuration = ConstU32<20>;
 	type MinPersonAuthUpdateInterval = ConstU32<10>;
@@ -512,12 +510,10 @@ impl Config for Test {
 	type StmtStoreCleanupLimit = StmtStoreCleanupLimit;
 	type StmtStoreReplacementCooldown = StmtStoreReplacementCooldown;
 	type StmtStoreGraceWindow = StmtStoreGraceWindow;
-	type FriendRequestAllowance = FriendRequestAllowance;
-	type FriendRequestSlotsPerPeriod = FriendRequestSlotsPerPeriod;
-	type LiteFriendRequestSlotsPerPeriod = LiteFriendRequestSlotsPerPeriod;
-	type FriendRequestPeriodDuration = FriendRequestPeriodDuration;
-	type FriendRequestGraceWindow = FriendRequestGraceWindow;
-	type FriendRequestRetentionDuration = FriendRequestRetentionDuration;
+	type NotificationAllowance = NotificationAllowance;
+	type NotificationSlotsPerPeriod = NotificationSlotsPerPeriod;
+	type LiteNotificationSlotsPerPeriod = LiteNotificationSlotsPerPeriod;
+	type NotificationPeriodDuration = NotificationPeriodDuration;
 	type OffchainWorkerInterval = ConstU64<1>;
 	type EnsurePerson = indiv_pallet_people::EnsurePersonalAliasInContext<Test>;
 	type EnsureLitePerson = indiv_pallet_people_lite::EnsureLitePerson<Test>;
@@ -551,6 +547,7 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 			encoded_chunk_page_hashes: vec![(RingExponent::R2e9.exponent(), vec![page_hash])],
 			..Default::default()
 		},
+		..Default::default()
 	}
 	.build_storage()
 	.unwrap();

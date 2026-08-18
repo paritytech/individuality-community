@@ -21,7 +21,6 @@ sp-arithmetic = { workspace = true }
 sp-core = { workspace = true }
 sp-io = { workspace = true }
 sp-runtime = { workspace = true }
-indiv-pallet-value-transfer-auth = { workspace = true }
 indiv-support = { workspace = true, features = ["genesis"] }
 paseo-runtime-constants = { workspace = true }
 rand = { workspace = true }
@@ -47,7 +46,6 @@ std = [
 	"indiv-pallet-mob-rule/std",
 	"indiv-pallet-people/std",
 	"indiv-pallet-proof-of-ink/std",
-	"indiv-pallet-value-transfer-auth/std",
 	"indiv-support/std",
 	"pallet-balances/std",
 	"paseo-runtime-constants/std",
@@ -68,7 +66,6 @@ runtime-benchmarks = [
 	"indiv-pallet-mob-rule/runtime-benchmarks",
 	"indiv-pallet-people/runtime-benchmarks",
 	"indiv-pallet-proof-of-ink/runtime-benchmarks",
-	"indiv-pallet-value-transfer-auth/runtime-benchmarks",
 	"indiv-support/runtime-benchmarks",
 	"pallet-balances/runtime-benchmarks",
 	"paseo-runtime-constants/runtime-benchmarks",
@@ -84,7 +81,6 @@ try-runtime = [
 	"indiv-pallet-mob-rule/try-runtime",
 	"indiv-pallet-people/try-runtime",
 	"indiv-pallet-proof-of-ink/try-runtime",
-	"indiv-pallet-value-transfer-auth/try-runtime",
 	"pallet-balances/try-runtime",
 	"sp-runtime/try-runtime",
 ]

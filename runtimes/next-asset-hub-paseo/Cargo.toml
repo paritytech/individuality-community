@@ -30,10 +30,12 @@ system-parachains-common = { workspace = true }
 indiv-pallet-alias-accounts = { workspace = true }
 indiv-pallet-dotns-gateway = { workspace = true }
 indiv-pallet-members-subscriber = { workspace = true }
+indiv-pallet-nft-claims = { workspace = true }
 indiv-pallet-origin-restriction = { workspace = true }
 indiv-pallet-pgas = { workspace = true }
-indiv-pallet-value-transfer-auth = { workspace = true }
+indiv-precompile-nft-claims = { workspace = true }
 indiv-precompile-personhood = { workspace = true }
+indiv-precompile-scarcity = { workspace = true }
 indiv-support = { workspace = true }
 verifiable = { workspace = true }
 
@@ -71,6 +73,7 @@ pallet-message-queue = { workspace = true }
 pallet-multi-asset-bounties = { workspace = true }
 pallet-multisig = { workspace = true }
 pallet-nfts = { workspace = true }
+pallet-scarcity = { workspace = true }
 pallet-nfts-runtime-api = { workspace = true }
 pallet-parameters = { workspace = true }
 pallet-pgas-allowance = { workspace = true }
@@ -164,6 +167,8 @@ snowbridge-runtime-common = { workspace = true }
 [dev-dependencies]
 approx = { workspace = true }
 asset-test-utils = { workspace = true }
+binary-merkle-tree = { workspace = true, features = ["std"] }
+pallet-revive-fixtures = { workspace = true }
 parachains-runtimes-test-utils = { workspace = true }
 sp-keyring = { workspace = true }
 sp-tracing = { workspace = true }
@@ -194,10 +199,12 @@ runtime-benchmarks = [
 	"indiv-pallet-alias-accounts/runtime-benchmarks",
 	"indiv-pallet-dotns-gateway/runtime-benchmarks",
 	"indiv-pallet-members-subscriber/runtime-benchmarks",
+	"indiv-pallet-nft-claims/runtime-benchmarks",
 	"indiv-pallet-origin-restriction/runtime-benchmarks",
 	"indiv-pallet-pgas/runtime-benchmarks",
-	"indiv-pallet-value-transfer-auth/runtime-benchmarks",
+	"indiv-precompile-nft-claims/runtime-benchmarks",
 	"indiv-precompile-personhood/runtime-benchmarks",
+	"indiv-precompile-scarcity/runtime-benchmarks",
 	"indiv-support/genesis",
 	"indiv-support/runtime-benchmarks",
 	"pallet-asset-conversion-tx-payment/runtime-benchmarks",
@@ -230,6 +237,7 @@ runtime-benchmarks = [
 	"pallet-proxy/runtime-benchmarks",
 	"pallet-referenda/runtime-benchmarks",
 	"pallet-revive/runtime-benchmarks",
+	"pallet-scarcity/runtime-benchmarks",
 	"pallet-scheduler/runtime-benchmarks",
 	"pallet-session/runtime-benchmarks",
 	"pallet-staking-async-rc-client/runtime-benchmarks",
@@ -260,7 +268,7 @@ runtime-benchmarks = [
 	"sp-staking/runtime-benchmarks",
 	"system-parachains-common/runtime-benchmarks",
 	"system-parachains-constants/runtime-benchmarks",
-	"verifiable/no-std-prover",
+	"verifiable/insecure-deterministic-prover",
 	"xcm-builder/runtime-benchmarks",
 	"xcm-executor/runtime-benchmarks",
 	"xcm-runtime-apis/runtime-benchmarks",
@@ -283,10 +291,12 @@ try-runtime = [
 	"indiv-pallet-alias-accounts/try-runtime",
 	"indiv-pallet-dotns-gateway/try-runtime",
 	"indiv-pallet-members-subscriber/try-runtime",
+	"indiv-pallet-nft-claims/try-runtime",
 	"indiv-pallet-origin-restriction/try-runtime",
 	"indiv-pallet-pgas/try-runtime",
-	"indiv-pallet-value-transfer-auth/try-runtime",
+	"indiv-precompile-nft-claims/try-runtime",
 	"indiv-precompile-personhood/try-runtime",
+	"indiv-precompile-scarcity/try-runtime",
 	"pallet-asset-conversion-tx-payment/try-runtime",
 	"pallet-asset-conversion/try-runtime",
 	"pallet-asset-rate/try-runtime",
@@ -318,6 +328,7 @@ try-runtime = [
 	"pallet-proxy/try-runtime",
 	"pallet-referenda/try-runtime",
 	"pallet-revive/try-runtime",
+	"pallet-scarcity/try-runtime",
 	"pallet-scheduler/try-runtime",
 	"pallet-session/try-runtime",
 	"pallet-staking-async-rc-client/try-runtime",
@@ -348,6 +359,7 @@ try-runtime = [
 std = [
 	"approx/std",
 	"assets-common/std",
+	"binary-merkle-tree/std",
 	"bp-asset-hub-paseo/std",
 	"bp-bridge-hub-kusama/std",
 	"bp-bridge-hub-paseo/std",
@@ -374,10 +386,12 @@ std = [
 	"indiv-pallet-alias-accounts/std",
 	"indiv-pallet-dotns-gateway/std",
 	"indiv-pallet-members-subscriber/std",
+	"indiv-pallet-nft-claims/std",
 	"indiv-pallet-origin-restriction/std",
 	"indiv-pallet-pgas/std",
-	"indiv-pallet-value-transfer-auth/std",
+	"indiv-precompile-nft-claims/std",
 	"indiv-precompile-personhood/std",
+	"indiv-precompile-scarcity/std",
 	"indiv-support/std",
 	"log/std",
 	"pallet-asset-conversion-tx-payment/std",
@@ -414,6 +428,7 @@ std = [
 	"pallet-proxy/std",
 	"pallet-referenda/std",
 	"pallet-revive/std",
+	"pallet-scarcity/std",
 	"pallet-scheduler/std",
 	"pallet-session/std",
 	"pallet-staking-async-rc-client/std",

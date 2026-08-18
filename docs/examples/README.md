@@ -120,11 +120,74 @@ spec to `generated/people-chain-spec.json`, which is ignored by git.
 `coinage.ts` is encode-only for the extrinsics by design: Coinage
 split/transfer require a custom coin origin, and load/unload require real ring
 membership proof material. It still connects to the People chain to read
-`Coinage.UnderlyingAssetId`.
+`Coinage.Instances`.
 
 `game_participation.ts` only signs up if there is an active game in
 `Registration`; it always keeps `report` encode-only because a real report must
 match the player's shuffled group and reporting phase.
+
+## People + Asset Hub (dual-chain)
+
+`people-network.toml` / `pnpm run node:people` above spawns the **People chain only** — the
+lightest path, enough for the People examples. The AH-aware examples (`subscriptions`, `dotns`)
+and the [members-notifier soak harness](../../internal/members-notifier-soak) need a companion
+**Asset Hub** that subscribes to People's ring-root updates. That is `assethub-network.toml` /
+`pnpm run node:assethub`.
+
+> **Heavier prerequisites.** The Asset Hub runtime (`next-asset-hub-paseo`) pulls in
+> `pallet-revive`, which needs `solc` + `resolc` at build time (see [`docs/launch.md`](../launch.md)),
+> and the node binaries must match the polkadot-sdk release this repo pins
+> (`POLKADOT_RELEASE_VERSION` in [`.github/env`](../../.github/env), currently
+> **`polkadot-unstable2604`** `-rc1`). The generic `zombienet setup polkadot` bundle is a *latest*
+> build and will fail the People PVF with a missing host import
+> (`ext_statement_store_remove_by_version_1`); install the `polkadot` relay bundle **and**
+> `polkadot-omni-node` from the pinned tag instead:
+> ```bash
+> TAG=polkadot-unstable2604-rc1
+> cargo install polkadot          --git https://github.com/paritytech/polkadot-sdk --tag "$TAG" --locked
+> cargo install polkadot-omni-node --git https://github.com/paritytech/polkadot-sdk --tag "$TAG" --locked
+> which -a polkadot polkadot-execute-worker polkadot-prepare-worker polkadot-omni-node
+> ```
+
+Spawn the dual-chain network in one terminal (builds both runtimes, generates both chain specs,
+then spawns relay + People + AH; leave it running):
+
+```bash
+pnpm run node:assethub
+```
+
+Default ports: relay alice `:10000`, People `:10010`, Asset Hub `:10020`.
+
+Then, from another terminal, bring up the cross-chain link and subscribe AH to ring-root
+updates. The HRMP channels are opened **at runtime** (not at genesis — see
+[`open-hrmp.ts`](open-hrmp.ts) for why), and the required order is **hrmp → chunks → subscribe**:
+
+```bash
+pnpm run hrmp          # force-open People<->AH HRMP channels, wait until both sides see them
+pnpm run chunks        # upload R2e9 ring-verifier chunk pages (enables ring building)
+pnpm run subscribe:assethub   # AH subscribes to the full-people ring-root updates
+ONBOARDING_SIZE=1 pnpm run onboarding   # create the people collection + shrink the cohort for churn
+# or all four in order:
+pnpm run bootstrap:assethub
+```
+
+| Script | What it does |
+|---|---|
+| `hrmp` | Force-open the People↔Asset Hub HRMP channels on the relay and block until both parachains see them (`Hrmp.force_open_hrmp_channel`). |
+| `chunks` | Upload the R2e9 ring-verifier chunk pages to `ChunksManager.add_chunks` so the chain can build ring roots. Reads `chunks/r2e9/` (override with `CHUNKS_DIR`). |
+| `subscribe` | Generic subscribe helper (`MembersNotifier.subscribe`). Defaults to people-lite → para 1000. |
+| `subscribe:assethub` | Convenience wrapper for the dual-chain path: full-people (`R2e9`) → Asset Hub para 1500. |
+| `onboarding` | Create the people collection if missing; only changes onboarding size when `ONBOARDING_SIZE` is set explicitly. |
+| `bootstrap:assethub` | Convenience wrapper for the dual-chain path: `hrmp → chunks → subscribe:assethub → ONBOARDING_SIZE=1 onboarding`. |
+
+The `chunks` step needs the chunk pages on disk first — generate them with the soak harness's
+tool: `internal/members-notifier-soak/scripts/gen-chunks.sh` writes them to `chunks/r2e9/` here.
+
+`open-hrmp.ts` talks to the relay with PAPI's untyped API, so the relay is **not** part of the
+committed descriptors and `pnpm run setup` stays offline. The People + Asset Hub descriptors are
+committed (`.papi/metadata/*.scale`); refresh them against the live local RPCs with
+`PEOPLE_RPC=ws://127.0.0.1:10010 pnpm run papi:add` and
+`ASSET_HUB_RPC=ws://127.0.0.1:10020 pnpm run papi:add:assethub` if metadata diverges.
 
 ## Notes
 

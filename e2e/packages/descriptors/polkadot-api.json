@@ -1,0 +1,12 @@
+{
+  "version": 0,
+  "descriptorPath": ".papi/descriptors",
+  "entries": {
+    "people": {
+      "metadata": ".papi/metadata/people.scale"
+    },
+    "assethub": {
+      "metadata": ".papi/metadata/assethub.scale"
+    }
+  }
+}

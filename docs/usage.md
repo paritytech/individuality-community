@@ -14,9 +14,13 @@ pallet docs (see [Reference](#reference)).
 
 Pallet: `pallets/game`.
 
-- `sign_up_with_invite` / `sign_up_with_account` / `sign_up_with_alias` — join
-  the next game. Which one you use depends on how you take part (with an invite
-  ticket, a plain account plus deposit, or an existing personhood alias).
+- `sign_up_with_invite` / `sign_up_with_account` / `sign_up_with_account_lite_invite` - sign up
+  for the next game as an account-based player for the first time or after being archived by using
+  an invite / paying a deposit / using a lite person alias.
+- `sign_up_with_account` - sign up for the next game as an active account-based player (for a first
+  time signup and for an archived player the deposit will be charged, and the user may prefer using
+  `sign_up_with_invite` and `sign_up_with_account_lite_invite` to avoid paying a deposit).
+- `sign_up_with_alias` - sign up for the next game using full personhood provided from another DIM.
 - `report` — report your result during the reporting phase.
 - `claim_airdrop` — claim a prize from a game-linked airdrop.
 - `offboard` — leave and reclaim any deposit once you are done.
@@ -49,8 +53,8 @@ Once an operator grants you invites (`grant_invites`), you hand them out:
 
 Pallet: `pallets/coinage`.
 
-Coinage is user-driven once an operator has set the underlying asset. The common
-actions:
+Coinage is user-driven once an operator has created an instance for an asset.
+The common actions:
 
 - `split` — split a coin into smaller coins.
 - `transfer` — transfer a coin to another account.

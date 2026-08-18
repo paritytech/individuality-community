@@ -9,6 +9,14 @@ chain = "rococo-local"
 default_command = "polkadot"
 default_args = ["--network-backend=libp2p", "--rpc-max-response-size=50"]
 
+# The People runtime calls the RFC-163 ECC host functions during PVF validation, and a
+# validator only registers them when its executor params ask for it. Without this the
+# People candidates are rejected with a missing `ext_host_calls_bls12_381_*` function
+# and the parachain stops being included a few blocks in. Same setting as
+# `e2e/zombienet/network.toml`.
+[relaychain.genesis.runtimeGenesis.patch.configuration.config]
+executor_params = [{ EnabledHostFunction = "EccRfc163" }]
+
 [[relaychain.nodes]]
 name = "alice-relay-validator"
 validator = true

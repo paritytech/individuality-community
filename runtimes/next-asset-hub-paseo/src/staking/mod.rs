@@ -987,9 +987,7 @@ mod tests {
 	// The emission values for the two year periods are as expected.
 	#[test]
 	fn stepped_inflation_two_year_values_correct() {
-		ExtBuilder::<Runtime>::default()
-		.build()
-		.execute_with(|| {
+		ExtBuilder::<Runtime>::default().build().execute_with(|| {
 			let two_years: RC_BlockNumber = RC_YEARS * 2;
 			pallet_balances::pallet::TotalIssuance::<Runtime, ()>::set(MARCH_TI);
 
@@ -1015,7 +1013,7 @@ mod tests {
 			);
 			assert_relative_eq!(
 				(to_stakers as f64 + to_treasury as f64) * 365.25, // full year
-				(55_617_170 * UNITS) as f64, // https://docs.google.com/spreadsheets/d/1pW6fVESnkenJkqIzRk2Pv4cp5KNzVYSupUI6EA-jeR8/edit?gid=0#gid=0&range=E2.
+				(55_617_170 * UNITS) as f64,
 				max_relative = 0.00001,
 			);
 
@@ -1042,7 +1040,7 @@ mod tests {
 			);
 			assert_relative_eq!(
 				(to_stakers as f64 + to_treasury as f64) * 365.25, // full year
-				(41_000_978 * UNITS) as f64, // https://docs.google.com/spreadsheets/d/1pW6fVESnkenJkqIzRk2Pv4cp5KNzVYSupUI6EA-jeR8/edit?gid=0#gid=0&range=E3.
+				(41_000_978 * UNITS) as f64,
 				max_relative = 0.00001,
 			);
 
@@ -1069,7 +1067,7 @@ mod tests {
 			);
 			assert_relative_eq!(
 				(to_stakers as f64 + to_treasury as f64) * 365.25, // full year
-				(30_225_921 * UNITS) as f64, // https://docs.google.com/spreadsheets/d/1pW6fVESnkenJkqIzRk2Pv4cp5KNzVYSupUI6EA-jeR8/edit?gid=0#gid=0&range=E4.
+				(30_225_921 * UNITS) as f64,
 				max_relative = 0.00001,
 			);
 		});

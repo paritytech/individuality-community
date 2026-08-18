@@ -11,6 +11,9 @@ importers:
       '@polkadot-api/descriptors':
         specifier: file:.papi/descriptors
         version: file:.papi/descriptors(polkadot-api@1.23.3(rxjs@7.8.2)(tsx@4.22.4))
+      '@polkadot-api/substrate-bindings':
+        specifier: ^0.17.0
+        version: 0.17.0
       '@polkadot-labs/hdkd':
         specifier: ^0.0.28
         version: 0.0.28

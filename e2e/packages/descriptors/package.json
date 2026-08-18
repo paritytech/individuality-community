@@ -1,0 +1,12 @@
+{
+  "name": "@individuality-e2e/descriptors-src",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "update": "node ./scripts/update-descriptors.mjs"
+  },
+  "dependencies": {
+    "@polkadot-api/descriptors": "file:.papi/descriptors",
+    "polkadot-api": "^2.1.7"
+  }
+}

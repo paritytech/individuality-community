@@ -113,6 +113,15 @@ fn mock_ring_root_updates_batch(
 	RingRootUpdatesBatch::<Test> { identifier, sequence, source_time, updates, next_ring_index }
 }
 
+/// Verify that the default mock configuration passes all integrity checks,
+/// including the block-fit assertion for `replay_missing_roots`.
+#[test]
+fn integrity_test_passes() {
+	new_test_ext().execute_with(|| {
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
 mod ring_roots_initialization {
 	use super::*;
 
@@ -2189,7 +2198,7 @@ mod offchain_worker {
 mod proof_verification {
 	use super::*;
 	use crate::pallet::Error;
-	use indiv_support::traits::{BatchProofItem, MembershipProver};
+	use indiv_support::traits::{MembershipMultiProver, MembershipProver, RingMembershipProof};
 
 	const CTX: crate::types::Context = [9u8; 32];
 	const MSG: &[u8] = b"msg";
@@ -2197,37 +2206,59 @@ mod proof_verification {
 
 	/// Build a `TestProof` that validates against a ring root containing `seed`.
 	fn proof_for(seed: u64) -> TestProof {
+		proof_for_with(seed, &[seed], CTX, MSG)
+	}
+
+	fn proof_for_with(
+		seed: u64,
+		members: &[u64],
+		context: crate::types::Context,
+		message: &[u8],
+	) -> TestProof {
 		TestProof {
-			context: CTX.to_vec(),
+			context: context.to_vec(),
 			member: TestMemberKey(seed),
-			members: vec![seed],
-			message: MSG.to_vec(),
+			members: members.to_vec(),
+			message: message.to_vec(),
 		}
+	}
+
+	fn root_for(seeds: &[u64]) -> crate::mock::TestMembers {
+		let mut members = crate::mock::TestMembers::default();
+		for seed in seeds {
+			members.try_push(*seed).unwrap();
+		}
+		members
 	}
 
 	/// Seed an active subscription with an exponent and a single root in the window.
 	fn seed_single_root(identifier: Identifier, revision: u32, seed: u64) {
+		seed_root(identifier, revision, root_for(&[seed]));
+	}
+
+	fn seed_root(identifier: Identifier, revision: u32, root: crate::mock::TestMembers) {
 		Subscription::<Test>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
 		RingCollectionExponents::<Test>::insert(identifier, TEST_RING_EXPONENT);
 		let batch = RingRootUpdatesBatch::<Test> {
 			identifier,
 			sequence: revision as u64,
-			source_time: 1000,
+			source_time: now_secs(),
 			updates: bounded_vec![RingRootUpdate {
 				ring_index: RING,
-				op: RingRootOp::Built { revision, root: mock_ring_root(seed) },
+				op: RingRootOp::Built { revision, root },
 			}],
 			next_ring_index: 1,
 		};
 		Pallet::<Test>::store_ring_roots(&batch);
 	}
 
-	/// Push one more revision onto an existing ring's sliding window.
+	/// Push one more revision onto an existing ring's sliding window with the current
+	/// mock time as source time.
 	fn push_revision(identifier: Identifier, revision: u32, seed: u64) {
 		let batch = RingRootUpdatesBatch::<Test> {
 			identifier,
 			sequence: revision as u64,
-			source_time: 1000,
+			source_time: now_secs(),
 			updates: bounded_vec![RingRootUpdate {
 				ring_index: RING,
 				op: RingRootOp::Built { revision, root: mock_ring_root(seed) },
@@ -2242,12 +2273,9 @@ mod proof_verification {
 		new_test_ext().execute_with(|| {
 			seed_single_root(PEOPLE, 1, 42);
 
-			let rca =
-				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, CTX, MSG).unwrap();
-
-			assert_eq!(rca.revision, 1);
-			assert_eq!(rca.ring, RING);
-			assert_eq!(rca.ca.context, CTX);
+			let ca = Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 1, CTX, MSG)
+				.unwrap();
+			assert_eq!(ca.context, CTX);
 		});
 	}
 
@@ -2258,20 +2286,33 @@ mod proof_verification {
 			seed_single_root(PEOPLE, 1, 42);
 			push_revision(PEOPLE, 2, 99);
 
-			// A proof built against revision 1 still validates and its revision is reported back.
-			let rca =
-				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, CTX, MSG).unwrap();
-			assert_eq!(rca.revision, 1);
+			// A proof built against revision 1 still validates when that revision is specified.
+			let ca = Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 1, CTX, MSG)
+				.unwrap();
+			assert_eq!(ca.context, CTX);
 
 			// A proof built against the newest revision also validates.
-			let rca =
-				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(99), RING, CTX, MSG).unwrap();
-			assert_eq!(rca.revision, 2);
+			let ca = Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(99), RING, 2, CTX, MSG)
+				.unwrap();
+			assert_eq!(ca.context, CTX);
 		});
 	}
 
 	#[test]
-	fn verify_membership_rejects_proof_built_against_evicted_root() {
+	fn verify_membership_rejects_invalid_proof_for_present_revision() {
+		new_test_ext().execute_with(|| {
+			// Revision 1 is present, but the proof was built against a different alias.
+			seed_single_root(PEOPLE, 1, 42);
+
+			assert_noop!(
+				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(99), RING, 1, CTX, MSG),
+				Error::<Test>::InvalidProof,
+			);
+		});
+	}
+
+	#[test]
+	fn verify_membership_returns_revision_not_found_for_evicted_root() {
 		new_test_ext().execute_with(|| {
 			// Fill then overflow the window so revision 1 is evicted.
 			seed_single_root(PEOPLE, 1, 42);
@@ -2285,77 +2326,93 @@ mod proof_verification {
 			assert_eq!(roots[1].revision, 3);
 
 			assert_noop!(
-				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, CTX, MSG),
-				Error::<Test>::InvalidProof,
-			);
-		});
-	}
-
-	#[test]
-	fn verify_membership_at_rev_succeeds_for_in_window_revision() {
-		new_test_ext().execute_with(|| {
-			seed_single_root(PEOPLE, 1, 42);
-			push_revision(PEOPLE, 2, 99);
-
-			let ca = Pallet::<Test>::verify_membership_at_rev(
-				&PEOPLE,
-				&proof_for(42),
-				RING,
-				1,
-				CTX,
-				MSG,
-			)
-			.unwrap();
-			assert_eq!(ca.context, CTX);
-		});
-	}
-
-	#[test]
-	fn verify_membership_at_rev_returns_revision_not_found_for_evicted() {
-		new_test_ext().execute_with(|| {
-			seed_single_root(PEOPLE, 1, 42);
-			push_revision(PEOPLE, 2, 99);
-			push_revision(PEOPLE, 3, 7);
-
-			assert_noop!(
-				Pallet::<Test>::verify_membership_at_rev(
-					&PEOPLE,
-					&proof_for(42),
-					RING,
-					1,
-					CTX,
-					MSG
-				),
+				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 1, CTX, MSG),
 				Error::<Test>::RevisionNotFound,
 			);
 		});
 	}
 
 	#[test]
-	fn verify_memberships_in_ring_preserves_order_and_returns_revision() {
+	fn verify_membership_succeeds_for_in_window_revision() {
 		new_test_ext().execute_with(|| {
 			seed_single_root(PEOPLE, 1, 42);
+			push_revision(PEOPLE, 2, 99);
 
-			let items = [b"m1", b"m2"]
-				.iter()
-				.map(|&msg| BatchProofItem {
-					proof: TestProof {
-						context: CTX.to_vec(),
-						member: TestMemberKey(42),
-						members: vec![42],
-						message: msg.to_vec(),
-					},
-					context: CTX.to_vec(),
-					message: msg.to_vec(),
-				})
-				.collect::<Vec<_>>();
-
-			let out = Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, &items).unwrap();
-			assert_eq!(out.len(), 2);
-			assert!(out.iter().all(|rca| rca.revision == 1 && rca.ring == RING));
+			let ca = Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 1, CTX, MSG)
+				.unwrap();
+			assert_eq!(ca.context, CTX);
 		});
 	}
 
+	#[test]
+	fn verify_membership_returns_revision_not_found_for_evicted() {
+		new_test_ext().execute_with(|| {
+			seed_single_root(PEOPLE, 1, 42);
+			push_revision(PEOPLE, 2, 99);
+			push_revision(PEOPLE, 3, 7);
+
+			assert_noop!(
+				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 1, CTX, MSG),
+				Error::<Test>::RevisionNotFound,
+			);
+		});
+	}
+
+	#[test]
+	fn verify_memberships_in_ring_matches_specified_revision() {
+		new_test_ext().execute_with(|| {
+			seed_single_root(PEOPLE, 1, 42);
+			push_revision(PEOPLE, 2, 99);
+
+			// Valid batch against revision 1.
+			let items = vec![RingMembershipProof {
+				proof: proof_for(42),
+				context: CTX.to_vec(),
+				message: MSG.to_vec(),
+			}];
+			let out = Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, 1, &items).unwrap();
+			assert_eq!(out.len(), 1);
+
+			// Asking for revision 2 with a proof built against revision 1 fails.
+			assert_noop!(
+				Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, 2, &items),
+				Error::<Test>::InvalidProof,
+			);
+
+			// Unknown revision returns RevisionNotFound.
+			assert_noop!(
+				Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, 99, &items),
+				Error::<Test>::RevisionNotFound,
+			);
+		});
+	}
+
+	// Verifies batch verification returns one alias per proof and preserves input order.
+	#[test]
+	fn verify_memberships_in_ring_preserves_input_order() {
+		new_test_ext().execute_with(|| {
+			let members = [42, 99];
+			seed_root(PEOPLE, 1, root_for(&members));
+
+			let items = members
+				.iter()
+				.map(|&member| RingMembershipProof {
+					proof: proof_for_with(member, &members, CTX, MSG),
+					context: CTX.to_vec(),
+					message: MSG.to_vec(),
+				})
+				.collect::<Vec<_>>();
+
+			let out = Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, 1, &items).unwrap();
+			assert_eq!(out.len(), 2);
+			assert_eq!(out[0].alias, items[0].proof.alias());
+			assert_eq!(out[1].alias, items[1].proof.alias());
+			assert_eq!(out[0].context, CTX);
+			assert_eq!(out[1].context, CTX);
+		});
+	}
+
+	// Verifies a single invalid proof rejects the entire batch even after a valid item.
 	#[test]
 	fn verify_memberships_in_ring_fails_when_any_proof_is_invalid() {
 		new_test_ext().execute_with(|| {
@@ -2363,12 +2420,12 @@ mod proof_verification {
 
 			// Second item's proof doesn't match the stored root.
 			let items = vec![
-				BatchProofItem {
+				RingMembershipProof {
 					proof: proof_for(42),
 					context: CTX.to_vec(),
 					message: MSG.to_vec(),
 				},
-				BatchProofItem {
+				RingMembershipProof {
 					proof: proof_for(99),
 					context: CTX.to_vec(),
 					message: MSG.to_vec(),
@@ -2376,38 +2433,8 @@ mod proof_verification {
 			];
 
 			assert_noop!(
-				Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, &items),
+				Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, 1, &items),
 				Error::<Test>::InvalidProof,
-			);
-		});
-	}
-
-	#[test]
-	fn verify_memberships_in_ring_at_rev_matches_specified_revision() {
-		new_test_ext().execute_with(|| {
-			seed_single_root(PEOPLE, 1, 42);
-			push_revision(PEOPLE, 2, 99);
-
-			// Valid batch against revision 1.
-			let items = vec![BatchProofItem {
-				proof: proof_for(42),
-				context: CTX.to_vec(),
-				message: MSG.to_vec(),
-			}];
-			let out = Pallet::<Test>::verify_memberships_in_ring_at_rev(&PEOPLE, RING, 1, &items)
-				.unwrap();
-			assert_eq!(out.len(), 1);
-
-			// Asking for revision 2 with a proof built against revision 1 fails.
-			assert_noop!(
-				Pallet::<Test>::verify_memberships_in_ring_at_rev(&PEOPLE, RING, 2, &items),
-				Error::<Test>::InvalidProof,
-			);
-
-			// Unknown revision returns RevisionNotFound.
-			assert_noop!(
-				Pallet::<Test>::verify_memberships_in_ring_at_rev(&PEOPLE, RING, 99, &items),
-				Error::<Test>::RevisionNotFound,
 			);
 		});
 	}
@@ -2448,10 +2475,115 @@ mod proof_verification {
 	}
 
 	#[test]
+	fn verify_membership_rejects_superseded_revision_past_retention() {
+		new_test_ext().execute_with(|| {
+			let start = 1_700_000_000;
+			set_time_secs(start);
+			seed_single_root(PEOPLE, 1, 42);
+			// Revision 2 supersedes revision 1 at `start`.
+			push_revision(PEOPLE, 2, 99);
+
+			// Just before the retention deadline the superseded revision still verifies.
+			set_time_secs(start + OldRootRetentionDuration::get() - 1);
+			let ca = Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 1, CTX, MSG)
+				.unwrap();
+			assert_eq!(ca.context, CTX);
+
+			// At the deadline it is rejected even though it is still in the window.
+			set_time_secs(start + OldRootRetentionDuration::get());
+			assert_eq!(RingRoots::<Test>::get(PEOPLE, RING).unwrap().len(), 2);
+			assert_noop!(
+				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 1, CTX, MSG),
+				Error::<Test>::RevisionExpired,
+			);
+
+			// The newest revision keeps verifying regardless of age.
+			let ca = Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(99), RING, 2, CTX, MSG)
+				.unwrap();
+			assert_eq!(ca.context, CTX);
+		});
+	}
+
+	#[test]
+	fn verify_memberships_in_ring_rejects_superseded_revision_past_retention() {
+		new_test_ext().execute_with(|| {
+			let start = 1_700_000_000;
+			set_time_secs(start);
+			seed_single_root(PEOPLE, 1, 42);
+			push_revision(PEOPLE, 2, 99);
+
+			let items = vec![RingMembershipProof {
+				proof: proof_for(42),
+				context: CTX.to_vec(),
+				message: MSG.to_vec(),
+			}];
+			let out = Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, 1, &items).unwrap();
+			assert_eq!(out.len(), 1);
+
+			set_time_secs(start + OldRootRetentionDuration::get());
+			assert_noop!(
+				Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, 1, &items),
+				Error::<Test>::RevisionExpired,
+			);
+		});
+	}
+
+	#[test]
+	fn is_revision_valid_expires_superseded_revision() {
+		new_test_ext().execute_with(|| {
+			let start = 1_700_000_000;
+			set_time_secs(start);
+			seed_single_root(PEOPLE, 1, 42);
+			push_revision(PEOPLE, 2, 99);
+
+			set_time_secs(start + OldRootRetentionDuration::get() - 1);
+			assert!(Pallet::<Test>::is_revision_valid(&PEOPLE, RING, 1));
+			assert!(Pallet::<Test>::is_revision_valid(&PEOPLE, RING, 2));
+
+			set_time_secs(start + OldRootRetentionDuration::get());
+			assert!(!Pallet::<Test>::is_revision_valid(&PEOPLE, RING, 1));
+			assert!(Pallet::<Test>::is_revision_valid(&PEOPLE, RING, 2));
+		});
+	}
+
+	#[test]
+	fn verify_membership_multi_context_matches_specified_revision() {
+		new_test_ext().execute_with(|| {
+			seed_single_root(PEOPLE, 1, 42);
+			push_revision(PEOPLE, 2, 99);
+
+			// Valid proof against revision 1.
+			let out = Pallet::<Test>::verify_membership_multi_context(
+				&PEOPLE,
+				&proof_for(42),
+				RING,
+				1,
+				&[CTX],
+				MSG,
+			)
+			.unwrap();
+			assert_eq!(out.len(), 1);
+
+			// Asking for revision 2 with a proof built against revision 1 fails.
+			assert_noop!(
+				Pallet::<Test>::verify_membership_multi_context(
+					&PEOPLE,
+					&proof_for(42),
+					RING,
+					2,
+					&[CTX],
+					MSG
+				),
+				Error::<Test>::InvalidProof,
+			);
+		});
+	}
+
+	#[test]
 	fn collection_not_found_when_no_exponent_stored() {
 		new_test_ext().execute_with(|| {
 			assert_noop!(
-				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, CTX, MSG),
+				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 0, CTX, MSG),
 				Error::<Test>::CollectionNotFound,
 			);
 		});
@@ -2462,7 +2594,7 @@ mod proof_verification {
 		new_test_ext().execute_with(|| {
 			RingCollectionExponents::<Test>::insert(PEOPLE, TEST_RING_EXPONENT);
 			assert_noop!(
-				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, CTX, MSG),
+				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 0, CTX, MSG),
 				Error::<Test>::NoRoot,
 			);
 		});

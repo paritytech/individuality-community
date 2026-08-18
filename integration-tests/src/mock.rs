@@ -31,13 +31,17 @@ use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateBare, CreateTransaction, CreateTransactionBase},
 	EnsureRoot,
 };
+use indiv_pallet_members::Root;
 use indiv_pallet_mob_rule::MOB_CONTEXT;
 use indiv_pallet_people::{
 	extension::{AsPerson, AsPersonInfo},
 	pallet::PEOPLE_MEMBER_IDENTIFIER,
 };
 use indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipantInfo;
-use indiv_support::traits::{AllocateStorage, Context, RingIndex, RI_ZERO};
+use indiv_support::{
+	crypto::{BandersnatchSuite, BandersnatchVrfVerifiable, GenerateVerifiable},
+	traits::{AllocateStorage, Context, RevisionIndex, RingIndex, RI_ZERO},
+};
 use rand::{prelude::ThreadRng, Rng};
 use sp_arithmetic::Percent;
 use sp_core::{ConstU16, ConstU32, ConstU64, H256};
@@ -50,13 +54,7 @@ use sp_runtime::{
 	transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidityError},
 	BuildStorage, DispatchError, DispatchResult, TransactionOutcome,
 };
-use verifiable::{
-	ring::{
-		ark_vrf::suites::bandersnatch::BandersnatchSha512Ell2,
-		bandersnatch::BandersnatchVrfVerifiable,
-	},
-	Entropy, GenerateVerifiable,
-};
+use verifiable::Entropy;
 use xcm::v5::Location;
 
 pub type TransactionExtension = (
@@ -448,7 +446,7 @@ impl TestExt {
 pub fn new_test_ext() -> sp_io::TestExternalities {
 	// Get the chunk page hashes for the genesis config
 	let chunk_page_hashes = indiv_support::genesis::ring_verifier_all_builder_params_hashes::<
-		BandersnatchSha512Ell2,
+		BandersnatchSuite,
 	>(CHUNK_PAGE_SIZE);
 
 	RuntimeGenesisConfig {
@@ -458,6 +456,7 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 			_phantom: Default::default(),
 		},
 		balances: pallet_balances::GenesisConfig::<Test> { ..Default::default() },
+		..Default::default()
 	}
 	.build_storage()
 	.unwrap()
@@ -692,14 +691,21 @@ pub fn exec_proof_as_alias_tx(
 	context: [u8; 32],
 	call: impl Into<RuntimeCall>,
 ) -> Result<(), TransactionExecutionError> {
+	let revision = people_revision(ring);
 	let tx_ext = (
 		frame_system::AuthorizeCall::new(),
-		AsPerson::new(Some(AsPersonInfo::AsPersonalAliasWithProof(proof, ring, context))),
+		AsPerson::new(Some(AsPersonInfo::AsPersonalAliasWithProof(proof, ring, revision, context))),
 		indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipant::<Test>::new(None),
 		frame_system::CheckNonce::from(0),
 	);
 
 	exec_tx(None, tx_ext, call)
+}
+
+pub fn people_revision(ring: RingIndex) -> RevisionIndex {
+	Root::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, ring)
+		.map(|root| root.revision)
+		.expect("people ring root should exist in integration tests")
 }
 
 pub fn exec_as_personal_id(
@@ -832,7 +838,10 @@ pub fn setup_alias_account(
 		frame_system::AuthorizeCall::new(),
 		indiv_pallet_people::extension::AsPerson::<Test>::new(Some(
 			indiv_pallet_people::extension::AsPersonInfo::AsPersonalAliasWithProof(
-				proof, ring_index, context,
+				proof,
+				ring_index,
+				people_revision(ring_index),
+				context,
 			),
 		)),
 		other_tx_ext.0,

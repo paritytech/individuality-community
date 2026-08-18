@@ -313,6 +313,7 @@ impl indiv_pallet_members_subscriber::Config for IntegrationTest {
 	type ReplayWarningThreshold = ReplayWarningThreshold;
 	type ReplayAbandonThreshold = ReplayAbandonThreshold;
 	type MaxRecentRootsPerRing = ConstU32<2>;
+	type OldRootRetentionDuration = ConstU64<3600>;
 	type OffchainWorkerInterval = ConstU64<1>;
 }
 
@@ -723,9 +724,11 @@ fn proof_precompile_returns_none_for_malformed_proof_bytes() {
 }
 
 #[test]
-fn proof_precompile_decode_failure_refunds_gas() {
+fn proof_precompile_decode_failure_charges_full_weight() {
 	new_integration_ext().execute_with(|| {
 		let valid_proof = MockProof { alias: ALICE_ALIAS, valid: true }.encode();
+		let mut malformed_proof = valid_proof.clone();
+		*malformed_proof.last_mut().expect("encoded proof is not empty") = 0xFF;
 
 		let result_valid = bare_call_proof_precompile(
 			1,
@@ -738,9 +741,9 @@ fn proof_precompile_decode_failure_refunds_gas() {
 			vec![],
 		);
 		let result_malformed = bare_call_proof_precompile(
-			2,
+			1,
 			FULL_STATUS,
-			vec![0xFF],
+			malformed_proof,
 			ALICE_ALIAS,
 			0,
 			&TEST_CONTEXT,
@@ -749,13 +752,17 @@ fn proof_precompile_decode_failure_refunds_gas() {
 		);
 
 		assert!(result_valid.result.is_ok());
-		assert!(result_malformed.result.is_ok());
+		let ok_malformed = IPersonhood::personhoodInfoByProofCall::abi_decode_returns(
+			&result_malformed.result.as_ref().expect("precompile call should succeed").data,
+		)
+		.unwrap();
+		assert!(!ok_malformed);
 
 		let weight_valid = result_valid.weight_consumed;
 		let weight_malformed = result_malformed.weight_consumed;
-		assert!(
-			weight_malformed.ref_time() < weight_valid.ref_time(),
-			"decode-failure path ({weight_malformed:?}) should refund vs valid path ({weight_valid:?})",
+		assert_eq!(
+			weight_malformed, weight_valid,
+			"decode-failure path ({weight_malformed:?}) must not refund below the verifying path ({weight_valid:?})",
 		);
 	});
 }

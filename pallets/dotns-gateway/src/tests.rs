@@ -767,6 +767,7 @@ mod registration {
 			let (_, _, origin) = validate_register(
 				valid_proof(alias_a(), &register_msg(ALICE, &bn1, &link)),
 				0,
+				people_revision(),
 				offchain_signature(ALICE),
 				ALICE,
 				bn1.clone(),
@@ -779,6 +780,7 @@ mod registration {
 			let result = validate_register(
 				valid_proof(alias_a(), &register_msg(BOB, &bn2, &link)),
 				0,
+				people_revision(),
 				offchain_signature(BOB),
 				BOB,
 				bn2,
@@ -794,8 +796,15 @@ mod registration {
 			let link = Link::None(default_chat_key());
 			let bn = base_name(ALICE_BASE);
 
-			let result =
-				validate_register(invalid_proof(), 0, offchain_signature(ALICE), ALICE, bn, link);
+			let result = validate_register(
+				invalid_proof(),
+				0,
+				people_revision(),
+				offchain_signature(ALICE),
+				ALICE,
+				bn,
+				link,
+			);
 
 			assert!(matches!(
 				result,
@@ -811,6 +820,7 @@ mod registration {
 			let result = validate_register(
 				invalid_proof(),
 				0,
+				people_revision(),
 				offchain_signature(ALICE),
 				ALICE,
 				base_name(b""),
@@ -837,6 +847,7 @@ mod registration {
 				let result = validate_register(
 					invalid_proof(),
 					0,
+					people_revision(),
 					offchain_signature(ALICE),
 					ALICE,
 					base_name(&bad),
@@ -860,6 +871,7 @@ mod registration {
 				let result = validate_register(
 					invalid_proof(),
 					0,
+					people_revision(),
 					offchain_signature(ALICE),
 					ALICE,
 					base_name(ALICE_BASE),
@@ -928,7 +940,15 @@ mod registration {
 			// Proof bound to (BOB, "alice", None) but call is from ALICE.
 			let proof = valid_proof(alias_a(), &register_msg(BOB, &bn, &link));
 
-			let result = validate_register(proof, 0, offchain_signature(ALICE), ALICE, bn, link);
+			let result = validate_register(
+				proof,
+				0,
+				people_revision(),
+				offchain_signature(ALICE),
+				ALICE,
+				bn,
+				link,
+			);
 
 			assert!(matches!(
 				result,
@@ -946,6 +966,7 @@ mod registration {
 			let result = validate_register(
 				proof,
 				0,
+				people_revision(),
 				offchain_signature(ALICE),
 				ALICE,
 				base_name(BOB_BASE),
@@ -972,6 +993,7 @@ mod registration {
 			let result = validate_register(
 				proof,
 				0,
+				people_revision(),
 				offchain_signature(ALICE),
 				ALICE,
 				bn,
@@ -994,7 +1016,15 @@ mod registration {
 			let bn = base_name(BOB_BASE);
 			let proof = valid_proof(alias_a(), &register_msg(BOB, &bn, &link));
 
-			let result = validate_register(proof, 0, offchain_signature(BOB), BOB, bn, link);
+			let result = validate_register(
+				proof,
+				0,
+				people_revision(),
+				offchain_signature(BOB),
+				BOB,
+				bn,
+				link,
+			);
 
 			assert_invalid_custom(&result, CustomValidity::NotLiteLabelOwner);
 		});
@@ -1007,7 +1037,15 @@ mod registration {
 			let bn = base_name(ALICE_BASE);
 			let proof = valid_proof(alias_a(), &register_msg(ALICE, &bn, &link));
 
-			let result = validate_register(proof, 0, offchain_signature(ALICE), ALICE, bn, link);
+			let result = validate_register(
+				proof,
+				0,
+				people_revision(),
+				offchain_signature(ALICE),
+				ALICE,
+				bn,
+				link,
+			);
 
 			assert_invalid_custom(&result, CustomValidity::NotLiteLabelOwner);
 		});
@@ -1037,6 +1075,7 @@ mod registration {
 			let (_validity, _, origin) = validate_register(
 				proof,
 				0,
+				people_revision(),
 				offchain_signature(ALICE),
 				ALICE,
 				bn.clone(),
@@ -1118,7 +1157,8 @@ mod registration {
 			let signature = offchain_signature(ALICE);
 
 			let (_validity, _, origin) =
-				validate_register(proof, 0, signature, ALICE, bn, link).expect("validates");
+				validate_register(proof, 0, people_revision(), signature, ALICE, bn, link)
+					.expect("validates");
 
 			// The extension must mutate the None origin into PersonRegistration.
 			assert_eq!(
@@ -1139,6 +1179,7 @@ mod registration {
 				crate::AsDotnsGatewayInfo::RegisterFullName {
 					proof,
 					ring_index: 0,
+					revision: people_revision(),
 					signature: offchain_signature(ALICE),
 				},
 			));
@@ -1171,6 +1212,7 @@ mod registration {
 				crate::AsDotnsGatewayInfo::RegisterFullName {
 					proof: invalid_proof(),
 					ring_index: 0,
+					revision: people_revision(),
 					signature: offchain_signature(ALICE),
 				},
 			));
@@ -1202,7 +1244,15 @@ mod registration {
 			let bn = base_name(ALICE_BASE);
 			let proof = valid_proof(alias_a(), &register_msg(ALICE, &bn, &link));
 
-			let result = validate_register(proof, 0, invalid_offchain_signature(), ALICE, bn, link);
+			let result = validate_register(
+				proof,
+				0,
+				people_revision(),
+				invalid_offchain_signature(),
+				ALICE,
+				bn,
+				link,
+			);
 
 			assert_invalid_custom(&result, CustomValidity::InvalidOffchainSignature);
 		});
@@ -1222,7 +1272,15 @@ mod registration {
 			let other_alias = [2u8; 32];
 			let proof = valid_proof(other_alias, &register_msg(ALICE, &bn, &link));
 
-			let result = validate_register(proof, 0, offchain_signature(ALICE), ALICE, bn, link);
+			let result = validate_register(
+				proof,
+				0,
+				people_revision(),
+				offchain_signature(ALICE),
+				ALICE,
+				bn,
+				link,
+			);
 
 			assert_invalid_custom(&result, CustomValidity::AccountAlreadyRegistered);
 		});
@@ -1239,6 +1297,7 @@ mod registration {
 			let (_validity, _, origin) = validate_register(
 				proof,
 				0,
+				people_revision(),
 				offchain_signature(ALICE),
 				ALICE,
 				bn.clone(),

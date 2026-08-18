@@ -21,12 +21,12 @@ use alloc::{vec, vec::Vec};
 use cumulus_primitives_core::ParaId;
 use frame_support::build_struct_json_patch;
 use hex_literal::hex;
+use indiv_support::crypto::BandersnatchSuite;
 use parachains_common::{AccountId, AuraId};
 use paseo_runtime_constants::system_parachain::PEOPLE_ID;
 use sp_core::crypto::UncheckedInto;
 use sp_genesis_builder::PresetId;
 use sp_keyring::Sr25519Keyring;
-use verifiable::ring::ark_vrf::suites::bandersnatch::BandersnatchSha512Ell2;
 
 const LIVE_RUNTIME_PRESET: &str = "live";
 
@@ -36,18 +36,31 @@ const SAFE_XCM_VERSION: u32 = 4;
 
 const PEOPLE_PASEO_ED: Balance = ExistentialDeposit::get();
 
+/// Whether a preset pre-creates the member collections.
+///
+/// The benchmarking preset must not: `frame-omni-bencher` builds its state from the
+/// `development` preset, and `create_people_collection` cannot be benchmarked against a chain
+/// where the collection already exists.
+enum MemberCollections {
+	Create,
+	Skip,
+}
+
 fn people_paseo_genesis(
 	invulnerables: Vec<(AccountId, AuraId)>,
 	endowed_accounts: Vec<AccountId>,
 	endowment: Balance,
 	id: ParaId,
 	sudo_key: AccountId,
+	collections: MemberCollections,
 ) -> serde_json::Value {
 	// Ensure the sudo account is always funded.
 	let mut endowed_accounts = endowed_accounts;
 	if !endowed_accounts.contains(&sudo_key) {
 		endowed_accounts.push(sudo_key.clone());
 	}
+
+	let create_collection = matches!(collections, MemberCollections::Create);
 
 	build_struct_json_patch!(RuntimeGenesisConfig {
 		balances: BalancesConfig {
@@ -70,13 +83,19 @@ fn people_paseo_genesis(
 				})
 				.collect(),
 		},
+		people: PeopleConfig { create_collection },
+		people_lite: PeopleLiteConfig { create_collection },
 		chunks_manager: ChunksManagerConfig {
 			encoded_chunk_page_hashes:
 				// We don't include the builder params hashes for r2e14 because it makes the
 				// runtime wasm binary too big.
-				indiv_support::genesis::ring_verifier_r2e9_r2e10_builder_params_hashes::<BandersnatchSha512Ell2>(
+				indiv_support::genesis::ring_verifier_r2e9_r2e10_builder_params_hashes::<BandersnatchSuite>(
 					people::ChunkPageSize::get()
 				),
+			_phantom: Default::default()
+		},
+		members_notifier: MembersNotifierConfig {
+			subscription_whitelist: people::asset_hub_subscription_whitelist(),
 			_phantom: Default::default()
 		},
 		polkadot_xcm: PolkadotXcmConfig { safe_xcm_version: Some(SAFE_XCM_VERSION) },
@@ -95,6 +114,7 @@ fn people_paseo_local_testnet_genesis() -> serde_json::Value {
 		PAS * 1_000_000,
 		PEOPLE_ID.into(),
 		Sr25519Keyring::Alice.to_account_id(),
+		MemberCollections::Create,
 	)
 }
 
@@ -111,6 +131,9 @@ fn people_paseo_development_genesis() -> serde_json::Value {
 		PAS * 1_000_000,
 		PEOPLE_ID.into(),
 		Sr25519Keyring::Alice.to_account_id(),
+		// `frame-omni-bencher` builds from this preset; pre-created collections would make the
+		// collection-creation benchmarks fail.
+		MemberCollections::Skip,
 	)
 }
 
@@ -135,6 +158,7 @@ fn people_paseo_live_genesis() -> serde_json::Value {
 		PEOPLE_ID.into(),
 		// Sudo key for live Paseo deployment
 		hex!("98384d04c5a3f298f29b027b5581b096b5d8f6a84e34e23a62f23d8ef6afc766").into(),
+		MemberCollections::Create,
 	)
 }
 

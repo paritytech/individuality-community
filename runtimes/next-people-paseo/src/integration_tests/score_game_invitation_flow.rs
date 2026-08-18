@@ -85,12 +85,16 @@ fn invitation_player_flow() {
 				game_play_time: now + i * in_between_games,
 				rounds: 1,
 				max_group_size: 3,
-				airdrop_prize: (i == 7).then(|| airdrop_prize_for(AIRDROP_MAX_WINNERS)),
+				airdrops: if i == 7 {
+					game_airdrops(&[0], AIRDROP_MAX_WINNERS)
+				} else {
+					Default::default()
+				},
 			})
 			.collect::<Vec<_>>();
 		Game::schedule_games(RuntimeOrigin::root(), schedules.clone()).unwrap();
 		let airdrop_game_index = 7u32;
-		let airdrop_event_id = airdrop_event_id_for(airdrop_game_index);
+		let airdrop_event_id = airdrop_event_id_for(airdrop_game_index, 0);
 		FungibleExternalAsset::mint_into(
 			&Score::score_pot_id(),
 			10 * UNITS * 26 + FungibleExternalAsset::minimum_balance(),
@@ -108,7 +112,9 @@ fn invitation_player_flow() {
 		let ticket_acc_id = pair_to_account_id(&ticket_acc);
 		let set_invite =
 			indiv_pallet_game::Call::<Runtime>::set_invite_ticket { ticket: ticket_acc_id };
+		let alice_before = Balances::free_balance(Sr25519Keyring::Alice.to_account_id());
 		exec_signed(&Sr25519Keyring::Alice.pair(), set_invite.into());
+		assert_eq!(Balances::free_balance(Sr25519Keyring::Alice.to_account_id()), alice_before);
 
 		// ─────────────────────────────────────
 		// Bob sign-up for game #1 with the invite. No airdrop entry here — the prize is
@@ -119,7 +125,7 @@ fn invitation_player_flow() {
 		advance_until_time(GameTimes::<Runtime>::registration_start(&schedules[0]));
 		let signup = indiv_pallet_game::Call::<Runtime>::sign_up_with_invite {
 			identifier_key: [0u8; 65],
-			airdrop: None,
+			airdrops: None,
 		};
 		exec_signed_game_invited(&bob_pair, &ticket_acc, signup.into());
 
@@ -147,7 +153,7 @@ fn invitation_player_flow() {
 		advance_until_time(GameTimes::<Runtime>::registration_start(&schedules[1]));
 		let signup = RuntimeCall::Game(indiv_pallet_game::Call::<Runtime>::sign_up_with_account {
 			identifier_key: [1u8; 65],
-			airdrop: None,
+			airdrops: None,
 		});
 		exec_signed_as_score_participant(&bob_pair, signup);
 
@@ -190,7 +196,7 @@ fn invitation_player_flow() {
 			let signup =
 				RuntimeCall::Game(indiv_pallet_game::Call::<Runtime>::sign_up_with_account {
 					identifier_key: [2u8; 65],
-					airdrop: None,
+					airdrops: None,
 				});
 			exec_signed_as_score_participant(&bob_pair, signup);
 
@@ -210,7 +216,7 @@ fn invitation_player_flow() {
 		drive_airdrop_to_registering(airdrop_event_id);
 		let signup = indiv_pallet_game::Call::<Runtime>::sign_up_with_account {
 			identifier_key: [9u8; 65],
-			airdrop: Some(build_account_airdrop_vrf(&bob_pair, airdrop_event_id)),
+			airdrops: Some(build_account_airdrop_vrfs(&bob_pair, &[airdrop_event_id])),
 		};
 		exec_signed_as_score_participant(&bob_pair, signup.into());
 		advance_until_time(GameTimes::<Runtime>::game_play_time(&schedules[6]));
@@ -230,6 +236,7 @@ fn invitation_player_flow() {
 		let beneficiary_before = FungibleExternalAsset::balance(&beneficiary);
 		let claim = indiv_pallet_game::Call::<Runtime>::claim_airdrop {
 			game_index: airdrop_game_index,
+			airdrop_index: 0,
 			beneficiary: beneficiary.clone(),
 		};
 		exec_signed_as_score_participant(&bob_pair, claim.into());
@@ -285,7 +292,7 @@ fn invitation_player_flow() {
 				identifier_key: [3u8; 65],
 				statement_account: zoe_stmt_acc.clone(),
 				sig: zoe_stmt_acc_proof_of_ownership.clone(),
-				airdrop: None,
+				airdrops: None,
 			};
 			exec_signed_as_alias_with_account_revised(
 				&zoe_score_alias_account,
@@ -302,7 +309,7 @@ fn invitation_player_flow() {
 		advance_until_time(GameTimes::<Runtime>::registration_start(&schedules[11]));
 		let signup = RuntimeCall::Game(indiv_pallet_game::Call::<Runtime>::sign_up_with_account {
 			identifier_key: [4u8; 65],
-			airdrop: None,
+			airdrops: None,
 		});
 		exec_signed_as_score_participant(&bob_pair, signup);
 		advance_until_time(GameTimes::<Runtime>::game_play_time(&schedules[11]));
@@ -346,7 +353,11 @@ fn invitation_player_flow() {
 				rounds: 1,
 				max_group_size: 3,
 				// The first extra game carries the alias-VRF airdrop prize.
-				airdrop_prize: (i == 13).then(|| airdrop_prize_for(AIRDROP_MAX_WINNERS)),
+				airdrops: if i == 13 {
+					game_airdrops(&[0], AIRDROP_MAX_WINNERS)
+				} else {
+					Default::default()
+				},
 			})
 			.collect::<Vec<_>>();
 		// Top up the airdrop source for the second event's prize allocation.
@@ -358,7 +369,7 @@ fn invitation_player_flow() {
 		Game::schedule_games(RuntimeOrigin::root(), extra_schedules.clone()).unwrap();
 		// Twelve games were already created earlier, so the first extra is game #13.
 		let alias_airdrop_game_index = 13u32;
-		let alias_airdrop_event_id = airdrop_event_id_for(alias_airdrop_game_index);
+		let alias_airdrop_event_id = airdrop_event_id_for(alias_airdrop_game_index, 0);
 
 		// ─────────────────────────────────────
 		// Game #13: Bob is recognized after resume; he signs up with the Alias VRF and
@@ -370,9 +381,9 @@ fn invitation_player_flow() {
 		drive_airdrop_to_registering(alias_airdrop_event_id);
 		let signup_bob = indiv_pallet_game::Call::<Runtime>::sign_up_with_account {
 			identifier_key: [6u8; 65],
-			airdrop: Some(build_alias_airdrop_vrf(
+			airdrops: Some(build_alias_airdrop_vrfs(
 				&s,
-				alias_airdrop_event_id,
+				&[alias_airdrop_event_id],
 				RegistrationEntry::Account { account_id: bob.clone() },
 			)),
 		};
@@ -389,6 +400,7 @@ fn invitation_player_flow() {
 		let beneficiary_alias_before = FungibleExternalAsset::balance(&beneficiary_alias);
 		let claim_alias = indiv_pallet_game::Call::<Runtime>::claim_airdrop {
 			game_index: alias_airdrop_game_index,
+			airdrop_index: 0,
 			beneficiary: beneficiary_alias.clone(),
 		};
 		exec_signed_as_score_participant(&bob_pair, claim_alias.into());
@@ -406,7 +418,7 @@ fn invitation_player_flow() {
 				identifier_key: [5u8; 65],
 				statement_account: zoe_stmt_acc.clone(),
 				sig: zoe_stmt_acc_proof_of_ownership.clone(),
-				airdrop: None,
+				airdrops: None,
 			};
 			exec_signed_as_alias_with_account_revised(
 				&zoe_score_alias_account,

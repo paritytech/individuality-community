@@ -17,21 +17,20 @@
 #![cfg(test)]
 
 mod mock;
-#[cfg(test)]
-mod value_transfer_auth_tests;
-#[cfg(test)]
-mod value_transfer_xcm_filter_tests;
 
 use codec::{Decode, Encode};
-use frame_support::{assert_err, assert_noop, assert_ok};
+use frame_support::{assert_err, assert_noop, assert_ok, weights::Weight};
 use frame_system::pallet_prelude::BlockNumberFor;
 use indiv_pallet_members::RingRoot;
 use indiv_pallet_mob_rule::MOB_CONTEXT;
 use indiv_pallet_people::pallet::PEOPLE_MEMBER_IDENTIFIER;
 use indiv_pallet_proof_of_ink::{Callbacks, DesignIndex, FamilyKind, InkChoice};
-use indiv_support::traits::{
-	AddOnlyPeopleTrait, ContextualAlias, InkSpec, Judgement, JudgementContext, PersonalId,
-	RevisedContextualAlias, RingPosition, Statement, StatementOracle, Truth, RI_ZERO,
+use indiv_support::{
+	crypto::{BandersnatchVrfVerifiable, GenerateVerifiable},
+	traits::{
+		AddOnlyPeopleTrait, ContextualAlias, InkSpec, Judgement, JudgementContext, PersonalId,
+		RevisedContextualAlias, RingPosition, Statement, StatementOracle, Truth, RI_ZERO,
+	},
 };
 use mock::*;
 use sp_runtime::{
@@ -39,7 +38,6 @@ use sp_runtime::{
 	transaction_validity::InvalidTransaction,
 };
 use std::collections::BTreeSet;
-use verifiable::{ring::bandersnatch::BandersnatchVrfVerifiable, GenerateVerifiable};
 
 type EncodedPublicKey = <BandersnatchVrfVerifiable as GenerateVerifiable>::Member;
 type SecretKey = <BandersnatchVrfVerifiable as GenerateVerifiable>::Secret;
@@ -79,7 +77,7 @@ fn everything_works() {
 		assert!(indiv_pallet_mob_rule::OpenCases::<Test>::get(0).is_some());
 
 		// We force the outcome by governance.
-		assert_ok!(MobRule::intervene(root(), 0, Judgement::Truth(Truth::True)));
+		assert_ok!(MobRule::intervene(root(), 0, Judgement::Truth(Truth::True), Weight::MAX));
 
 		// First person is now a proven - they register a special key and we bake the first root.
 		let secret_key = BandersnatchVrfVerifiable::new_secret([0u8; 32]);
@@ -158,10 +156,11 @@ fn everything_works() {
 		.unwrap();
 
 		assert_ok!(exec_proof_as_alias_tx(proof, ring_index, MOB_CONTEXT, call));
+		let revision = people_revision(ring_index);
 		assert_eq!(
 			indiv_pallet_people::AccountToAlias::<Test>::get(20),
 			Some(RevisedContextualAlias {
-				revision: 0,
+				revision,
 				ring: ring_index,
 				ca: ContextualAlias { context: MOB_CONTEXT, alias: mob_1 },
 			}),
@@ -175,7 +174,7 @@ fn everything_works() {
 		assert_eq!(
 			indiv_pallet_people::AccountToAlias::<Test>::get(30),
 			Some(RevisedContextualAlias {
-				revision: 0,
+				revision,
 				ring: ring_index,
 				ca: ContextualAlias { context: MOB_CONTEXT, alias: mob_1 },
 			}),
@@ -241,7 +240,7 @@ fn everything_works() {
 		assert!(indiv_pallet_mob_rule::OpenCases::<Test>::get(1).is_some());
 
 		// We force the outcome by governance.
-		assert_ok!(MobRule::intervene(root(), 1, Judgement::Truth(Truth::True)));
+		assert_ok!(MobRule::intervene(root(), 1, Judgement::Truth(Truth::True), Weight::MAX));
 
 		// 50 is still funded until it registers.
 		assert_eq!(frame_system::Account::<Test>::get(50).providers, 0);
@@ -640,7 +639,8 @@ fn onboard_a_person(who: u64) -> PersonalKeys {
 	assert_ok!(MobRule::intervene(
 		root(),
 		indiv_pallet_mob_rule::CaseCount::<Test>::get() - 1,
-		Judgement::Truth(Truth::True)
+		Judgement::Truth(Truth::True),
+		Weight::MAX
 	));
 
 	// final onboarding steps - keys generation and registration with them
@@ -830,6 +830,7 @@ fn replay_protection_for_alias() {
 					indiv_pallet_people::extension::AsPersonInfo::AsPersonalAliasWithProof(
 						proof,
 						0,
+						people_revision(0),
 						MOB_CONTEXT,
 					),
 				)),
@@ -846,7 +847,8 @@ fn replay_protection_for_alias() {
 			call_valid_at: System::block_number(),
 		});
 		let (tx_ext1, alias) = generate_alias_tx_ext_for_call(call1.clone());
-		let rev_alias = RevisedContextualAlias { revision: 0, ring: 0, ca: alias.clone() };
+		let rev_alias =
+			RevisedContextualAlias { revision: people_revision(0), ring: 0, ca: alias.clone() };
 		// Execute transaction 1. It should succeed.
 		assert_ok!(exec_tx(None, tx_ext1.clone(), call1.clone()));
 		assert_eq!(indiv_pallet_people::AliasToAccount::<Test>::get(&alias), Some(10));

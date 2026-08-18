@@ -25,7 +25,8 @@ use indiv_pallet_coinage::Config as CoinageConfig;
 /// Test that verifies the minimum token distribution guarantee at base multiplier.
 ///
 /// This test ensures that when the fee multiplier is at its base value (1), both people and
-/// lite people get at least 10 free unload tokens. The calculation is: allowance / fee >= 10.
+/// lite people get at least 10 free unload tokens.
+/// The calculation is: min(allowance / fee, MaxFreeUnloadTokensPerTimePeriod) >= 10.
 #[test]
 fn people_get_at_least_10_free_tokens_at_base_multiplier() {
 	new_test_ext().execute_with(|| {
@@ -39,27 +40,22 @@ fn people_get_at_least_10_free_tokens_at_base_multiplier() {
 		);
 
 		// Get the fee at base multiplier (multiplier = 1)
-		let fee = Coinage::get_paid_unload_token_fee_in_asset()
-			.expect("Fee should be available with external asset configured");
+		let fee = Coinage::get_paid_unload_token_fee_in_native();
 
 		// Test people allowance
-		let people_allowance: u128 =
-			<Runtime as CoinageConfig>::UnloadTokenAllowancePerTimePeriodForPeople::get();
-		let people_tokens = people_allowance / fee;
+		let people_tokens = Coinage::free_unload_token_limit_for_people();
 		assert!(
 			people_tokens >= 10,
 			"People should get at least 10 free unload tokens at base multiplier. \
-			Got {people_tokens} tokens (allowance={people_allowance}, fee={fee})"
+			Got {people_tokens} tokens (fee={fee})"
 		);
 
 		// Test lite people allowance
-		let lite_allowance: u128 =
-			<Runtime as CoinageConfig>::UnloadTokenAllowancePerTimePeriodForLitePeople::get();
-		let lite_tokens = lite_allowance / fee;
+		let lite_tokens = Coinage::free_unload_token_limit_for_lite_people();
 		assert!(
 			lite_tokens >= 10,
 			"Lite people should get at least 10 free unload tokens at base multiplier. \
-			Got {lite_tokens} tokens (allowance={lite_allowance}, fee={fee})"
+			Got {lite_tokens} tokens (fee={fee})"
 		);
 	});
 }
@@ -68,29 +64,21 @@ fn people_get_at_least_10_free_tokens_at_base_multiplier() {
 #[test]
 fn allowance_values_are_correctly_configured() {
 	new_test_ext().execute_with(|| {
-		// People allowance should be $2 = 200 * 10^4
+		// People allowance should be 20 whole native tokens
 		let people_allowance: u128 =
 			<Runtime as CoinageConfig>::UnloadTokenAllowancePerTimePeriodForPeople::get();
-		assert_eq!(
-			people_allowance,
-			200 * 10u128.pow(4),
-			"People allowance should be $2 (200 * 10^4)"
-		);
+		assert_eq!(people_allowance, 20 * UNITS, "People allowance should be 20 * UNITS");
 
-		// Lite people allowance should be $0.5 = 50 * 10^4
+		// Lite people allowance should be 10 whole native tokens
 		let lite_people_allowance: u128 =
 			<Runtime as CoinageConfig>::UnloadTokenAllowancePerTimePeriodForLitePeople::get();
-		assert_eq!(
-			lite_people_allowance,
-			50 * 10u128.pow(4),
-			"Lite people allowance should be $0.5 (50 * 10^4)"
-		);
+		assert_eq!(lite_people_allowance, 10 * UNITS, "Lite people allowance should be 10 * UNITS");
 
-		// Verify the ratio: people should have 4x the allowance of lite people
+		// Verify the ratio: people should have 2x the allowance of lite people
 		assert_eq!(
 			people_allowance / lite_people_allowance,
-			4,
-			"People allowance should be 4x lite people allowance"
+			2,
+			"People allowance should be 2x lite people allowance"
 		);
 	});
 }

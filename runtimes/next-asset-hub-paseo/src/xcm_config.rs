@@ -40,15 +40,12 @@ use frame_support::{
 	},
 };
 use frame_system::EnsureRoot;
-use indiv_pallet_value_transfer_auth::{
-	allow_only_siblings::AllowOnlySiblings, ProtectedAssetTransactor,
-};
 use pallet_xcm::{AuthorizedAliasers, XcmPassthrough};
 use parachains_common::xcm_config::{
 	AllSiblingSystemParachains, ConcreteAssetFromSystem, ParentRelayOrSiblingParachains,
 	RelayOrOtherSystemParachains,
 };
-use paseo_runtime_constants::{system_parachain, ProtectedAssetLocation};
+use paseo_runtime_constants::system_parachain;
 use polkadot_parachain_primitives::primitives::Sibling;
 use snowbridge_outbound_queue_primitives::v2::exporter::PausableExporter;
 use sp_runtime::traits::TryConvertInto;
@@ -70,11 +67,6 @@ use xcm_builder::{
 use xcm_executor::XcmExecutor;
 
 pub use system_parachains_constants::paseo::locations::{AssetHubLocation, RelayChainLocation};
-
-parameter_types! {
-	pub NextAssetHubParaId: u32 = system_parachain::NEXT_ASSET_HUB_ID;
-	pub NextPeopleParaId: u32 = system_parachain::NEXT_PEOPLE_ID;
-}
 
 parameter_types! {
 	pub const RootLocation: Location = Location::here();
@@ -191,11 +183,7 @@ pub type PoolAssetsConvertedConcreteId =
 	assets_common::PoolAssetsConvertedConcreteId<PoolAssetsPalletLocation, Balance>;
 
 /// Means for transacting assets on this chain.
-pub type AssetTransactors = ProtectedAssetTransactor<
-	(FungibleTransactor, FungiblesTransactor, ForeignFungiblesTransactor),
-	ProtectedAssetLocation,
-	AllowOnlySiblings<NextAssetHubParaId, NextPeopleParaId>,
->;
+pub type AssetTransactors = (FungibleTransactor, FungiblesTransactor, ForeignFungiblesTransactor);
 
 /// Asset converter for pool assets.
 /// Used to convert one asset to another, when there is a pool available between the two.
@@ -506,13 +494,7 @@ impl xcm_executor::Config for XcmConfig {
 	type UniversalAliases =
 		(bridging::to_kusama::UniversalAliases, bridging::to_ethereum::UniversalAliases);
 	type CallDispatcher = RuntimeCall;
-	// Inbound XCM `Transact` is bounced through the same protected-asset value-transfer gate as
-	// local dispatch: the block flag defaults to BLOCKED because no
-	// `AuthorizeValueTransfer::prepare` runs for XCM-borne calls, so any protected-asset-touching
-	// call carried inside a `Transact` is rejected before dispatch.
-	type SafeCallFilter = indiv_pallet_value_transfer_auth::BlockValueTransfersWhenFlagSet<
-		crate::value_transfer_filter::AhNextValueTransferFilter,
-	>;
+	type SafeCallFilter = Everything;
 	type Aliasers = TrustedAliasers;
 	type TransactionalProcessor = FrameTransactionalProcessor;
 	type HrmpNewChannelOpenRequestHandler = ();

@@ -33,7 +33,8 @@ use frame_system::{
 };
 use indiv_pallet_members_subscriber::types::NotifierEndpoint;
 use indiv_support::traits::{
-	Alias, Identifier, RingExponent, RingIndex, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER,
+	Alias, Identifier, RevisionIndex, RingExponent, RingIndex, PEOPLE_IDENTIFIER,
+	PEOPLE_LITE_IDENTIFIER,
 };
 use scale_info::TypeInfo;
 use sp_core::{ConstU32, ConstU64, H160};
@@ -381,6 +382,7 @@ impl indiv_pallet_members_subscriber::Config for Test {
 	type ReplayWarningThreshold = ReplayWarningThreshold;
 	type ReplayAbandonThreshold = ReplayAbandonThreshold;
 	type MaxRecentRootsPerRing = ConstU32<2>;
+	type OldRootRetentionDuration = ConstU64<3600>;
 	type OffchainWorkerInterval = ConstU64<1>;
 }
 
@@ -402,7 +404,7 @@ impl crate::AddressMapper<u64> for TestAddressMapper {
 
 #[cfg(feature = "runtime-benchmarks")]
 impl crate::benchmarking::BenchmarkHelper<Test> for () {
-	fn setup_ring_root(identifier: &Identifier, ring_index: RingIndex) {
+	fn setup_ring_root(identifier: &Identifier, ring_index: RingIndex) -> RevisionIndex {
 		// Filling to MaxRecentRootsPerRing capacity so verify_proof iterates
 		// all roots (worst-case for find_map over the sliding window).
 		let now = MOCK_NOW.with(|v| *v.borrow());
@@ -424,6 +426,7 @@ impl crate::benchmarking::BenchmarkHelper<Test> for () {
 			*identifier,
 			RingExponent::R2e9,
 		);
+		max_recent
 	}
 
 	fn valid_proof(_collection: &crate::Collection, message: &[u8]) -> MockProof {
@@ -500,6 +503,12 @@ pub fn valid_proof(alias: Alias, message: &[u8]) -> MockProof {
 	}
 }
 
+pub fn people_revision() -> RevisionIndex {
+	indiv_pallet_members_subscriber::RingRoots::<Test>::get(*PEOPLE_IDENTIFIER, 0)
+		.and_then(|roots| roots.last().map(|record| record.revision))
+		.expect("people ring revision seeded in test ext")
+}
+
 pub fn invalid_proof() -> MockProof {
 	MockProof { alias: [0u8; 32], valid: false, message: BoundedVec::new() }
 }
@@ -536,6 +545,7 @@ pub fn invalid_offchain_signature() -> UintAuthorityId {
 pub fn validate_register(
 	proof: ProofOf<Test>,
 	ring_index: RingIndex,
+	revision: RevisionIndex,
 	signature: UintAuthorityId,
 	who: u64,
 	label: BaseLabel,
@@ -544,6 +554,7 @@ pub fn validate_register(
 	let tx_ext = AsDotnsGateway::<Test>::new(Some(AsDotnsGatewayInfo::RegisterFullName {
 		proof,
 		ring_index,
+		revision,
 		signature,
 	}));
 	let call = RuntimeCall::DotnsGateway(crate::pallet::Call::register_name { who, label, link });

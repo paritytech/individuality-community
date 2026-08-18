@@ -1,0 +1,121 @@
+# Zombienet spec for a local relay + next-people-paseo (para 1502) +
+# next-asset-hub-paseo (para 1500) network — the People chain plus a companion
+# Asset Hub that subscribes to its ring-root updates.
+#
+# This is the dual-chain counterpart to `people-network.toml` (People only). It
+# is used by the AH-aware examples (`subscriptions`, `dotns`) and by the
+# members-notifier soak harness in `internal/members-notifier-soak/`.
+#
+# The People<->AH HRMP channels (ring-root updates People->AH, replay requests
+# AH->People) are opened at runtime by `pnpm run hrmp`, NOT declared here — see
+# the note below the AH collator.
+#
+# Para IDs are the canonical paseo values (paseo-runtime-constants):
+#   PEOPLE_ID / NEXT_PEOPLE_ID = 1502
+#   ASSET_HUB_ID / NEXT_ASSET_HUB_ID = 1500
+# AH's runtime hard-codes People as 1502 (PeopleParaId) for incoming XCM, and the
+# notifier routes to whatever para id the `subscribe` call names (we use 1500),
+# so these IDs must match for both directions to work.
+#
+# Spawn with:  pnpm run node:assethub
+# (the `polkadot` relay bundle + `polkadot-omni-node` must be on PATH — see README)
+
+[settings]
+timeout = 1000
+node_spawn_timeout = 300
+
+[relaychain]
+chain = "rococo-local"
+default_command = "polkadot"
+default_args = ["--network-backend=libp2p", "--rpc-max-response-size=50"]
+
+# The People runtime calls the RFC-163 ECC host functions during PVF validation, and a
+# validator only registers them when its executor params ask for it. Without this the
+# People candidates are rejected with a missing `ext_host_calls_bls12_381_*` function
+# and the parachain stops being included a few blocks in. Applied as a genesis overlay
+# rather than a prebuilt relay spec so zombienet still generates the spec itself, which
+# is what puts the validator keys in the right keystores. Same setting as
+# `e2e/zombienet/network.toml`.
+[relaychain.genesis.runtimeGenesis.patch.configuration.config]
+executor_params = [{ EnabledHostFunction = "EccRfc163" }]
+
+[[relaychain.nodes]]
+name = "alice-relay-validator"
+validator = true
+rpc_port = 10000
+p2p_port = 30336
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "bob-relay-validator"
+validator = true
+rpc_port = 9955
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "charlie-relay-validator"
+validator = true
+rpc_port = 9956
+balance = 1000000000000000
+
+[[relaychain.nodes]]
+name = "dave-relay-validator"
+validator = true
+rpc_port = 9957
+balance = 1000000000000000
+
+# ----- People chain (para 1502) -----
+[[parachains]]
+id = 1502
+cumulus_based = true
+chain_spec_path = "./generated/people-chain-spec.json"
+
+[[parachains.collators]]
+name = "people-collator"
+rpc_port = 10010
+p2p_port = 30335
+command = "polkadot-omni-node"
+args = [
+	"--authoring=slot-based",
+	"--enable-statement-store",
+	"--force-authoring",
+	"--network-backend=libp2p",
+	"--rpc-max-connections=500",
+	"--rpc-max-response-size=50",
+	# Surface the notifier and credit-tree OCW log lines (discriminator windowing,
+	# stall warnings).
+	"-lruntime::indiv-pallet-members-notifier=debug,runtime::indiv-pallet-nft-credits=debug,parachain=debug,xcm=trace",
+]
+
+# ----- Asset Hub (para 1500) -----
+[[parachains]]
+id = 1500
+cumulus_based = true
+chain_spec_path = "./generated/ah-chain-spec.json"
+
+[[parachains.collators]]
+name = "ah-collator"
+rpc_port = 10020
+p2p_port = 30337
+command = "polkadot-omni-node"
+args = [
+	"--authoring=slot-based",
+	"--enable-statement-store",
+	"--force-authoring",
+	"--network-backend=libp2p",
+	"--rpc-max-connections=500",
+	"--rpc-max-response-size=50",
+	"-lruntime::indiv-pallet-members-subscriber=debug,runtime=debug,xcm=debug,txpool=debug",
+]
+
+# NOTE: HRMP channels are intentionally NOT declared here.
+#
+# Declaring `[[hrmp_channels]]` makes zombienet preopen them at genesis, which on
+# this polkadot-sdk produces an inconsistent relay DMQ head — the parachain then
+# panics in cumulus-pallet-parachain-system ("DMQ head mismatch" →
+# "Missing required set_validation_data inherent") and never produces a block
+# (polkadot-sdk#1616).
+#
+# Instead the People<->AH channels are force-opened *at runtime* (after genesis)
+# by `pnpm run hrmp`, which avoids the genesis DMQ computation entirely. Run it
+# before `pnpm run subscribe` — see open-hrmp.ts and the README.

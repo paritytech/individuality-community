@@ -39,6 +39,8 @@ opencode.json
 **/hfuzz_target/
 **/hfuzz_workspace/
 **/node_modules
+**/__pycache__/
+*.py[cod]
 **/target/
 **/wip/*.stderr
 /.cargo/config

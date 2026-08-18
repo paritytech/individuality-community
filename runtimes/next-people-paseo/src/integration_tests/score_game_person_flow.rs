@@ -68,27 +68,37 @@ fn alias_player_flow() {
 		exec_as_alias_with_proof(&amy_secret, SCORE_CONTEXT, set_alias.into());
 
 		// ─────────────────────────────────────
-		// Schedule 5 games and 12 payouts. Game #4 (= schedules[3]) carries an airdrop
-		// prize so Amy can exercise the alias-VRF path end-to-end. Game #4 is also Amy's
-		// last attended game in the segment below, so `last_attended_game == Some(4)` lines
-		// up with the claim target.
+		// Schedule 5 games and 12 payouts. Game #4 (= schedules[3]) carries two airdrop
+		// events — one drawn at the game play time, one drawn half a game-interval later —
+		// so Amy can exercise the alias-VRF path across several draws end-to-end. Game #4 is
+		// also Amy's last attended game in the segment below, so `last_attended_game ==
+		// Some(4)` lines up with the claim targets.
 		// ─────────────────────────────────────
 		reduce_game_phase_durations();
 		const AIRDROP_MAX_WINNERS: u32 = 4;
-		setup_airdrop_prize_asset(AIRDROP_MAX_WINNERS);
+		// Two events, each with its own `max_winners` prize allocation.
+		setup_airdrop_prize_asset(2 * AIRDROP_MAX_WINNERS);
 		let now = (pallet_timestamp::Now::<Runtime>::get() / 1000) as u32; // seconds
 		let in_between_games = IN_BETWEEN_GAMES;
+		let second_draw_offset = in_between_games / 2;
 		let schedules = (1..=5)
 			.map(|i| indiv_pallet_game::GameSchedule {
 				game_play_time: now + i * in_between_games,
 				rounds: 1,
 				max_group_size: 3,
-				airdrop_prize: (i == 4).then(|| airdrop_prize_for(AIRDROP_MAX_WINNERS)),
+				airdrops: if i == 4 {
+					game_airdrops(&[0, second_draw_offset], AIRDROP_MAX_WINNERS)
+				} else {
+					Default::default()
+				},
 			})
 			.collect::<Vec<_>>();
 		Game::schedule_games(RuntimeOrigin::root(), schedules.clone()).unwrap();
 		let airdrop_game_index = 4u32;
-		let airdrop_event_id = airdrop_event_id_for(airdrop_game_index);
+		let airdrop_event_ids = [
+			airdrop_event_id_for(airdrop_game_index, 0),
+			airdrop_event_id_for(airdrop_game_index, 1),
+		];
 		FungibleExternalAsset::mint_into(
 			&Score::score_pot_id(),
 			10 * UNITS * 12 + FungibleExternalAsset::minimum_balance(),
@@ -107,7 +117,7 @@ fn alias_player_flow() {
 			identifier_key: [0u8; 65],
 			statement_account: amy_stmt_acc.clone(),
 			sig: amy_stmt_acc_proof_of_ownership.clone(),
-			airdrop: None,
+			airdrops: None,
 		};
 		exec_signed_as_alias_with_account(&amy_alias_acc_pair, sign_up_alias.into());
 		advance_until_time(GameTimes::<Runtime>::player_process_end(&schedules[0]));
@@ -120,7 +130,7 @@ fn alias_player_flow() {
 			identifier_key: [1u8; 65],
 			statement_account: amy_stmt_acc.clone(),
 			sig: amy_stmt_acc_proof_of_ownership.clone(),
-			airdrop: None,
+			airdrops: None,
 		};
 		exec_signed_as_alias_with_account(&amy_alias_acc_pair, sign_up_alias.into());
 
@@ -138,7 +148,7 @@ fn alias_player_flow() {
 			identifier_key: [2u8; 65],
 			statement_account: amy_stmt_acc.clone(),
 			sig: amy_stmt_acc_proof_of_ownership.clone(),
-			airdrop: None,
+			airdrops: None,
 		};
 		exec_signed_as_alias_with_account(&amy_alias_acc_pair, sign_up_alias.into());
 		advance_until_time(GameTimes::<Runtime>::player_process_end(&schedules[2]));
@@ -156,18 +166,21 @@ fn alias_player_flow() {
 		);
 
 		// ─────────────────────────────────────
-		// Game #4: sign up with alias and the Alias VRF for the airdrop, report and win.
-		// After this game `last_attended_game` is `Some(4)` — the index of the airdrop's game.
+		// Game #4: sign up with alias and one Alias VRF per airdrop event — each proof is
+		// bound to its own event id. After this game `last_attended_game` is `Some(4)` — the
+		// index of the airdrops' game.
 		// ─────────────────────────────────────
 		advance_until_time(GameTimes::<Runtime>::registration_start(&schedules[3]));
-		drive_airdrop_to_registering(airdrop_event_id);
+		for event_id in airdrop_event_ids {
+			drive_airdrop_to_registering(event_id);
+		}
 		let sign_up_alias = indiv_pallet_game::Call::<Runtime>::sign_up_with_alias {
 			identifier_key: [3u8; 65],
 			statement_account: amy_stmt_acc.clone(),
 			sig: amy_stmt_acc_proof_of_ownership.clone(),
-			airdrop: Some(build_alias_airdrop_vrf(
+			airdrops: Some(build_alias_airdrop_vrfs(
 				&amy_secret,
-				airdrop_event_id,
+				&airdrop_event_ids,
 				RegistrationEntry::Alias { alias: amy_score_alias },
 			)),
 		};
@@ -192,21 +205,26 @@ fn alias_player_flow() {
 		);
 
 		// ─────────────────────────────────────
-		// Amy claims the airdrop scheduled on game #4 to a fresh beneficiary. She is
-		// recognized, so she signs the claim as her personal alias.
+		// Amy claims both airdrops scheduled on game #4 to a fresh beneficiary, each one
+		// separately once its own draw has run. She is recognized, so she signs the claims
+		// as her personal alias. She never attends another game in between, so
+		// `last_attended_game` stays at `Some(4)` for the later draw too.
 		// ─────────────────────────────────────
-		drive_airdrop_to_claiming(airdrop_event_id);
 		let beneficiary = pair_to_account_id(&sr25519::Pair::from_seed(&[200u8; 32]));
 		let beneficiary_before = FungibleExternalAsset::balance(&beneficiary);
-		let claim = indiv_pallet_game::Call::<Runtime>::claim_airdrop {
-			game_index: airdrop_game_index,
-			beneficiary: beneficiary.clone(),
-		};
-		exec_signed_as_alias_with_account(&amy_alias_acc_pair, claim.into());
-		assert_eq!(
-			FungibleExternalAsset::balance(&beneficiary),
-			beneficiary_before + AIRDROP_PRIZE_PER_WINNER,
-			"airdrop prize must arrive at the beneficiary",
-		);
+		for (airdrop_index, event_id) in airdrop_event_ids.into_iter().enumerate() {
+			drive_airdrop_to_claiming(event_id);
+			let claim = indiv_pallet_game::Call::<Runtime>::claim_airdrop {
+				game_index: airdrop_game_index,
+				airdrop_index: airdrop_index as u8,
+				beneficiary: beneficiary.clone(),
+			};
+			exec_signed_as_alias_with_account(&amy_alias_acc_pair, claim.into());
+			assert_eq!(
+				FungibleExternalAsset::balance(&beneficiary),
+				beneficiary_before + (airdrop_index as Balance + 1) * AIRDROP_PRIZE_PER_WINNER,
+				"airdrop prize must arrive at the beneficiary",
+			);
+		}
 	});
 }

@@ -64,7 +64,9 @@ use frame_support::{
 };
 use indiv_support::{
 	traits::{Alias, Context, MembershipProver},
+	tx_priority,
 	utils::BigEndianU32,
+	weight_budget::OcwWeightBudget,
 };
 use sp_runtime::SaturatedConversion;
 use verifiable::GenerateVerifiable;
@@ -270,6 +272,17 @@ pub mod pallet {
 				"`PgasClaimAmount` must be >= `PgasMinBalance`, otherwise the first claim to a \
 				 fresh account would fail the asset's existential-deposit check",
 			);
+
+			// `clean_pgas_claim_records` is submitted by the offchain worker as an authorized
+			// transaction, with the dispatch weight bounded by `MaxPgasClaimRecordCleanupPerCall`.
+			// If the weight exceeds Normal.max_extrinsic, it is silently dropped and the claim
+			// record cleanup flow stalls.
+			let worst_case = <T as Config>::WeightInfo::clean_pgas_claim_records(
+				T::MaxPgasClaimRecordCleanupPerCall::get(),
+			)
+			.saturating_add(<T as Config>::WeightInfo::authorize_clean_pgas_claim_records());
+			OcwWeightBudget::from_normal_max::<T>()
+				.assert_fits("clean_pgas_claim_records", worst_case);
 		}
 	}
 
@@ -399,6 +412,9 @@ pub mod pallet {
 			ValidTransaction::with_tag_prefix("PgasAssetCreation")
 				.and_provides(b"create_pgas")
 				.propagate(true)
+				// Bootstrap transaction: no PGAS claim can proceed until the asset
+				// exists, so it must be included before any other PGAS work.
+				.priority(tx_priority::PROTOCOL_LIVENESS)
 				.build()
 				.map(|v| (v, Weight::zero()))
 		}
@@ -429,6 +445,7 @@ pub mod pallet {
 			ValidTransaction::with_tag_prefix("pgas:clean-pgas-claims")
 				.and_provides((day_index, first_alias))
 				.propagate(false)
+				.priority(tx_priority::CLEANUP)
 				.build()
 				.map(|v| (v, <T as Config>::WeightInfo::authorize_clean_pgas_claim_records()))
 		}

@@ -178,11 +178,13 @@ fn success_token_is_usable_in_unload_call() {
 		)
 		.unwrap()];
 		let call = RuntimeCall::Coinage(crate::Call::unload_recycler_into_external_asset {
+			instance_id: TEST_INSTANCE_ID,
 			aliases,
 			value: val,
 			index: r_idx,
 			revision: r_rev,
 			to: dest,
+			max_fee: 0,
 		});
 
 		let inherited = ((0u8, &call), (), ());
@@ -192,7 +194,7 @@ fn success_token_is_usable_in_unload_call() {
 		let r_com = CryptoOf::<Test>::open(
 			recycler_ring_size(),
 			&CryptoOf::<Test>::member_from_secret(&recycler_secrets[0]),
-			Coinage::get_recycler_members(val, r_idx).into_iter(),
+			Coinage::get_recycler_members(TEST_INSTANCE_ID, val, r_idx).into_iter(),
 		)
 		.unwrap();
 		let (r_proof, _) = CryptoOf::<Test>::create(
@@ -344,11 +346,13 @@ fn success_with_previous_revision() {
 		)
 		.unwrap()];
 		let call = RuntimeCall::Coinage(crate::Call::unload_recycler_into_external_asset {
+			instance_id: TEST_INSTANCE_ID,
 			aliases,
 			value: val,
 			index: r_idx,
 			revision: r_rev,
 			to: dest,
+			max_fee: 0,
 		});
 
 		let inherited = ((0u8, &call), (), ());
@@ -358,7 +362,7 @@ fn success_with_previous_revision() {
 		let r_com = CryptoOf::<Test>::open(
 			recycler_ring_size(),
 			&CryptoOf::<Test>::member_from_secret(&recycler_secrets[0]),
-			Coinage::get_recycler_members(val, r_idx).into_iter(),
+			Coinage::get_recycler_members(TEST_INSTANCE_ID, val, r_idx).into_iter(),
 		)
 		.unwrap();
 		let (r_proof, _) = CryptoOf::<Test>::create(

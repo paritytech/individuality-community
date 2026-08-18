@@ -23,31 +23,35 @@ include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 extern crate alloc;
 
 mod genesis_config_presets;
+pub mod parameters;
 pub mod people;
-pub mod value_transfer_filter;
 mod weights;
 pub mod xcm_config;
 
 #[cfg(test)]
 mod integration_tests;
-#[cfg(not(feature = "runtime-benchmarks"))]
 mod migrations;
 
+#[cfg(not(feature = "std"))]
+use alloc::vec;
 use alloc::vec::Vec;
-use assets_common::local_and_foreign_assets::ForeignAssetReserveData;
+use assets_common::local_and_foreign_assets::{ForeignAssetReserveData, TargetFromLeft};
 #[cfg(not(feature = "runtime-benchmarks"))]
 use assets_common::migrations::foreign_assets_reserves::ForeignAssetsReservesMigration;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use cumulus_pallet_parachain_system::{RelayNumberMonotonicallyIncreases, RelaychainDataProvider};
 use cumulus_primitives_core::{AggregateMessageOrigin, ParaId};
+#[cfg(not(feature = "runtime-benchmarks"))]
+use frame_support::traits::NeverEnsureOrigin;
 use frame_support::{
 	construct_runtime, derive_impl,
 	dispatch::DispatchClass,
 	genesis_builder_helper::{build_state, get_preset},
 	parameter_types,
 	traits::{
-		fungibles::Balanced as _, AsEnsureOriginWithArg, ConstBool, ConstU32, ConstU64, ConstU8,
-		ContainsPair, EitherOfDiverse, InstanceFilter, NeverEnsureOrigin, TransformOrigin,
+		fungible, fungibles::Balanced as _, tokens::imbalance::ResolveAssetTo,
+		AsEnsureOriginWithArg, ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, ContainsPair,
+		EitherOfDiverse, InstanceFilter, TransformOrigin,
 	},
 	weights::{ConstantMultiplier, Weight, WeightToFee as _},
 	PalletId,
@@ -201,10 +205,7 @@ pub type TransactionExtension = cumulus_pallet_weight_reclaim::StorageWeightRecl
 	(
 		// Origin modifiers
 		(
-			indiv_pallet_value_transfer_auth::extension::AuthorizeValueTransfer<
-				Runtime,
-				paseo_runtime_constants::ValueTransferAuthorizationPubkey,
-			>,
+			(),
 			pallet_verify_signature::VerifySignature<Runtime>,
 			indiv_pallet_people::extension::AsPerson<Runtime>,
 			indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipant<Runtime>,
@@ -241,8 +242,19 @@ pub type UncheckedExtrinsic =
 pub type Migrations = (
 	pallet_collator_selection::migration::v2::MigrationToV2<Runtime>,
 	cumulus_pallet_xcmp_queue::migration::v6::MigrateV5ToV6<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_members_notifier::migration::SeedSubscriptionWhitelist<
+		Runtime,
+		people::AssetHubSubscriptionWhitelist,
+	>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
+	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)
+	migrations::ChunkPageHashesInitialization<Runtime, indiv_support::crypto::BandersnatchSuite>,
+	// permanent, a no-op once the people collection exists
+	indiv_pallet_people::migration::CreatePeopleCollection<Runtime>,
+	// permanent, a no-op once the lite people collection exists
+	indiv_pallet_people_lite::migration::CreateLitePeopleCollection<Runtime>,
 );
 
 /// Executive: handles dispatch to the various modules.
@@ -266,10 +278,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 1_000_023,
+	spec_version: 1_000_033,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
-	transaction_version: 3,
+	transaction_version: 4,
 	system_version: 1,
 };
 
@@ -310,9 +322,7 @@ parameter_types! {
 
 #[derive_impl(frame_system::config_preludes::ParaChainDefaultConfig)]
 impl frame_system::Config for Runtime {
-	type BaseCallFilter = indiv_pallet_value_transfer_auth::BlockValueTransfersWhenFlagSet<
-		value_transfer_filter::PeopleNextValueTransferFilter,
-	>;
+	type BaseCallFilter = frame_support::traits::Everything;
 	type AccountId = AccountId;
 	type RuntimeCall = RuntimeCall;
 	type Lookup = AccountIdLookup<AccountId, ()>;
@@ -429,6 +439,7 @@ impl pallet_asset_tx_payment::BenchmarkHelperTrait<AccountId, Location, Location
 	}
 }
 
+// This extension still uses AssetRate, we may want to a change to using pools.
 impl pallet_asset_tx_payment::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type Fungibles = Assets;
@@ -466,7 +477,7 @@ parameter_types! {
 
 impl cumulus_pallet_parachain_system::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
-	type OnSystemEvent = ();
+	type OnSystemEvent = RelayRandomness;
 	type SelfParaId = parachain_info::Pallet<Runtime>;
 	type OutboundXcmpMessageSource = XcmpQueue;
 	type DmpQueue = frame_support::traits::EnqueueWithOrigin<MessageQueue, RelayOrigin>;
@@ -477,6 +488,10 @@ impl cumulus_pallet_parachain_system::Config for Runtime {
 	type ConsensusHook = ConsensusHook;
 	type WeightInfo = weights::cumulus_pallet_parachain_system::WeightInfo<Runtime>;
 	type RelayParentOffset = ConstU32<RELAY_PARENT_OFFSET>;
+}
+
+impl indiv_pallet_relay_randomness::Config for Runtime {
+	type WeightInfo = weights::indiv_pallet_relay_randomness::WeightInfo<Runtime>;
 }
 
 type ConsensusHook = cumulus_pallet_aura_ext::FixedVelocityConsensusHook<
@@ -692,7 +707,15 @@ impl InstanceFilter<RuntimeCall> for ProxyType {
 	fn filter(&self, c: &RuntimeCall) -> bool {
 		match self {
 			ProxyType::Any => true,
-			ProxyType::NonTransfer => !matches!(c, RuntimeCall::Balances { .. }),
+			ProxyType::NonTransfer => !matches!(
+				c,
+				RuntimeCall::Balances { .. } |
+					RuntimeCall::Assets { .. } |
+					RuntimeCall::AssetConversion { .. } |
+					RuntimeCall::PoolAssets { .. } |
+					RuntimeCall::PolkadotXcm { .. } |
+					RuntimeCall::Coinage { .. }
+			),
 			ProxyType::CancelProxy => matches!(
 				c,
 				RuntimeCall::Proxy(pallet_proxy::Call::reject_announcement { .. }) |
@@ -776,13 +799,13 @@ impl cumulus_pallet_weight_reclaim::Config for Runtime {
 	type WeightInfo = weights::cumulus_pallet_weight_reclaim::WeightInfo<Runtime>;
 }
 
-// TODO: choose good value
+// TODO(paritytech/individuality#1124): choose good value.
 const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_MAX: Balance = UNITS;
 const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = CENTS;
 const POI_CANDIDATE_RECOVERY: Balance = CENTS;
 const ACCOUNT_PARTICIPANT_RECOVERY: Balance = CENTS;
-const LITE_PERSON_ALLOWANCE_MAX: Balance = UNITS;
-const LITE_PERSON_ALLOWANCE_RECOVERY: Balance = MILLICENTS;
+const LITE_PERSON_AND_ALIAS_ALLOWANCE_MAX: Balance = UNITS;
+const LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = MILLICENTS;
 
 #[derive(
 	Clone,
@@ -802,6 +825,7 @@ pub enum RestrictedEntity {
 	AccountParticipant(AccountId),
 	InvitedCandidate(AccountId),
 	LitePerson(AccountId),
+	LiteAlias(Alias),
 }
 
 impl indiv_pallet_origin_restriction::RestrictedEntity<OriginCaller, Balance> for RestrictedEntity {
@@ -818,9 +842,9 @@ impl indiv_pallet_origin_restriction::RestrictedEntity<OriginCaller, Balance> fo
 				Allowance { max: 0, recovery_per_block: POI_CANDIDATE_RECOVERY },
 			RestrictedEntity::AccountParticipant(_) =>
 				Allowance { max: 0, recovery_per_block: ACCOUNT_PARTICIPANT_RECOVERY },
-			RestrictedEntity::LitePerson(_) => Allowance {
-				max: LITE_PERSON_ALLOWANCE_MAX,
-				recovery_per_block: LITE_PERSON_ALLOWANCE_RECOVERY,
+			RestrictedEntity::LitePerson(_) | RestrictedEntity::LiteAlias(_) => Allowance {
+				max: LITE_PERSON_AND_ALIAS_ALLOWANCE_MAX,
+				recovery_per_block: LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY,
 			},
 		}
 	}
@@ -839,6 +863,7 @@ impl indiv_pallet_origin_restriction::RestrictedEntity<OriginCaller, Balance> fo
 				Some(RestrictedEntity::AccountParticipant(account_id.clone())),
 			PeopleLite(LitePerson(account_id)) =>
 				Some(RestrictedEntity::LitePerson(account_id.clone())),
+			PeopleLite(LiteAlias(rev_ca)) => Some(RestrictedEntity::LiteAlias(rev_ca.ca.alias)),
 			_ => None,
 		}
 	}
@@ -884,6 +909,9 @@ impl ContainsPair<RestrictedEntity, RuntimeCall> for OperationAllowedOneTimeExce
 				)
 			},
 			RestrictedEntity::PersonalAlias(_) | RestrictedEntity::PersonalIdentity(_) => false,
+			RestrictedEntity::LiteAlias(_) => {
+				matches!(call, RuntimeCall::Game(sign_up_with_account_lite_invite { .. }))
+			},
 			RestrictedEntity::LitePerson(_) => false,
 		}
 	}
@@ -953,7 +981,10 @@ impl pallet_assets::Config for Runtime {
 	type AssetIdParameter = Location;
 	type ReserveData = ForeignAssetReserveData;
 	type Currency = Balances;
+	#[cfg(not(feature = "runtime-benchmarks"))]
 	type CreateOrigin = AsEnsureOriginWithArg<NeverEnsureOrigin<AccountId>>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type CreateOrigin = AsEnsureOriginWithArg<frame_system::EnsureSigned<AccountId>>;
 	type ForceOrigin = EnsureRoot<AccountId>;
 	type AssetDeposit = AssetDeposit;
 	type MetadataDepositBase = MetadataDepositBase;
@@ -974,6 +1005,116 @@ impl pallet_assets::Config for Runtime {
 impl pallet_assets_holder::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type RuntimeHoldReason = RuntimeHoldReason;
+}
+
+/// The liquidity pool tokens of [`AssetConversion`].
+///
+/// Minted and burned by the asset conversion pallet itself, hence the origin that can create
+/// them is the pallet's own account.
+pub type PoolAssetsInstance = pallet_assets::Instance1;
+impl pallet_assets::Config<PoolAssetsInstance> for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Balance = Balance;
+	type RemoveItemsLimit = ConstU32<1000>;
+	type AssetId = u32;
+	type AssetIdParameter = u32;
+	type ReserveData = ();
+	type Currency = Balances;
+	#[cfg(feature = "runtime-benchmarks")]
+	type CreateOrigin =
+		AsEnsureOriginWithArg<frame_system::EnsureSignedBy<AssetConversionOrigin, AccountId>>;
+	#[cfg(not(feature = "runtime-benchmarks"))]
+	type CreateOrigin = AsEnsureOriginWithArg<NeverEnsureOrigin<AccountId>>;
+	type ForceOrigin = EnsureRoot<AccountId>;
+	type AssetDeposit = ConstU128<0>;
+	type AssetAccountDeposit = ConstU128<0>;
+	type MetadataDepositBase = ConstU128<0>;
+	type MetadataDepositPerByte = ConstU128<0>;
+	type ApprovalDeposit = ExistentialDeposit;
+	type StringLimit = AssetsStringLimit;
+	type Freezer = ();
+	type Holder = ();
+	type Extra = ();
+	type CallbackHandle = ();
+	type WeightInfo = weights::pallet_assets_pool::WeightInfo<Runtime>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = ();
+}
+
+pub type NativeAndAssets = fungible::UnionOf<
+	Balances,
+	people::AssetsWithHolder,
+	TargetFromLeft<xcm_config::RelayLocation, Location>,
+	Location,
+	AccountId,
+>;
+
+parameter_types! {
+	pub const AssetConversionPalletId: PalletId = PalletId(*b"py/ascon");
+	pub const LiquidityWithdrawalFee: Permill = Permill::from_percent(0);
+	/// Where the pool setup fee goes, the same destination as the transaction fees.
+	pub StakingPotAccount: AccountId =
+		<pallet_collator_selection::StakingPotAccountId<Runtime> as frame_support::traits::TypedGet>::get();
+	pub LpFee: Permill = Permill::from_rational(3u32, 1_000u32); // 0.3%
+	/// Storage deposit for the pool entry and for its liquidity token, plus the deposit an asset
+	/// costs to register, so that creating a pool is no cheaper than creating the asset it pairs.
+	pub const PoolSetupFee: Balance = deposit(1, 4) + AssetDeposit::get();
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+parameter_types! {
+	/// Index of the `Assets` pallet, used to build the asset locations of benchmark pools.
+	pub AssetsPalletIndex: u32 =
+		<Assets as frame_support::traits::PalletInfoAccess>::index() as u32;
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+frame_support::ord_parameter_types! {
+	pub const AssetConversionOrigin: AccountId =
+		sp_runtime::traits::AccountIdConversion::<AccountId>::into_account_truncating(
+			&AssetConversionPalletId::get(),
+		);
+}
+
+pub type PoolIdToAccountId =
+	pallet_asset_conversion::AccountIdConverter<AssetConversionPalletId, (Location, Location)>;
+
+impl pallet_asset_conversion::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Balance = Balance;
+	type HigherPrecisionBalance = sp_core::U256;
+	type AssetKind = Location;
+	type Assets = NativeAndAssets;
+	type PoolId = (Self::AssetKind, Self::AssetKind);
+	// Every pool is paired with the native currency, which is what the fee conversion needs and
+	// what keeps a swap path down to a single hop.
+	type PoolLocator = pallet_asset_conversion::WithFirstAsset<
+		xcm_config::RelayLocation,
+		AccountId,
+		Self::AssetKind,
+		PoolIdToAccountId,
+	>;
+	type PoolAssetId = u32;
+	type PoolAssets = PoolAssets;
+	type PoolSetupFee = PoolSetupFee;
+	type PoolSetupFeeAsset = xcm_config::RelayLocation;
+	type PoolSetupFeeTarget = ResolveAssetTo<StakingPotAccount, Self::Assets>;
+	type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
+	type LPFee = LpFee;
+	type PalletId = AssetConversionPalletId;
+	// Every pool holds the native asset on one side (see `PoolLocator`), so swapping one asset for
+	// another takes two hops through native. Coinage itself only ever swaps an asset for native,
+	// which is a single hop.
+	type MaxSwapPathLength = ConstU32<3>;
+	type MintMinLiquidity = ConstU128<100>;
+	type WeightInfo = weights::pallet_asset_conversion::WeightInfo<Runtime>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = assets_common::benchmarks::AssetPairFactory<
+		xcm_config::RelayLocation,
+		parachain_info::Pallet<Runtime>,
+		AssetsPalletIndex,
+		Self::AssetKind,
+	>;
 }
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -1034,6 +1175,19 @@ where
 	}
 }
 
+/// Mortality window, in blocks, for authorized transactions the runtime constructs and submits.
+/// They are re-submitted every block by their offchain workers while the action stays due. A
+/// short window lets stale submissions expire from the pool promptly.
+///
+/// At the 2s block time this is ~4.3 minutes.
+///
+/// Note: Must be a power of two for `Era::mortal` and cannot exceed `BlockHashCount`.
+pub const TRANSACTION_MORTALITY_PERIOD: BlockNumber = 128;
+
+// A mortal era whose period exceeds the number of retained block hashes can never be validated (its
+// birth hash is pruned before the window closes), so guard the invariant at compile time.
+const _: () = assert!(TRANSACTION_MORTALITY_PERIOD <= BlockHashCount::get());
+
 impl<LocalCall> CreateAuthorizedTransaction<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
@@ -1041,10 +1195,7 @@ where
 	fn create_extension() -> Self::Extension {
 		(
 			(
-				indiv_pallet_value_transfer_auth::extension::AuthorizeValueTransfer::<
-					Runtime,
-					paseo_runtime_constants::ValueTransferAuthorizationPubkey,
-				>::default(),
+				(),
 				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
 				indiv_pallet_people::extension::AsPerson::<Runtime>::new(None),
 				indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipant::<Runtime>::new(None),
@@ -1062,7 +1213,13 @@ where
 			frame_system::CheckSpecVersion::<Runtime>::new(),
 			frame_system::CheckTxVersion::<Runtime>::new(),
 			frame_system::CheckGenesis::<Runtime>::new(),
-			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal), // TODO: maybe mortal
+			// Anchor the mortal era at `block_number() - 1`: offchain workers build this extension
+			// while executing on the current block, whose own hash is not yet in storage, so the
+			// birth block must be the parent.
+			frame_system::CheckEra::<Runtime>::from(generic::Era::mortal(
+				u64::from(TRANSACTION_MORTALITY_PERIOD),
+				u64::from(System::block_number()).saturating_sub(1),
+			)),
 			frame_system::CheckNonce::<Runtime>::from(0),
 			frame_system::CheckWeight::<Runtime>::new(),
 			pallet_skip_feeless_payment::SkipCheckIfFeeless::<
@@ -1084,6 +1241,8 @@ construct_runtime!(
 		Timestamp: pallet_timestamp = 2,
 		ParachainInfo: parachain_info = 3,
 		WeightReclaim: cumulus_pallet_weight_reclaim = 4,
+		RelayRandomness: indiv_pallet_relay_randomness = 5,
+		Parameters: pallet_parameters = 73,
 
 		// Monetary stuff.
 		Balances: pallet_balances = 10,
@@ -1094,6 +1253,8 @@ construct_runtime!(
 		AssetsHolder: pallet_assets_holder = 15,
 		AssetRate: pallet_asset_rate = 16,
 		AssetTxPayment: pallet_asset_tx_payment = 17,
+		AssetConversion: pallet_asset_conversion = 18,
+		PoolAssets: pallet_assets::<Instance1> = 19,
 
 		// Collator support. The order of these 5 are important and shall not change.
 		Authorship: pallet_authorship = 20,
@@ -1123,6 +1284,9 @@ construct_runtime!(
 		// 54: previously used for privacy voucher
 		Game: indiv_pallet_game = 55,
 		Score: indiv_pallet_score = 56,
+		// The game's NFT claim credits: awarded by playing, committed to per-block roots here and
+		// delivered to the claims chain.
+		NftCredits: indiv_pallet_nft_credits = 57,
 		DummyDim: indiv_pallet_dummy_dim = 59,
 		PeopleLite: indiv_pallet_people_lite = 62,
 		Resources: indiv_pallet_resources = 63,
@@ -1133,9 +1297,6 @@ construct_runtime!(
 		MembersNotifier: indiv_pallet_members_notifier = 69,
 		Airdrop: indiv_pallet_airdrop = 70,
 		Honour: indiv_pallet_honour = 71,
-
-		// Only for storage initialization of PoP pallets
-		StorageInitialization: indiv_pallet_storage_initialization = 60,
 
 		// Migrations pallet
 		MultiBlockMigrations: pallet_migrations = 98,
@@ -1155,8 +1316,11 @@ mod benches {
 		[pallet_utility, Utility]
 		[pallet_timestamp, Timestamp]
 		[pallet_migrations, MultiBlockMigrations]
+		[pallet_parameters, Parameters]
 		[pallet_transaction_payment, TransactionPayment]
 		[pallet_assets, Assets]
+		[pallet_assets, Pool]
+		[pallet_asset_conversion, AssetConversion]
 		[pallet_asset_rate, AssetRate]
 		[pallet_asset_tx_payment, AssetTxPayment]
 		// Cumulus
@@ -1173,8 +1337,8 @@ mod benches {
 		[indiv_pallet_people, People]
 		[indiv_pallet_dummy_dim, DummyDim]
 		[indiv_pallet_game, Game]
+		[indiv_pallet_nft_credits, NftCredits]
 		[indiv_pallet_score, Score]
-		[indiv_pallet_storage_initialization, StorageInitialization]
 		[indiv_pallet_proof_of_ink, ProofOfInk]
 		[indiv_pallet_mob_rule, MobRule]
 		[indiv_pallet_people_lite, PeopleLite]
@@ -1184,6 +1348,7 @@ mod benches {
 		[indiv_pallet_members_notifier, MembersNotifier]
 		[indiv_pallet_coinage, Coinage]
 		[indiv_pallet_airdrop, Airdrop]
+		[indiv_pallet_relay_randomness, RelayRandomness]
 		[indiv_pallet_honour, Honour]
 	);
 }
@@ -1425,6 +1590,29 @@ impl_runtime_apis! {
 		}
 	}
 
+	impl indiv_pallet_nft_credits::runtime_api::NftCreditsApi<Block, AccountId, BlockNumber> for Runtime {
+		fn nft_claim_credit_roots(
+			claimant: indiv_support::identity::AccountOrPerson<AccountId>,
+		) -> Vec<(BlockNumber, indiv_support::credit_trees::NftClaimCreditTree)> {
+			NftCredits::nft_claim_credit_roots(&claimant)
+		}
+
+		fn nft_claim_credit_proofs(
+			award_block: BlockNumber,
+			claimant: indiv_support::identity::AccountOrPerson<AccountId>,
+		) -> Result<Vec<indiv_pallet_nft_credits::NftClaimCreditProof>, indiv_pallet_nft_credits::NftClaimCreditProofError> {
+			NftCredits::nft_claim_credit_proofs(award_block, &claimant)
+		}
+
+		fn nft_claim_credit_proof_from_awards(
+			award_block: BlockNumber,
+			awards: Vec<indiv_pallet_nft_credits::NftClaimCreditAward<AccountId>>,
+			leaf_index: u32,
+		) -> Result<indiv_pallet_nft_credits::NftClaimCreditProof, indiv_pallet_nft_credits::NftClaimCreditProofError> {
+			NftCredits::nft_claim_credit_proof_from_awards(award_block, awards, leaf_index)
+		}
+	}
+
 	impl cumulus_primitives_core::CollectCollationInfo<Block> for Runtime {
 		fn collect_collation_info(header: &<Block as BlockT>::Header) -> cumulus_primitives_core::CollationInfo {
 			ParachainSystem::collect_collation_info(header)
@@ -1467,6 +1655,9 @@ impl_runtime_apis! {
 			// are referenced in that call.
 			type XcmBalances = pallet_xcm_benchmarks::fungible::Pallet::<Runtime>;
 			type XcmGeneric = pallet_xcm_benchmarks::generic::Pallet::<Runtime>;
+			// The liquidity-token instance of `pallet_assets`, benchmarked separately from the
+			// assets instance because its asset id and storage layout differ.
+			type Pool = pallet_assets::Pallet::<Runtime, PoolAssetsInstance>;
 
 			let mut list = Vec::<BenchmarkList>::new();
 			list_benchmarks!(list, extra);
@@ -1686,6 +1877,9 @@ impl_runtime_apis! {
 
 			type XcmBalances = pallet_xcm_benchmarks::fungible::Pallet::<Runtime>;
 			type XcmGeneric = pallet_xcm_benchmarks::generic::Pallet::<Runtime>;
+			// The liquidity-token instance of `pallet_assets`, benchmarked separately from the
+			// assets instance because its asset id and storage layout differ.
+			type Pool = pallet_assets::Pallet::<Runtime, PoolAssetsInstance>;
 
 			use frame_support::traits::WhitelistedStorageKeys;
 			let whitelist: Vec<TrackedStorageKey> = AllPalletsWithSystem::whitelisted_storage_keys();

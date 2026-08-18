@@ -1071,6 +1071,340 @@ mod dap {
 	}
 }
 
+mod pgas_fees {
+	use codec::Encode;
+	use frame_support::{
+		assert_ok,
+		dispatch::GetDispatchInfo,
+		traits::{
+			fungible::Inspect as FungibleInspect,
+			fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
+			SignedTransactionBuilder,
+		},
+	};
+	use next_asset_hub_paseo_runtime::{
+		Assets, Balances, Executive, ExistentialDeposit, NftClaims, PgasAssetId, PgasMinBalance,
+		Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, Scarcity, SessionKeys, System,
+		TxExtension, UncheckedExtrinsic,
+	};
+	use parachains_common::{AccountId, AuraId};
+	use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
+	use sp_keyring::Sr25519Keyring;
+	use sp_runtime::{
+		generic,
+		transaction_validity::{InvalidTransaction, TransactionValidityError},
+		MultiSignature,
+	};
+
+	use asset_test_utils::ExtBuilder;
+
+	use super::ALICE;
+
+	/// Builds a signed extrinsic whose `ChargePGAS` has the PGAS path enabled. The `dap` module's
+	/// helper cannot be reused: it goes through `EthExtraImpl::get_eth_extension`, which
+	/// constructs `ChargePGAS` with `new_skip_pgas`.
+	fn construct_extrinsic(sender: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
+		let account_id = AccountId::from(sender.public());
+		let nonce = frame_system::Pallet::<Runtime>::account(&account_id).nonce;
+		let tx_ext = TxExtension::from((
+			(
+				(),
+				pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
+				frame_system::AuthorizeCall::<Runtime>::new(),
+				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
+				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
+			),
+			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(true),
+			frame_system::CheckNonZeroSender::<Runtime>::new(),
+			frame_system::CheckSpecVersion::<Runtime>::new(),
+			frame_system::CheckTxVersion::<Runtime>::new(),
+			frame_system::CheckGenesis::<Runtime>::new(),
+			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
+			frame_system::CheckNonce::<Runtime>::from(nonce),
+			frame_system::CheckWeight::<Runtime>::new(),
+			pallet_pgas_allowance::ChargePGAS::<
+				Runtime,
+				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
+			>::from(pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
+				0, None,
+			)),
+			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
+			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
+		));
+		let payload = generic::SignedPayload::new(call.clone(), tx_ext.clone()).unwrap();
+		let signature = payload.using_encoded(|e| sender.sign(e));
+		UncheckedExtrinsic::new_signed_transaction(
+			call,
+			account_id.into(),
+			MultiSignature::Sr25519(signature),
+			tx_ext,
+		)
+	}
+
+	#[test]
+	fn pgas_pays_the_fee_of_a_non_revive_call() {
+		let alice = AccountId::from(ALICE);
+		let bob = AccountId::from(Sr25519Keyring::Bob.public());
+		let charlie = AccountId::from(Sr25519Keyring::Charlie.public());
+
+		ExtBuilder::<Runtime>::default()
+			.with_collators(vec![alice.clone()])
+			.with_session_keys(vec![(
+				alice.clone(),
+				alice.clone(),
+				SessionKeys { aura: AuraId::from(sp_core::sr25519::Public::from_raw(ALICE)) },
+			)])
+			.with_para_id(ASSET_HUB_ID.into())
+			.build()
+			.execute_with(|| {
+				assert_ok!(indiv_pallet_pgas::Pallet::<Runtime>::do_create_pgas_asset());
+				let pgas = PgasAssetId::get();
+				let endowment = 100 * ExistentialDeposit::get();
+				assert_ok!(<Assets as FungiblesMutate<AccountId>>::mint_into(
+					pgas, &bob, endowment
+				));
+
+				let call = RuntimeCall::System(frame_system::Call::remark { remark: vec![] });
+				let xt_bob = construct_extrinsic(Sr25519Keyring::Bob, call.clone());
+				let xt_charlie = construct_extrinsic(Sr25519Keyring::Charlie, call);
+
+				assert_eq!(<Balances as FungibleInspect<AccountId>>::balance(&bob), 0);
+				assert_eq!(<Balances as FungibleInspect<AccountId>>::balance(&charlie), 0);
+				assert!(!frame_system::Pallet::<Runtime>::account_exists(&charlie));
+
+				// Endow Charlie one planck short of the fee. The balance keeps his account alive
+				let fee = pallet_transaction_payment::Pallet::<Runtime>::compute_fee(
+					xt_charlie.encoded_size() as u32,
+					&xt_charlie.get_dispatch_info(),
+					0,
+				);
+				let charlie_endowment = fee - 1;
+				assert!(
+					charlie_endowment >= PgasMinBalance::get(),
+					"the PGAS endowment must be holdable yet insufficient for the fee"
+				);
+				assert_ok!(<Assets as FungiblesMutate<AccountId>>::mint_into(
+					pgas,
+					&charlie,
+					charlie_endowment
+				));
+				assert!(frame_system::Pallet::<Runtime>::account_exists(&charlie));
+
+				assert_ok!(Executive::apply_extrinsic(xt_bob).unwrap());
+
+				let paid = endowment - <Assets as FungiblesInspect<AccountId>>::balance(pgas, &bob);
+				assert!(paid > 0, "the fee should have been taken in PGAS");
+				assert_eq!(<Balances as FungibleInspect<AccountId>>::balance(&bob), 0);
+				assert!(
+					System::events().iter().any(|record| matches!(
+						record.event,
+						RuntimeEvent::PgasAllowance(
+							pallet_pgas_allowance::Event::PGASFeePaid { actual_fee, .. }
+						) if actual_fee == paid
+					)),
+					"a PGASFeePaid event should report the fee burned"
+				);
+
+				assert_eq!(
+					Executive::apply_extrinsic(xt_charlie),
+					Err(TransactionValidityError::Invalid(InvalidTransaction::Payment))
+				);
+				assert_eq!(
+					<Assets as FungiblesInspect<AccountId>>::balance(pgas, &charlie),
+					charlie_endowment,
+					"a rejected transaction does not touch the signer's PGAS"
+				);
+			});
+	}
+
+	/// A person's NFT claim is paid for out of the PGAS they mint daily, holding no native
+	/// balance at all.
+	#[test]
+	fn pgas_pays_the_fee_of_a_persons_nft_claim() {
+		let alice = AccountId::from(ALICE);
+		let bob = AccountId::from(Sr25519Keyring::Bob.public());
+		let owner = AccountId::from([254u8; 32]);
+		let mint_to = AccountId::from([2u8; 32]);
+		let alias = [9u8; 32];
+		let credit = [7u8; 32];
+
+		ExtBuilder::<Runtime>::default()
+			.with_collators(vec![alice.clone()])
+			.with_session_keys(vec![(
+				alice.clone(),
+				alice.clone(),
+				SessionKeys { aura: AuraId::from(sp_core::sr25519::Public::from_raw(ALICE)) },
+			)])
+			// The collection owner pays Scarcity's deposits; Bob is deliberately left with none.
+			.with_balances(vec![(owner.clone(), 1_000 * ExistentialDeposit::get())])
+			.with_para_id(ASSET_HUB_ID.into())
+			.build()
+			.execute_with(|| {
+				assert_ok!(indiv_pallet_pgas::Pallet::<Runtime>::do_create_pgas_asset());
+				let pgas = PgasAssetId::get();
+				let endowment = 100 * ExistentialDeposit::get();
+				assert_ok!(<Assets as FungiblesMutate<AccountId>>::mint_into(
+					pgas, &bob, endowment
+				));
+
+				// The collection and item a claim mints into, set up and registered for claims
+				// by their owner beforehand.
+				let collection = 0;
+				assert_ok!(Scarcity::do_create_collection(owner.clone()));
+				assert_ok!(Scarcity::do_define_item(
+					owner.clone(),
+					collection,
+					pallet_scarcity::Transferability::Transferable,
+					Vec::new()
+				));
+				assert_ok!(NftClaims::set_collection_minter(
+					RuntimeOrigin::signed(owner),
+					collection,
+					Some(indiv_pallet_nft_claims::ItemSelection::Random)
+				));
+
+				// Bob's account is bound to the alias the game chain awarded the credit to.
+				indiv_pallet_alias_accounts::AccountToAlias::<Runtime>::insert(
+					&bob,
+					indiv_pallet_alias_accounts::AliasAccountInfo {
+						collection: *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER,
+						revision: 0,
+						ring: 0,
+						ca: indiv_support::traits::ContextualAlias { context: [0u8; 32], alias },
+					},
+				);
+
+				// A one-leaf tree's root is that leaf's hash, over the alias rather than Bob.
+				let leaf = indiv_support::credit_trees::credit_leaf(
+					&indiv_support::identity::AccountOrPerson::<AccountId>::Person(alias),
+					&credit,
+				);
+				indiv_pallet_nft_claims::CreditTrees::<Runtime>::insert(
+					1u32,
+					indiv_support::credit_trees::NftClaimCreditTree {
+						game_index: 0,
+						root: indiv_support::credit_trees::CreditProofNode(
+							sp_io::hashing::blake2_256(&leaf.encode()),
+						),
+						leaf_count: 1,
+						timestamp: 0,
+					},
+				);
+
+				let call = RuntimeCall::NftClaims(indiv_pallet_nft_claims::Call::claim {
+					claimant: indiv_pallet_nft_claims::ClaimantKind::Person,
+					block: 1,
+					credit,
+					leaf_index: 0,
+					proof: Default::default(),
+					collection,
+					mint_to: mint_to.clone(),
+				});
+				let xt = construct_extrinsic(Sr25519Keyring::Bob, call);
+
+				assert_ok!(Executive::apply_extrinsic(xt).unwrap());
+
+				assert!(indiv_pallet_nft_claims::ClaimedCredits::<Runtime>::contains_key(
+					1u32, leaf
+				));
+				assert!(pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&mint_to));
+
+				let paid = endowment - <Assets as FungiblesInspect<AccountId>>::balance(pgas, &bob);
+				assert!(paid > 0, "the claim's fee should have been taken in PGAS");
+				assert_eq!(
+					<Balances as FungibleInspect<AccountId>>::balance(&bob),
+					0,
+					"the claimant holds no native balance, so nothing else can have paid"
+				);
+				assert!(
+					System::events().iter().any(|record| matches!(
+						record.event,
+						RuntimeEvent::PgasAllowance(
+							pallet_pgas_allowance::Event::PGASFeePaid { actual_fee, .. }
+						) if actual_fee == paid
+					)),
+					"a PGASFeePaid event should report the fee burned"
+				);
+			});
+	}
+
+	/// A signer whose PGAS balance does not cover the fee pays it in the native asset instead.
+	#[test]
+	fn dot_pays_the_fee_when_pgas_is_insufficient() {
+		let alice = AccountId::from(ALICE);
+		let bob = AccountId::from(Sr25519Keyring::Bob.public());
+		let endowment = 100 * ExistentialDeposit::get();
+
+		ExtBuilder::<Runtime>::default()
+			.with_collators(vec![alice.clone()])
+			.with_session_keys(vec![(
+				alice.clone(),
+				alice.clone(),
+				SessionKeys { aura: AuraId::from(sp_core::sr25519::Public::from_raw(ALICE)) },
+			)])
+			.with_balances(vec![
+				(bob.clone(), endowment),
+				(pallet_dap::Pallet::<Runtime>::staging_account(), ExistentialDeposit::get()),
+			])
+			.with_para_id(ASSET_HUB_ID.into())
+			.build()
+			.execute_with(|| {
+				assert_ok!(indiv_pallet_pgas::Pallet::<Runtime>::do_create_pgas_asset());
+				let pgas = PgasAssetId::get();
+
+				let call = RuntimeCall::System(frame_system::Call::remark { remark: vec![] });
+				let xt = construct_extrinsic(Sr25519Keyring::Bob, call);
+
+				let info = xt.get_dispatch_info();
+				let fee = pallet_transaction_payment::Pallet::<Runtime>::compute_fee(
+					xt.encoded_size() as u32,
+					&info,
+					0,
+				);
+				let pgas_endowment = fee - 1;
+				assert!(
+					pgas_endowment >= PgasMinBalance::get(),
+					"the PGAS endowment must be holdable yet insufficient for the fee"
+				);
+				assert_ok!(<Assets as FungiblesMutate<AccountId>>::mint_into(
+					pgas,
+					&bob,
+					pgas_endowment
+				));
+
+				assert_ok!(Executive::apply_extrinsic(xt).unwrap());
+
+				let paid = endowment - <Balances as FungibleInspect<AccountId>>::balance(&bob);
+				assert!(paid > 0, "the fee should have been taken from the native balance");
+				assert_eq!(
+					<Assets as FungiblesInspect<AccountId>>::balance(pgas, &bob),
+					pgas_endowment,
+					"the insufficient PGAS balance should be left untouched"
+				);
+				assert!(
+					System::events().iter().any(|record| matches!(
+						record.event,
+						RuntimeEvent::TransactionPayment(
+							pallet_transaction_payment::Event::TransactionFeePaid {
+								actual_fee, ..
+							}
+						) if actual_fee == paid
+					)),
+					"a TransactionFeePaid event should report the native fee"
+				);
+				assert!(
+					!System::events().iter().any(|record| matches!(
+						record.event,
+						RuntimeEvent::PgasAllowance(
+							pallet_pgas_allowance::Event::PGASFeePaid { .. }
+						)
+					)),
+					"no fee should have been taken in PGAS"
+				);
+			});
+	}
+}
+
 mod external_asset_teleport {
 	use super::*;
 	use paseo_runtime_constants::system_parachain::PEOPLE_ID;
@@ -1128,5 +1462,209 @@ mod external_asset_teleport {
 		// Regression: pre-existing native-asset teleport rules unaffected.
 		let dot: Asset = (DotLocation::get(), 1_000u128).into();
 		assert!(IsTeleporter::contains(&dot, &Location::parent()));
+	}
+}
+
+/// The transaction pipeline is what decides whether a call can reach dispatch unpaid, so its shape
+/// is an invariant of this chain, not an implementation detail.
+mod tx_extension_pipeline {
+	use next_asset_hub_paseo_runtime::{RuntimeCall, TxExtension};
+	use sp_runtime::traits::TransactionExtension;
+
+	/// Every extension of the pipeline, in the order it runs.
+	///
+	/// The four ahead of `RestrictOrigins` are the ones that replace the origin, and everything
+	/// that charges the transaction runs after it. An extension that installs an origin the
+	/// payment extensions do not charge therefore needs an allowance in
+	/// `pallet-origin-restriction` to bound it, which is why an addition anywhere in this list is
+	/// a deliberate change rather than an implementation detail.
+	const PIPELINE: [&str; 17] = [
+		"UnitTransactionExtension",
+		"AsScarcity",
+		"AuthorizeCall",
+		"AsPgas",
+		"AsDotnsGateway",
+		"RestrictOrigins",
+		"CheckNonZeroSender",
+		"CheckSpecVersion",
+		"CheckTxVersion",
+		"CheckGenesis",
+		"CheckMortality",
+		"CheckNonce",
+		"CheckWeight",
+		"ChargeAssetTxPayment",
+		"CheckMetadataHash",
+		"EthSetOrigin",
+		"StorageWeightReclaim",
+	];
+
+	#[test]
+	fn the_pipeline_is_the_expected_one() {
+		let identifiers = <TxExtension as TransactionExtension<RuntimeCall>>::metadata()
+			.into_iter()
+			.map(|meta| meta.identifier)
+			.collect::<Vec<_>>();
+
+		assert_eq!(identifiers, PIPELINE);
+	}
+}
+
+/// `EnsureCreditClaimant` is the only path from a transaction to a claimant identity, and
+/// `ClaimantKind` is the only thing that selects between the two: no extension installs an alias
+/// origin, so a claim resolves the person from the signer's binding.
+mod credit_claimant_origin {
+	use frame_support::traits::{EnsureOriginWithArg, Get};
+	use indiv_pallet_alias_accounts::{AccountToAlias, AliasAccountInfo, PEOPLE_IDENTIFIER};
+	use indiv_pallet_members_subscriber::{types::RingCommitmentRecord, RingRoots};
+	use indiv_pallet_nft_claims::ClaimantKind;
+	use indiv_support::{
+		crypto::BandersnatchVrfVerifiable,
+		identity::AccountOrPerson,
+		traits::{Context, ContextualAlias, PersonhoodLookup},
+	};
+	use next_asset_hub_paseo_runtime::{
+		AliasAccounts, EnsureCreditClaimant, Runtime, RuntimeOrigin,
+	};
+	use parachains_common::AccountId;
+	use sp_runtime::BoundedVec;
+	use verifiable::{ring::RingDomainSize, GenerateVerifiable};
+
+	const ALIAS: [u8; 32] = [9u8; 32];
+	const CONTEXT: Context = [3u8; 32];
+	/// Time the seeded ring roots are committed at, in seconds.
+	const SOURCE_TIME: u64 = 1_000_000;
+
+	/// Window `personhood_info` keeps accepting a superseded revision for.
+	fn grace() -> u64 {
+		<<Runtime as indiv_pallet_alias_accounts::Config>::CleanupGracePeriod as Get<u64>>::get()
+	}
+
+	fn signer() -> AccountId {
+		AccountId::from([8u8; 32])
+	}
+
+	/// Records `revisions` roots for ring 0 of the people collection, numbered from 0 and all
+	/// committed at [`SOURCE_TIME`]. The grace policy reads only the revision numbers and their
+	/// source times, so an empty ring commitment stands in for the real root.
+	fn seed_ring(revisions: u32) {
+		let root = BandersnatchVrfVerifiable::finish_members(
+			BandersnatchVrfVerifiable::start_members(RingDomainSize::Domain11),
+		);
+		let roots = (0..revisions)
+			.map(|revision| RingCommitmentRecord {
+				root: root.clone(),
+				revision,
+				source_time: SOURCE_TIME,
+				source_sequence: 1,
+			})
+			.collect::<Vec<_>>();
+		RingRoots::<Runtime>::insert(
+			*PEOPLE_IDENTIFIER,
+			0,
+			BoundedVec::try_from(roots).expect("revisions within MaxRecentRootsPerRing"),
+		);
+	}
+
+	/// Moves the clock the grace policy reads to `SOURCE_TIME + offset` seconds. Writes `Now`
+	/// directly, since `set_timestamp` runs Aura's `OnTimestampSet` hook, which requires the slot
+	/// to match.
+	fn set_now(offset: u64) {
+		pallet_timestamp::Now::<Runtime>::put(
+			SOURCE_TIME.saturating_add(offset).saturating_mul(1_000),
+		);
+	}
+
+	/// The alias `personhood_info` resolves for `signer()` in [`CONTEXT`].
+	fn personhood_alias() -> Option<[u8; 32]> {
+		<AliasAccounts as PersonhoodLookup<AccountId, _>>::personhood_info(&signer(), &CONTEXT)
+			.0
+			.map(|(_collection, alias)| alias)
+	}
+
+	/// Binds `signer()` to [`ALIAS`], as `set_alias_account` does for a person who proved a ring
+	/// membership.
+	fn bind_alias() {
+		AccountToAlias::<Runtime>::insert(
+			signer(),
+			AliasAccountInfo {
+				collection: *PEOPLE_IDENTIFIER,
+				ring: 0,
+				revision: 0,
+				ca: ContextualAlias { alias: ALIAS, context: CONTEXT },
+			},
+		);
+	}
+
+	/// `try_origin`'s success value, dropping the origin it hands back on failure so this does not
+	/// depend on `RuntimeOrigin` being printable.
+	fn claimant(origin: RuntimeOrigin, kind: ClaimantKind) -> Option<AccountOrPerson<AccountId>> {
+		EnsureCreditClaimant::try_origin(origin, &kind).ok()
+	}
+
+	#[test]
+	fn a_signer_claims_what_was_awarded_to_its_account() {
+		sp_io::TestExternalities::default().execute_with(|| {
+			let origin = RuntimeOrigin::signed(signer());
+			assert_eq!(
+				claimant(origin, ClaimantKind::Account),
+				Some(AccountOrPerson::Account(signer()))
+			);
+		});
+	}
+
+	/// Revision 0 is the ring's latest, so the binding is one both lookups accept. This is the
+	/// baseline [`a_stale_binding_still_resolves_to_its_person`] moves away from.
+	#[test]
+	fn a_signer_claims_as_the_person_its_account_is_bound_to() {
+		sp_io::TestExternalities::default().execute_with(|| {
+			bind_alias();
+			seed_ring(1);
+			set_now(0);
+			assert_eq!(personhood_alias(), Some(ALIAS));
+
+			let origin = RuntimeOrigin::signed(signer());
+			assert_eq!(
+				claimant(origin, ClaimantKind::Person),
+				Some(AccountOrPerson::Person(ALIAS))
+			);
+		});
+	}
+
+	/// Claiming as a person is what the binding authorizes, so an account without one is rejected
+	/// rather than falling back to claiming as itself.
+	#[test]
+	fn an_unbound_signer_cannot_claim_as_a_person() {
+		sp_io::TestExternalities::default().execute_with(|| {
+			let origin = RuntimeOrigin::signed(signer());
+			assert_eq!(claimant(origin, ClaimantKind::Person), None);
+		});
+	}
+
+	/// Revision 1 supersedes the binding's revision 0 and the grace period has passed, so
+	/// `personhood_info` refuses the binding. The credit is awarded to the alias before the claim,
+	/// so the claim still resolves the same person.
+	#[test]
+	fn a_stale_binding_still_resolves_to_its_person() {
+		sp_io::TestExternalities::default().execute_with(|| {
+			bind_alias();
+			seed_ring(2);
+			set_now(grace() + 1);
+			assert_eq!(personhood_alias(), None);
+
+			let origin = RuntimeOrigin::signed(signer());
+			assert_eq!(
+				claimant(origin, ClaimantKind::Person),
+				Some(AccountOrPerson::Person(ALIAS))
+			);
+		});
+	}
+
+	#[test]
+	fn an_unsigned_origin_cannot_claim() {
+		sp_io::TestExternalities::default().execute_with(|| {
+			bind_alias();
+			assert_eq!(claimant(RuntimeOrigin::root(), ClaimantKind::Person), None);
+			assert_eq!(claimant(RuntimeOrigin::none(), ClaimantKind::Account), None);
+		});
 	}
 }

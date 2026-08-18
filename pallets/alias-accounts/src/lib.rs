@@ -20,21 +20,16 @@
 //! No other collections are accepted. Provides:
 //!
 //! - Bidirectional alias-to-account mappings (set up via `set_paid_alias_account`, paid in PGAS)
-//! - A transaction extension that promotes signed alias-bound accounts into `Origin::RingAlias` for
-//!   downstream pallets
 //! - Verifies ring proofs through [`Config::MemberService`]
 //!
-//! ## Extension Variant
-//!
-//! - `WithAccount(nonce)`: signed call by an alias-bound account; the extension swaps the origin to
-//!   `Origin::RingAlias` so downstream pallets can consume the alias identity.
+//! A call reads an account's alias through [`AccountToAlias`] or [`Config::MemberService`]. Nothing
+//! here promotes a signed origin to an alias origin: an origin that authenticates as a person and
+//! is not signed pays no fee, so the caller of such a call would have to be bounded separately.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
-pub mod extension;
-pub mod origin;
 pub mod types;
 pub mod weights;
 
@@ -45,7 +40,6 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
-pub use extension::{AsRingAlias, AsRingAliasInfo, CustomValidity};
 pub use indiv_support::traits::{PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER};
 pub use pallet::*;
 pub use types::*;
@@ -60,7 +54,7 @@ pub mod pallet {
 		traits::{
 			fungibles::{self, Mutate as _},
 			tokens::{Fortitude, Precision, Preservation},
-			EnsureOrigin, IsSubType, OriginTrait, UnixTime,
+			EnsureOrigin, UnixTime,
 		},
 	};
 	use frame_system::pallet_prelude::*;
@@ -82,19 +76,7 @@ pub mod pallet {
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
-	pub trait Config:
-		frame_system::Config<
-		RuntimeOrigin: From<Origin>
-		                   + OriginTrait<
-			PalletsOrigin: From<Origin>
-			                   + TryInto<
-				Origin,
-				Error = <Self::RuntimeOrigin as OriginTrait>::PalletsOrigin,
-			>,
-		>,
-		RuntimeCall: Parameter + IsSubType<Call<Self>>,
-	>
-	{
+	pub trait Config: frame_system::Config {
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 
@@ -231,29 +213,6 @@ pub mod pallet {
 		BadProof,
 		/// The configured ring capacity is invalid for this collection.
 		InvalidRingCapacity,
-	}
-
-	// ========== Origin ==========
-
-	/// Custom origin for ring alias authentication.
-	///
-	/// Set by the transaction extension after verifying a ring membership proof
-	/// or looking up an existing alias-to-account mapping.
-	#[pallet::origin]
-	#[derive(
-		Clone,
-		PartialEq,
-		Eq,
-		Debug,
-		codec::Encode,
-		codec::Decode,
-		codec::MaxEncodedLen,
-		scale_info::TypeInfo,
-		codec::DecodeWithMemTracking,
-	)]
-	pub enum Origin {
-		/// Origin authenticated via ring alias.
-		RingAlias(AliasAccountInfo),
 	}
 
 	// ========== Hooks ==========
@@ -554,7 +513,7 @@ pub mod pallet {
 		) -> (bool, Weight) {
 			let max = Self::personhood_info_by_proof_weight();
 
-			let res = T::MemberService::verify_membership_at_rev(
+			let res = T::MemberService::verify_membership(
 				&request.identifier,
 				&request.proof,
 				request.ring_index,
@@ -570,16 +529,6 @@ pub mod pallet {
 	// ========== Helper Functions ==========
 
 	impl<T: Config> Pallet<T> {
-		/// Extract `AliasAccountInfo` from the custom origin.
-		pub fn ensure_ring_alias(
-			origin: T::RuntimeOrigin,
-		) -> Result<AliasAccountInfo, DispatchError> {
-			match origin.into_caller().try_into() {
-				Ok(Origin::RingAlias(info)) => Ok(info),
-				_ => Err(DispatchError::BadOrigin),
-			}
-		}
-
 		/// Verify that an alias mapping is stale and eligible for cleanup.
 		///
 		/// An alias is stale when any of the following is true:
@@ -652,7 +601,7 @@ pub mod pallet {
 				Error::<T>::StaleRevision
 			);
 
-			let ca = T::MemberService::verify_membership_at_rev(
+			let ca = T::MemberService::verify_membership(
 				collection, proof, ring_index, revision, *context, msg,
 			)
 			.map_err(|_| Error::<T>::BadProof)?;
