@@ -4877,6 +4877,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "indiv-pallet-network-suffix"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support 47.0.0",
+ "frame-system 47.0.0",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-io 46.0.0",
+ "sp-runtime 47.0.0",
+]
+
+[[package]]
 name = "indiv-pallet-nft-claims"
 version = "0.1.0"
 dependencies = [
@@ -5769,6 +5782,7 @@ dependencies = [
  "indiv-pallet-alias-accounts",
  "indiv-pallet-dotns-gateway",
  "indiv-pallet-members-subscriber",
+ "indiv-pallet-network-suffix",
  "indiv-pallet-nft-claims",
  "indiv-pallet-origin-restriction",
  "indiv-pallet-pgas",
@@ -5916,6 +5930,7 @@ dependencies = [
  "indiv-pallet-members",
  "indiv-pallet-members-notifier",
  "indiv-pallet-mob-rule",
+ "indiv-pallet-network-suffix",
  "indiv-pallet-nft-credits",
  "indiv-pallet-origin-restriction",
  "indiv-pallet-people",

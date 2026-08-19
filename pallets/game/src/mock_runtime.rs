@@ -947,7 +947,7 @@ impl indiv_pallet_people::Config for Test {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: Vec<u8> = b"paseo".to_vec();
 	pub const LiteCollectionOwner: u32 = 2;
 	pub const LiteRingExp: RingExponent = RingExponent::R2e9;
 	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");

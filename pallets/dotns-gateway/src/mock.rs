@@ -459,7 +459,7 @@ impl crate::benchmarking::BenchmarkHelper<Test> for () {
 // ========== DotNS Gateway Config ==========
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: Vec<u8> = b"paseo".to_vec();
 	pub const MockMaxContractCallWeight: frame_support::weights::Weight =
 		frame_support::weights::Weight::from_parts(500_000_000, 50_000);
 	pub const MockMaxValiditySeconds: u64 = 600;

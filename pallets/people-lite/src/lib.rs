@@ -122,9 +122,8 @@ pub mod pallet {
 		/// pallet.
 		type RegistrationFee: Get<BalanceOf<Self>>;
 
-		/// Network suffix appended to this pallet's product name.
-		#[pallet::constant]
-		type Suffix: Get<&'static [u8]>;
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<Vec<u8>>;
 
 		/// The origin that can issue quotas to verifiers.
 		type AttestationAllowanceManager: EnsureOrigin<Self::RuntimeOrigin>;
@@ -246,7 +245,7 @@ pub mod pallet {
 		pub fn auth_context() -> Context {
 			indiv_support::context::build_product_context(
 				indiv_support::context::personhood::PRODUCT_NAME,
-				T::Suffix::get(),
+				&T::Suffix::get(),
 				indiv_support::context::personhood::PEOPLE_LITE_AUTH,
 			)
 		}

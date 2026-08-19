@@ -100,9 +100,8 @@ pub mod pallet {
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 
-		/// Network suffix appended to this pallet's product name.
-		#[pallet::constant]
-		type Suffix: Get<&'static [u8]>;
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<Vec<u8>>;
 
 		/// Ring-membership prover used to verify proofs sent to [`Pallet::register_name`].
 		type MemberService: MembershipProver<
@@ -562,7 +561,7 @@ pub mod pallet {
 		pub fn proof_context() -> indiv_support::traits::Context {
 			build_product_context(
 				personhood::PRODUCT_NAME,
-				T::Suffix::get(),
+				&T::Suffix::get(),
 				personhood::DOTNS_GATEWAY,
 			)
 		}

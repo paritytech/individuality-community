@@ -20,6 +20,8 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
+
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 mod extension;
@@ -153,9 +155,8 @@ pub mod pallet {
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 
-		/// Network suffix appended to this pallet's product name.
-		#[pallet::constant]
-		type Suffix: Get<&'static [u8]>;
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<Vec<u8>>;
 
 		/// Ensure origin is a person.
 		type EnsurePerson: EnsureOriginWithArg<OriginFor<Self>, Context, Success = Alias>
@@ -222,7 +223,7 @@ pub mod pallet {
 		/// The context used for the proofs required to authenticate as a personal alias in score
 		/// pallet.
 		pub fn score_context() -> Context {
-			build_product_context(personhood::PRODUCT_NAME, T::Suffix::get(), personhood::SCORE)
+			build_product_context(personhood::PRODUCT_NAME, &T::Suffix::get(), personhood::SCORE)
 		}
 	}
 

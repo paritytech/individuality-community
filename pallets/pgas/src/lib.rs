@@ -43,6 +43,8 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
+
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
@@ -119,9 +121,8 @@ pub mod pallet {
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 
-		/// Network suffix appended to this pallet's product name.
-		#[pallet::constant]
-		type Suffix: Get<&'static [u8]>;
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<Vec<u8>>;
 
 		/// Source of ring-VRF proof verification against subscribed ring roots.
 		///
@@ -458,7 +459,7 @@ pub mod pallet {
 		pub fn build_gas_context(day: u32, slot_index: u32) -> Context {
 			build_product_context(
 				personhood::PRODUCT_NAME,
-				T::Suffix::get(),
+				&T::Suffix::get(),
 				personhood::pgas_claim(day, slot_index),
 			)
 		}

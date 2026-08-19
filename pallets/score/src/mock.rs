@@ -217,7 +217,7 @@ impl indiv_pallet_people::Config for Test {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: Vec<u8> = b"paseo".to_vec();
 }
 
 impl crate::Config for Test {

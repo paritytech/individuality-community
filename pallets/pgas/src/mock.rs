@@ -474,7 +474,7 @@ impl pallet_pgas::benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: Vec<u8> = b"paseo".to_vec();
 }
 
 impl pallet_pgas::Config for Test {

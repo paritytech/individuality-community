@@ -151,16 +151,19 @@ impl<T: frame_system::Config> indiv_pallet_people_airdrops::WeightInfo for Weigh
 	/// Proof: `Airdrop::Events` (`max_values`: None, `max_size`: Some(800), added: 3275, mode: `MaxEncodedLen`)
 	/// Storage: `Airdrop::Registrations` (r:16 w:16)
 	/// Proof: `Airdrop::Registrations` (`max_values`: None, `max_size`: Some(105), added: 2580, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 16]`.
 	fn register(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `255 + n * (265 ±0)`
-		//  Estimated: `990 + n * (3275 ±0)`
+		//  Estimated: `1502 + n * (3275 ±0)`
 		// Minimum execution time: 30_275_000 picoseconds.
 		Weight::from_parts(13_835_847, 0)
-			.saturating_add(Weight::from_parts(0, 990))
+			.saturating_add(Weight::from_parts(0, 1502))
 			// Standard Error: 34_340
 			.saturating_add(Weight::from_parts(18_534_156, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().reads((3_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 3275).saturating_mul(n.into()))
@@ -183,14 +186,16 @@ impl<T: frame_system::Config> indiv_pallet_people_airdrops::WeightInfo for Weigh
 	/// Proof: `AssetsHolder::BalancesOnHold` (`max_values`: None, `max_size`: Some(682), added: 3157, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn claim() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1176`
-		//  Estimated: `7404`
+		//  Estimated: `7916`
 		// Minimum execution time: 121_059_000 picoseconds.
 		Weight::from_parts(128_138_000, 0)
-			.saturating_add(Weight::from_parts(0, 7404))
-			.saturating_add(T::DbWeight::get().reads(10))
+			.saturating_add(Weight::from_parts(0, 7916))
+			.saturating_add(T::DbWeight::get().reads(11))
 			.saturating_add(T::DbWeight::get().writes(8))
 	}
 	/// Storage: `PeopleAirdrops::DrawSalts` (r:1 w:1)

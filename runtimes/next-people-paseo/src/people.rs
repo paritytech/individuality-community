@@ -19,7 +19,7 @@ use assets_common::local_and_foreign_assets::TargetFromLeft;
 use codec::{Decode, Encode};
 use cumulus_primitives_core::Junction::{GeneralIndex, PalletInstance, Parachain};
 use frame_support::{
-	pallet_prelude::PhantomData,
+	pallet_prelude::{BoundedVec, PhantomData},
 	parameter_types,
 	traits::{
 		fungible::{HoldConsideration, ItemOf},
@@ -39,8 +39,6 @@ use indiv_support::{
 use paseo_runtime_constants::system_parachain::{
 	NextAssetHubParaId, ASSET_HUB_ID, NEXT_ASSET_HUB_ID,
 };
-#[cfg(feature = "runtime-benchmarks")]
-use sp_runtime::BoundedVec;
 use sp_runtime::{
 	traits::{AccountIdConversion, ConstI8, ConstU16},
 	DispatchResult, MultiSignature, MultiSigner, Percent, SaturatedConversion,
@@ -66,12 +64,28 @@ use crate::{
 pub const EXTERNAL_ASSET_ID: u32 = 50_000_413;
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub DefaultNetworkSuffix: BoundedVec<u8, ConstU32<16>> =
+		b"paseo".to_vec().try_into().expect("default network suffix fits");
 	pub const StaleAliasCleanupInterval: BlockNumber = 5 * MINUTES;
 	pub ExternalAssetLocation: Location = Location::new(
 		1,
 		[Parachain(ASSET_HUB_ID), PalletInstance(50), GeneralIndex(EXTERNAL_ASSET_ID as u128)],
 	);
+}
+
+impl indiv_pallet_network_suffix::Config for Runtime {
+	type UpdateOrigin = EnsureRoot<Self::AccountId>;
+	type MaxSuffixLength = ConstU32<16>;
+	type DefaultSuffix = DefaultNetworkSuffix;
+	type WeightInfo = NetworkSuffixWeightInfo;
+}
+
+/// Conservatively reuse the heavier `pallet_parameters` setter weight.
+pub struct NetworkSuffixWeightInfo;
+impl indiv_pallet_network_suffix::WeightInfo for NetworkSuffixWeightInfo {
+	fn set_network_suffix(_s: u32) -> frame_support::weights::Weight {
+		<weights::pallet_parameters::WeightInfo<Runtime> as pallet_parameters::WeightInfo>::set_parameter()
+	}
 }
 
 /// The full featured fungibles implementation with both regular and hold functionality.
