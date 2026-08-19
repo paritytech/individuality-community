@@ -23,7 +23,7 @@ jobs:
         run: sudo apt update && sudo apt install --assume-yes build-essential
 
       - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@11df97af8e8102fd60b60a77dfbf58d40cd843b8 # v1.10.1
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
         with:
           toolchain: stable
           cache: false
@@ -32,7 +32,7 @@ jobs:
         run: cargo install --locked -q zepter && zepter --version
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Dont clone historic commits.
 

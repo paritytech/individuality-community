@@ -29,7 +29,10 @@ use frame_support::{
 	traits::{Authorize, Hooks},
 };
 use frame_system::RawOrigin as SystemOrigin;
-use indiv_support::traits::AppendOnlyMembers;
+use indiv_support::{
+	context::{build_product_context, personhood},
+	traits::AppendOnlyMembers,
+};
 use sp_core::Get;
 use sp_runtime::{
 	traits::DispatchTransaction,
@@ -1728,18 +1731,17 @@ mod notification {
 	}
 
 	#[test]
-	fn notification_context_layout_is_fixed_and_non_truncating() {
+	fn notification_context_uses_allocated_people_raw_suffix() {
 		new_test_ext().execute_with(|| {
 			let reference = NotificationReference { period: 0x0102_0304, seq: 0xAB };
-			let context = Resources::notification_context(reference);
-			let prefix = b"NOTIF:";
 
-			assert_eq!(&context[..prefix.len()], prefix);
-			assert_eq!(&context[prefix.len()..prefix.len() + 4], &reference.period.to_be_bytes());
-			assert_eq!(context[prefix.len() + 4], reference.seq);
-			assert!(
-				context[prefix.len() + 5..].iter().all(|b| *b == b' '),
-				"remaining context bytes should stay as padding",
+			assert_eq!(
+				Resources::notification_context(reference),
+				build_product_context(
+					personhood::PRODUCT_NAME,
+					<Test as Config>::Suffix::get(),
+					personhood::resources_notification(reference.period, reference.seq),
+				),
 			);
 		});
 	}
@@ -3753,19 +3755,18 @@ mod stmt_store_allowance {
 	}
 
 	#[test]
-	fn context_layout_is_fixed_and_non_truncating() {
+	fn statement_store_context_uses_allocated_people_raw_suffix() {
 		new_test_ext().execute_with(|| {
 			let period = 0x0102_0304u32;
 			let seq = 0x05060708u32;
-			let context = Resources::stmt_store_slot_context(period, seq);
-			let prefix = b"SSS_SLOT:";
 
-			assert_eq!(&context[..prefix.len()], prefix);
-			assert_eq!(&context[prefix.len()..prefix.len() + 4], &period.to_be_bytes());
-			assert_eq!(&context[prefix.len() + 4..prefix.len() + 8], &seq.to_be_bytes());
-			assert!(
-				context[prefix.len() + 8..].iter().all(|b| *b == b' '),
-				"remaining context bytes should stay as padding",
+			assert_eq!(
+				Resources::stmt_store_slot_context(period, seq),
+				build_product_context(
+					personhood::PRODUCT_NAME,
+					<Test as Config>::Suffix::get(),
+					personhood::statement_store_slot(period, seq),
+				),
 			);
 		});
 	}

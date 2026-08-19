@@ -134,7 +134,7 @@
 //! with the call `sign_up_with_account_lite_invite`:
 //!
 //! 1. The lite person binds the account they want to play with to their alias in
-//!    [`indiv_pallet_score::SCORE_CONTEXT`], in indiv-pallet-people-lite.
+//!    [`indiv_pallet_score::Pallet::score_context`], in indiv-pallet-people-lite.
 //! 2. That account signs up with `sign_up_with_account_lite_invite`, as a player with an invited
 //!    credibility and without paying any deposit.
 //! 3. The account signs up for later games with `sign_up_with_account`, for free. If its score
@@ -253,7 +253,7 @@ use indiv_pallet_airdrop::types::{
 	Airdrop, EventId as AirdropEventId, EventInfo as AirdropEventInfo,
 	RegistrationEntry as AirdropRegistrationEntry,
 };
-use indiv_pallet_score::{AccountOrPerson, SCORE_CONTEXT};
+use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
 	credit_trees::AwardCredits,
 	traits::{Alias, CommunicationIdentifier, Context},
@@ -358,7 +358,7 @@ pub mod pallet {
 		/// Origin certifying a lite person by an alias in a context, and yielding that alias.
 		///
 		/// [`Pallet::sign_up_with_account_lite_invite`] uses it with the context
-		/// [`indiv_pallet_score::SCORE_CONTEXT`]: lite personhood is credibility enough to play,
+		/// [`indiv_pallet_score::Pallet::score_context`]: lite personhood is credibility enough to play,
 		/// and the alias identifies the lite person without linking to their account.
 		type EnsureLiteAlias: EnsureOriginWithArg<Self::RuntimeOrigin, Context, Success = Alias>;
 
@@ -627,7 +627,7 @@ pub mod pallet {
 		StorageDoubleMap<_, Blake2_128Concat, T::AccountId, Blake2_128Concat, TicketOf<T>, ()>;
 
 	/// The account each lite person designated to play with, keyed by the lite person's alias in
-	/// [`indiv_pallet_score::SCORE_CONTEXT`].
+	/// [`indiv_pallet_score::Pallet::score_context`].
 	#[pallet::storage]
 	pub type LiteInvites<T: Config> = StorageMap<_, Blake2_128Concat, Alias, T::AccountId>;
 
@@ -1014,7 +1014,7 @@ pub mod pallet {
 		/// any event does not accept its registration or the number of supplied VRFs does not
 		/// match `airdrops_scheduled`. See the documentation of [`AirdropVrfs`] for more details.
 		///
-		/// The origin must be a lite alias in [`indiv_pallet_score::SCORE_CONTEXT`], see
+		/// The origin must be a lite alias in [`indiv_pallet_score::Pallet::score_context`], see
 		/// [`Config::EnsureLiteAlias`]. The lite person names the account playing on their behalf
 		/// with `account`, so the playing account is not the lite person's own account and stays
 		/// unlinkable from it.
@@ -1035,7 +1035,10 @@ pub mod pallet {
 			identifier_key: CommunicationIdentifier,
 			airdrops: Option<AirdropVrfs<AirdropProofOf<T>>>,
 		) -> DispatchResultWithPostInfo {
-			let alias = T::EnsureLiteAlias::ensure_origin(origin, &SCORE_CONTEXT)?;
+			let alias = T::EnsureLiteAlias::ensure_origin(
+				origin,
+				&indiv_pallet_score::Pallet::<T>::score_context(),
+			)?;
 
 			if let Some(invited) = LiteInvites::<T>::get(alias) {
 				ensure!(invited == account, Error::<T>::AnotherAccountInvited);

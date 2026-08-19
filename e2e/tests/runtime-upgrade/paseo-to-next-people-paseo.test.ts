@@ -32,15 +32,11 @@ const RUNTIME_LOG_LEVEL = Number(process.env.NEXT_PEOPLE_PASEO_UPGRADE_RUNTIME_L
 
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const e2eRoot = resolve(import.meta.dirname, "../..");
-const allowedSourceSpecNames = new Set(["next-people-paseo"]);
+const SPEC_NAME = "next-people-paseo";
+const DEFAULT_ENDPOINT = "wss://paseo-people-next-system-rpc.polkadot.io";
 
 /** r2e9 (3 pages) + r2e10 (5 pages) at the runtime's `ChunkPageSize`. */
 const EXPECTED_CHUNK_PAGE_HASHES = 8;
-
-const sourceEndpointPresets = {
-  "next-paseo": "wss://paseo-people-next-system-rpc.polkadot.io",
-} as const;
-type SourceEndpointPreset = keyof typeof sourceEndpointPresets;
 
 // The expected outcome of the SeedSubscriptionWhitelist migration, mirroring
 // people::asset_hub_subscription_whitelist() in runtimes/next-people-paseo.
@@ -112,57 +108,40 @@ async function resolveNextPeoplePaseoRuntimeWasm(): Promise<string> {
   );
 }
 
-function resolveSourceEndpoints(): Array<{ label: string; endpoint: string }> {
-  const raw = process.env.NEXT_PEOPLE_PASEO_UPGRADE_TARGETS ?? "next-paseo";
-  return raw
-    .split(",")
-    .map(value => value.trim())
-    .filter(Boolean)
-    .map(value => {
-      const preset = value as SourceEndpointPreset;
-      return {
-        label: value,
-        endpoint: sourceEndpointPresets[preset] ?? value,
-      };
-    });
+function resolveEndpoint(): string {
+  return process.env.NEXT_PEOPLE_PASEO_UPGRADE_ENDPOINT ?? DEFAULT_ENDPOINT;
+}
+
+function resolveBlockOption() {
+  const blockRef = process.env.NEXT_PEOPLE_PASEO_UPGRADE_BLOCK;
+  if (blockRef == null) {
+    return {};
+  }
+  return blockRef.startsWith("0x")
+    ? { blockHash: blockRef as `0x${string}` }
+    : { blockNumber: Number(blockRef) };
 }
 
 describeRuntimeUpgrade("Paseo next-people-paseo -> local next-people-paseo runtime upgrade", () => {
-  const sourceEndpoints = resolveSourceEndpoints();
-
-  test.each(sourceEndpoints)(
-    "builds a block and seeds the subscription whitelist after injecting local next-people-paseo runtime from $label",
-    async ({ endpoint }) => {
+  test(
+    "builds a block and seeds the subscription whitelist after injecting local next-people-paseo runtime",
+    async () => {
       const runtimeWasm = await resolveNextPeoplePaseoRuntimeWasm();
-      // Keep a stable filesystem-safe cache name per source endpoint.
-      const endpointSlug = endpoint
-        .replace(/[^a-z0-9]+/gi, "-")
-        .replace(/^-+|-+$/g, "")
-        .toLowerCase();
       const dbPath = resolve(
         e2eRoot,
-        process.env.NEXT_PEOPLE_PASEO_UPGRADE_DB ??
-          `.cache/nextPeoplePaseo.runtime-upgrade.${endpointSlug}.sqlite`,
+        process.env.NEXT_PEOPLE_PASEO_UPGRADE_DB ?? ".cache/nextPeoplePaseo.runtime-upgrade.sqlite",
       );
-      const blockRef = process.env.NEXT_PEOPLE_PASEO_UPGRADE_BLOCK;
-      const blockOption =
-        blockRef == null
-          ? {}
-          : blockRef.startsWith("0x")
-            ? { blockHash: blockRef as `0x${string}` }
-            : { blockNumber: Number(blockRef) };
-
       await mkdir(dirname(dbPath), { recursive: true });
 
       const ctx = await setupContext({
-        endpoint,
+        endpoint: resolveEndpoint(),
         db: dbPath,
         allowUnresolvedImports: true,
         processQueuedMessages: false,
         runtimeLogLevel: RUNTIME_LOG_LEVEL,
         saveBlock: false,
         timeout: 60_000,
-        ...blockOption,
+        ...resolveBlockOption(),
       });
 
       try {
@@ -171,7 +150,7 @@ describeRuntimeUpgrade("Paseo next-people-paseo -> local next-people-paseo runti
         // The fork starts from the live Paseo chain, so this version check tells us
         // which runtime is currently deployed before we inject our local build.
         const oldVersion = await block.runtimeVersion;
-        expect(allowedSourceSpecNames.has(oldVersion.specName)).toBe(true);
+        expect(oldVersion.specName).toBe(SPEC_NAME);
 
         // The seeding migration assumes it runs on a chain whose whitelist was never
         // seeded. When this fails, the upgrade carrying SeedSubscriptionWhitelist is
@@ -187,7 +166,7 @@ describeRuntimeUpgrade("Paseo next-people-paseo -> local next-people-paseo runti
         // Build a block with the injected runtime.
         const upgradedBlock = await ctx.chain.newBlock();
         const newVersion = await upgradedBlock.runtimeVersion;
-        expect(newVersion.specName).toBe("next-people-paseo");
+        expect(newVersion.specName).toBe(SPEC_NAME);
         expect(upgradedBlock.number).toBeGreaterThan(block.number);
 
         // Executive only runs migrations when the spec version changed, so without

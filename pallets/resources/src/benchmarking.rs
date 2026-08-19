@@ -223,9 +223,10 @@ mod benches {
 		UsernameReservationQueue::<T>::insert(&other_reserved, queue);
 		ReservationOf::<T>::insert(&lite_account, &other_reserved);
 
-		let origin = T::EnsurePerson::try_successful_origin(&RESOURCES_CONTEXT)
+		let context = Pallet::<T>::resources_context();
+		let origin = T::EnsurePerson::try_successful_origin(&context)
 			.map_err(|_| BenchmarkError::Weightless)?;
-		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &RESOURCES_CONTEXT) else {
+		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &context) else {
 			panic!("origin was created with `try_successful_origin`; qed");
 		};
 		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&alias[..]);
@@ -274,9 +275,10 @@ mod benches {
 			BoundedVec::try_from(entries).unwrap();
 		UsernameReservationQueue::<T>::insert(&reserved, queue);
 
-		let origin = T::EnsurePerson::try_successful_origin(&RESOURCES_CONTEXT)
+		let context = Pallet::<T>::resources_context();
+		let origin = T::EnsurePerson::try_successful_origin(&context)
 			.map_err(|_| BenchmarkError::Weightless)?;
-		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &RESOURCES_CONTEXT) else {
+		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &context) else {
 			panic!("origin was created with `try_successful_origin`; qed");
 		};
 		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&alias[..]);
@@ -311,9 +313,10 @@ mod benches {
 		ReservationOf::<T>::insert(&account, &reserved);
 		UsernameOwnerOf::<T>::insert(&username, &account);
 
-		let origin = T::EnsurePerson::try_successful_origin(&RESOURCES_CONTEXT)
+		let context = Pallet::<T>::resources_context();
+		let origin = T::EnsurePerson::try_successful_origin(&context)
 			.map_err(|_| BenchmarkError::Weightless)?;
-		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &RESOURCES_CONTEXT) else {
+		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &context) else {
 			panic!("origin was created with `try_successful_origin`; qed");
 		};
 

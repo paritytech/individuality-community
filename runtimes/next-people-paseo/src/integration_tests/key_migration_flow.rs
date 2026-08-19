@@ -366,7 +366,7 @@ fn key_migration_with_proof_generation() {
 		// ═══════════════════════════════════════════════════════════════════════════
 
 		// Set up an alias account
-		let context = SCORE_CONTEXT;
+		let context = score_context();
 		let alias_account = sr25519::Pair::from_seed(&[99u8; 32]);
 		let set_alias_call = RuntimeCall::People(indiv_pallet_people::Call::set_alias_account {
 			account: pair_to_account_id(&alias_account),

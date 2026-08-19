@@ -191,7 +191,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 2_000_036,
+	spec_version: 2_000_038,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 21,
@@ -1377,8 +1377,13 @@ parameter_types! {
 	pub const DotnsMaxFutureSkewSeconds: u64 = 30;
 }
 
+parameter_types! {
+	pub const NetworkSuffix: &'static [u8] = b"paseo";
+}
+
 impl indiv_pallet_dotns_gateway::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_dotns_gateway::WeightInfo<Runtime>;
+	type Suffix = NetworkSuffix;
 	type MemberService = MembersSubscriber;
 	type ContractCaller = ReviveContractCaller;
 	type AddressMapper = ReviveAddressMapper;
@@ -1430,10 +1435,8 @@ impl indiv_pallet_dotns_gateway::benchmarking::BenchmarkHelper<Runtime>
 		}
 		let last_idx = roots.len() - 1;
 		roots[last_idx].root = real_root;
-		indiv_pallet_members_subscriber::RingRoots::<Runtime>::insert(
-			*identifier,
-			ring_index,
-			roots,
+		indiv_pallet_members_subscriber::Pallet::<Runtime>::set_current_ring_roots(
+			identifier, ring_index, roots,
 		);
 		indiv_pallet_members_subscriber::RingCollectionExponents::<Runtime>::insert(
 			*identifier,
@@ -1470,7 +1473,7 @@ impl indiv_pallet_dotns_gateway::benchmarking::BenchmarkHelper<Runtime>
 /// Bandersnatch + sr25519 helpers shared by the dotNS gateway benchmark.
 #[cfg(feature = "runtime-benchmarks")]
 mod bandersnatch_bench {
-	use super::{AccountId, Signature};
+	use super::{AccountId, Runtime, Signature};
 	use indiv_support::{
 		crypto::{BandersnatchSuite, BandersnatchVrfVerifiable},
 		genesis::ring_verifier_builder_params,
@@ -1542,7 +1545,7 @@ mod bandersnatch_bench {
 		let (proof, _alias) = Crypto::create(
 			commitment,
 			&secret,
-			&indiv_pallet_dotns_gateway::DOTNS_GATEWAY_CONTEXT[..],
+			&indiv_pallet_dotns_gateway::Pallet::<Runtime>::proof_context(),
 			message,
 		)
 		.expect("create proof");
@@ -1726,6 +1729,12 @@ impl frame_support::traits::EnsureOriginWithArg<RuntimeOrigin, RuntimeParameters
 				WhitelistedCaller,
 			>::ensure_origin(origin.clone())
 			.map(|_success| ()),
+			// Economic param.
+			AliasAccounts(_) =>
+				<EnsureRoot<AccountId> as EnsureOrigin<RuntimeOrigin>>::ensure_origin(
+					origin.clone(),
+				)
+				.map(|_success| ()),
 		}
 		.map_err(|_| origin)
 	}
@@ -1812,6 +1821,16 @@ pub mod dynamic_params {
 		#[codec(index = 1)]
 		pub static MaxOnIdleWeight: Option<Weight> =
 			Some(Perbill::from_percent(50) * RuntimeBlockWeights::get().max_block);
+	}
+
+	/// Parameters about the alias-accounts pallet.
+	#[dynamic_pallet_params]
+	#[codec(index = 3)]
+	pub mod alias_accounts {
+		/// PGAS burned on each paid alias registration or account swap.
+		/// `None` closes alias registration.
+		#[codec(index = 0)]
+		pub static AliasFee: Option<Balance> = None;
 	}
 }
 
@@ -2171,7 +2190,8 @@ impl indiv_pallet_members_subscriber::Config for Runtime {
 	type SelfParaId = MembersSubscriberSelfParaId;
 	type MaxMissingRootsPerCollection = ConstU32<255>;
 	type MaxDeletedRingsPerCollection = ConstU32<100>;
-	type MaxRingRootsPerCollection = ConstU32<100>;
+	type MaxGapScanPerBatch = ConstU32<32>;
+	type PurgePageSize = ConstU32<100>;
 	type EnsureNotifierOrigin = EnsureNotifierSibling;
 	type EnsureTerminationOrigin = EitherOfDiverse<EnsureRoot<AccountId>, EnsureNotifierSibling>;
 	type MaxCollections = ConstU32<10>;
@@ -2266,7 +2286,7 @@ impl indiv_pallet_alias_accounts::Config for Runtime {
 	type PeopleRingExponent = PeopleRingExponent;
 	type Fungibles = Assets;
 	type PgasAssetId = PgasAssetId;
-	type FeeManagerOrigin = EnsureRoot<AccountId>;
+	type AliasFee = dynamic_params::alias_accounts::AliasFee;
 }
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -2338,19 +2358,17 @@ impl indiv_pallet_alias_accounts::benchmarking::BenchmarkHelper<Runtime> for Run
 		// The bench fills the sliding window with mock records before calling us; replace
 		// the record matching `revision` with our real Bandersnatch commitment so
 		// `verify_proof` against the bench-chosen target revision succeeds.
-		indiv_pallet_members_subscriber::RingRoots::<Runtime>::mutate(
-			*identifier,
-			ring_index,
-			|roots_opt| {
-				let roots = roots_opt
-					.as_mut()
-					.expect("seed_ring populates RingRoots before create_proof_for_revision");
-				let idx = roots
-					.iter()
-					.position(|r| r.revision == revision)
-					.expect("requested revision must be present in seeded roots");
-				roots[idx].root = root;
-			},
+		let mut roots = indiv_pallet_members_subscriber::Pallet::<Runtime>::current_ring_roots(
+			identifier, ring_index,
+		)
+		.expect("seed_ring populates RingRoots before create_proof_for_revision");
+		let idx = roots
+			.iter()
+			.position(|r| r.revision == revision)
+			.expect("requested revision must be present in seeded roots");
+		roots[idx].root = root;
+		indiv_pallet_members_subscriber::Pallet::<Runtime>::set_current_ring_roots(
+			identifier, ring_index, roots,
 		);
 		indiv_pallet_members_subscriber::RingCollectionExponents::<Runtime>::insert(
 			*identifier,
@@ -2376,6 +2394,17 @@ impl indiv_pallet_alias_accounts::benchmarking::BenchmarkHelper<Runtime> for Run
 			)
 			.expect("create pgas asset");
 		}
+	}
+
+	fn set_alias_fee(fee: Balance) {
+		pallet_parameters::Pallet::<Runtime>::set_parameter(
+			RuntimeOrigin::root(),
+			RuntimeParameters::AliasAccounts(dynamic_params::alias_accounts::Parameters::AliasFee(
+				dynamic_params::alias_accounts::AliasFee,
+				Some(Some(fee)),
+			)),
+		)
+		.expect("root may set the alias fee");
 	}
 
 	fn max_ring_revisions() -> u32 {
@@ -2419,7 +2448,11 @@ impl indiv_pallet_alias_accounts::benchmarking::BenchmarkHelper<Runtime> for Run
 				})
 				.expect("revisions bounded by max_ring_revisions");
 		}
-		indiv_pallet_members_subscriber::RingRoots::<Runtime>::insert(collection, ring, roots);
+		indiv_pallet_members_subscriber::Pallet::<Runtime>::set_current_ring_roots(
+			&collection,
+			ring,
+			roots,
+		);
 	}
 }
 
@@ -2434,6 +2467,7 @@ parameter_types! {
 
 impl indiv_pallet_pgas::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_pgas::WeightInfo<Runtime>;
+	type Suffix = NetworkSuffix;
 	type MembershipProver = MembersSubscriber;
 	type Clock = Timestamp;
 	type Fungibles = Assets;
@@ -2526,10 +2560,8 @@ impl indiv_pallet_pgas::benchmarking::BenchmarkHelper<Runtime> for PgasBenchHelp
 		};
 		let mut roots: frame_support::BoundedVec<_, _> = Default::default();
 		roots.try_push(record).expect("MaxRecentRootsPerRing > 0");
-		indiv_pallet_members_subscriber::RingRoots::<Runtime>::insert(
-			*identifier,
-			ring_index,
-			roots,
+		indiv_pallet_members_subscriber::Pallet::<Runtime>::set_current_ring_roots(
+			identifier, ring_index, roots,
 		);
 		indiv_pallet_members_subscriber::RingCollectionExponents::<Runtime>::insert(
 			*identifier,

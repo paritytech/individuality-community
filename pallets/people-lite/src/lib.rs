@@ -76,9 +76,6 @@ pub mod pallet {
 	pub const MSG_PREFIX: &[u8; 30] = b"pop:people-lite:register using";
 	/// Fixed-width namespaced storage identifier for the lite people collection.
 	pub use indiv_support::traits::PEOPLE_LITE_IDENTIFIER as LITE_PEOPLE_MEMBER_IDENTIFIER;
-	/// Fixed-width namespaced proof context for lite people authorization; trailing spaces are
-	/// intentional padding.
-	pub const LITE_PEOPLE_AUTH_CONTEXT: &Context = b"pop:polkadot.network/plite-auth ";
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -102,6 +99,10 @@ pub mod pallet {
 	{
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
+
+		/// Network suffix appended to this pallet's product name.
+		#[pallet::constant]
+		type Suffix: Get<&'static [u8]>;
 
 		/// The origin that can issue quotas to verifiers.
 		type AttestationAllowanceManager: EnsureOrigin<Self::RuntimeOrigin>;
@@ -212,6 +213,15 @@ pub mod pallet {
 
 	#[pallet::extra_constants]
 	impl<T: Config> Pallet<T> {
+		/// The context used to authenticate lite people.
+		pub fn auth_context() -> Context {
+			indiv_support::context::build_product_context(
+				indiv_support::context::personhood::PRODUCT_NAME,
+				T::Suffix::get(),
+				indiv_support::context::personhood::PEOPLE_LITE_AUTH,
+			)
+		}
+
 		/// The number of blocks of tolerance we allow for an alias setup transaction.
 		pub fn account_setup_block_tolerance() -> BlockNumberFor<T> {
 			600u32.into()
@@ -735,6 +745,11 @@ pub mod pallet {
 	#[cfg(feature = "runtime-benchmarks")]
 	pub trait BenchmarkHelper<AccountId, Signature> {
 		fn sign_message(message: &[u8]) -> (AccountId, Signature);
+
+		/// Return an accepted context that exercises the runtime's worst-case allowlist path.
+		fn worst_case_account_context(default: Context) -> Context {
+			default
+		}
 	}
 	#[cfg(feature = "runtime-benchmarks")]
 	impl BenchmarkHelper<sp_runtime::AccountId32, sp_runtime::MultiSignature> for () {

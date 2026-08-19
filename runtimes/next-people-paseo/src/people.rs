@@ -54,8 +54,8 @@ use crate::{
 		LongTermStorageAllowanceForPeople, LongTermStorageClaimsPerPeriod,
 		LongTermStorageCleanupLimit, LongTermStorageGraceWindow, LongTermStoragePeriodDuration,
 		NotificationAllowance, NotificationPeriodDuration, NotificationSlotsPerPeriod,
-		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow,
-		StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
+		PeopleAirdropsPrizeSource, PersonStatementLimit, StmtStoreCleanupLimit,
+		StmtStoreGraceWindow, StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -64,6 +64,7 @@ use crate::{
 pub const EXTERNAL_ASSET_ID: u32 = 50_000_413;
 
 parameter_types! {
+	pub const NetworkSuffix: &'static [u8] = b"paseo";
 	pub const StaleAliasCleanupInterval: BlockNumber = 5 * MINUTES;
 	pub ExternalAssetLocation: Location = Location::new(
 		1,
@@ -108,8 +109,8 @@ pub struct AccountContexts;
 impl frame_support::traits::Contains<Context> for AccountContexts {
 	fn contains(l: &Context) -> bool {
 		l == &indiv_pallet_mob_rule::MOB_CONTEXT ||
-			l == &indiv_pallet_score::SCORE_CONTEXT ||
-			l == &indiv_pallet_resources::RESOURCES_CONTEXT
+			l == &indiv_pallet_score::Pallet::<Runtime>::score_context() ||
+			l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context()
 	}
 }
 
@@ -286,6 +287,11 @@ pub mod benchmark_utils {
 			// storage-backed alias contexts through `AccountContexts`.
 			indiv_pallet_mob_rule::MOB_CONTEXT
 		}
+
+		fn worst_case_account_context() -> Context {
+			indiv_pallet_resources::Pallet::<Runtime>::resources_context()
+		}
+
 		fn initialize_chunks() -> Vec<<BandersnatchVrfVerifiable as GenerateVerifiable>::StaticChunk>
 		{
 			initialize_chunks(RingDomainSize::Domain11)
@@ -565,6 +571,7 @@ impl indiv_pallet_score::benchmarking::BenchmarkHelper<Runtime> for ScoreBenchma
 
 impl indiv_pallet_score::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_score::WeightInfo<Runtime>;
+	type Suffix = NetworkSuffix;
 	type EnsurePerson = indiv_pallet_people::EnsurePersonalAliasInContext<Runtime>;
 	type ScorePotId = ScorePotId;
 	type Currency = FungibleExternalAsset;
@@ -963,6 +970,114 @@ impl indiv_pallet_airdrop::benchmarking::BenchmarkHelper<Runtime> for AirdropBen
 	}
 }
 
+impl indiv_pallet_people_airdrops::Config for Runtime {
+	type WeightInfo = weights::indiv_pallet_people_airdrops::WeightInfo<Runtime>;
+	type Suffix = NetworkSuffix;
+	type EnsurePerson = indiv_pallet_people::EnsurePersonalAliasInContext<Runtime>;
+	type AirdropAssetId = <Runtime as pallet_assets::Config>::AssetId;
+	type AirdropAssetBalance = Balance;
+	type Airdrop = Airdrop;
+	type ManagerOrigin = EnsureRoot<Self::AccountId>;
+	type PrizeSource = PeopleAirdropsPrizeSource;
+	type Randomness = indiv_pallet_relay_randomness::RelayBlockRandomness<Runtime>;
+	type UnixTime = RuntimeClock;
+	type MaxScheduleBatch = ConstU32<16>;
+	type MaxRegisterBatch = ConstU32<16>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = PeopleAirdropsBenchmarkHelper;
+}
+
+/// Benchmark hooks for the people-airdrops pallet: places draws into lifecycle phases by writing
+/// the airdrop pallet's storage directly, since the `Airdrop` trait deliberately cannot.
+#[cfg(feature = "runtime-benchmarks")]
+pub struct PeopleAirdropsBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl indiv_pallet_people_airdrops::benchmarking::BenchmarkHelper<Runtime>
+	for PeopleAirdropsBenchmarkHelper
+{
+	fn fund_prize_source(
+		source: &AccountId,
+		draws: u32,
+	) -> alloc::vec::Vec<indiv_pallet_people_airdrops::AirdropEventInfoOf<Runtime>> {
+		use frame_support::traits::fungibles::Mutate;
+		use indiv_pallet_airdrop::{benchmarking::BenchmarkHelper as _, pallet::SupportedAssets};
+		const BENCH_ASSET_BASE: u32 = 42;
+		const BENCH_PRIZE: Balance = 1_000;
+		// `UnixTime::now` is read on the claim path; make sure it is past genesis.
+		if pallet_timestamp::Now::<Runtime>::get() == 0 {
+			Self::set_unix_time(1);
+		}
+		let pot = indiv_pallet_airdrop::Pallet::<Runtime>::airdrop_pot_id();
+		// One distinct asset per draw so a batch schedule touches distinct asset storage per draw
+		// (see the `BenchmarkHelper` trait doc).
+		(0..draws)
+			.map(|i| {
+				let asset_id =
+					AirdropBenchmarkHelper::create_asset_id_parameter(BENCH_ASSET_BASE + i);
+				// Mirror `enable_asset`: mark the asset supported and keep the pot's asset account
+				// alive.
+				if !SupportedAssets::<Runtime>::contains_key(&asset_id) {
+					Assets::mint_into(asset_id.clone(), &pot, 1).expect("fund pot ed");
+					SupportedAssets::<Runtime>::insert(&asset_id, 1u128);
+				}
+				Assets::mint_into(asset_id.clone(), source, BENCH_PRIZE)
+					.expect("fund prize source");
+				indiv_pallet_people_airdrops::AirdropEventInfoOf::<Runtime> {
+					prize: indiv_pallet_airdrop::types::AirdropPrize {
+						asset_id,
+						asset_amount: BENCH_PRIZE,
+						max_winners: 1,
+						winner_cap: sp_runtime::Permill::one(),
+					},
+					registration_starts: 100,
+					draw_time: 200,
+					end_time: 300,
+				}
+			})
+			.collect()
+	}
+
+	fn open_registration(event_id: &indiv_pallet_airdrop::types::EventId) {
+		indiv_pallet_airdrop::pallet::Events::<Runtime>::mutate(event_id, |event| {
+			if let Some(event) = event {
+				event.status =
+					indiv_pallet_airdrop::types::Status::Registering { total_participants: 0 };
+			}
+		});
+	}
+
+	fn start_claiming(event_id: &indiv_pallet_airdrop::types::EventId) {
+		use indiv_pallet_airdrop::pallet::{Registrations, Winners};
+		let registrations =
+			Registrations::<Runtime>::iter_prefix(event_id).collect::<alloc::vec::Vec<_>>();
+		for (slot, entry) in &registrations {
+			Winners::<Runtime>::insert(event_id, entry.clone(), *slot);
+		}
+		indiv_pallet_airdrop::pallet::Events::<Runtime>::mutate(event_id, |event| {
+			if let Some(event) = event {
+				event.status = indiv_pallet_airdrop::types::Status::Claiming {
+					total_participants: registrations.len() as u32,
+					effective_winners: registrations.len() as u32,
+					claimed: 0,
+				};
+			}
+		});
+	}
+
+	fn count_registrations(event_id: &indiv_pallet_airdrop::types::EventId) -> u32 {
+		indiv_pallet_airdrop::pallet::Registrations::<Runtime>::iter_prefix(event_id).count() as u32
+	}
+
+	fn count_winners(event_id: &indiv_pallet_airdrop::types::EventId) -> u32 {
+		indiv_pallet_airdrop::pallet::Winners::<Runtime>::iter_prefix(event_id).count() as u32
+	}
+
+	fn set_unix_time(now_secs: u64) {
+		pallet_timestamp::Now::<Runtime>::put(now_secs * 1_000);
+	}
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 pub struct GamePalletBenchmarkHelper {}
 
@@ -1091,13 +1206,30 @@ parameter_types! {
 pub struct LitePeopleAccountContexts;
 impl frame_support::traits::Contains<Context> for LitePeopleAccountContexts {
 	fn contains(l: &Context) -> bool {
-		l == indiv_pallet_people_lite::LITE_PEOPLE_AUTH_CONTEXT ||
-			l == &indiv_pallet_score::SCORE_CONTEXT
+		l == &indiv_pallet_people_lite::Pallet::<Runtime>::auth_context() ||
+			l == &indiv_pallet_score::Pallet::<Runtime>::score_context()
+	}
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct PeopleLiteBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl indiv_pallet_people_lite::BenchmarkHelper<AccountId, Signature> for PeopleLiteBenchmarkHelper {
+	fn sign_message(message: &[u8]) -> (AccountId, Signature) {
+		<() as indiv_pallet_people_lite::BenchmarkHelper<AccountId, Signature>>::sign_message(
+			message,
+		)
+	}
+
+	fn worst_case_account_context(_default: Context) -> Context {
+		indiv_pallet_score::Pallet::<Runtime>::score_context()
 	}
 }
 
 impl indiv_pallet_people_lite::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people_lite::WeightInfo<Runtime>;
+	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;
 	type CollectionOwner = LitePeopleCollectionOwner;
@@ -1107,7 +1239,7 @@ impl indiv_pallet_people_lite::Config for Runtime {
 	type LiteConsumerRegistrar = Resources;
 	type AccountContexts = LitePeopleAccountContexts;
 	#[cfg(feature = "runtime-benchmarks")]
-	type BenchmarkHelper = ();
+	type BenchmarkHelper = PeopleLiteBenchmarkHelper;
 }
 
 parameter_types! {
@@ -1119,6 +1251,7 @@ parameter_types! {
 
 impl indiv_pallet_resources::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_resources::WeightInfo<Runtime>;
+	type Suffix = NetworkSuffix;
 	type MemberService = Members;
 	type MinUsernameLength = MinUsernameLength;
 	type PersonAuthDuration = PersonAuthDuration;

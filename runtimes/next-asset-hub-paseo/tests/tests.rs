@@ -1515,7 +1515,7 @@ mod tx_extension_pipeline {
 mod credit_claimant_origin {
 	use frame_support::traits::{EnsureOriginWithArg, Get};
 	use indiv_pallet_alias_accounts::{AccountToAlias, AliasAccountInfo, PEOPLE_IDENTIFIER};
-	use indiv_pallet_members_subscriber::{types::RingCommitmentRecord, RingRoots};
+	use indiv_pallet_members_subscriber::types::RingCommitmentRecord;
 	use indiv_pallet_nft_claims::ClaimantKind;
 	use indiv_support::{
 		crypto::BandersnatchVrfVerifiable,
@@ -1523,7 +1523,7 @@ mod credit_claimant_origin {
 		traits::{Context, ContextualAlias, PersonhoodLookup},
 	};
 	use next_asset_hub_paseo_runtime::{
-		AliasAccounts, EnsureCreditClaimant, Runtime, RuntimeOrigin,
+		AliasAccounts, EnsureCreditClaimant, MembersSubscriber, Runtime, RuntimeOrigin,
 	};
 	use parachains_common::AccountId;
 	use sp_runtime::BoundedVec;
@@ -1558,8 +1558,8 @@ mod credit_claimant_origin {
 				source_sequence: 1,
 			})
 			.collect::<Vec<_>>();
-		RingRoots::<Runtime>::insert(
-			*PEOPLE_IDENTIFIER,
+		MembersSubscriber::set_current_ring_roots(
+			PEOPLE_IDENTIFIER,
 			0,
 			BoundedVec::try_from(roots).expect("revisions within MaxRecentRootsPerRing"),
 		);
@@ -1665,6 +1665,81 @@ mod credit_claimant_origin {
 			bind_alias();
 			assert_eq!(claimant(RuntimeOrigin::root(), ClaimantKind::Person), None);
 			assert_eq!(claimant(RuntimeOrigin::none(), ClaimantKind::Account), None);
+		});
+	}
+}
+
+/// Worst-case notifier-to-subscriber calls must fit the per-XCM-message weight budget.
+/// The calls arrive only via XCM Transact, so their declared dispatch weight is weighed
+/// into the message; a call above the MessageQueue service weight is marked permanently
+/// overweight and never executes.
+mod members_subscriber_xcm_budget {
+	use super::*;
+	use frame_support::{dispatch::GetDispatchInfo, traits::Get};
+	use indiv_pallet_members_subscriber::types::{
+		RingRootOp, RingRootUpdate, RingRootUpdatesBatch,
+	};
+	use indiv_support::{crypto::BandersnatchVrfVerifiable, traits::RingExponent};
+	use sp_runtime::BoundedVec;
+	use verifiable::{ring::RingDomainSize, GenerateVerifiable};
+
+	/// A full batch whose ring counter sits at the far end of its range, proving the
+	/// weight annotation is capped rather than growing with the counter.
+	fn worst_case_batch() -> RingRootUpdatesBatch<Runtime> {
+		let root = BandersnatchVrfVerifiable::finish_members(
+			BandersnatchVrfVerifiable::start_members(RingDomainSize::Domain11),
+		);
+		let max_updates =
+			<Runtime as indiv_pallet_members_subscriber::Config>::MaxUpdatesPerBatch::get();
+		let updates = (0..max_updates)
+			.map(|i| RingRootUpdate {
+				ring_index: i,
+				op: RingRootOp::Built { revision: 1, root: root.clone() },
+			})
+			.collect::<Vec<_>>();
+		RingRootUpdatesBatch {
+			identifier: *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER,
+			sequence: 1,
+			source_time: 1,
+			updates: BoundedVec::try_from(updates).expect("within MaxUpdatesPerBatch"),
+			next_ring_index: u32::MAX,
+		}
+	}
+
+	#[test]
+	fn subscriber_calls_fit_the_xcm_message_budget() {
+		sp_io::TestExternalities::default().execute_with(|| {
+			let budget =
+				next_asset_hub_paseo_runtime::dynamic_params::message_queue::MaxOnInitWeight::get()
+					.expect("MQ service weight configured");
+
+			// Transact instruction overhead is negligible next to the slack this asserts.
+			let calls = [
+				(
+					"initialize_ring_roots",
+					indiv_pallet_members_subscriber::Call::<Runtime>::initialize_ring_roots {
+						ring_exponent: RingExponent::R2e9,
+						roots: worst_case_batch(),
+					},
+				),
+				(
+					"process_ring_updates",
+					indiv_pallet_members_subscriber::Call::<Runtime>::process_ring_updates {
+						batch: worst_case_batch(),
+					},
+				),
+				(
+					"terminate_subscription",
+					indiv_pallet_members_subscriber::Call::<Runtime>::terminate_subscription {},
+				),
+			];
+			for (name, call) in calls {
+				let weight = call.get_dispatch_info().call_weight;
+				assert!(
+					weight.all_lte(budget),
+					"`{name}` worst-case weight {weight:?} exceeds the XCM message budget {budget:?}",
+				);
+			}
 		});
 	}
 }

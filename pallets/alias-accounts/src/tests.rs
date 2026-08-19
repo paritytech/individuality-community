@@ -18,7 +18,7 @@
 
 use crate::{
 	mock::*,
-	pallet::{AccountToAlias, AliasFee, AliasToAccount, Error},
+	pallet::{AccountToAlias, AliasToAccount, Error},
 };
 use frame_support::{assert_noop, assert_ok};
 use indiv_support::traits::{Alias, ContextualAlias, Identifier};
@@ -51,7 +51,7 @@ mod set_alias_account {
 	#[test]
 	fn succeeds_with_custom_context() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, 1_000);
 
 			assert_ok!(AliasAccounts::set_alias_account(
@@ -82,7 +82,7 @@ mod set_alias_account {
 	#[test]
 	fn rejects_invalid_collection() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, 1_000);
 
 			assert_noop!(
@@ -123,7 +123,7 @@ mod set_alias_account {
 	#[test]
 	fn fails_with_invalid_proof() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, 1_000);
 
 			assert_noop!(
@@ -144,7 +144,7 @@ mod set_alias_account {
 	#[test]
 	fn fails_with_insufficient_pgas() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, PAID_FEE - 1);
 
 			assert!(AliasAccounts::set_alias_account(
@@ -167,7 +167,7 @@ mod set_alias_account {
 	#[test]
 	fn rejects_when_signer_already_holds_a_different_alias() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, 10_000);
 
 			// First mapping under custom context.
@@ -200,7 +200,7 @@ mod set_alias_account {
 	#[test]
 	fn rejects_replay_when_already_set() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, 10_000);
 
 			assert_ok!(AliasAccounts::set_alias_account(
@@ -231,7 +231,7 @@ mod set_alias_account {
 	#[test]
 	fn allows_account_swap_paid_again() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, 10_000);
 			setup_pgas_for(BOB, 10_000);
 
@@ -278,7 +278,7 @@ mod set_alias_account {
 	#[test]
 	fn rejects_unsigned_origin() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 
 			assert_noop!(
 				AliasAccounts::set_alias_account(
@@ -298,7 +298,7 @@ mod set_alias_account {
 	#[test]
 	fn set_alias_in_new_revision_charges_fee() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, 10_000);
 
 			assert_ok!(AliasAccounts::set_alias_account(
@@ -334,7 +334,7 @@ mod set_alias_account {
 	#[test]
 	fn succeeds_with_zero_fee() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(0);
+			AliasFee::set(&Some(0));
 			// Deliberately do NOT fund ALICE with any PGAS.
 			assert_eq!(pgas_balance(ALICE), 0);
 
@@ -356,7 +356,7 @@ mod set_alias_account {
 	#[test]
 	fn fails_with_outdated_proof() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, 1_000);
 
 			let proof_valid_at = MOCK_GENESIS_TIME;
@@ -383,7 +383,7 @@ mod set_alias_account {
 	#[test]
 	fn fails_with_future_proof() {
 		new_test_ext().execute_with(|| {
-			AliasFee::<Test>::put(PAID_FEE);
+			AliasFee::set(&Some(PAID_FEE));
 			setup_pgas_for(ALICE, 1_000);
 
 			let proof_valid_at = MOCK_GENESIS_TIME + 10;
@@ -646,7 +646,7 @@ mod clean_up_stale_alias {
 		new_test_ext().execute_with(|| {
 			const CUSTOM_CONTEXT: Context = [42u8; 32];
 
-			AliasFee::<Test>::put(100u64);
+			AliasFee::set(&Some(100u64));
 			setup_pgas_for(ALICE, 10_000);
 			assert_ok!(AliasAccounts::set_alias_account(
 				RuntimeOrigin::signed(ALICE),
@@ -993,7 +993,7 @@ mod reprove_alias_account {
 	const PAID_FEE: u64 = 100;
 
 	fn setup_paid_alias() {
-		AliasFee::<Test>::put(PAID_FEE);
+		AliasFee::set(&Some(PAID_FEE));
 		setup_pgas_for(ALICE, 10_000);
 		assert_ok!(AliasAccounts::set_alias_account(
 			RuntimeOrigin::signed(ALICE),
@@ -1089,7 +1089,7 @@ mod reprove_alias_account {
 	fn rejects_revision_regression_on_same_ring() {
 		new_test_ext().execute_with(|| {
 			// Set up the paid mapping at revision 5.
-			AliasFee::<Test>::put(100u64);
+			AliasFee::set(&Some(100u64));
 			setup_pgas_for(ALICE, 10_000);
 			set_mock_ring_revision(PeopleCollection::get(), 0, 5);
 			assert_ok!(AliasAccounts::set_alias_account(
@@ -1158,38 +1158,6 @@ mod reprove_alias_account {
 					proof_valid_at,
 				),
 				crate::Error::<Test>::TimeOutOfRange
-			);
-		});
-	}
-}
-
-// ========== set_alias_fee tests ==========
-
-mod set_alias_fee {
-	use super::*;
-
-	#[test]
-	fn manager_origin_can_set_fee() {
-		new_test_ext().execute_with(|| {
-			assert_ok!(AliasAccounts::set_alias_fee(RuntimeOrigin::root(), 250));
-			assert_eq!(AliasFee::<Test>::get(), Some(250));
-
-			// Override.
-			assert_ok!(AliasAccounts::set_alias_fee(RuntimeOrigin::root(), 0));
-			assert_eq!(AliasFee::<Test>::get(), Some(0));
-		});
-	}
-
-	#[test]
-	fn non_manager_origin_rejected() {
-		new_test_ext().execute_with(|| {
-			assert_noop!(
-				AliasAccounts::set_alias_fee(RuntimeOrigin::signed(ALICE), 250),
-				DispatchError::BadOrigin
-			);
-			assert_noop!(
-				AliasAccounts::set_alias_fee(RuntimeOrigin::none(), 250),
-				DispatchError::BadOrigin
 			);
 		});
 	}

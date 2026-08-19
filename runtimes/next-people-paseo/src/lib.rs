@@ -278,10 +278,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 1_000_033,
+	spec_version: 1_000_035,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
-	transaction_version: 4,
+	transaction_version: 5,
 	system_version: 1,
 };
 
@@ -994,7 +994,7 @@ impl pallet_assets::Config for Runtime {
 	type Freezer = ();
 	type Holder = AssetsHolder;
 	type Extra = ();
-	type WeightInfo = weights::pallet_assets::WeightInfo<Runtime>;
+	type WeightInfo = weights::pallet_assets_assets::WeightInfo<Runtime>;
 	type CallbackHandle = ();
 	type AssetAccountDeposit = AssetAccountDeposit;
 	type RemoveItemsLimit = frame_support::traits::ConstU32<1000>;
@@ -1297,6 +1297,7 @@ construct_runtime!(
 		MembersNotifier: indiv_pallet_members_notifier = 69,
 		Airdrop: indiv_pallet_airdrop = 70,
 		Honour: indiv_pallet_honour = 71,
+		PeopleAirdrops: indiv_pallet_people_airdrops = 72,
 
 		// Migrations pallet
 		MultiBlockMigrations: pallet_migrations = 98,
@@ -1350,6 +1351,7 @@ mod benches {
 		[indiv_pallet_airdrop, Airdrop]
 		[indiv_pallet_relay_randomness, RelayRandomness]
 		[indiv_pallet_honour, Honour]
+		[indiv_pallet_people_airdrops, PeopleAirdrops]
 	);
 }
 

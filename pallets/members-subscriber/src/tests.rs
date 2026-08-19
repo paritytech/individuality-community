@@ -19,12 +19,12 @@
 use crate::{
 	mock::{MaxDeletedRingsPerCollection, MaxMissingRootsPerCollection, *},
 	pallet::{
-		Event, ProcessingState, RingCollectionExponents, RingCollectionStates, RingRoots,
-		Subscription,
+		CurrentGeneration, Event, ProcessingState, QueuedRingPurge, RingCollectionExponents,
+		RingCollectionStates, RingRoots, Subscription,
 	},
 	types::{
-		Identifier, RingCollectionState, RingRootOp, RingRootUpdate, RingRootUpdatesBatch,
-		SubscriptionStatus,
+		Identifier, RingCollectionState, RingCommitmentRecord, RingPurgeProgress, RingRootOp,
+		RingRootUpdate, RingRootUpdatesBatch, SubscriptionStatus,
 	},
 	Pallet,
 };
@@ -71,7 +71,24 @@ fn make_collection_ring_state(
 		next_ring_index,
 		missing_indices: missing,
 		deleted_indices: deleted,
+		..Default::default()
 	}
+}
+
+fn next_scan_index(identifier: Identifier) -> u32 {
+	RingCollectionStates::<Test>::get(identifier).next_scan_index
+}
+
+/// Roots stored under the current generation prefix.
+fn ring_roots(
+	identifier: Identifier,
+	ring_index: u32,
+) -> Option<BoundedVec<RingCommitmentRecord<Test>, MaxRecentRootsPerRing>> {
+	Pallet::<Test>::current_ring_roots(&identifier, ring_index)
+}
+
+fn has_ring_root(identifier: Identifier, ring_index: u32) -> bool {
+	ring_roots(identifier, ring_index).is_some()
 }
 
 fn is_missing(identifier: Identifier, idx: u32) -> bool {
@@ -88,9 +105,33 @@ fn total_missing_count() -> usize {
 		.sum()
 }
 
+/// Active subscription with both test collections initialized, which `process_ring_updates`
+/// requires before it accepts a batch.
 fn setup_active_subscription() {
 	Subscription::<Test>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
 	ProcessingState::<Test>::mutate(|s| s.last_processed_sequence = 1);
+	for identifier in [PEOPLE, PEOPLE_LITE] {
+		RingCollectionExponents::<Test>::insert(identifier, TEST_RING_EXPONENT);
+	}
+}
+
+/// Dispatches purge pages until all stale ring roots are physically removed.
+fn run_purge_to_completion() {
+	while QueuedRingPurge::<Test>::exists() {
+		assert_ok!(MembersSubscriber::purge_stale_ring_roots(RuntimeOrigin::from(
+			frame_system::RawOrigin::Authorized
+		)));
+	}
+}
+
+/// Queues a purge of `generation` starting at `page`.
+fn queue_purge(generation: u32, page: u32) {
+	QueuedRingPurge::<Test>::put(RingPurgeProgress { generation, page });
+}
+
+/// The queued purge as a `(generation, page)` pair.
+fn queued_purge() -> Option<(u32, u32)> {
+	QueuedRingPurge::<Test>::get().map(|p| (p.generation, p.page))
 }
 
 fn mock_ring_root_updates_batch(
@@ -234,7 +275,7 @@ mod ring_roots_initialization {
 			));
 
 			// Old ring root stored.
-			assert!(RingRoots::<Test>::get(PEOPLE, 0).is_some());
+			assert!(has_ring_root(PEOPLE, 0));
 			assert_eq!(RingCollectionStates::<Test>::get(PEOPLE).ring_count, 1);
 			assert_eq!(RingCollectionExponents::<Test>::get(PEOPLE), Some(RingExponent::R2e9));
 
@@ -263,10 +304,16 @@ mod ring_roots_initialization {
 				SubscriptionStatus::Active { initialized_at_sequence: 10 }
 			);
 
-			// Old ring root cleared, new one stored.
-			assert!(RingRoots::<Test>::get(PEOPLE, 0).is_none());
-			assert!(RingRoots::<Test>::get(PEOPLE, 5).is_some());
+			// Old ring root logically cleared: unreachable but still under the stale prefix.
+			assert!(!has_ring_root(PEOPLE, 0));
+			assert_eq!(RingRoots::<Test>::iter().count(), 2);
+			assert!(has_ring_root(PEOPLE, 5));
 			assert_eq!(RingCollectionStates::<Test>::get(PEOPLE).ring_count, 1);
+
+			// Purge removes the stale entry and keeps the new one.
+			run_purge_to_completion();
+			assert!(!has_ring_root(PEOPLE, 0));
+			assert!(has_ring_root(PEOPLE, 5));
 
 			// Stale exponent was wiped by `clear_all_ring_data` and replaced with the new one.
 			assert_eq!(RingCollectionExponents::<Test>::get(PEOPLE), Some(RingExponent::R2e14));
@@ -347,7 +394,7 @@ mod ring_roots_initialization {
 
 			// Each ring root has correct data.
 			for i in 0..3u32 {
-				let roots = RingRoots::<Test>::get(PEOPLE, i).expect("ring root should exist");
+				let roots = ring_roots(PEOPLE, i).expect("ring root should exist");
 				let record = roots.last().expect("at least one record");
 				assert_eq!(record.root, mock_ring_root(i as u64 + 100));
 				assert_eq!(record.revision, 1);
@@ -570,18 +617,19 @@ mod ring_roots_initialization {
 				batch2
 			));
 
-			// Old rings cleared, only new 3 exist
+			// Old rings logically cleared; purge removes them physically, only new 3 exist
+			run_purge_to_completion();
 			assert_eq!(RingRoots::<Test>::iter().count(), 3);
 			assert_eq!(get_ring_count(PEOPLE), 3);
 
 			// Old rings (0-4) don't exist
 			for i in 0..5u32 {
-				assert!(RingRoots::<Test>::get(PEOPLE, i).is_none());
+				assert!(!has_ring_root(PEOPLE, i));
 			}
 
 			// New rings (10-12) exist
 			for i in 10..13u32 {
-				assert!(RingRoots::<Test>::get(PEOPLE, i).is_some());
+				assert!(has_ring_root(PEOPLE, i));
 			}
 		});
 	}
@@ -780,9 +828,9 @@ mod ring_roots_initialization {
 			assert_eq!(total_missing_count(), 0);
 
 			// Ring roots actually stored for all indices
-			assert!(RingRoots::<Test>::contains_key(PEOPLE, 0));
-			assert!(RingRoots::<Test>::contains_key(PEOPLE, 1));
-			assert!(RingRoots::<Test>::contains_key(PEOPLE, 2));
+			assert!(has_ring_root(PEOPLE, 0));
+			assert!(has_ring_root(PEOPLE, 1));
+			assert!(has_ring_root(PEOPLE, 2));
 		});
 	}
 }
@@ -865,7 +913,7 @@ mod ring_roots_updates {
 			assert_eq!(ProcessingState::<Test>::get().last_processed_sequence, 1);
 			// Replay batch is processed — ring root is stored
 			assert_eq!(RingRoots::<Test>::iter().count(), 1);
-			assert!(RingRoots::<Test>::contains_key(PEOPLE, 0));
+			assert!(has_ring_root(PEOPLE, 0));
 		});
 	}
 
@@ -913,7 +961,7 @@ mod ring_roots_updates {
 			// Ring roots were stored
 			assert_eq!(RingRoots::<Test>::iter().count(), 3);
 			for i in 0..3u32 {
-				let roots = RingRoots::<Test>::get(PEOPLE, i).expect("ring root should exist");
+				let roots = ring_roots(PEOPLE, i).expect("ring root should exist");
 				let record = roots.last().expect("at least one record");
 				assert_eq!(record.root, mock_ring_root(i as u64 + 200));
 				assert_eq!(record.revision, 2);
@@ -1133,7 +1181,7 @@ mod ring_roots_updates {
 
 			// All expected roots exist
 			for i in 0..5u32 {
-				assert!(RingRoots::<Test>::contains_key(PEOPLE, i), "Ring {i} should exist");
+				assert!(has_ring_root(PEOPLE, i), "Ring {i} should exist");
 			}
 		});
 	}
@@ -1167,10 +1215,10 @@ mod ring_roots_updates {
 			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch2));
 
 			// Ring 1 should be removed
-			assert!(RingRoots::<Test>::get(PEOPLE, 1).is_none());
+			assert!(!has_ring_root(PEOPLE, 1));
 			// Rings 0 and 2 still exist
-			assert!(RingRoots::<Test>::get(PEOPLE, 0).is_some());
-			assert!(RingRoots::<Test>::get(PEOPLE, 2).is_some());
+			assert!(has_ring_root(PEOPLE, 0));
+			assert!(has_ring_root(PEOPLE, 2));
 			// Count decremented
 			assert_eq!(get_ring_count(PEOPLE), 2);
 			// Deleted index tracked
@@ -1286,6 +1334,7 @@ mod subscription_termination {
 			// Terminating
 			assert_ok!(MembersSubscriber::terminate_subscription(RuntimeOrigin::root()));
 			assert_eq!(Subscription::<Test>::get(), SubscriptionStatus::Terminated);
+			run_purge_to_completion();
 			assert_eq!(RingRoots::<Test>::iter().count(), 0);
 
 			// Re-initializing with new sequence
@@ -1360,11 +1409,15 @@ mod subscription_termination {
 			assert_ok!(MembersSubscriber::terminate_subscription(RuntimeOrigin::root()));
 			assert_eq!(Subscription::<Test>::get(), SubscriptionStatus::Terminated);
 
-			// All ring data should be cleared
-			assert_eq!(RingRoots::<Test>::iter().count(), 0);
+			// Small maps cleared inline; ring roots await the purge
+			assert!(queued_purge().is_some());
 			assert_eq!(RingCollectionStates::<Test>::iter().count(), 0);
 			assert_eq!(RingCollectionExponents::<Test>::iter().count(), 0);
 			assert_eq!(ProcessingState::<Test>::get(), Default::default());
+
+			// Purge removes all stale ring roots
+			run_purge_to_completion();
+			assert_eq!(RingRoots::<Test>::iter().count(), 0);
 		});
 	}
 }
@@ -1642,7 +1695,7 @@ mod missing_rings_detection {
 			// Index 1 no longer in deleted indices
 			assert!(!RingCollectionStates::<Test>::get(PEOPLE).deleted_indices.contains(&1));
 			// And is correctly stored
-			assert!(RingRoots::<Test>::get(PEOPLE, 1).is_some());
+			assert!(has_ring_root(PEOPLE, 1));
 			assert_eq!(get_ring_count(PEOPLE), 3);
 		});
 	}
@@ -1710,7 +1763,7 @@ mod missing_rings_detection {
 
 			// Batch 2 (continuation, same sequence) with lower next_ring_index — should not
 			// decrease
-			let batch2 = mock_ring_root_updates_batch(1, 1000, [5], PEOPLE, 3);
+			let batch2 = mock_ring_root_updates_batch(1, 1000, [2], PEOPLE, 3);
 			assert_ok!(MembersSubscriber::initialize_ring_roots(
 				RuntimeOrigin::root(),
 				TEST_RING_EXPONENT,
@@ -1871,7 +1924,7 @@ mod recent_ring_roots {
 				batch
 			));
 
-			let roots = RingRoots::<Test>::get(PEOPLE, 0).expect("should exist");
+			let roots = ring_roots(PEOPLE, 0).expect("should exist");
 			assert_eq!(roots.len(), 1);
 			assert_eq!(roots[0].root, mock_ring_root(0));
 			assert_eq!(roots[0].revision, 1);
@@ -1887,7 +1940,7 @@ mod recent_ring_roots {
 			let batch1 = mock_ring_root_updates_batch(2, 1000, [0], PEOPLE, 1);
 			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch1));
 
-			let roots = RingRoots::<Test>::get(PEOPLE, 0).unwrap();
+			let roots = ring_roots(PEOPLE, 0).unwrap();
 			assert_eq!(roots.len(), 1);
 
 			// Second root at same ring index with different revision
@@ -1908,7 +1961,7 @@ mod recent_ring_roots {
 			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch2));
 
 			// Both roots should be in the vec (MaxRecentRootsPerRing = 2)
-			let roots = RingRoots::<Test>::get(PEOPLE, 0).unwrap();
+			let roots = ring_roots(PEOPLE, 0).unwrap();
 			assert_eq!(roots.len(), 2);
 			assert_eq!(roots[0].revision, 1); // Oldest
 			assert_eq!(roots[0].root, mock_ring_root(0));
@@ -1963,7 +2016,7 @@ mod recent_ring_roots {
 			};
 			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch3));
 
-			let roots = RingRoots::<Test>::get(PEOPLE, 0).unwrap();
+			let roots = ring_roots(PEOPLE, 0).unwrap();
 			assert_eq!(roots.len(), 2);
 			// Revision 1 evicted, window now contains revisions 2 and 3
 			assert_eq!(roots[0].revision, 2);
@@ -1997,7 +2050,7 @@ mod recent_ring_roots {
 				next_ring_index: 1,
 			};
 			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch2));
-			assert_eq!(RingRoots::<Test>::get(PEOPLE, 0).unwrap().len(), 2);
+			assert_eq!(ring_roots(PEOPLE, 0).unwrap().len(), 2);
 
 			// Deleting the ring removes the entire BoundedVec
 			let mut del_updates = BoundedVec::new();
@@ -2013,7 +2066,7 @@ mod recent_ring_roots {
 			};
 			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), del_batch));
 
-			assert!(RingRoots::<Test>::get(PEOPLE, 0).is_none());
+			assert!(!has_ring_root(PEOPLE, 0));
 			assert_eq!(get_ring_count(PEOPLE), 0);
 		});
 	}
@@ -2038,7 +2091,7 @@ mod recent_ring_roots {
 				next_ring_index: 1,
 			};
 			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), del_batch));
-			assert!(RingRoots::<Test>::get(PEOPLE, 0).is_none());
+			assert!(!has_ring_root(PEOPLE, 0));
 
 			// Re-adding starts with fresh window of length 1
 			let mut readd = BoundedVec::new();
@@ -2057,7 +2110,7 @@ mod recent_ring_roots {
 			};
 			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), readd_batch));
 
-			let roots = RingRoots::<Test>::get(PEOPLE, 0).unwrap();
+			let roots = ring_roots(PEOPLE, 0).unwrap();
 			assert_eq!(roots.len(), 1);
 			assert_eq!(roots[0].revision, 5);
 			assert_eq!(get_ring_count(PEOPLE), 1);
@@ -2320,7 +2373,7 @@ mod proof_verification {
 			push_revision(PEOPLE, 3, 7);
 
 			// Sanity: only the two most recent revisions are retained.
-			let roots = RingRoots::<Test>::get(PEOPLE, RING).unwrap();
+			let roots = ring_roots(PEOPLE, RING).unwrap();
 			assert_eq!(roots.len(), 2);
 			assert_eq!(roots[0].revision, 2);
 			assert_eq!(roots[1].revision, 3);
@@ -2491,7 +2544,7 @@ mod proof_verification {
 
 			// At the deadline it is rejected even though it is still in the window.
 			set_time_secs(start + OldRootRetentionDuration::get());
-			assert_eq!(RingRoots::<Test>::get(PEOPLE, RING).unwrap().len(), 2);
+			assert_eq!(ring_roots(PEOPLE, RING).unwrap().len(), 2);
 			assert_noop!(
 				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 1, CTX, MSG),
 				Error::<Test>::RevisionExpired,
@@ -2597,6 +2650,735 @@ mod proof_verification {
 				Pallet::<Test>::verify_membership(&PEOPLE, &proof_for(42), RING, 0, CTX, MSG),
 				Error::<Test>::NoRoot,
 			);
+		});
+	}
+}
+
+mod scan_cap_and_weights {
+	use super::*;
+	use crate::{pallet::Call, weights::WeightInfo};
+	use frame_support::dispatch::GetDispatchInfo;
+
+	#[test]
+	fn charge_is_capped_as_next_ring_index_grows() {
+		new_test_ext().execute_with(|| {
+			let cap = MaxGapScanPerBatch::get();
+			let batch_at_cap = mock_ring_root_updates_batch(2, 1000, [0], PEOPLE, cap);
+			let batch_at_max = mock_ring_root_updates_batch(2, 1000, [0], PEOPLE, u32::MAX);
+
+			// Declared weight is identical at the cap and far beyond it.
+			let update_at_cap = Call::<Test>::process_ring_updates { batch: batch_at_cap.clone() }
+				.get_dispatch_info()
+				.call_weight;
+			let update_at_max = Call::<Test>::process_ring_updates { batch: batch_at_max.clone() }
+				.get_dispatch_info()
+				.call_weight;
+			assert_eq!(update_at_cap, update_at_max);
+
+			let init_at_cap = Call::<Test>::initialize_ring_roots {
+				ring_exponent: TEST_RING_EXPONENT,
+				roots: batch_at_cap,
+			}
+			.get_dispatch_info()
+			.call_weight;
+			let init_at_max = Call::<Test>::initialize_ring_roots {
+				ring_exponent: TEST_RING_EXPONENT,
+				roots: batch_at_max,
+			}
+			.get_dispatch_info()
+			.call_weight;
+			assert_eq!(init_at_cap, init_at_max);
+		});
+	}
+
+	#[test]
+	fn process_ring_updates_refunds_to_scanned_count() {
+		new_test_ext().execute_with(|| {
+			setup_active_subscription();
+			// Scan already caught up to the frontier, so only one new index is examined.
+			let mut state = make_collection_ring_state(0, 999, &[], &[]);
+			state.next_scan_index = 999;
+			RingCollectionStates::<Test>::insert(PEOPLE, state);
+
+			let batch = mock_ring_root_updates_batch(2, 1000, [999], PEOPLE, 1000);
+			let charged = Call::<Test>::process_ring_updates { batch: batch.clone() }
+				.get_dispatch_info()
+				.call_weight;
+
+			// Subscriber processes a batch whose counter exceeds the scan cap.
+			let post =
+				MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch).unwrap();
+
+			// Actual weight is priced on the single scanned index and undercuts the capped charge.
+			let actual = post.actual_weight.unwrap();
+			let expected = <() as WeightInfo>::process_ring_updates(1)
+				.saturating_add(<() as WeightInfo>::detect_missing_in_range(1));
+			assert_eq!(actual, expected);
+			assert!(actual.all_lt(charged));
+		});
+	}
+
+	#[test]
+	fn charge_covers_a_lagging_cursor_under_a_small_batch_counter() {
+		new_test_ext().execute_with(|| {
+			setup_active_subscription();
+			// Frontier sits far ahead of the scan cursor after an earlier jump.
+			RingCollectionStates::<Test>::insert(
+				PEOPLE,
+				make_collection_ring_state(1, 1000, &[], &[]),
+			);
+
+			// A later batch reports a counter far below the stored frontier.
+			let batch = mock_ring_root_updates_batch(2, 1000, [], PEOPLE, 2);
+			let charged = Call::<Test>::process_ring_updates { batch: batch.clone() }
+				.get_dispatch_info()
+				.call_weight;
+
+			let post =
+				MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch).unwrap();
+
+			// The scan still walked a page from the cursor, and the charge covered it.
+			assert_eq!(next_scan_index(PEOPLE), MaxGapScanPerBatch::get());
+			assert!(post.actual_weight.unwrap().all_lte(charged));
+		});
+	}
+
+	#[test]
+	fn scan_stops_within_the_cap() {
+		new_test_ext().execute_with(|| {
+			setup_active_subscription();
+
+			// Batch pushes the frontier far past the scan cap with no rings stored.
+			let batch = mock_ring_root_updates_batch(2, 1000, [], PEOPLE, 10_000);
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch));
+
+			// Exactly one page is examined, and the cursor stops at its end.
+			assert_eq!(
+				RingCollectionStates::<Test>::get(PEOPLE).missing_indices.len(),
+				MaxGapScanPerBatch::get() as usize,
+			);
+			assert_eq!(next_scan_index(PEOPLE), MaxGapScanPerBatch::get());
+		});
+	}
+
+	#[test]
+	fn scan_resumes_past_the_cap_on_later_batches() {
+		new_test_ext().execute_with(|| {
+			setup_active_subscription();
+			let cap = MaxGapScanPerBatch::get();
+
+			// Frontier jumps several pages past the scan cap with no rings stored.
+			let batch = mock_ring_root_updates_batch(2, 1000, [], PEOPLE, 3 * cap);
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch));
+
+			// First page records one gap per scanned index and parks the cursor at its end.
+			assert_eq!(
+				RingCollectionStates::<Test>::get(PEOPLE).missing_indices.len(),
+				cap as usize,
+			);
+			assert_eq!(next_scan_index(PEOPLE), cap);
+
+			// A later batch at the same frontier continues from the cursor.
+			let batch = mock_ring_root_updates_batch(3, 2000, [], PEOPLE, 3 * cap);
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch));
+
+			// Gaps beyond the first page are detected instead of being skipped for good.
+			let state = RingCollectionStates::<Test>::get(PEOPLE);
+			assert_eq!(state.missing_indices.len(), 2 * cap as usize);
+			assert!(state.missing_indices.contains_key(&cap));
+			assert_eq!(state.next_scan_index, 2 * cap);
+		});
+	}
+
+	#[test]
+	fn capacity_break_leaves_the_cursor_in_place() {
+		new_test_ext().execute_with(|| {
+			setup_active_subscription();
+			// Missing tracking full with indices above the scan window
+			let missing = (10_000..10_000 + MaxMissingRootsPerCollection::get())
+				.map(|idx| (idx, 0))
+				.collect::<Vec<_>>();
+			RingCollectionStates::<Test>::insert(
+				PEOPLE,
+				make_collection_ring_state(0, 0, &missing, &[]),
+			);
+
+			let batch = mock_ring_root_updates_batch(2, 1000, [], PEOPLE, 100);
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch));
+
+			// Index 0 could not be recorded, so the next scan retries it.
+			assert_eq!(next_scan_index(PEOPLE), 0);
+			assert!(!is_missing(PEOPLE, 0));
+		});
+	}
+
+	#[test]
+	fn all_accounted_for_advances_the_cursor() {
+		new_test_ext().execute_with(|| {
+			setup_active_subscription();
+
+			// Every index below the frontier arrives in the batch.
+			let batch = mock_ring_root_updates_batch(2, 1000, 0..3, PEOPLE, 3);
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch));
+
+			// The scan is caught up without examining any index.
+			assert_eq!(next_scan_index(PEOPLE), 3);
+			assert!(RingCollectionStates::<Test>::get(PEOPLE).missing_indices.is_empty());
+		});
+	}
+
+	#[test]
+	fn frontier_covers_indices_above_the_batch_counter() {
+		new_test_ext().execute_with(|| {
+			setup_active_subscription();
+
+			// Notifier delivers an index at or above the counter it reports.
+			let batch = mock_ring_root_updates_batch(2, 1000, [5], PEOPLE, 1);
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch));
+
+			// Frontier covers the delivered index, so the gaps below it stay detectable.
+			assert_eq!(RingCollectionStates::<Test>::get(PEOPLE).next_ring_index, 6);
+			assert!(is_missing(PEOPLE, 0));
+			assert!(!is_missing(PEOPLE, 5));
+		});
+	}
+
+	#[test]
+	fn initialize_refunds_clear_cost_when_not_reinitializing() {
+		new_test_ext().execute_with(|| {
+			// Ring 1 arrives and ring 0 does not, so the scan examines both indices.
+			let batch = mock_ring_root_updates_batch(1, 1000, [1], PEOPLE, 2);
+			let charged = Call::<Test>::initialize_ring_roots {
+				ring_exponent: TEST_RING_EXPONENT,
+				roots: batch.clone(),
+			}
+			.get_dispatch_info()
+			.call_weight;
+
+			// Fresh initialization takes the cheap branch without the clear.
+			let post = MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch,
+			)
+			.unwrap();
+
+			let actual = post.actual_weight.unwrap();
+			let expected = <() as WeightInfo>::initialize_ring_roots(1)
+				.saturating_add(<() as WeightInfo>::detect_missing_in_range(2));
+			assert_eq!(actual, expected);
+			assert!(actual.all_lt(charged));
+		});
+	}
+
+	#[test]
+	fn initialize_charges_clear_cost_when_reinitializing() {
+		new_test_ext().execute_with(|| {
+			let batch = mock_ring_root_updates_batch(1, 1000, [0], PEOPLE, 1);
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch
+			));
+
+			// Re-initialization with a higher sequence takes the clearing branch.
+			let batch = mock_ring_root_updates_batch(2, 2000, [0], PEOPLE, 1);
+			let post = MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch,
+			)
+			.unwrap();
+
+			// The only ring is delivered, so the scan is caught up without examining an index.
+			let expected = <() as WeightInfo>::initialize_ring_roots(1)
+				.saturating_add(<() as WeightInfo>::detect_missing_in_range(0))
+				.saturating_add(<() as WeightInfo>::clear_ring_data());
+			assert_eq!(post.actual_weight.unwrap(), expected);
+		});
+	}
+}
+
+mod generation_and_purge {
+	use super::*;
+	use crate::{pallet::Call, weights::WeightInfo};
+	use frame_support::{dispatch::GetDispatchInfo, traits::Authorize};
+	use indiv_support::traits::MembershipProver;
+	use sp_runtime::transaction_validity::{
+		InvalidTransaction, TransactionSource, TransactionValidityError,
+	};
+
+	fn authorized_origin() -> RuntimeOrigin {
+		RuntimeOrigin::from(frame_system::RawOrigin::Authorized)
+	}
+
+	fn insert_ring_entry(identifier: Identifier, ring_index: u32, generation: u32) {
+		let mut roots = BoundedVec::new();
+		roots
+			.try_push(RingCommitmentRecord {
+				root: mock_ring_root(ring_index as u64),
+				revision: 1,
+				source_time: 1000,
+				source_sequence: 1,
+			})
+			.unwrap();
+		RingRoots::<Test>::insert((generation, identifier, ring_index), roots);
+	}
+
+	#[test]
+	fn reinit_hides_old_roots_immediately() {
+		new_test_ext().execute_with(|| {
+			let batch = mock_ring_root_updates_batch(1, 1000, [0], PEOPLE, 1);
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch
+			));
+			assert_eq!(Pallet::<Test>::ring_revision(&PEOPLE, 0), Some(1));
+
+			// Notifier re-initializes with a higher sequence and a different ring.
+			let batch = mock_ring_root_updates_batch(2, 2000, [5], PEOPLE, 6);
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch
+			));
+
+			// Old root is physically stored under the stale prefix but invisible to the prover.
+			assert!(!has_ring_root(PEOPLE, 0));
+			assert_eq!(RingRoots::<Test>::iter().count(), 2);
+			assert_eq!(Pallet::<Test>::ring_revision(&PEOPLE, 0), None);
+			assert!(!Pallet::<Test>::is_revision_valid(&PEOPLE, 0, 1));
+			assert_eq!(Pallet::<Test>::ring_revision(&PEOPLE, 5), Some(1));
+		});
+	}
+
+	#[test]
+	fn built_over_stale_entry_resets_window() {
+		new_test_ext().execute_with(|| {
+			let batch = mock_ring_root_updates_batch(1, 1000, [0], PEOPLE, 1);
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch
+			));
+			assert_ok!(MembersSubscriber::terminate_subscription(RuntimeOrigin::root()));
+
+			// Fresh initialization writes the same ring index over the stale entry.
+			let mut updates: BoundedVec<RingRootUpdate<Test>, MaxUpdatesPerBatch> =
+				BoundedVec::new();
+			updates
+				.try_push(RingRootUpdate {
+					ring_index: 0,
+					op: RingRootOp::Built { revision: 5, root: mock_ring_root(99) },
+				})
+				.unwrap();
+			let batch = RingRootUpdatesBatch::<Test> {
+				identifier: PEOPLE,
+				sequence: 10,
+				source_time: 2000,
+				updates,
+				next_ring_index: 1,
+			};
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch
+			));
+
+			// The window restarts instead of appending across generations.
+			let roots = ring_roots(PEOPLE, 0).unwrap();
+			assert_eq!(roots.len(), 1);
+			assert_eq!(roots[0].revision, 5);
+			assert_eq!(get_ring_count(PEOPLE), 1);
+		});
+	}
+
+	#[test]
+	fn deleted_op_on_stale_entry_does_not_underflow_ring_count() {
+		new_test_ext().execute_with(|| {
+			let batch = mock_ring_root_updates_batch(1, 1000, [0], PEOPLE, 1);
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch
+			));
+			assert_ok!(MembersSubscriber::terminate_subscription(RuntimeOrigin::root()));
+
+			// Fresh initialization deletes a ring index that only exists as a stale entry.
+			let mut updates: BoundedVec<RingRootUpdate<Test>, MaxUpdatesPerBatch> =
+				BoundedVec::new();
+			updates
+				.try_push(RingRootUpdate { ring_index: 0, op: RingRootOp::Deleted })
+				.unwrap();
+			let batch = RingRootUpdatesBatch::<Test> {
+				identifier: PEOPLE,
+				sequence: 10,
+				source_time: 2000,
+				updates,
+				next_ring_index: 1,
+			};
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch
+			));
+
+			// The delete finds nothing under the live prefix and ring_count stays at zero.
+			assert!(!has_ring_root(PEOPLE, 0));
+			assert_eq!(get_ring_count(PEOPLE), 0);
+
+			// The stale entry is unreachable until the purge removes it.
+			run_purge_to_completion();
+			assert_eq!(RingRoots::<Test>::iter().count(), 0);
+		});
+	}
+
+	#[test]
+	fn detect_reflags_stale_entries_as_missing() {
+		new_test_ext().execute_with(|| {
+			let batch = mock_ring_root_updates_batch(1, 1000, [0, 1], PEOPLE, 2);
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch
+			));
+			assert_ok!(MembersSubscriber::terminate_subscription(RuntimeOrigin::root()));
+
+			// Fresh initialization restores only ring 1 of the previous two.
+			let batch = mock_ring_root_updates_batch(10, 2000, [1], PEOPLE, 2);
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				batch
+			));
+
+			// The stale entry at index 0 counts as missing again.
+			assert!(is_missing(PEOPLE, 0));
+			assert!(!is_missing(PEOPLE, 1));
+		});
+	}
+
+	#[test]
+	fn purge_removes_only_stale_entries() {
+		new_test_ext().execute_with(|| {
+			insert_ring_entry(PEOPLE, 1, 0);
+			insert_ring_entry(PEOPLE, 2, 0);
+			insert_ring_entry(PEOPLE, 3, 1);
+			CurrentGeneration::<Test>::put(1);
+			queue_purge(0, 0);
+
+			// A single page removes both stale entries and completes the purge.
+			assert_ok!(MembersSubscriber::purge_stale_ring_roots(authorized_origin()));
+
+			assert_eq!(RingRoots::<Test>::iter().count(), 1);
+			assert!(has_ring_root(PEOPLE, 3));
+			assert!(queued_purge().is_none());
+		});
+	}
+
+	#[test]
+	fn purge_pages_advance_until_done() {
+		// `clear_prefix` counts backend deletions only, so entries must be committed out of
+		// the overlay for the page limit to bite.
+		let mut ext = new_test_ext();
+		let page = PurgePageSize::get();
+		let total = 2 * page + 50;
+
+		// Two full pages and a remainder are stored under a stale generation.
+		ext.execute_with(|| {
+			for i in 0..total {
+				insert_ring_entry(PEOPLE, i, 0);
+			}
+			CurrentGeneration::<Test>::put(1);
+			queue_purge(0, 0);
+		});
+		ext.commit_all().expect("commit overlay to backend");
+
+		// First page removes exactly one page and advances the page counter.
+		ext.execute_with(|| {
+			assert_ok!(MembersSubscriber::purge_stale_ring_roots(authorized_origin()));
+			assert_eq!(queued_purge(), Some((0, 1)));
+			assert_eq!(RingRoots::<Test>::iter().count(), (total - page) as usize);
+		});
+		ext.commit_all().expect("commit deletions to backend");
+
+		// The next page resumes at the first surviving key instead of restarting.
+		ext.execute_with(|| {
+			assert_ok!(MembersSubscriber::purge_stale_ring_roots(authorized_origin()));
+			assert_eq!(queued_purge(), Some((0, 2)));
+			assert_eq!(RingRoots::<Test>::iter().count(), 50);
+		});
+		ext.commit_all().expect("commit deletions to backend");
+
+		// The short final page empties the prefix and completes the purge.
+		ext.execute_with(|| {
+			assert_ok!(MembersSubscriber::purge_stale_ring_roots(authorized_origin()));
+			assert_eq!(RingRoots::<Test>::iter().count(), 0);
+			assert!(queued_purge().is_none());
+		});
+	}
+
+	#[test]
+	fn purge_advances_to_the_next_stale_generation() {
+		new_test_ext().execute_with(|| {
+			// Two clears in a row leave two stale generations behind.
+			insert_ring_entry(PEOPLE, 0, 0);
+			CurrentGeneration::<Test>::put(1);
+			insert_ring_entry(PEOPLE, 1, 1);
+			CurrentGeneration::<Test>::put(2);
+			insert_ring_entry(PEOPLE, 2, 2);
+			queue_purge(0, 0);
+
+			// The first sweep finishes generation 0 and queues generation 1.
+			assert_ok!(MembersSubscriber::purge_stale_ring_roots(authorized_origin()));
+			assert_eq!(queued_purge(), Some((1, 0)));
+
+			// Every stale generation is removed and the live one survives.
+			run_purge_to_completion();
+			assert_eq!(RingRoots::<Test>::iter().count(), 1);
+			assert!(has_ring_root(PEOPLE, 2));
+		});
+	}
+
+	#[test]
+	fn purge_refunds_to_removed_count() {
+		// The refund is priced on backend removals, so the entries must leave the overlay.
+		let mut ext = new_test_ext();
+
+		// Three stale entries, well under a full page.
+		ext.execute_with(|| {
+			insert_ring_entry(PEOPLE, 0, 0);
+			insert_ring_entry(PEOPLE, 1, 0);
+			insert_ring_entry(PEOPLE, 2, 0);
+			CurrentGeneration::<Test>::put(1);
+			queue_purge(0, 0);
+		});
+		ext.commit_all().expect("commit overlay to backend");
+
+		ext.execute_with(|| {
+			let charged = Call::<Test>::purge_stale_ring_roots {}.get_dispatch_info().call_weight;
+
+			// A partial page refunds down to the number of entries removed.
+			let post = MembersSubscriber::purge_stale_ring_roots(authorized_origin()).unwrap();
+			let actual = post.actual_weight.unwrap();
+			assert_eq!(actual, <() as WeightInfo>::purge_stale_ring_roots(3));
+			assert!(actual.all_lt(charged));
+		});
+	}
+
+	#[test]
+	fn ocw_submits_purge_while_terminated() {
+		new_test_ext().execute_with(|| {
+			Subscription::<Test>::put(SubscriptionStatus::Terminated);
+			CurrentGeneration::<Test>::put(1);
+			queue_purge(0, 0);
+
+			// Offchain worker runs on a terminated subscription.
+			Pallet::<Test>::offchain_worker(1);
+
+			assert_eq!(pending_ocw_tx_count(), 1);
+		});
+	}
+
+	#[test]
+	fn ocw_skips_purge_when_none_pending() {
+		new_test_ext().execute_with(|| {
+			Subscription::<Test>::put(SubscriptionStatus::Terminated);
+
+			Pallet::<Test>::offchain_worker(1);
+
+			assert_eq!(pending_ocw_tx_count(), 0);
+		});
+	}
+
+	#[test]
+	fn authorize_purge_rejects_external_source() {
+		new_test_ext().execute_with(|| {
+			CurrentGeneration::<Test>::put(1);
+			queue_purge(0, 0);
+			let call = Call::<Test>::purge_stale_ring_roots {};
+
+			let result = call.authorize(TransactionSource::External).unwrap();
+
+			assert_eq!(
+				result.unwrap_err(),
+				TransactionValidityError::from(InvalidTransaction::Call)
+			);
+		});
+	}
+
+	#[test]
+	fn authorize_purge_rejects_when_nothing_to_purge() {
+		new_test_ext().execute_with(|| {
+			let call = Call::<Test>::purge_stale_ring_roots {};
+
+			let result = call.authorize(TransactionSource::InBlock).unwrap();
+
+			assert_eq!(
+				result.unwrap_err(),
+				TransactionValidityError::from(InvalidTransaction::Custom(0))
+			);
+		});
+	}
+
+	#[test]
+	fn authorize_purge_tags_each_page() {
+		new_test_ext().execute_with(|| {
+			let call = Call::<Test>::purge_stale_ring_roots {};
+			// Two clears happened, so generations 0 and 1 are both stale.
+			CurrentGeneration::<Test>::put(2);
+
+			// The first page of the first stale generation.
+			queue_purge(0, 0);
+			let first = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
+
+			// A later page of the same generation is a distinct pool entry.
+			queue_purge(0, 1);
+			let next_page = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
+
+			// So is the first page of the next stale generation.
+			queue_purge(1, 0);
+			let next_generation = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
+
+			assert_ne!(first.provides, next_page.provides);
+			assert_ne!(first.provides, next_generation.provides);
+		});
+	}
+
+	#[test]
+	fn authorize_purge_rejects_the_live_generation() {
+		new_test_ext().execute_with(|| {
+			// A live entry sits in generation 0, and a purge is queued for that same
+			// generation.
+			insert_ring_entry(PEOPLE, 0, 0);
+			queue_purge(0, 0);
+			let call = Call::<Test>::purge_stale_ring_roots {};
+
+			let result = call.authorize(TransactionSource::InBlock).unwrap();
+
+			// The call never reaches dispatch, so the live entry cannot be cleared.
+			assert_eq!(
+				result.unwrap_err(),
+				TransactionValidityError::from(InvalidTransaction::Custom(1))
+			);
+			assert!(RingRoots::<Test>::contains_key((0, PEOPLE, 0)));
+			assert_eq!(queued_purge(), Some((0, 0)));
+		});
+	}
+}
+
+mod collection_bound {
+	use super::*;
+	use crate::{pallet::Call, weights::WeightInfo, Error};
+	use frame_support::{
+		dispatch::{DispatchResultWithPostInfo, GetDispatchInfo},
+		traits::Get,
+	};
+
+	fn identifier(n: u8) -> Identifier {
+		[n; 32]
+	}
+
+	fn collection_count() -> usize {
+		RingCollectionExponents::<Test>::iter_keys().count()
+	}
+
+	fn init_collection(n: u8) -> DispatchResultWithPostInfo {
+		MembersSubscriber::initialize_ring_roots(
+			RuntimeOrigin::root(),
+			TEST_RING_EXPONENT,
+			mock_ring_root_updates_batch(1, 1000, [0], identifier(n), 1),
+		)
+	}
+
+	#[test]
+	fn rejects_a_collection_past_max_collections() {
+		new_test_ext().execute_with(|| {
+			// Notifier initializes collections up to the bound.
+			for n in 0..MaxCollections::get() as u8 {
+				assert_ok!(init_collection(n));
+			}
+			assert_eq!(collection_count(), MaxCollections::get() as usize);
+
+			// One collection past the bound is refused.
+			assert_noop!(
+				init_collection(MaxCollections::get() as u8),
+				Error::<Test>::TooManyCollections
+			);
+			assert_eq!(collection_count(), MaxCollections::get() as usize);
+		});
+	}
+
+	#[test]
+	fn re_initializing_a_known_collection_does_not_count_twice() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(init_collection(0));
+
+			// A later part of the same initialization repeats the identifier.
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				mock_ring_root_updates_batch(1, 1000, [1], identifier(0), 2)
+			));
+
+			assert_eq!(collection_count(), 1);
+		});
+	}
+
+	#[test]
+	fn clearing_ring_data_frees_the_bound_again() {
+		new_test_ext().execute_with(|| {
+			for n in 0..MaxCollections::get() as u8 {
+				assert_ok!(init_collection(n));
+			}
+
+			// Notifier re-initializes with a higher sequence, which wipes every collection.
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				mock_ring_root_updates_batch(2, 2000, [0], identifier(200), 1)
+			));
+
+			// Only the re-initialized collection counts, so the bound has room again.
+			assert_eq!(collection_count(), 1);
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				mock_ring_root_updates_batch(2, 2000, [0], identifier(201), 1)
+			));
+			assert_eq!(collection_count(), 2);
+		});
+	}
+
+	#[test]
+	fn updates_for_an_uninitialized_collection_are_refused() {
+		new_test_ext().execute_with(|| {
+			// Active subscription, but this collection never went through initialization.
+			Subscription::<Test>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
+			ProcessingState::<Test>::mutate(|s| s.last_processed_sequence = 1);
+			let unknown = identifier(9);
+
+			let batch = mock_ring_root_updates_batch(2, 2000, [0], unknown, 1);
+			let charged = Call::<Test>::process_ring_updates { batch: batch.clone() }
+				.get_dispatch_info()
+				.call_weight;
+			let post =
+				MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch).unwrap();
+
+			// No state is created, so the collection cannot consume the bound.
+			assert!(!RingCollectionStates::<Test>::contains_key(unknown));
+			assert!(!has_ring_root(unknown, 0));
+			assert_eq!(collection_count(), 0);
+
+			// Weight refunds to the early return plus the exponent read.
+			let actual = post.actual_weight.unwrap();
+			let db: frame_support::weights::RuntimeDbWeight =
+				<Test as frame_system::Config>::DbWeight::get();
+			let expected =
+				<() as WeightInfo>::process_ring_updates_stale_batch().saturating_add(db.reads(1));
+			assert_eq!(actual, expected);
+			assert!(actual.all_lt(charged));
 		});
 	}
 }

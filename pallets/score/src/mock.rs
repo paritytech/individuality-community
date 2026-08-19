@@ -216,8 +216,13 @@ impl indiv_pallet_people::Config for Test {
 	type BenchmarkHelper = ();
 }
 
+parameter_types! {
+	pub const NetworkSuffix: &'static [u8] = b"paseo";
+}
+
 impl crate::Config for Test {
 	type WeightInfo = ();
+	type Suffix = NetworkSuffix;
 	type EnsurePerson = indiv_pallet_people::EnsurePersonalAliasInContext<Test>;
 	type ScorePotId = ScorePotId;
 	type Currency = Balances;

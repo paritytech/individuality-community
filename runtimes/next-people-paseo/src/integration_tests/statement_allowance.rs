@@ -344,10 +344,10 @@ fn game_sign_up_grants_player_allowance() {
 			account: alias_pair.public().into(),
 			call_valid_at: frame_system::Pallet::<Runtime>::block_number(),
 		};
-		exec_as_alias_with_proof(&person_secret, SCORE_CONTEXT, set_alias.into());
+		exec_as_alias_with_proof(&person_secret, score_context(), set_alias.into());
 
 		// Proof of ownership for statement account
-		let score_alias = Crypto::alias_in_context(&person_secret, &SCORE_CONTEXT[..]).unwrap();
+		let score_alias = Crypto::alias_in_context(&person_secret, &score_context()[..]).unwrap();
 		let stmt_acc_proof: MultiSignature = stmt_acc_pair
 			.sign(
 				&(b"pop:game:stmt_account_for_alias:", score_alias)

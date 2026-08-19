@@ -18,13 +18,13 @@
 
 use super::*;
 use crate::{
-	pallet::{AccountToAlias, AliasFee, AliasToAccount, BalanceOf},
+	pallet::{AccountToAlias, AliasToAccount, BalanceOf},
 	types::{AliasAccountInfo, ContextualAlias, ProofOf},
 };
 use frame_benchmarking::{account, v2::*, BenchmarkError};
 use frame_support::{
 	dispatch::{DispatchInfo, PostDispatchInfo},
-	traits::{fungibles, EnsureOrigin, Get},
+	traits::{fungibles, Get},
 };
 use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::traits::{
@@ -68,6 +68,9 @@ pub trait BenchmarkHelper<T: Config> {
 	/// Ensure the PGAS asset exists. Idempotent — must be a no-op when the asset
 	/// already exists.
 	fn setup_pgas_asset();
+
+	/// Make [`Config::AliasFee`] return `Some(fee)`.
+	fn set_alias_fee(fee: BalanceOf<T>);
 
 	/// Maximum number of revisions that [`Config::MemberService`] retains per ring.
 	/// Used as the worst-case `Linear` upper bound in benchmarks.
@@ -157,8 +160,7 @@ mod benches {
 			<T::Fungibles as fungibles::Inspect<T::AccountId>>::minimum_balance(
 				T::PgasAssetId::get(),
 			);
-		let fee: BalanceOf<T> = pgas_ed;
-		AliasFee::<T>::put(fee);
+		<T as BenchmarkHelper<T>>::set_alias_fee(pgas_ed);
 		let new_account: T::AccountId = account("paid_new", 0, 0);
 		<T::Fungibles as fungibles::Mutate<T::AccountId>>::mint_into(
 			T::PgasAssetId::get(),
@@ -395,22 +397,6 @@ mod benches {
 		frame_system::Pallet::<T>::assert_last_event(
 			Event::<T>::AliasAccountSet { account: holder, collection, alias }.into(),
 		);
-
-		Ok(())
-	}
-
-	#[benchmark]
-	fn set_alias_fee() -> Result<(), BenchmarkError> {
-		let origin =
-			T::FeeManagerOrigin::try_successful_origin().map_err(|_| BenchmarkError::Weightless)?;
-		let fee: BalanceOf<T> = 42u32.into();
-
-		#[extrinsic_call]
-		_(origin as T::RuntimeOrigin, fee);
-
-		assert_eq!(AliasFee::<T>::get(), Some(fee));
-
-		frame_system::Pallet::<T>::assert_last_event(Event::<T>::AliasFeeSet { fee }.into());
 
 		Ok(())
 	}

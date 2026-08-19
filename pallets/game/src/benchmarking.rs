@@ -80,7 +80,7 @@ mod benches {
 	};
 	use indiv_pallet_score::{
 		AbsenceGraceSchedule, AbsenceGraceTier, AbsenceGraceTiers, PersonhoodThresholdSchedule,
-		PersonhoodThresholdTier, MAX_PERSONHOOD_THRESHOLD_TIERS, SCORE_CONTEXT,
+		PersonhoodThresholdTier, MAX_PERSONHOOD_THRESHOLD_TIERS,
 	};
 	use indiv_support::traits::CountedMembers;
 	use sp_core::Get;
@@ -1166,7 +1166,8 @@ mod benches {
 			.using_encoded(sp_io::hashing::blake2_256);
 		let signature = <T as Config>::BenchmarkHelper::sign_account(seed, &msg[..]);
 
-		let origin = T::EnsurePerson::try_successful_origin(&SCORE_CONTEXT)
+		let score_context = indiv_pallet_score::Pallet::<T>::score_context();
+		let origin = T::EnsurePerson::try_successful_origin(&score_context)
 			.map_err(|_| BenchmarkError::Weightless)?;
 
 		let result = pallet::Pallet::<T>::sign_up_with_alias(
@@ -1396,7 +1397,8 @@ mod benches {
 		let signature = <T as Config>::BenchmarkHelper::sign_account(seed, &msg[..]);
 
 		// Origin for the personal alias
-		let origin = T::EnsurePerson::try_successful_origin(&SCORE_CONTEXT)
+		let score_context = indiv_pallet_score::Pallet::<T>::score_context();
+		let origin = T::EnsurePerson::try_successful_origin(&score_context)
 			.map_err(|_| BenchmarkError::Weightless)?;
 
 		let participant_origin =
@@ -1447,9 +1449,10 @@ mod benches {
 		Pallet::<T>::new_game(&schedule)?;
 		let game_index = Game::<T>::get().expect("game exists").index;
 
-		let origin = T::EnsureLiteAlias::try_successful_origin(&SCORE_CONTEXT)
+		let score_context = indiv_pallet_score::Pallet::<T>::score_context();
+		let origin = T::EnsureLiteAlias::try_successful_origin(&score_context)
 			.map_err(|_| BenchmarkError::Weightless)?;
-		let alias = T::EnsureLiteAlias::try_origin(origin.clone(), &SCORE_CONTEXT)
+		let alias = T::EnsureLiteAlias::try_origin(origin.clone(), &score_context)
 			.map_err(|_| BenchmarkError::Weightless)?;
 
 		let (account, vrfs) = bench_account_vrfs::<T>(game_index, n);
@@ -1742,7 +1745,8 @@ mod benches {
 		}
 		PlayerAttendanceHistory::<T>::insert(&person_aop, attendance);
 
-		let origin = T::EnsurePerson::try_successful_origin(&SCORE_CONTEXT)
+		let score_context = indiv_pallet_score::Pallet::<T>::score_context();
+		let origin = T::EnsurePerson::try_successful_origin(&score_context)
 			.map_err(|_| BenchmarkError::Weightless)?;
 
 		#[extrinsic_call]

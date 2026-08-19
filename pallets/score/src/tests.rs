@@ -736,7 +736,7 @@ fn cash_out_fails_if_externally_recognized_person() {
 				indiv_pallet_people::Origin::PersonalAlias(RevisedContextualAlias {
 					revision: 0,
 					ring: 0,
-					ca: ContextualAlias { context: crate::SCORE_CONTEXT, alias: p_1 },
+					ca: ContextualAlias { context: PalletScore::score_context(), alias: p_1 },
 				})
 				.into()
 			),
