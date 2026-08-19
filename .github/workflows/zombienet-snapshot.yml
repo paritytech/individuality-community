@@ -1,0 +1,184 @@
+name: E2E zombienet snapshot
+
+# Periodically build + initialise the realistic local network (relay + People 1502 + Asset Hub 1500)
+# and publish its post-bootstrap chain state as a downloadable snapshot, so contributors can boot the
+# initialised network in seconds instead of re-running the initial-setup scripts:
+#
+#   cd e2e/
+#   just fetch-snapshot   # download this workflow's snapshot into .tools/snapshot/
+#   just spawn-snap
+#
+# The snapshot is SPEC/VERSION-LOCKED — valid only for the runtime WASM + node binaries it was built
+# from (the restored DB's genesis hash must match the freshly-generated chain spec). We therefore
+# rebuild it on a schedule (and on demand) and record the runtime spec sha256s + commit in the
+# published manifest so `just fetch-snapshot` can warn when a consumer's runtime has drifted.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # nightly, 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zombienet-snapshot
+  cancel-in-progress: true
+
+env:
+  SNAPSHOT_TAG: e2e-zombienet-snapshot
+
+jobs:
+  snapshot:
+    runs-on: parity-large
+    timeout-minutes: 150
+    steps:
+      - name: Install build + bootstrap deps
+        # build-essential/clang/cmake/protobuf for the runtime + node-binary builds; llvm-dev and
+        # libclang-dev for clang-sys while building polkadot-sdk from source; jq+bc for initial-setup
+        # (00-requirements auto-installs `dot` and jq, but never bc).
+        run: sudo apt update && sudo apt install --assume-yes cmake protobuf-compiler build-essential clang llvm-dev libclang-dev jq bc
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load common env file
+        run: cat .github/env >> "$GITHUB_ENV"
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@11df97af8e8102fd60b60a77dfbf58d40cd843b8 # v1.10.1
+        with:
+          cache: false
+
+      - name: Fetch Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          shared-key: individuality-cache-zombienet-snapshot
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: e2e/.nvmrc
+
+      - name: Enable pnpm (corepack)
+        run: corepack enable
+
+      - name: Setup just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
+
+      # Node binaries: the polkadot bundle (built from source at the .github/env release tag) + zombie-cli
+      # (downloaded at ZOMBIENET_SDK_VERSION) only change when those pins change. Cache the per-ref build/
+      # download dirs — NOT _src (the multi-GB polkadot-sdk clone), needed only on a cache miss.
+      - name: Cache node binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            e2e/zombienet/.tools/cache/polkadot-node
+            e2e/zombienet/.tools/cache/zombienet-sdk
+          key: zn-binaries-${{ runner.os }}-${{ env.POLKADOT_RELEASE_VERSION }}${{ env.POLKADOT_RELEASE_PATCH }}-${{ env.ZOMBIENET_SDK_VERSION }}
+
+      - name: Install JS workspace
+        working-directory: e2e
+        run: pnpm install --frozen-lockfile
+
+      - name: Build runtimes
+        working-directory: e2e
+        run: just build-runtimes
+
+      - name: Generate PAPI descriptors
+        working-directory: e2e
+        run: pnpm run descriptors:update
+
+      - name: Install pinned node binaries (cached after first run)
+        working-directory: e2e
+        run: just install-binaries
+
+      - name: Generate chain specs
+        working-directory: e2e
+        run: just gen-specs
+
+      - name: Spawn, bootstrap, verify, capture snapshot
+        run: bash .github/scripts/zn-snapshot-run.sh
+
+      - name: Compose manifest + checksums + release notes
+        working-directory: e2e/zombienet
+        run: |
+          set -euo pipefail
+          SNAP=.tools/snapshot
+          # Include the captured relay spec in SHA256SUMS so fetch-snapshot verifies its integrity
+          # too (05-snapshot.sh writes it next to the *.tgz DBs).
+          ( cd "$SNAP" && sha256sum *.tgz rococo-local.raw.json > SHA256SUMS )
+          PEOPLE_SPEC=$(sha256sum specs/people-local.json | awk '{print $1}')
+          AH_SPEC=$(sha256sum specs/ah-local.json | awk '{print $1}')
+          RELAY_SPEC=$(sha256sum "$SNAP/rococo-local.raw.json" | awk '{print $1}')
+          CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RELEASE="${POLKADOT_RELEASE_VERSION}${POLKADOT_RELEASE_PATCH}"
+
+          jq -n \
+            --arg created "$CREATED" --arg commit "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" \
+            --arg release "$RELEASE" --arg people "$PEOPLE_SPEC" --arg ah "$AH_SPEC" \
+            --arg relay "$RELAY_SPEC" \
+            '{created:$created, commit:$commit, repo:$repo, polkadot_release:$release,
+              specs_sha256:{people:$people, ah:$ah}, relay_spec_sha256:$relay}' > "$SNAP/manifest.json"
+          cat "$SNAP/manifest.json"
+
+          {
+            echo "# E2E zombienet snapshot (rolling)"
+            echo
+            echo "Post-bootstrap state of the realistic local network (relay + People 1502 + Asset Hub 1500),"
+            echo "captured by \`.github/workflows/zombienet-snapshot.yml\`. Boot it without re-initialising:"
+            echo
+            echo '```bash'
+            echo "cd e2e/"
+            echo "just fetch-snapshot"
+            echo "just spawn-snap"
+            echo '```'
+            echo
+            echo "No bootstrap rerun is required: the snapshot is captured only after the init-state checks pass."
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| commit | \`$GITHUB_SHA\` |"
+            echo "| created | $CREATED |"
+            echo "| polkadot release | $RELEASE |"
+            echo "| people spec sha256 | \`$PEOPLE_SPEC\` |"
+            echo "| ah spec sha256 | \`$AH_SPEC\` |"
+            echo "| relay spec sha256 | \`$RELAY_SPEC\` |"
+            echo
+            echo "**Spec/version-locked:** valid only for the runtime specs above. \`just fetch-snapshot\`"
+            echo "verifies the parachain specs against your local \`specs/*.json\` and warns on drift."
+            echo "The relay spec (\`rococo-local.raw.json\`) is downloaded with the snapshot and pinned by"
+            echo "\`network-snap.toml\` — the relay genesis is not locally reproducible, so it ships here."
+          } > "$SNAP/RELEASE_NOTES.md"
+
+      - name: Show spawn log tail on failure
+        if: failure()
+        run: tail -200 "$RUNNER_TEMP/zn-spawn.log" || true
+
+      - name: Collect zombienet diagnostics on failure
+        if: failure()
+        run: bash .github/scripts/zn-dump-diagnostics.sh "$RUNNER_TEMP/zombienet-diagnostics"
+
+      - name: Upload zombienet diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zombienet-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/zombienet-diagnostics
+
+      - name: Publish rolling snapshot prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.SNAPSHOT_TAG }}
+          name: E2E zombienet snapshot (rolling)
+          prerelease: true
+          make_latest: false
+          body_path: e2e/zombienet/.tools/snapshot/RELEASE_NOTES.md
+          files: |
+            e2e/zombienet/.tools/snapshot/*.tgz
+            e2e/zombienet/.tools/snapshot/rococo-local.raw.json
+            e2e/zombienet/.tools/snapshot/manifest.json
+            e2e/zombienet/.tools/snapshot/SHA256SUMS

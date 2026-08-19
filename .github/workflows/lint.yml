@@ -1,0 +1,77 @@
+name: "Lint"
+
+on:
+  push:
+    branches: ["main", "release-*"]
+  pull_request:
+  workflow_dispatch:
+
+# cancel previous runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: parity-ubuntu
+    # Must exceed a cold-cache build: the Clippy step runs two full `--all-targets` passes, which
+    # takes ~20 minutes with nothing in the cache. Rust caches are evicted routinely, since a full
+    # set is ~4 GB per branch against GitHub's 10 GB per-repository budget. A timeout that a cold
+    # build cannot fit under is self-perpetuating: the job is cancelled, so `rust-cache` skips its
+    # save step, so the next run is cold as well.
+    timeout-minutes: 40
+    steps:
+      - name: Install updates and protobuf-compiler
+        run: sudo apt update && sudo apt install --assume-yes cmake protobuf-compiler build-essential
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load common env file
+        run: cat .github/env >> $GITHUB_ENV
+
+      - name: Check TODOs reference a GitHub issue
+        run: .github/scripts/check_todos.sh
+
+      - name: Check ValidTransaction builders set a priority
+        run: .github/scripts/check_validtx_priority.sh
+
+      - name: Install solc and resolc
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+
+          curl -sL --fail -o "$HOME/.local/bin/solc" \
+            "https://github.com/ethereum/solidity/releases/download/v${{ env.SOLC_VERSION }}/solc-static-linux"
+          chmod +x "$HOME/.local/bin/solc"
+          solc --version
+
+          curl -L --fail -o "$HOME/.local/bin/resolc" \
+            "https://github.com/paritytech/revive/releases/download/v${{ env.RESOLC_VERSION }}/resolc-x86_64-unknown-linux-musl"
+          chmod +x "$HOME/.local/bin/resolc"
+          resolc --version
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@11df97af8e8102fd60b60a77dfbf58d40cd843b8 # v1.10.1
+        with:
+          cache: false
+
+      - name: Fetch cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          shared-key: "individuality-cache-clippy"
+
+      - name: Clippy
+        env:
+          RUSTFLAGS: "-D warnings"
+          SKIP_WASM_BUILD: 1
+        run: |
+          cargo clippy --all-targets --locked --quiet
+          cargo clippy --all-targets --all-features --locked --quiet
+
+      - name: Rustdoc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+          SKIP_WASM_BUILD: 1
+        run: cargo doc --no-deps -p 'indiv-pallet-*' --locked --quiet

@@ -1,0 +1,43 @@
+# Various checks to verify the workspace and its crates are correctly configured with the right Polkadot SDK version.
+name: "Polkadot SDK version"
+
+on:
+  push:
+    branches: ["main", "release-*"]
+  pull_request:
+  workflow_dispatch:
+
+# cancel previous runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check Polkadot SDK version
+    runs-on: parity-ubuntu
+
+    steps:
+      - name: Install updates and protobuf-compiler
+        run: sudo apt update && sudo apt install --assume-yes build-essential pkg-config libssl-dev
+
+      - name: Install stable Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+
+      - name: Install PSVM
+        run: cargo install --git https://github.com/paritytech/psvm psvm -q
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Dont clone historic commits.
+
+      - name: Load common env file
+        run: cat .github/env >> $GITHUB_ENV
+
+      - name: Check crate versions
+        run: |
+          psvm --version $POLKADOT_RELEASE_VERSION$POLKADOT_RELEASE_PATCH --check
