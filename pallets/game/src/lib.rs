@@ -1960,8 +1960,8 @@ pub mod pallet {
 			// Signing up with an invite must never fail after the transaction extension validation,
 			// except, potentially, extreme conditions.
 			//
-			// TODO(paritytech/individuality#230): refactor to avoid duplicated checks and enforce the success of
-			// `sign_up_with_invite`.
+			// TODO(paritytech/individuality#230): refactor to avoid duplicated checks and enforce
+			// the success of `sign_up_with_invite`.
 
 			// Check the game state.
 			let mut game = Game::<T>::get().ok_or(Error::<T>::NoGame)?;
@@ -2169,11 +2169,11 @@ pub mod pallet {
 
 		/// Validation-only counterpart of [`Self::register_for_airdrop`] used by the
 		/// `GameAsInvited` transaction extension.
-		// TODO(paritytech/individuality#230): ideally change the onboarding flow to first onboard and then register for
-		// the game so the check for onboarding only consists of checking the invitation. Or
-		// otherwise we may not want to check the validity of the VRF and maybe not even check
-		// the validity of the complete call, just let the invitation do 5 calls until being
-		// consumed, the invited being responsible for doing valid calls.
+		// TODO(paritytech/individuality#230): ideally change the onboarding flow to first onboard
+		// and then register for the game so the check for onboarding only consists of checking
+		// the invitation. Or otherwise we may not want to check the validity of the VRF and maybe
+		// not even check the validity of the complete call, just let the invitation do 5 calls
+		// until being consumed, the invited being responsible for doing valid calls.
 		pub(crate) fn validate_register_for_airdrop(
 			airdrops: &Option<AirdropVrfs<AirdropProofOf<T>>>,
 			who: &AccountOrPerson<T::AccountId>,
