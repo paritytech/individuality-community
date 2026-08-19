@@ -232,6 +232,8 @@ pub mod migration;
 pub mod runtime_api;
 pub mod weights;
 
+pub use weights::WeightInfo;
+
 #[frame_support::pallet]
 pub mod pallet {
 	use crate::{weights::WeightInfo, OnCollectionDeleted, OnPurseOccupied, ValidateMetadata};

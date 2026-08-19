@@ -1106,7 +1106,7 @@ pub type ScarcityStoragePrice =
 
 impl pallet_scarcity::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = pallet_scarcity::weights::SubstrateWeight<Runtime>;
+	type WeightInfo = weights::pallet_scarcity::WeightInfo<Runtime>;
 	type UnixTime = Timestamp;
 	type Balance = Balance;
 	// The pallet aggregates exact deposit sums per collection; the consideration ticket
