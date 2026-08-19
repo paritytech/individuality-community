@@ -14,10 +14,6 @@ inputs:
     description: Path to the next-people paseo runtime WASM, relative to the repo root.
     required: false
     default: .artifacts/next_people_paseo_runtime.wasm
-  next-asset-hub-runtime-wasm:
-    description: Path to the next-asset-hub paseo runtime WASM, relative to the repo root.
-    required: false
-    default: .artifacts/next_asset_hub_paseo_runtime.wasm
 
 runs:
   using: composite
@@ -49,14 +45,8 @@ runs:
         name: ${{ inputs.artifact-name }}
         path: ${{ inputs.artifact-download-path }}
 
-    - name: Run runtime upgrade Chopsticks suite (People)
+    - name: Run runtime upgrade Chopsticks suite
       run: pnpm --dir e2e run test:runtime-upgrade:paseo-to-next-people-paseo
       shell: bash
       env:
         NEXT_PEOPLE_PASEO_RUNTIME_WASM: ${{ inputs.next-people-runtime-wasm }}
-
-    - name: Run runtime upgrade Chopsticks suite (Asset Hub)
-      run: pnpm --dir e2e run test:runtime-upgrade:paseo-to-next-asset-hub-paseo
-      shell: bash
-      env:
-        NEXT_ASSET_HUB_PASEO_RUNTIME_WASM: ${{ inputs.next-asset-hub-runtime-wasm }}

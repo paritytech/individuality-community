@@ -50,7 +50,7 @@ runs:
         shared-key: individuality-cache-e2e-runtime-wasm
 
     - name: Build E2E runtime WASM artifacts
-      run: cargo build --release -p next-people-paseo-runtime -p next-asset-hub-paseo-runtime --locked
+      run: cargo build --release -p next-people-paseo-runtime --locked
       shell: bash
 
     - name: Stage E2E runtime WASM artifacts
@@ -58,8 +58,6 @@ runs:
         mkdir -p "${{ inputs.artifact-dir }}"
         cp target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.wasm \
           "${{ inputs.artifact-dir }}/next_people_paseo_runtime.wasm"
-        cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm \
-          "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime.wasm"
       shell: bash
 
     - name: Upload E2E runtime WASM artifacts
