@@ -1,0 +1,529 @@
+name: Command
+
+on:
+  issue_comment: # listen for comments on issues
+    types: [created]
+
+permissions: # allow the action to comment on the PR
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  is-org-member:
+    if: startsWith(github.event.comment.body, '/cmd')
+    runs-on: parity-int-ubuntu
+    outputs:
+      member: ${{ steps.is-member.outputs.result }}
+    steps:
+      - name: Generate token
+        id: generate_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CMD_BOT_APP_ID }}
+          private-key: ${{ secrets.CMD_BOT_APP_KEY }}
+
+      - name: Check if user is a member of the organization
+        id: is-member
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.generate_token.outputs.token }}
+          result-encoding: string
+          script: |
+            const fs = require("fs");
+            try {
+              const org = '${{ github.event.repository.owner.login }}';
+              const username = '${{ github.event.comment.user.login }}';
+
+              const membership = await github.rest.orgs.checkMembershipForUser({
+                  org: org,
+                  username: username
+              });
+
+              console.log(membership, membership.status, membership.status === 204);
+
+              if (membership.status === 204) {
+                return 'true';
+              } else {
+                console.log(membership);
+                fs.appendFileSync(process.env["GITHUB_STEP_SUMMARY"], `${membership.data && membership.data.message || 'Unknown error happened, please check logs'}`);
+              }
+            } catch (error) {
+              console.log(error)
+            }
+
+            return 'false';
+
+  reject-non-member:
+    needs: is-org-member
+    if: ${{ startsWith(github.event.comment.body, '/cmd') && needs.is-org-member.outputs.member != 'true' }}
+    runs-on: parity-int-ubuntu
+    steps:
+      - name: Add reaction to rejected comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.reactions.createForIssueComment({
+              comment_id: ${{ github.event.comment.id }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              content: 'confused'
+            })
+
+      - name: Comment PR (Rejected)
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Sorry, only organization members can run commands.`
+            })
+
+  acknowledge:
+    needs: is-org-member
+    if: ${{ startsWith(github.event.comment.body, '/cmd') && needs.is-org-member.outputs.member == 'true' }}
+    runs-on: parity-int-ubuntu
+    steps:
+      - name: Add reaction to triggered comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.reactions.createForIssueComment({
+              comment_id: ${{ github.event.comment.id }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              content: 'eyes'
+            })
+
+  clean:
+    needs: is-org-member
+    runs-on: parity-int-ubuntu
+    steps:
+      - name: Clean previous comments
+        if: ${{ startsWith(github.event.comment.body, '/cmd') && contains(github.event.comment.body, '--clean') && needs.is-org-member.outputs.member == 'true' }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.listComments({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            }).then(comments => {
+              for (let comment of comments.data) {
+                console.log(comment)
+                if (
+                  ${{ github.event.comment.id }} !== comment.id &&
+                    (
+                      (
+                        (
+                          comment.body.startsWith('Command') ||
+                          comment.body.startsWith('<details><summary>Command') ||
+                          comment.body.startsWith('Sorry, only ')
+                        ) && comment.user.type === 'Bot'
+                      ) ||
+                      (comment.body.startsWith('/cmd') && comment.user.login === context.actor)
+                    )
+                ) {
+                  github.rest.issues.deleteComment({
+                    comment_id: comment.id,
+                    owner: context.repo.owner,
+                    repo: context.repo.repo
+                  })
+                }
+              }
+            })
+
+  help:
+    needs: [clean, is-org-member]
+    if: ${{ startsWith(github.event.comment.body, '/cmd') && contains(github.event.comment.body, '--help') && needs.is-org-member.outputs.member == 'true' }}
+    runs-on: parity-int-ubuntu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Get command
+        uses: actions-ecosystem/action-regex-match@v2
+        id: get-pr-comment
+        with:
+          text: ${{ github.event.comment.body }}
+          regex: '^(\/cmd )([\s\w-:]+)$'
+
+      - name: Save output of help
+        id: help
+        env:
+          CMD: ${{ steps.get-pr-comment.outputs.group2 }}
+        run: |
+          echo 'help<<EOF' >> $GITHUB_OUTPUT
+          python3 .github/scripts/cmd/cmd.py $CMD >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
+      - name: Comment PR (Help)
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `<details><summary>Command help:</summary>
+
+            \`\`\`
+            ${{ steps.help.outputs.help }}
+            \`\`\`
+
+            </details>`
+            })
+
+      - name: Add confused reaction on failure
+        uses: actions/github-script@v7
+        if: ${{ failure() }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.reactions.createForIssueComment({
+              comment_id: ${{ github.event.comment.id }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              content: 'confused'
+            })
+
+      - name: Add reaction on success
+        uses: actions/github-script@v7
+        if: ${{ !failure() }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.reactions.createForIssueComment({
+              comment_id: ${{ github.event.comment.id }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              content: '+1'
+            })
+
+  # Get PR branch name, because the issue_comment event does not contain the PR branch name
+  get-pr-branch:
+    needs: [clean, is-org-member]
+    if: ${{ startsWith(github.event.comment.body, '/cmd') && !contains(github.event.comment.body, '--help') && needs.is-org-member.outputs.member == 'true' }}
+    runs-on: parity-int-ubuntu
+    outputs:
+      pr-branch: ${{ steps.get-pr.outputs.pr_branch }}
+      repo: ${{ steps.get-pr.outputs.repo }}
+    steps:
+      - name: Check if the issue is a PR
+        id: check-pr
+        run: |
+          if [ -n "${{ github.event.issue.pull_request.url }}" ]; then
+            echo "This is a pull request comment"
+          else
+            echo "This is not a pull request comment"
+            exit 1
+          fi
+
+      - name: Get PR Branch Name and Repo
+        if: steps.check-pr.outcome == 'success'
+        id: get-pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            const prBranch = pr.data.head.ref;
+            const repo = pr.data.head.repo.full_name;
+            core.setOutput('pr_branch', prBranch);
+            core.setOutput('repo', repo);
+
+      - name: Use PR Branch Name and Repo
+        run: |
+          echo "The PR branch is ${{ steps.get-pr.outputs.pr_branch }}"
+          echo "The repository is ${{ steps.get-pr.outputs.repo }}"
+
+  cmd:
+    needs: [get-pr-branch, is-org-member]
+    timeout-minutes: 1440 # 24 hours
+    env:
+      JOB_NAME: "cmd"
+    if: ${{ startsWith(github.event.comment.body, '/cmd') && !contains(github.event.comment.body, '--help') && needs.is-org-member.outputs.member == 'true' }}
+    runs-on: ${{ startsWith(github.event.comment.body, '/cmd bench') && 'parity-weights' || startsWith(github.event.comment.body, '/cmd fmt') && 'parity-int-ubuntu' || 'parity-int-ubuntu' }}
+    steps:
+      - name: Get command
+        uses: actions-ecosystem/action-regex-match@v2
+        id: get-pr-comment
+        with:
+          text: ${{ github.event.comment.body }}
+          regex: '^(\/cmd )([\s\w-:]+)$'
+
+      - name: Build workflow link
+        if: ${{ !contains(github.event.comment.body, '--quiet') }}
+        id: build-link
+        run: |
+          jobLink=$(curl -s \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs | jq '.jobs[] | select(.name | contains("${{ env.JOB_NAME }}")) | .html_url')
+
+          runLink=$(curl -s \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }} | jq '.html_url')
+
+          echo "job_url=${jobLink}"
+          echo "run_url=${runLink}"
+          echo "job_url=$jobLink" >> $GITHUB_OUTPUT
+          echo "run_url=$runLink" >> $GITHUB_OUTPUT
+
+      - name: Comment PR (Start)
+        if: ${{ !contains(github.event.comment.body, '--quiet') }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            let job_url = ${{ steps.build-link.outputs.job_url }}
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Command "${{ steps.get-pr-comment.outputs.group2 }}" has started 🚀 [See logs here](${job_url})`
+            })
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.get-pr-branch.outputs.repo }}
+          ref: ${{ needs.get-pr-branch.outputs.pr-branch }}
+          # Needed by the weight-deviation script to resolve the merge-base
+          # between the PR branch and origin/main after benchmark commits.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install updates and dependencies
+        if: startsWith(steps.get-pr-comment.outputs.group2, 'bench')
+        run: .github/install-deps.sh
+
+      - name: Load common env file
+        run: cat .github/env >> $GITHUB_ENV
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@master
+        if: startsWith(steps.get-pr-comment.outputs.group2, 'fmt')
+        with:
+          targets: "wasm32-unknown-unknown"
+          components: "rust-src, rustfmt"
+          toolchain: "nightly-${{ env.RUST_NIGHTLY_VERSION }}"
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@11df97af8e8102fd60b60a77dfbf58d40cd843b8 # v1.10.1
+        if: startsWith(steps.get-pr-comment.outputs.group2, 'bench')
+        with:
+          cache: false
+
+      - name: Build frame-omni-bencher from source if OMNI_BENCHER_COMMIT is set
+        if: startsWith(steps.get-pr-comment.outputs.group2, 'bench') && env.OMNI_BENCHER_COMMIT
+        run: |
+          cargo install --git https://github.com/paritytech/polkadot-sdk frame-omni-bencher --profile=production --rev $OMNI_BENCHER_COMMIT --root . -q --locked
+          sudo mv ./bin/frame-omni-bencher /usr/local/bin/frame-omni-bencher
+          frame-omni-bencher --version
+        shell: bash
+
+      - name: Download frame-omni-bencher
+        if: startsWith(steps.get-pr-comment.outputs.group2, 'bench') && env.OMNI_BENCHER_COMMIT == null
+        run: |
+          curl --max-time 10 --retry 5 --retry-delay 10 --retry-max-time 120 -sL \
+            https://github.com/paritytech/polkadot-sdk/releases/download/$OMNI_BENCHER_POLKADOT_RELEASE_VERSION/frame-omni-bencher \
+            -o frame-omni-bencher
+          chmod +x ./frame-omni-bencher
+          sudo mv ./frame-omni-bencher /usr/local/bin/frame-omni-bencher
+          frame-omni-bencher --version
+        shell: bash
+
+      - name: Install dependencies for fmt
+        if: startsWith(steps.get-pr-comment.outputs.group2, 'fmt')
+        run: |
+          curl -fsSL https://github.com/tamasfe/taplo/releases/download/${{ env.TAPLO_VERSION }}/taplo-linux-x86.gz | gunzip > taplo
+          chmod +x taplo
+          sudo mv taplo /usr/local/bin/
+
+      - name: Setup Cache
+        if: startsWith(steps.get-pr-comment.outputs.group2, 'bench')
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "individuality-cache-cmd"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run cmd
+        id: cmd
+        env:
+          CMD: ${{ steps.get-pr-comment.outputs.group2 }}
+        run: |
+          echo "Running command: $CMD on branch ${{ needs.get-pr-branch.outputs.pr-branch }}"
+          python3 .github/scripts/cmd/cmd.py $CMD
+          git status
+          git diff
+
+      - name: Capture diff for dry-run
+        id: dry-run-diff
+        if: ${{ contains(github.event.comment.body, '--dry-run') }}
+        shell: bash
+        run: |
+          diff_output=$(git diff -- '*.rs')
+          # Truncate if too large for GitHub comment (max ~65k)
+          if [ ${#diff_output} -gt 60000 ]; then
+            diff_output="${diff_output:0:60000}
+
+          ... (truncated, diff too large for PR comment)"
+          fi
+          {
+            echo "diff<<EOF"
+            echo "$diff_output"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+          # Discard changes — dry-run should not leave modified files
+          git checkout -- .
+
+      - name: Commit changes
+        if: ${{ !contains(github.event.comment.body, '--dry-run') }}
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+
+            git pull origin ${{ needs.get-pr-branch.outputs.pr-branch }}
+            git add .
+            git restore --staged Cargo.lock # ignore changes in Cargo.lock
+            git commit -m "Update from ${{ github.actor }} running command '${{ steps.get-pr-comment.outputs.group2 }}'" || true
+            git push origin ${{ needs.get-pr-branch.outputs.pr-branch }}
+          else
+            echo "Nothing to commit";
+          fi
+
+      - name: Run weight deviation
+        id: weight_deviation
+        if: ${{ startsWith(steps.get-pr-comment.outputs.group2, 'bench') && !contains(github.event.comment.body, '--dry-run') }}
+        shell: bash
+        run: |
+          git fetch -q origin main:refs/remotes/origin/main
+
+          report="$RUNNER_TEMP/weight-deviation.txt"
+          status=0
+          .github/scripts/weight_deviation.py --base origin/main --current HEAD > "$report" || status=$?
+
+          # Exit code 2 means high-variance changes were found. That is
+          # informational for /cmd bench, so only fail on real errors.
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+            cat "$report"
+            exit "$status"
+          fi
+
+          {
+            echo "### Runtime weight deviation"
+            echo
+            echo '```'
+            cat "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "result<<EOF"
+            cat "$report"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      # Generate a fresh token for post-benchmark steps — the original
+      # GITHUB_TOKEN may have expired during long-running benchmarks.
+      - name: Generate token for PR comments
+        id: generate_token
+        if: ${{ always() }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CMD_BOT_APP_ID }}
+          private-key: ${{ secrets.CMD_BOT_APP_KEY }}
+
+      - name: Comment PR (End)
+        if: ${{ !failure() && !contains(github.event.comment.body, '--quiet') }}
+        uses: actions/github-script@v7
+        env:
+          WEIGHT_DEVIATION: "${{ steps.weight_deviation.outputs.result }}"
+          DRY_RUN_DIFF: "${{ steps.dry-run-diff.outputs.diff }}"
+        with:
+          github-token: ${{ steps.generate_token.outputs.token }}
+          script: |
+            let runUrl = ${{ steps.build-link.outputs.run_url }}
+            let weightDeviation = process.env.WEIGHT_DEVIATION;
+            let dryRunDiff = process.env.DRY_RUN_DIFF;
+
+            let extra = '';
+            if (dryRunDiff) {
+              extra = `\n\n<details>\n\n<summary>🏃 Dry-run diff (steps=10, repeat=4, not committed):</summary>\n\n\`\`\`diff\n${dryRunDiff}\n\`\`\`\n\n</details>`;
+            } else if (weightDeviation) {
+              extra = `\n\n<details>\n\n<summary>Runtime weight deviation:</summary>\n\n\`\`\`\n${weightDeviation}\n\`\`\`\n\n</details>`;
+            }
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Command "${{ steps.get-pr-comment.outputs.group2 }}" has finished ✅ [See logs here](${runUrl})${extra}`
+            })
+
+      - name: Comment PR (Failure)
+        if: ${{ failure() && !contains(github.event.comment.body, '--quiet') }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.generate_token.outputs.token }}
+          script: |
+            let jobUrl = ${{ steps.build-link.outputs.job_url }}
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Command "${{ steps.get-pr-comment.outputs.group2 }}" has failed ❌! [See logs here](${jobUrl})`
+            })
+
+      - name: Add confused reaction on failure
+        uses: actions/github-script@v7
+        if: ${{ failure() }}
+        with:
+          github-token: ${{ steps.generate_token.outputs.token }}
+          script: |
+            github.rest.reactions.createForIssueComment({
+              comment_id: ${{ github.event.comment.id }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              content: 'confused'
+            })
+
+      - name: Add reaction on success
+        uses: actions/github-script@v7
+        if: ${{ !failure() }}
+        with:
+          github-token: ${{ steps.generate_token.outputs.token }}
+          script: |
+            github.rest.reactions.createForIssueComment({
+              comment_id: ${{ github.event.comment.id }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              content: '+1'
+            })

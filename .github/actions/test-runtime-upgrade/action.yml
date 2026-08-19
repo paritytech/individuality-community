@@ -1,0 +1,52 @@
+name: Run runtime upgrade Chopsticks suite
+description: Download the built runtime WASM artifact and run the runtime upgrade e2e test.
+
+inputs:
+  artifact-name:
+    description: Artifact name for the built runtime WASM files.
+    required: false
+    default: e2e-runtime-wasm
+  artifact-download-path:
+    description: Directory where the runtime WASM artifact is downloaded.
+    required: false
+    default: .artifacts
+  next-people-runtime-wasm:
+    description: Path to the next-people paseo runtime WASM, relative to the repo root.
+    required: false
+    default: .artifacts/next_people_paseo_runtime.wasm
+
+runs:
+  using: composite
+  steps:
+    - name: Install build dependencies
+      run: sudo apt update && sudo apt install --assume-yes build-essential python3
+      shell: bash
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10.33.4
+        run_install: false
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: e2e/pnpm-lock.yaml
+
+    - name: Install e2e dependencies
+      run: pnpm --dir e2e install --frozen-lockfile
+      shell: bash
+
+    - name: Download e2e runtime WASM artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.artifact-download-path }}
+
+    - name: Run runtime upgrade Chopsticks suite
+      run: pnpm --dir e2e run test:runtime-upgrade:paseo-to-next-people-paseo
+      shell: bash
+      env:
+        NEXT_PEOPLE_PASEO_RUNTIME_WASM: ${{ inputs.next-people-runtime-wasm }}
