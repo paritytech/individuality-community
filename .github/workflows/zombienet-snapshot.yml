@@ -40,23 +40,23 @@ jobs:
         run: sudo apt update && sudo apt install --assume-yes cmake protobuf-compiler build-essential clang llvm-dev libclang-dev jq bc
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Load common env file
         run: cat .github/env >> "$GITHUB_ENV"
 
       - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@11df97af8e8102fd60b60a77dfbf58d40cd843b8 # v1.10.1
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
         with:
           cache: false
 
       - name: Fetch Rust cache
-        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: individuality-cache-zombienet-snapshot
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version-file: e2e/.nvmrc
 
@@ -72,7 +72,7 @@ jobs:
       # (downloaded at ZOMBIENET_SDK_VERSION) only change when those pins change. Cache the per-ref build/
       # download dirs — NOT _src (the multi-GB polkadot-sdk clone), needed only on a cache miss.
       - name: Cache node binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             e2e/zombienet/.tools/cache/polkadot-node
@@ -163,14 +163,14 @@ jobs:
 
       - name: Upload zombienet diagnostics on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: zombienet-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           path: ${{ runner.temp }}/zombienet-diagnostics
 
       - name: Publish rolling snapshot prerelease
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.SNAPSHOT_TAG }}
           name: E2E zombienet snapshot (rolling)

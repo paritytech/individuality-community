@@ -138,7 +138,7 @@ fn deposit_player_flow() {
 		let zoe_s = Crypto::new_secret([1u8; 32]);
 		let zoe_p = Crypto::member_from_secret(&zoe_s);
 		let zoe_score_alias_account = sr25519::Pair::from_seed(&[1u8; 32]);
-		let zoe_score_alias = Crypto::alias_in_context(&zoe_s, &SCORE_CONTEXT[..]).unwrap();
+		let zoe_score_alias = Crypto::alias_in_context(&zoe_s, &score_context()[..]).unwrap();
 		let zoe_stmt_acc_pair = sr25519::Pair::from_seed(&[2u8; 32]);
 		let zoe_stmt_acc = pair_to_account_id(&zoe_stmt_acc_pair);
 		let zoe_stmt_acc_proof_of_ownership: MultiSignature = zoe_stmt_acc_pair
@@ -161,7 +161,7 @@ fn deposit_player_flow() {
 			account: zoe_score_alias_account.public().into(),
 			call_valid_at: frame_system::Pallet::<Runtime>::block_number(),
 		};
-		exec_as_alias_with_proof(&zoe_s, SCORE_CONTEXT, set_alias.into());
+		exec_as_alias_with_proof(&zoe_s, score_context(), set_alias.into());
 
 		// ─────────────────────────────────────
 		// Schedule 12 games and 26 payouts. Game #7 (= schedules[6]) carries an airdrop

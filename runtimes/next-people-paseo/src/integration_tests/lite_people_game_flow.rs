@@ -62,15 +62,16 @@ fn lite_person_plays_the_game_for_free_with_a_product_key() {
 			account: product_key.clone(),
 			valid_at_block: frame_system::Pallet::<Runtime>::block_number(),
 		};
-		let uxt = build_as_lite_alias_with_proof_ext(&lite_secret, SCORE_CONTEXT, set_alias.into());
+		let uxt =
+			build_as_lite_alias_with_proof_ext(&lite_secret, score_context(), set_alias.into());
 		Executive::apply_extrinsic(uxt)
 			.expect("the alias setup transaction is valid")
 			.expect("the alias setup dispatch succeeds");
-		let score_alias = Crypto::alias_in_context(&lite_secret, &SCORE_CONTEXT[..]).unwrap();
+		let score_alias = Crypto::alias_in_context(&lite_secret, &score_context()[..]).unwrap();
 		assert_eq!(
 			indiv_pallet_people_lite::AliasToAccount::<Runtime>::get(ContextualAlias {
 				alias: score_alias,
-				context: SCORE_CONTEXT
+				context: score_context()
 			}),
 			Some(product_key.clone())
 		);

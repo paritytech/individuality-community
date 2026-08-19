@@ -120,19 +120,20 @@ impl crate::BenchmarkHelper<u64, UintAuthorityId> for Helper {
 	}
 }
 
-/// Extra context accepted alongside [`crate::LITE_PEOPLE_AUTH_CONTEXT`], used to exercise the
+/// Extra context accepted alongside the product authentication context, used to exercise the
 /// multi-context [`crate::Config::AccountContexts`] gating.
 pub const OTHER_LITE_CONTEXT: &indiv_support::traits::Context = b"pop:polkadot.network/plite-other";
 
 pub struct LiteAccountContexts;
 impl frame_support::traits::Contains<indiv_support::traits::Context> for LiteAccountContexts {
 	fn contains(context: &indiv_support::traits::Context) -> bool {
-		context == crate::LITE_PEOPLE_AUTH_CONTEXT || context == OTHER_LITE_CONTEXT
+		context == &PeopleLite::auth_context() || context == OTHER_LITE_CONTEXT
 	}
 }
 
 impl crate::Config for Test {
 	type WeightInfo = ();
+	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = MockMemberService;
 	type CollectionOwner = LiteCollectionOwnerConst;
@@ -146,6 +147,7 @@ impl crate::Config for Test {
 }
 
 parameter_types! {
+	pub const NetworkSuffix: &'static [u8] = b"paseo";
 	pub const LiteCollectionOwnerConst: u32 = 42;
 	pub const LiteRingExponentConst: RingExponent = RingExponent::R2e9;
 	pub const LiteOnboardingSizeConst: u32 = 7;
@@ -511,7 +513,7 @@ pub fn exec_as_lite_alias_with_proof_tx(
 			proof,
 			ring_index,
 			revision,
-			*crate::LITE_PEOPLE_AUTH_CONTEXT,
+			PeopleLite::auth_context(),
 		))),
 	);
 	exec_tx(x)
@@ -531,7 +533,7 @@ pub fn exec_as_lite_alias_with_proof_tx_at_rev(
 			proof,
 			ring_index,
 			revision,
-			*crate::LITE_PEOPLE_AUTH_CONTEXT,
+			PeopleLite::auth_context(),
 		))),
 	);
 	exec_tx_post(x)
@@ -559,7 +561,7 @@ pub fn exec_as_lite_alias_with_account_revised_tx(
 				proof,
 				ring_index,
 				revision,
-				*crate::LITE_PEOPLE_AUTH_CONTEXT,
+				PeopleLite::auth_context(),
 			),
 		)),
 	);

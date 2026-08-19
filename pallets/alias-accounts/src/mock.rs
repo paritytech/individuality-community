@@ -75,6 +75,7 @@ parameter_types! {
 	pub const PeopleCollection: Identifier = *crate::PEOPLE_IDENTIFIER;
 	pub const PeopleRingExp: RingExponent = RingExponent::R2e9;
 	pub const PgasAssetId: u32 = 1;
+	pub storage AliasFee: Option<u64> = None;
 }
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -421,7 +422,7 @@ impl crate::Config for Test {
 	type PeopleRingExponent = PeopleRingExp;
 	type Fungibles = PalletAssets;
 	type PgasAssetId = PgasAssetId;
-	type FeeManagerOrigin = frame_system::EnsureRoot<u64>;
+	type AliasFee = AliasFee;
 }
 
 // ========== Test Helpers ==========
@@ -515,6 +516,10 @@ impl crate::benchmarking::BenchmarkHelper<Test> for Test {
 			<PalletAssets as Create<u64>>::create(PgasAssetId::get(), PGAS_ADMIN, true, 1)
 				.expect("create pgas asset");
 		}
+	}
+
+	fn set_alias_fee(fee: u64) {
+		AliasFee::set(&Some(fee));
 	}
 
 	fn max_ring_revisions() -> u32 {

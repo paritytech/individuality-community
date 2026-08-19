@@ -240,6 +240,17 @@ pub trait Airdrop<AccountId, AssetId, Balance> {
 		signature: VrfSignature,
 	) -> DispatchResult;
 
+	/// Register a participant under a caller-supplied entropy slot.
+	///
+	/// The caller must derive `slot` deterministically from the participant identity and the
+	/// event, so that one participant cannot occupy two slots in the same event; the pallet only
+	/// rejects occupied slots. `entry` is the identifier the participant later claims with.
+	fn participate_with_slot(
+		event_id: EventId,
+		slot: BigEndianU256,
+		entry: RegistrationEntry<AccountId>,
+	) -> DispatchResult;
+
 	/// Claim a prize on behalf of a winning participant.
 	///
 	/// `registrant` is the participant's identifier used at registration time.

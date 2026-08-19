@@ -22,7 +22,7 @@ jobs:
             path: runtimes/next-asset-hub-paseo
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build ${{ matrix.name }} runtime
         id: srtool_build
@@ -38,7 +38,7 @@ jobs:
           echo '${{ steps.srtool_build.outputs.json }}' | jq > ${{ matrix.name }}_srtool_output.json
 
       - name: Upload ${{ matrix.name }} wasm
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}-runtime
           path: |
@@ -50,10 +50,10 @@ jobs:
     needs: [build-runtimes]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -95,7 +95,7 @@ jobs:
           cat RELEASE_NOTES.md
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release-assets/*.wasm

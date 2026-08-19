@@ -9,10 +9,16 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
+ark-bls12-381-ext = { workspace = true }
+ark-ec = { workspace = true }
+ark-ed-on-bls12-381-bandersnatch-ext = { workspace = true }
+ark-ff = { workspace = true }
+ark-scale = { workspace = true, features = ["ec"] }
 codec = { workspace = true, features = ["derive"] }
 scale-info = { workspace = true, features = ["derive"] }
 frame-support = { workspace = true }
 frame-system = { workspace = true }
+getrandom = { workspace = true, optional = true }
 sp-core = { workspace = true }
 sp-crypto-ec-utils = { workspace = true, features = ["bls12-381", "ed-on-bls12-381-bandersnatch"] }
 sp-io = { workspace = true }
@@ -32,9 +38,15 @@ pallet-asset-conversion = { workspace = true }
 [features]
 default = ["std"]
 std = [
+	"ark-bls12-381-ext/std",
+	"ark-ec/std",
+	"ark-ed-on-bls12-381-bandersnatch-ext/std",
+	"ark-ff/std",
+	"ark-scale/std",
 	"codec/std",
 	"frame-support/std",
 	"frame-system/std",
+	"getrandom?/std",
 	"pallet-asset-conversion-tx-payment/std",
 	"pallet-asset-conversion/std",
 	"pallet-asset-tx-payment/std",
@@ -55,6 +67,7 @@ ec-crypto-hostcalls = []
 runtime-benchmarks = [
 	"frame-support/runtime-benchmarks",
 	"frame-system/runtime-benchmarks",
+	"getrandom/custom",
 	"pallet-asset-conversion-tx-payment/runtime-benchmarks",
 	"pallet-asset-conversion/runtime-benchmarks",
 	"pallet-asset-tx-payment/runtime-benchmarks",
@@ -64,6 +77,7 @@ runtime-benchmarks = [
 	"prover",
 	"sp-runtime/runtime-benchmarks",
 	"verifiable/builder-params",
+	"verifiable/no-std-prover",
 ]
 genesis = ["verifiable/builder-params"]
 prover = ["verifiable/prover"]

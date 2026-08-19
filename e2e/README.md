@@ -25,7 +25,10 @@ the `e2e/` directory; `just --list` shows every recipe with its one-line descrip
 - `packages/shared` contains the connection helpers used by the live suites.
 - `packages/descriptors` generates `@polkadot-api/descriptors` from locally built runtime WASM.
 - `suites/initialization-tests` validates the bootstrapped local network state.
-- `tests/runtime-upgrade` forks Paseo People with Chopsticks and injects a local runtime build.
+- `tests/runtime-upgrade` forks Paseo People and Paseo Asset Hub with Chopsticks and injects a local
+  runtime build. The Asset Hub case also asserts that the upgraded chain leaves the alias fee
+  parameter (`Parameters::Parameters`, key `AliasAccounts(AliasFee)`) unset, so alias registration
+  stays closed until governance sets it.
 
 ## Prerequisites
 
@@ -50,13 +53,22 @@ cd e2e
 just test-runtime-upgrade
 ```
 
+Both chains are covered; run one on its own with `pnpm run test:runtime-upgrade:paseo-to-next-people-paseo`
+or `pnpm run test:runtime-upgrade:paseo-to-next-asset-hub-paseo`. Each needs the matching runtime built
+in release mode first (`cargo build --release -p next-people-paseo-runtime`, `-p next-asset-hub-paseo-runtime`).
+
 Optional environment variables:
 
-- `NEXT_PEOPLE_PASEO_UPGRADE_TARGETS=next-paseo` (or a `wss://` endpoint running next-people-paseo)
+- `NEXT_PEOPLE_PASEO_UPGRADE_ENDPOINT=wss://paseo-people-next-system-rpc.polkadot.io`
 - `NEXT_PEOPLE_PASEO_UPGRADE_BLOCK=<block-number-or-hash>`
 - `NEXT_PEOPLE_PASEO_UPGRADE_DB=.cache/nextPeoplePaseo.runtime-upgrade.sqlite`
 - `NEXT_PEOPLE_PASEO_UPGRADE_RUNTIME_LOG_LEVEL=0`
 - `NEXT_PEOPLE_PASEO_RUNTIME_WASM=target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.wasm`
+- `NEXT_ASSET_HUB_PASEO_UPGRADE_ENDPOINT=wss://paseo-asset-hub-next-rpc.polkadot.io`
+- `NEXT_ASSET_HUB_PASEO_UPGRADE_BLOCK=<block-number-or-hash>`
+- `NEXT_ASSET_HUB_PASEO_UPGRADE_DB=.cache/nextAssetHubPaseo.runtime-upgrade.sqlite`
+- `NEXT_ASSET_HUB_PASEO_UPGRADE_RUNTIME_LOG_LEVEL=0`
+- `NEXT_ASSET_HUB_PASEO_RUNTIME_WASM=target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm`
 
 ## Zombienet + init-state suite
 

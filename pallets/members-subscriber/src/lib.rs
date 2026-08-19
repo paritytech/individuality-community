@@ -77,6 +77,10 @@ pub mod pallet {
 
 	const LOG_TARGET: &str = "pallet-members-subscriber";
 
+	/// Number of blocks that an offchain worker transaction of this pallet stays valid in the
+	/// transaction pool.
+	const TX_LONGEVITY: u64 = 3;
+
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
 
@@ -115,10 +119,17 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxDeletedRingsPerCollection: Get<u32>;
 
-		/// Maximum number of ring roots per collection.
-		/// Used to bound `clear` operations during re-initialization.
+		/// Number of ring indices the gap scan examines per batch.
+		/// It must exceed `MaxUpdatesPerBatch`, otherwise the scan cursor
+		/// advances no faster than the ring index frontier and never catches up.
 		#[pallet::constant]
-		type MaxRingRootsPerCollection: Get<u32>;
+		type MaxGapScanPerBatch: Get<u32>;
+
+		/// Maximum number of `RingRoots` entries removed per `purge_stale_ring_roots` call.
+		/// Bounds the weight of a single purge page; the offchain worker submits pages
+		/// until all stale entries are removed.
+		#[pallet::constant]
+		type PurgePageSize: Get<u32>;
 
 		/// Origin check for XCM messages from the notifier.
 		type EnsureNotifierOrigin: EnsureOrigin<Self::RuntimeOrigin>;
@@ -177,22 +188,36 @@ pub mod pallet {
 	// ========== Storage Items ==========
 
 	/// Recent ring roots received from the notifier.
-	/// Maps (identifier, ring_index) to a sliding window of ring roots.
+	/// Maps (generation, identifier, ring_index) to a sliding window of ring roots; only the
+	/// [`CurrentGeneration`] prefix is live, so a logical clear leaves the older prefixes
+	/// unreachable until the offchain purge removes them.
 	/// Proofs are accepted against any root in the window that has not expired: a
 	/// superseded root expires once `OldRootRetentionDuration` has passed since its
 	/// successor's source time. The oldest root is evicted when the window reaches
 	/// `MaxRecentRootsPerRing`, so expired roots may remain stored until then but are
 	/// rejected during verification.
 	#[pallet::storage]
-	pub type RingRoots<T: Config> = StorageDoubleMap<
+	pub type RingRoots<T: Config> = StorageNMap<
 		_,
-		Blake2_128Concat,
-		Identifier,
-		Blake2_128Concat,
-		RingIndex,
+		(
+			NMapKey<Twox64Concat, Generation>,
+			NMapKey<Blake2_128Concat, Identifier>,
+			NMapKey<Blake2_128Concat, RingIndex>,
+		),
 		BoundedVec<RingCommitmentRecord<T>, T::MaxRecentRootsPerRing>,
 		OptionQuery,
 	>;
+
+	/// Generation prefix holding the live `RingRoots` entries. Increased on
+	/// `clear_all_ring_data` call. A saturated counter stops distinguishing generations, which
+	/// is unreachable for notifier-driven re-initializations.
+	#[pallet::storage]
+	pub type CurrentGeneration<T: Config> = StorageValue<_, Generation, ValueQuery>;
+
+	/// Position of the purge that removes the stale `RingRoots` prefixes. Absent when no stale
+	/// ring data remains.
+	#[pallet::storage]
+	pub type QueuedRingPurge<T: Config> = StorageValue<_, RingPurgeProgress, OptionQuery>;
 
 	/// State of each ring collection including rings count and missing rings tracking.
 	#[pallet::storage]
@@ -291,6 +316,23 @@ pub mod pallet {
 		RevisionNotFound,
 		/// Requested revision has been superseded for longer than the retention duration.
 		RevisionExpired,
+		/// The notifier initialized more than `MaxCollections` collections.
+		TooManyCollections,
+	}
+
+	/// Custom transaction-validity errors for authorized calls.
+	#[repr(u8)]
+	pub enum AuthorizeInvalidity {
+		/// No stale ring data awaits purging.
+		NothingToPurge = 0,
+		/// The queued purge names the live generation, so removing it would delete live entries.
+		PurgeGenerationNotStale = 1,
+	}
+
+	impl From<AuthorizeInvalidity> for TransactionValidityError {
+		fn from(e: AuthorizeInvalidity) -> Self {
+			InvalidTransaction::Custom(e as u8).into()
+		}
 	}
 
 	// ========== Hooks ==========
@@ -301,6 +343,12 @@ pub mod pallet {
 			// Limiting execution frequency
 			if !(block_number % T::OffchainWorkerInterval::get()).is_zero() {
 				return;
+			}
+
+			// Purging stale ring data also while the subscription is Terminated
+			if QueuedRingPurge::<T>::exists() {
+				let call = Call::purge_stale_ring_roots {};
+				Self::submit_authorized_transaction(call, "Purge Stale Ring Roots");
 			}
 
 			if !matches!(Subscription::<T>::get(), SubscriptionStatus::Active { .. }) {
@@ -362,6 +410,13 @@ pub mod pallet {
 
 			assert!(T::MaxUpdatesPerBatch::get() > 0, "MaxUpdatesPerBatch must be greater than 0");
 
+			// At equality the scan advances exactly as fast as the frontier, so a cursor that
+			// falls behind may stay behind for long.
+			assert!(
+				T::MaxGapScanPerBatch::get() > T::MaxUpdatesPerBatch::get(),
+				"MaxGapScanPerBatch must be greater than MaxUpdatesPerBatch"
+			);
+
 			assert!(T::MaxCollections::get() > 0, "MaxCollections must be greater than 0");
 
 			assert!(
@@ -369,10 +424,7 @@ pub mod pallet {
 				"MaxDeletedRingsPerCollection must be greater than 0"
 			);
 
-			assert!(
-				T::MaxRingRootsPerCollection::get() > 0,
-				"MaxRingRootsPerCollection must be greater than 0"
-			);
+			assert!(T::PurgePageSize::get() > 0, "PurgePageSize must be greater than 0");
 
 			assert!(
 				T::ReplayAbandonThreshold::get() > T::ReplayWarningThreshold::get(),
@@ -389,6 +441,8 @@ pub mod pallet {
 				"OffchainWorkerInterval must be greater than 0"
 			);
 
+			let budget = OcwWeightBudget::from_normal_max::<T>();
+
 			// `replay_missing_roots` is submitted by offchain worker as an authorized transaction.
 			// If weight exceeds Normal.max_extrinsic, it is silently dropped and the
 			// replay flow stalls.
@@ -397,8 +451,25 @@ pub mod pallet {
 					T::MaxMissingRootsPerCollection::get(),
 				),
 			);
-			OcwWeightBudget::from_normal_max::<T>()
-				.assert_fits("replay_missing_roots", replay_weight);
+			budget.assert_fits("replay_missing_roots", replay_weight);
+
+			let purge_weight = T::WeightInfo::purge_stale_ring_roots(T::PurgePageSize::get())
+				.saturating_add(T::WeightInfo::authorize_purge_stale_ring_roots());
+			budget.assert_fits("purge_stale_ring_roots", purge_weight);
+
+			// The notifier dispatches both calls below through XCM, and each reserves a full
+			// gap-scan page up front. Without these assertions a runtime can set
+			// `MaxGapScanPerBatch` past the block and every batch fails on arrival.
+			let scan_weight = T::WeightInfo::detect_missing_in_range(T::MaxGapScanPerBatch::get());
+
+			let init_weight = T::WeightInfo::initialize_ring_roots(T::MaxUpdatesPerBatch::get())
+				.saturating_add(scan_weight)
+				.saturating_add(T::WeightInfo::clear_ring_data());
+			budget.assert_fits("initialize_ring_roots", init_weight);
+
+			let update_weight = T::WeightInfo::process_ring_updates(T::MaxUpdatesPerBatch::get())
+				.saturating_add(scan_weight);
+			budget.assert_fits("process_ring_updates", update_weight);
 		}
 	}
 
@@ -417,10 +488,10 @@ pub mod pallet {
 		#[pallet::call_index(0)]
 		#[pallet::weight(
 			T::WeightInfo::initialize_ring_roots(roots.updates.len() as u32)
-				.saturating_add(T::WeightInfo::detect_missing_in_range(roots.next_ring_index))
-				// Worst case when re-init from Active state clears all existing ring data.
-				// Using terminate_subscription() as upper bound for clear_all_ring_data().
-				.saturating_add(T::WeightInfo::terminate_subscription())
+				.saturating_add(T::WeightInfo::detect_missing_in_range(
+					T::MaxGapScanPerBatch::get()
+				))
+				.saturating_add(T::WeightInfo::clear_ring_data())
 		)]
 		pub fn initialize_ring_roots(
 			origin: OriginFor<T>,
@@ -445,11 +516,14 @@ pub mod pallet {
 				}
 			}
 
-			let old_next_ring_index =
-				RingCollectionStates::<T>::get(roots.identifier).next_ring_index;
+			if !RingCollectionExponents::<T>::contains_key(roots.identifier) {
+				let limit = T::MaxCollections::get() as usize;
+				let existing = RingCollectionExponents::<T>::iter_keys().take(limit).count();
+				ensure!(existing < limit, Error::<T>::TooManyCollections);
+			}
 
 			Self::store_ring_roots(&roots);
-			Self::detect_missing_rings_in_batch(&roots, old_next_ring_index);
+			let scanned = Self::detect_missing_rings_in_batch(&roots);
 			Self::record_batch_processed(roots.sequence);
 
 			Subscription::<T>::put(SubscriptionStatus::Active {
@@ -461,12 +535,10 @@ pub mod pallet {
 			Self::deposit_event(Event::RingRootsInitialized { count, sequence: roots.sequence });
 
 			// Refunding overcharged weight
-			let delta = roots.next_ring_index.saturating_sub(old_next_ring_index);
 			let mut actual_weight = T::WeightInfo::initialize_ring_roots(count)
-				.saturating_add(T::WeightInfo::detect_missing_in_range(delta));
+				.saturating_add(T::WeightInfo::detect_missing_in_range(scanned));
 			if re_init {
-				actual_weight =
-					actual_weight.saturating_add(T::WeightInfo::terminate_subscription());
+				actual_weight = actual_weight.saturating_add(T::WeightInfo::clear_ring_data());
 			}
 			Ok(Some(actual_weight).into())
 		}
@@ -479,7 +551,9 @@ pub mod pallet {
 		#[pallet::call_index(1)]
 		#[pallet::weight(
 			T::WeightInfo::process_ring_updates(batch.updates.len() as u32)
-				.saturating_add(T::WeightInfo::detect_missing_in_range(batch.next_ring_index))
+				.saturating_add(T::WeightInfo::detect_missing_in_range(
+					T::MaxGapScanPerBatch::get()
+				))
 		)]
 		pub fn process_ring_updates(
 			origin: OriginFor<T>,
@@ -495,21 +569,30 @@ pub mod pallet {
 				return Ok(Some(T::WeightInfo::process_ring_updates_stale_batch()).into());
 			}
 
-			let old_next_ring_index =
-				RingCollectionStates::<T>::get(batch.identifier).next_ring_index;
+			if !RingCollectionExponents::<T>::contains_key(batch.identifier) {
+				log::error!(
+					target: LOG_TARGET,
+					"notifier sent updates for uninitialized collection {:?}",
+					batch.identifier,
+				);
+				return Ok(Some(
+					T::WeightInfo::process_ring_updates_stale_batch()
+						.saturating_add(T::DbWeight::get().reads(1)),
+				)
+				.into());
+			}
 
 			Self::store_ring_roots(&batch);
-			Self::detect_missing_rings_in_batch(&batch, old_next_ring_index);
+			let scanned = Self::detect_missing_rings_in_batch(&batch);
 			Self::record_batch_processed(batch.sequence);
 
 			let count = batch.updates.len() as u32;
 			Self::deposit_event(Event::RingRootsUpdated { count, sequence: batch.sequence });
 
-			// Refunding overcharged detect_missing_rings_in_batch weight: annotation uses
-			// next_ring_index but actual work is proportional to the delta
-			let delta = batch.next_ring_index.saturating_sub(old_next_ring_index);
+			// Refunding overcharged detect_missing_rings_in_batch weight: actual work is
+			// proportional to the indices the scan reached
 			let actual_weight = T::WeightInfo::process_ring_updates(count)
-				.saturating_add(T::WeightInfo::detect_missing_in_range(delta));
+				.saturating_add(T::WeightInfo::detect_missing_in_range(scanned));
 			Ok(Some(actual_weight).into())
 		}
 
@@ -587,6 +670,45 @@ pub mod pallet {
 
 			Ok(())
 		}
+
+		/// Removes a page of stale-generation `RingRoots` entries.
+		///
+		/// Submitted by the offchain worker as an authorized transaction.
+		#[pallet::authorize(Pallet::<T>::authorize_purge_stale_ring_roots)]
+		#[pallet::call_index(4)]
+		#[pallet::weight(T::WeightInfo::purge_stale_ring_roots(T::PurgePageSize::get()))]
+		#[pallet::weight_of_authorize(T::WeightInfo::authorize_purge_stale_ring_roots())]
+		pub fn purge_stale_ring_roots(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+
+			// `authorize` rejects a purge that is absent or names the live generation, so this
+			// should not happen.
+			let Some(RingPurgeProgress { generation, page }) = QueuedRingPurge::<T>::take()
+				.defensive_proof("authorize rejects a purge without a stale generation")
+			else {
+				return Ok(Some(T::WeightInfo::purge_stale_ring_roots(0)).into());
+			};
+
+			// Removed keys are gone, so the next page resumes at the first surviving key
+			// without a stored cursor
+			let result = RingRoots::<T>::clear_prefix((generation,), T::PurgePageSize::get(), None);
+
+			if result.maybe_cursor.is_some() {
+				QueuedRingPurge::<T>::put(RingPurgeProgress {
+					generation,
+					page: page.saturating_add(1),
+				});
+			} else {
+				// Prefix exhausted; moving to the next stale generation if a later clear
+				// queued one
+				let next = generation.saturating_add(1);
+				if next < CurrentGeneration::<T>::get() {
+					QueuedRingPurge::<T>::put(RingPurgeProgress { generation: next, page: 0 });
+				}
+			}
+
+			Ok(Some(T::WeightInfo::purge_stale_ring_roots(result.unique)).into())
+		}
 	}
 
 	// ========== Call Declarations ==========
@@ -645,27 +767,88 @@ pub mod pallet {
 
 			let validity = ValidTransaction::with_tag_prefix("members-subscriber:replay")
 				.and_provides(identifier)
-				.longevity(3)
+				.longevity(TX_LONGEVITY)
 				.propagate(false)
 				.priority(tx_priority::BACKGROUND_PROGRESS)
 				.into();
 			Ok((validity, T::WeightInfo::authorize_replay_missing_roots(indices.len() as u32)))
+		}
+
+		/// Validates a purge request.
+		///
+		/// Checks that the transaction is local/in-block, that a purge is pending and that the
+		/// generation it names is stale. The stored generation and page counter are the
+		/// `provides` tag, so each page enters the pool once.
+		pub fn authorize_purge_stale_ring_roots(
+			source: TransactionSource,
+		) -> TransactionValidityWithRefund {
+			if !matches!(source, TransactionSource::InBlock | TransactionSource::Local) {
+				return Err(InvalidTransaction::Call.into());
+			}
+
+			let Some(progress) = QueuedRingPurge::<T>::get() else {
+				return Err(AuthorizeInvalidity::NothingToPurge.into());
+			};
+
+			// `clear_all_ring_data` only queues a generation below the live one. A queued
+			// generation at or above it would clear the live rings.
+			if progress.generation >= CurrentGeneration::<T>::get() {
+				return Err(AuthorizeInvalidity::PurgeGenerationNotStale.into());
+			}
+
+			let validity = ValidTransaction::with_tag_prefix("members-subscriber:purge")
+				.and_provides(progress)
+				.longevity(TX_LONGEVITY)
+				.propagate(false)
+				.priority(tx_priority::BACKGROUND_PROGRESS)
+				.into();
+			Ok((validity, T::WeightInfo::authorize_purge_stale_ring_roots()))
 		}
 	}
 
 	// ========== Helper Functions ==========
 
 	impl<T: Config> Pallet<T> {
-		/// Clears all ring root data: RingRoots, RingCollectionStates,
-		/// RingCollectionExponents, and ProcessingState.
-		fn clear_all_ring_data() {
-			let max_roots =
-				T::MaxCollections::get().saturating_mul(T::MaxRingRootsPerCollection::get());
-			let _ = RingRoots::<T>::clear(max_roots, None);
-			let _ = RingCollectionStates::<T>::clear(T::MaxCollections::get(), None);
-			let _ = RingCollectionExponents::<T>::clear(T::MaxCollections::get(), None);
+		/// Retires the live generation and queues it for purging, then drops the per-collection
+		/// state. `RingRoots` entries are not touched here; the offchain purge removes them.
+		pub(crate) fn clear_all_ring_data() {
+			let stale = CurrentGeneration::<T>::get();
+			CurrentGeneration::<T>::put(stale.saturating_add(1));
+			// Keeping the oldest pending generation, so that an ongoing purge finishes its
+			// job first
+			QueuedRingPurge::<T>::mutate(|purge| {
+				purge.get_or_insert(RingPurgeProgress { generation: stale, page: 0 });
+			});
+			let states = RingCollectionStates::<T>::clear(T::MaxCollections::get(), None);
+			let exponents = RingCollectionExponents::<T>::clear(T::MaxCollections::get(), None);
+			// Shouldn't happen but worth checking.
+			if states.maybe_cursor.is_some() || exponents.maybe_cursor.is_some() {
+				log::error!(
+					target: LOG_TARGET,
+					"more than {} collections stored; leftovers are unreachable",
+					T::MaxCollections::get(),
+				);
+			}
 
 			ProcessingState::<T>::kill();
+		}
+
+		/// Roots for `(identifier, ring_index)` under the current generation prefix.
+		/// Entries left in a stale prefix are unreachable and read as absent.
+		pub fn current_ring_roots(
+			identifier: &Identifier,
+			ring_index: RingIndex,
+		) -> Option<BoundedVec<RingCommitmentRecord<T>, T::MaxRecentRootsPerRing>> {
+			RingRoots::<T>::get((CurrentGeneration::<T>::get(), identifier, ring_index))
+		}
+
+		/// Writes the roots for `(identifier, ring_index)` under the current generation prefix.
+		pub fn set_current_ring_roots(
+			identifier: &Identifier,
+			ring_index: RingIndex,
+			roots: BoundedVec<RingCommitmentRecord<T>, T::MaxRecentRootsPerRing>,
+		) {
+			RingRoots::<T>::insert((CurrentGeneration::<T>::get(), identifier, ring_index), roots);
 		}
 
 		/// Computes worst-case weight for the `replay_missing_roots` extrinsic.
@@ -707,18 +890,33 @@ pub mod pallet {
 		/// Also removes recovered indices from `missing_indices`.
 		pub(crate) fn store_ring_roots(batch: &RingRootUpdatesBatch<T>) {
 			let identifier = batch.identifier;
+			let generation = CurrentGeneration::<T>::get();
 			let mut state = RingCollectionStates::<T>::get(identifier);
 
 			state.next_ring_index = state.next_ring_index.max(batch.next_ring_index);
 
 			for update in batch.updates.iter() {
+				// Keeping every stored index inside the scanned range, which the gap-detection
+				// shortcut relies on to infer coverage from `ring_count`
+				if update.ring_index >= state.next_ring_index {
+					log::error!(
+						target: LOG_TARGET,
+						"notifier sent ring index {} at or above its frontier {} for collection {:?}",
+						update.ring_index,
+						state.next_ring_index,
+						identifier,
+					);
+					state.next_ring_index = update.ring_index.saturating_add(1);
+				}
+
 				// Clearing from missing regardless of op type
 				state.missing_indices.remove(&update.ring_index);
 
 				match &update.op {
 					RingRootOp::Built { revision, root } => {
 						let mut roots =
-							RingRoots::<T>::get(identifier, update.ring_index).unwrap_or_default();
+							RingRoots::<T>::get((generation, identifier, update.ring_index))
+								.unwrap_or_default();
 						if roots.is_empty() {
 							state.ring_count = state.ring_count.saturating_add(1);
 						}
@@ -738,11 +936,14 @@ pub mod pallet {
 							.defensive_proof(
 								"room guaranteed: either was not full or oldest was evicted",
 							);
-						RingRoots::<T>::insert(identifier, update.ring_index, roots);
+						RingRoots::<T>::insert((generation, identifier, update.ring_index), roots);
 					},
 					RingRootOp::Deleted => {
+						// Entries in a stale prefix are unreachable and never counted
+						// towards ring_count
 						let was_stored =
-							RingRoots::<T>::take(identifier, update.ring_index).is_some();
+							RingRoots::<T>::take((generation, identifier, update.ring_index))
+								.is_some();
 						if was_stored {
 							state.ring_count = state.ring_count.saturating_sub(1);
 						}
@@ -762,50 +963,68 @@ pub mod pallet {
 		}
 
 		/// Detects and records missing ring roots for the collection in the batch.
-		/// Only scans the delta range `old_next_ring_index..next_ring_index` for new gaps,
-		/// avoiding a full scan on every batch.
-		pub(crate) fn detect_missing_rings_in_batch(
-			batch: &RingRootUpdatesBatch<T>,
-			old_next_ring_index: u32,
-		) {
+		/// The scan resumes at `next_scan_index` and covers at most `MaxGapScanPerBatch`
+		/// indices, so a frontier jump larger than one page is finished by later batches.
+		/// Returns the number of indices examined, for the caller's weight refund.
+		pub(crate) fn detect_missing_rings_in_batch(batch: &RingRootUpdatesBatch<T>) -> u32 {
 			let state = RingCollectionStates::<T>::get(batch.identifier);
 
 			let accounted_for = state.ring_count.saturating_add(state.deleted_indices.len() as u32);
 
 			if accounted_for >= state.next_ring_index {
+				// Every index below the frontier is stored or deleted, so there is no gap left
+				// to find and the scan is caught up.
 				RingCollectionStates::<T>::mutate(batch.identifier, |state| {
 					state.missing_indices.clear();
+					state.next_scan_index = state.next_ring_index;
 				});
-				return;
+				return 0;
 			}
 
-			// Skipping the scan when deleted_indices at capacity to avoid false positives
+			// Skipping the scan when deleted_indices at capacity to avoid false positives.
+			// The cursor stays put: this says nothing about the unscanned indices.
 			if state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get() {
 				Self::deposit_event(Event::DeletedIndicesAtCapacity {
 					identifier: batch.identifier,
 				});
-				return;
+				return 0;
 			}
 
 			let mut new_missing_count = 0u32;
+			let mut scanned = 0u32;
+			let generation = CurrentGeneration::<T>::get();
 			RingCollectionStates::<T>::mutate(batch.identifier, |state| {
-				for idx in old_next_ring_index..state.next_ring_index {
-					if !RingRoots::<T>::contains_key(batch.identifier, idx) &&
-						!state.missing_indices.contains_key(&idx) &&
-						!state.deleted_indices.contains(&idx)
-					{
+				// Resuming where the previous scan stopped, bounded so that the work matches
+				// the charged weight
+				let scan_start = state.next_scan_index;
+				let scan_end = state
+					.next_ring_index
+					.min(scan_start.saturating_add(T::MaxGapScanPerBatch::get()));
+				let mut cursor = scan_start;
+				for idx in scan_start..scan_end {
+					scanned = scanned.saturating_add(1);
+					// Entries in a stale prefix are unreachable, so their gaps are re-detected
+					let present = RingRoots::<T>::contains_key((generation, batch.identifier, idx));
+					// `missing_indices` is not checked because every key in it is below the cursor,
+					// because this loop is the only writer and it leaves the cursor above each
+					// index it handles.
+					if !present && !state.deleted_indices.contains(&idx) {
 						if state.missing_indices.try_insert(idx, 0).is_err() {
 							log::warn!(
 								target: LOG_TARGET,
 								"missing_indices at capacity for collection {:?}, \
-								 stopping scan at index {idx}",
+								 scan resumes at index {idx}",
 								batch.identifier,
 							);
 							break;
 						}
 						new_missing_count += 1;
 					}
+					// Advancing only past a fully handled index, so a capacity break leaves the
+					// unrecorded gap for the next batch
+					cursor = idx.saturating_add(1);
 				}
+				state.next_scan_index = cursor;
 			});
 
 			if new_missing_count > 0 {
@@ -814,6 +1033,8 @@ pub mod pallet {
 					count: new_missing_count,
 				});
 			}
+
+			scanned
 		}
 
 		/// Updates timestamps and sequence after processing a batch.
@@ -958,7 +1179,8 @@ pub mod pallet {
 				.ok_or(Error::<T>::CollectionNotFound)?;
 			let capacity: <T::Crypto as GenerateVerifiable>::Config =
 				ring_exponent.try_into().map_err(|_| Error::<T>::InvalidRingExponent)?;
-			let roots = RingRoots::<T>::get(identifier, ring_index).ok_or(Error::<T>::NoRoot)?;
+			let roots =
+				Self::current_ring_roots(identifier, ring_index).ok_or(Error::<T>::NoRoot)?;
 			Ok((capacity, roots))
 		}
 
@@ -1045,7 +1267,7 @@ pub mod pallet {
 		}
 
 		fn ring_revision(identifier: &Identifier, ring_index: RingIndex) -> Option<RevisionIndex> {
-			RingRoots::<T>::get(identifier, ring_index)?.last().map(|r| r.revision)
+			Self::current_ring_roots(identifier, ring_index)?.last().map(|r| r.revision)
 		}
 
 		fn is_revision_valid(
@@ -1053,7 +1275,7 @@ pub mod pallet {
 			ring_index: RingIndex,
 			revision: RevisionIndex,
 		) -> bool {
-			let Some(roots) = RingRoots::<T>::get(identifier, ring_index) else {
+			let Some(roots) = Self::current_ring_roots(identifier, ring_index) else {
 				return false;
 			};
 			roots
@@ -1067,7 +1289,7 @@ pub mod pallet {
 			ring_index: RingIndex,
 			revision: RevisionIndex,
 		) -> Option<u64> {
-			RingRoots::<T>::get(identifier, ring_index)?
+			Self::current_ring_roots(identifier, ring_index)?
 				.iter()
 				.find(|r| r.revision == revision)
 				.map(|r| r.source_time)

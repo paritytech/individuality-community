@@ -473,8 +473,13 @@ impl pallet_pgas::benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 	}
 }
 
+parameter_types! {
+	pub const NetworkSuffix: &'static [u8] = b"paseo";
+}
+
 impl pallet_pgas::Config for Test {
 	type WeightInfo = ();
+	type Suffix = NetworkSuffix;
 	type MembershipProver = MockProver;
 	type Clock = TestClock;
 	type Fungibles = Assets;

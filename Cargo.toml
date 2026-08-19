@@ -26,6 +26,7 @@ members = [
 	"pallets/nft-claims",
 	"pallets/nft-credits",
 	"pallets/origin-restriction",
+	"pallets/people-airdrops",
 	"pallets/people-lite",
 	"pallets/people-multi",
 	"pallets/pgas",
@@ -81,6 +82,11 @@ len_zero = { level = "allow", priority = 2 }
 [workspace.dependencies]
 alloy-core = { version = "1.2.1", default-features = false }
 approx = { version = "0.5.1", default-features = false }
+ark-bls12-381-ext = { version = "0.6", default-features = false }
+ark-ec = { version = "0.6", default-features = false }
+ark-ed-on-bls12-381-bandersnatch-ext = { version = "0.6", default-features = false }
+ark-ff = { version = "0.6", default-features = false }
+ark-scale = { version = "0.0.14", default-features = false }
 array-bytes = { version = "6.2.2", default-features = false }
 asset-test-utils = { version = "34.0.0" }
 assets-common = { version = "0.32.0", default-features = false }
@@ -119,6 +125,7 @@ frame-system = { version = "47.0.0", default-features = false }
 frame-system-benchmarking = { version = "48.0.0", default-features = false }
 frame-system-rpc-runtime-api = { version = "42.0.0", default-features = false }
 frame-try-runtime = { version = "0.53.0", default-features = false }
+getrandom = { version = "0.2", default-features = false }
 hex-literal = { version = "0.4.1" }
 indiv-pallet-airdrop = { path = "pallets/airdrop", default-features = false }
 indiv-pallet-alias-accounts = { path = "pallets/alias-accounts", default-features = false }
@@ -136,6 +143,7 @@ indiv-pallet-nft-claims = { path = "pallets/nft-claims", default-features = fals
 indiv-pallet-nft-credits = { path = "pallets/nft-credits", default-features = false }
 indiv-pallet-origin-restriction = { path = "pallets/origin-restriction", default-features = false }
 indiv-pallet-people = { path = "pallets/people-multi", default-features = false }
+indiv-pallet-people-airdrops = { path = "pallets/people-airdrops", default-features = false }
 indiv-pallet-people-lite = { path = "pallets/people-lite", default-features = false }
 indiv-pallet-pgas = { path = "pallets/pgas", default-features = false }
 indiv-pallet-proof-of-ink = { path = "pallets/proof-of-ink", default-features = false }
@@ -282,7 +290,7 @@ tokio = { version = "1.45.0", default-features = false, features = [
 	"rt-multi-thread",
 ] }
 tracing = { version = "0.1.37", default-features = false }
-verifiable = { git = "https://github.com/paritytech/verifiable", rev = "1f9f67524acce0d9c46dbbb566f84ce52757b114", default-features = false, version = "*" }
+verifiable = { version = "0.3.0", default-features = false }
 xcm = { version = "23.0.1", package = "staging-xcm", default-features = false }
 xcm-builder = { version = "28.0.0", package = "staging-xcm-builder", default-features = false }
 xcm-executor = { version = "27.0.0", package = "staging-xcm-executor", default-features = false }

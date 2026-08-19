@@ -865,6 +865,73 @@ fn account_participation_validates_vrf_and_binding() {
 }
 
 #[test]
+fn slot_participation_registers_and_rejects_duplicates() {
+	new_test_ext().execute_with(|| {
+		fund_source();
+		let id = event_id(23);
+		let entry = RegistrationEntry::<u64>::Alias { alias: alias_from(0x33) };
+		let slot = BigEndianU256::from([0x44u8; 32]);
+
+		// Unknown event is rejected.
+		assert_err!(
+			crate::Pallet::<Test>::participate_with_slot(id, slot, entry.clone()),
+			crate::Error::<Test>::UnknownEvent,
+		);
+
+		assert_ok!(crate::Pallet::<Test>::schedule(SOURCE, id, default_info(2, Permill::one())));
+		// A scheduled event does not accept registrations before it opens.
+		assert_err!(
+			crate::Pallet::<Test>::participate_with_slot(id, slot, entry.clone()),
+			crate::Error::<Test>::NotAcceptingRegistrations,
+		);
+
+		set_now_secs(150);
+		run_to_next_ocw(); // → Registering
+		assert_ok!(crate::Pallet::<Test>::participate_with_slot(id, slot, entry.clone()));
+		assert_eq!(Registrations::<Test>::get(id, slot), Some(entry));
+		assert!(matches!(
+			Events::<Test>::get(id).unwrap().status,
+			Status::Registering { total_participants: 1 }
+		));
+
+		// The same slot cannot be occupied twice, whatever the entry.
+		let other_entry = RegistrationEntry::<u64>::Account { account_id: 5 };
+		assert_err!(
+			crate::Pallet::<Test>::participate_with_slot(id, slot, other_entry),
+			crate::Error::<Test>::EntropySlotTaken,
+		);
+	});
+}
+
+#[test]
+fn slot_registered_participant_wins_and_claims() {
+	new_test_ext().execute_with(|| {
+		fund_source();
+		let id = event_id(29);
+		let info = default_info(1, Permill::one());
+		assert_ok!(crate::Pallet::<Test>::schedule(SOURCE, id, info.clone()));
+		set_now_secs(info.registration_starts);
+		run_to_next_ocw(); // → Registering
+		let entry = RegistrationEntry::<u64>::Alias { alias: alias_from(0x66) };
+		let slot = BigEndianU256::from([0x55u8; 32]);
+		assert_ok!(crate::Pallet::<Test>::participate_with_slot(id, slot, entry.clone()));
+
+		set_now_secs(info.draw_time);
+		run_to_next_ocw(); // Registering → AwaitingEntropy
+		run_to_next_ocw(); // capture_entropy → DrawWinners
+		run_to_next_ocw(); // draw_winners fills the single slot
+		run_to_next_ocw(); // close_drawing → Claiming
+		assert!(matches!(Events::<Test>::get(id).unwrap().status, Status::Claiming { .. }));
+		assert_eq!(Winners::<Test>::get(id, &entry), Some(slot));
+
+		let beneficiary = 99u64;
+		assert_ok!(crate::Pallet::<Test>::claim(id, entry, beneficiary));
+		use frame_support::traits::fungibles::Inspect;
+		assert_eq!(<Assets as Inspect<u64>>::balance(ASSET_ID, &beneficiary), PRIZE_VALUE);
+	});
+}
+
+#[test]
 fn draw_marks_exactly_effective_n_winners() {
 	new_test_ext().execute_with(|| {
 		fund_source();

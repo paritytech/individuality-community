@@ -26,7 +26,7 @@ use crate::{
 	},
 	pallet::{AccountToAlias, AliasToAccount, AttestationAllowance, LitePeople},
 	EnsureLiteAliasInContext, LitePeopleCollectionCreated, MemberOf, Pallet as PeopleLitePallet,
-	ProofOf, LITE_PEOPLE_AUTH_CONTEXT, LITE_PEOPLE_MEMBER_IDENTIFIER, MSG_PREFIX,
+	ProofOf, LITE_PEOPLE_MEMBER_IDENTIFIER, MSG_PREFIX,
 };
 use codec::Encode;
 use frame_support::{
@@ -42,6 +42,10 @@ use verifiable::GenerateVerifiable;
 const EXTENSION_VERSION: u8 = 0;
 
 type SecretOfTest = <crate::CryptoOf<Test> as GenerateVerifiable>::Secret;
+
+fn auth_context() -> Context {
+	PeopleLitePallet::<Test>::auth_context()
+}
 
 fn attest_msg(who: u64, key: MemberOf<Test>) -> Vec<u8> {
 	[&MSG_PREFIX[..], &who.encode()[..], &key.encode()[..]].concat()
@@ -129,7 +133,7 @@ fn establish_alias(
 		account: alias_account,
 		valid_at_block: Pallet::<Test>::block_number(),
 	});
-	let (proof, alias) = alias_proof_for_call(secret, &call, *LITE_PEOPLE_AUTH_CONTEXT);
+	let (proof, alias) = alias_proof_for_call(secret, &call, auth_context());
 	assert_ok!(exec_as_lite_alias_with_proof_tx(call.clone(), proof, 0));
 	let rev_alias = RevisedContextualAlias {
 		revision: mock_member_service_revision(LITE_PEOPLE_MEMBER_IDENTIFIER),
@@ -628,8 +632,8 @@ fn alias_proof_rejects_wrong_context() {
 #[test]
 fn alias_proof_accepts_any_configured_context() {
 	new_test_ext().execute_with(|| {
-		// `OTHER_LITE_CONTEXT` is a second context accepted by the mock's `AccountContexts`
-		// alongside `LITE_PEOPLE_AUTH_CONTEXT`, so an alias proven in it must be accepted.
+		// `OTHER_LITE_CONTEXT` is a second context accepted by the mock's `AccountContexts`,
+		// so an alias proven in it must be accepted.
 		let lite_account = 730;
 		let alias_account = 731;
 		let secret = register_lite_person(1310, lite_account, 66);
@@ -660,7 +664,7 @@ fn alias_proof_rejects_non_set_alias_account_calls() {
 		let call = RuntimeCall::System(frame_system::Call::<Test>::remark_with_event {
 			remark: b"not-alias-setup".to_vec(),
 		});
-		let (proof, _) = alias_proof_for_call(&secret, &call, *LITE_PEOPLE_AUTH_CONTEXT);
+		let (proof, _) = alias_proof_for_call(&secret, &call, auth_context());
 
 		let err = exec_as_lite_alias_with_proof_tx(call, proof, 0)
 			.expect_err("proof auth must only allow set_alias_account");
@@ -773,7 +777,7 @@ fn stale_alias_requires_revised_variant() {
 			old_alias_account,
 			0,
 			&rotate_call,
-			*LITE_PEOPLE_AUTH_CONTEXT,
+			auth_context(),
 		);
 		assert_ok!(exec_as_lite_alias_with_account_revised_tx(
 			old_alias_account,
@@ -842,7 +846,7 @@ fn revised_alias_mismatch_is_rejected() {
 			alias_account,
 			0,
 			&rotate_call,
-			*LITE_PEOPLE_AUTH_CONTEXT,
+			auth_context(),
 		);
 
 		let err = exec_as_lite_alias_with_account_revised_tx(
@@ -867,7 +871,7 @@ fn set_alias_account_rejects_canonical_lite_account_as_alias_account() {
 			account: lite_account,
 			valid_at_block: Pallet::<Test>::block_number(),
 		});
-		let (proof, _) = alias_proof_for_call(&secret, &call, *LITE_PEOPLE_AUTH_CONTEXT);
+		let (proof, _) = alias_proof_for_call(&secret, &call, auth_context());
 		let err = exec_as_lite_alias_with_proof_tx(call, proof, 0)
 			.expect_err("canonical lite account must not enter alias storage");
 
@@ -947,8 +951,7 @@ fn alias_proof_rejects_future_and_stale_setup_calls() {
 			account: 994,
 			valid_at_block: Pallet::<Test>::block_number() + 1,
 		});
-		let (future_proof, _) =
-			alias_proof_for_call(&secret, &future_call, *LITE_PEOPLE_AUTH_CONTEXT);
+		let (future_proof, _) = alias_proof_for_call(&secret, &future_call, auth_context());
 		let future_err = exec_as_lite_alias_with_proof_tx(future_call, future_proof, 0)
 			.expect_err("future alias setup should fail validation");
 		assert_eq!(future_err, TransactionExecutionError::from(InvalidTransaction::Future));
@@ -960,8 +963,7 @@ fn alias_proof_rejects_future_and_stale_setup_calls() {
 			account: 995,
 			valid_at_block: 0,
 		});
-		let (stale_proof, _) =
-			alias_proof_for_call(&secret, &stale_call, *LITE_PEOPLE_AUTH_CONTEXT);
+		let (stale_proof, _) = alias_proof_for_call(&secret, &stale_call, auth_context());
 		let stale_err = exec_as_lite_alias_with_proof_tx(stale_call, stale_proof, 0)
 			.expect_err("stale alias setup should fail validation");
 		assert_eq!(stale_err, TransactionExecutionError::from(InvalidTransaction::Stale));
@@ -980,7 +982,7 @@ fn alias_proof_replay_is_rejected_as_stale() {
 			account: alias_account,
 			valid_at_block: Pallet::<Test>::block_number(),
 		});
-		let (proof, _) = alias_proof_for_call(&secret, &call, *LITE_PEOPLE_AUTH_CONTEXT);
+		let (proof, _) = alias_proof_for_call(&secret, &call, auth_context());
 		let replayed_proof = proof.clone();
 
 		assert_ok!(exec_as_lite_alias_with_proof_tx(call.clone(), proof, 0));
@@ -1004,8 +1006,7 @@ fn alias_proof_old_revision_replay_is_rejected_and_not_free() {
 			account: alias_account,
 			valid_at_block: Pallet::<Test>::block_number(),
 		});
-		let (proof_old, alias) =
-			alias_proof_for_call(&alice_secret, &call, *LITE_PEOPLE_AUTH_CONTEXT);
+		let (proof_old, alias) = alias_proof_for_call(&alice_secret, &call, auth_context());
 
 		let post =
 			exec_as_lite_alias_with_proof_tx_at_rev(call.clone(), proof_old.clone(), 0, rev_old)
@@ -1022,8 +1023,7 @@ fn alias_proof_old_revision_replay_is_rejected_and_not_free() {
 		let rev_new = mock_member_service_revision(LITE_PEOPLE_MEMBER_IDENTIFIER);
 		assert!(rev_new > rev_old);
 
-		let (proof_new, alias_new) =
-			alias_proof_for_call(&alice_secret, &call, *LITE_PEOPLE_AUTH_CONTEXT);
+		let (proof_new, alias_new) = alias_proof_for_call(&alice_secret, &call, auth_context());
 		assert_eq!(alias_new, alias);
 
 		let post = exec_as_lite_alias_with_proof_tx_at_rev(call.clone(), proof_new, 0, rev_new)
@@ -1056,10 +1056,8 @@ fn alias_proof_older_revision_rebind_to_new_account_succeeds_and_charges_fee() {
 			valid_at_block: Pallet::<Test>::block_number(),
 		});
 
-		let (proof_a_old, alias) =
-			alias_proof_for_call(&alice_secret, &call_a, *LITE_PEOPLE_AUTH_CONTEXT);
-		let (proof_b_old, alias_b) =
-			alias_proof_for_call(&alice_secret, &call_b, *LITE_PEOPLE_AUTH_CONTEXT);
+		let (proof_a_old, alias) = alias_proof_for_call(&alice_secret, &call_a, auth_context());
+		let (proof_b_old, alias_b) = alias_proof_for_call(&alice_secret, &call_b, auth_context());
 		assert_eq!(alias, alias_b);
 
 		exec_as_lite_alias_with_proof_tx_at_rev(call_a.clone(), proof_a_old, 0, rev_old)
@@ -1074,8 +1072,7 @@ fn alias_proof_older_revision_rebind_to_new_account_succeeds_and_charges_fee() {
 		let rev_new = mock_member_service_revision(LITE_PEOPLE_MEMBER_IDENTIFIER);
 		assert!(rev_new > rev_old);
 
-		let (proof_a_new, _) =
-			alias_proof_for_call(&alice_secret, &call_a, *LITE_PEOPLE_AUTH_CONTEXT);
+		let (proof_a_new, _) = alias_proof_for_call(&alice_secret, &call_a, auth_context());
 		exec_as_lite_alias_with_proof_tx_at_rev(call_a, proof_a_new, 0, rev_new)
 			.expect("refresh to newer revision should succeed");
 		assert_eq!(AccountToAlias::<Test>::get(account_a).unwrap().revision, rev_new);

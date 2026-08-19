@@ -37,7 +37,6 @@
 
 extern crate alloc;
 
-use core::mem::size_of;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
@@ -58,6 +57,7 @@ use frame_support::{
 };
 use frame_system::offchain::{CreateAuthorizedTransaction, SubmitTransaction};
 use indiv_support::{
+	context::{build_product_context, personhood, ProductContextSuffix},
 	labels::is_lite_person_label,
 	traits::{
 		Alias, AllocateStorage, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar,
@@ -83,12 +83,7 @@ pub mod pallet {
 	use sp_runtime::traits::Zero;
 	use sp_statement_store::{decrease_allowance_by, increase_allowance_by, StatementAllowance};
 
-	pub const RESOURCES_CONTEXT: Context = *b"pop:polkadot.network/resources  ";
-
 	const LOG_TARGET: &str = "runtime::indiv-pallet-resources";
-	const NOTIFICATION_CONTEXT_PREFIX: &[u8; 6] = b"NOTIF:";
-	const STMT_STORE_SLOT_CONTEXT_PREFIX: &[u8; 9] = b"SSS_SLOT:";
-	const LONG_TERM_STORAGE_CONTEXT_BASE: [u8; 24] = *b"pop:polkadot.net/rsc-lts";
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
 
 	#[pallet::pallet]
@@ -114,6 +109,10 @@ pub mod pallet {
 	{
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
+
+		/// Network suffix appended to this pallet's product name.
+		#[pallet::constant]
+		type Suffix: Get<&'static [u8]>;
 
 		/// Trait allowing cryptographic proof of membership without exposing the underlying member.
 		/// Normally a Ring-VRF.
@@ -718,7 +717,7 @@ pub mod pallet {
 		#[pallet::weight(<T as Config>::WeightInfo::touch_person_authorization())]
 		pub fn touch_person_authorization(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
 			// Ensure this is a person.
-			let alias = T::EnsurePerson::ensure_origin(origin, &RESOURCES_CONTEXT)?;
+			let alias = T::EnsurePerson::ensure_origin(origin, &Self::resources_context())?;
 			let account = AccountOfAlias::<T>::get(alias).ok_or(Error::<T>::NotRegistered)?;
 			let consumer_info = Consumers::<T>::get(&account).ok_or(Error::<T>::NotRegistered)?;
 			let Credibility::Person { last_update, demoted: was_demoted, .. } =
@@ -1139,7 +1138,7 @@ pub mod pallet {
 		/// Returns the proof context for a statement store slot claim at the given
 		/// `period` and `seq`.
 		///
-		/// Layout: `SSS_SLOT:<period (4 bytes BE)><seq (4 bytes BE)>` padded to 32 bytes.
+		/// Uses the product-owned statement-store slot context family.
 		pub fn stmt_store_slot_context_for(period: u32, seq: u32) -> Context {
 			Self::stmt_store_slot_context(period, seq)
 		}
@@ -1304,7 +1303,7 @@ pub mod pallet {
 			lite_identity_proof: T::OffchainSignature,
 			username: Username,
 		) -> DispatchResultWithPostInfo {
-			let alias = T::EnsurePerson::ensure_origin(origin, &RESOURCES_CONTEXT)?;
+			let alias = T::EnsurePerson::ensure_origin(origin, &Self::resources_context())?;
 			ensure!(!AccountOfAlias::<T>::contains_key(alias), Error::<T>::AlreadyRegistered);
 
 			// Validate the username, including that it is not already taken.
@@ -1343,7 +1342,7 @@ pub mod pallet {
 			lite_identity_proof: T::OffchainSignature,
 			reserved_username: Username,
 		) -> DispatchResultWithPostInfo {
-			let alias = T::EnsurePerson::ensure_origin(origin, &RESOURCES_CONTEXT)?;
+			let alias = T::EnsurePerson::ensure_origin(origin, &Self::resources_context())?;
 			ensure!(!AccountOfAlias::<T>::contains_key(alias), Error::<T>::AlreadyRegistered);
 
 			let queue = UsernameReservationQueue::<T>::get(&reserved_username)
@@ -1434,47 +1433,19 @@ pub mod pallet {
 			period == Self::notification_period_from_timestamp(now_secs)
 		}
 
+		pub fn resources_context() -> Context {
+			Self::build_context(personhood::RESOURCES)
+		}
+
 		pub fn notification_context(reference: NotificationReference) -> Context {
-			let mut context = [b' '; 32];
-			let required_len =
-				NOTIFICATION_CONTEXT_PREFIX.len() + size_of::<u32>() + size_of::<u8>();
-			debug_assert!(
-				required_len <= context.len(),
-				"notification context payload does not fit: required={required_len}, len={}",
-				context.len()
-			);
-			let payload = NOTIFICATION_CONTEXT_PREFIX
-				.iter()
-				.copied()
-				.chain(reference.period.to_be_bytes())
-				.chain([reference.seq]);
-			for (dst, src) in context.iter_mut().zip(payload) {
-				*dst = src;
-			}
-			context
+			Self::build_context(personhood::resources_notification(reference.period, reference.seq))
 		}
 
 		/// Build the context for a statement store slot proof.
 		///
-		/// Layout: `SSS_SLOT:<period (4 bytes BE)><seq (4 bytes BE)>` padded to 32 bytes.
+		/// The raw suffix contains the allocated family followed by the period and sequence.
 		pub fn stmt_store_slot_context(period: u32, seq: u32) -> Context {
-			let mut context = [b' '; 32];
-			let required_len =
-				STMT_STORE_SLOT_CONTEXT_PREFIX.len() + size_of::<u32>() + size_of::<u32>();
-			debug_assert!(
-				required_len <= context.len(),
-				"stmt store slot context payload does not fit: required={required_len}, len={}",
-				context.len()
-			);
-			let payload = STMT_STORE_SLOT_CONTEXT_PREFIX
-				.iter()
-				.copied()
-				.chain(period.to_be_bytes())
-				.chain(seq.to_be_bytes());
-			for (dst, src) in context.iter_mut().zip(payload) {
-				*dst = src;
-			}
-			context
+			Self::build_context(personhood::statement_store_slot(period, seq))
 		}
 
 		/// Compute the statement store period from a timestamp.
@@ -1596,11 +1567,11 @@ pub mod pallet {
 
 		/// Construct the context for a long-term storage claim.
 		pub fn long_term_storage_context(period: u32, counter: u8) -> Context {
-			let mut context = [0u8; 32];
-			context[..24].copy_from_slice(&LONG_TERM_STORAGE_CONTEXT_BASE);
-			context[24..28].copy_from_slice(&period.to_be_bytes());
-			context[28] = counter;
-			context
+			Self::build_context(personhood::long_term_storage(period, counter))
+		}
+
+		fn build_context(suffix: ProductContextSuffix) -> Context {
+			build_product_context(personhood::PRODUCT_NAME, T::Suffix::get(), suffix)
 		}
 
 		pub fn long_term_storage_period_from_timestamp(now_secs: u64) -> u32 {

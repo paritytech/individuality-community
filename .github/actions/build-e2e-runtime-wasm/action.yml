@@ -23,7 +23,7 @@ runs:
       shell: bash
 
     - name: Setup Rust toolchain
-      uses: actions-rust-lang/setup-rust-toolchain@11df97af8e8102fd60b60a77dfbf58d40cd843b8 # v1.10.1
+      uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
       with:
         cache: false
 
@@ -45,12 +45,12 @@ runs:
       shell: bash
 
     - name: Fetch cache
-      uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         shared-key: individuality-cache-e2e-runtime-wasm
 
     - name: Build E2E runtime WASM artifacts
-      run: cargo build --release -p next-people-paseo-runtime --locked
+      run: cargo build --release -p next-people-paseo-runtime -p next-asset-hub-paseo-runtime --locked
       shell: bash
 
     - name: Stage E2E runtime WASM artifacts
@@ -58,10 +58,12 @@ runs:
         mkdir -p "${{ inputs.artifact-dir }}"
         cp target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.wasm \
           "${{ inputs.artifact-dir }}/next_people_paseo_runtime.wasm"
+        cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm \
+          "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime.wasm"
       shell: bash
 
     - name: Upload E2E runtime WASM artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ inputs.artifact-dir }}

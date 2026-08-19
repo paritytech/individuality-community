@@ -54,7 +54,7 @@ pub mod pallet {
 		traits::{
 			fungibles::{self, Mutate as _},
 			tokens::{Fortitude, Precision, Preservation},
-			EnsureOrigin, UnixTime,
+			UnixTime,
 		},
 	};
 	use frame_system::pallet_prelude::*;
@@ -116,8 +116,9 @@ pub mod pallet {
 		/// The asset id of the PGAS token used to pay for alias registrations.
 		type PgasAssetId: Get<AssetIdOf<Self>>;
 
-		/// Origin allowed to set the PGAS fee charged on alias registrations.
-		type FeeManagerOrigin: EnsureOrigin<Self::RuntimeOrigin>;
+		/// PGAS fee burned on each alias registration or account swap.
+		/// `None` fails every registration with [`Error::AliasFeeUnset`].
+		type AliasFee: Get<Option<BalanceOf<Self>>>;
 	}
 
 	// ========== Storage Items ==========
@@ -139,13 +140,6 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type AccountToAlias<T: Config> =
 		StorageMap<_, Blake2_128Concat, T::AccountId, AliasAccountInfo, OptionQuery>;
-
-	/// PGAS fee burned on each alias registration / account swap.
-	///
-	/// Set by [`Config::FeeManagerOrigin`] via [`Pallet::set_alias_fee`].
-	/// While unset, alias registrations fail with [`Error::AliasFeeUnset`].
-	#[pallet::storage]
-	pub type AliasFee<T: Config> = StorageValue<_, BalanceOf<T>, OptionQuery>;
 
 	// ========== Events ==========
 
@@ -175,8 +169,6 @@ pub mod pallet {
 			/// The contextual alias.
 			alias: Alias,
 		},
-		/// The PGAS fee for alias registrations was changed.
-		AliasFeeSet { fee: BalanceOf<T> },
 	}
 
 	// ========== Errors ==========
@@ -255,7 +247,7 @@ pub mod pallet {
 		/// Link an account to a ring alias, on payment of a PGAS fee.
 		///
 		/// The origin must be signed; the signer becomes the bound account. The PGAS fee
-		/// ([`AliasFee`]) is burned from the signer's PGAS balance. The alias must verify
+		/// ([`Config::AliasFee`]) is burned from the signer's PGAS balance. The alias must verify
 		/// against the supplied `collection`/`ring_index`/`ring_revision` in `context`. The
 		/// collection must still be People or People Lite.
 		///
@@ -277,7 +269,7 @@ pub mod pallet {
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
-			let fee = AliasFee::<T>::get().ok_or(Error::<T>::AliasFeeUnset)?;
+			let fee = T::AliasFee::get().ok_or(Error::<T>::AliasFeeUnset)?;
 
 			let now = T::UnixTime::now().as_secs();
 			let window = T::ProofValidityWindow::get();
@@ -404,20 +396,6 @@ pub mod pallet {
 			});
 
 			Ok(Pays::No.into())
-		}
-
-		/// Set the PGAS fee charged by [`Pallet::set_alias_account`].
-		///
-		/// Origin must be [`Config::FeeManagerOrigin`]. The new fee replaces the
-		/// previous value (if any). There is no minimum — set to zero to
-		/// effectively disable the burn while keeping the path open.
-		#[pallet::call_index(5)]
-		#[pallet::weight(<T as Config>::WeightInfo::set_alias_fee())]
-		pub fn set_alias_fee(origin: OriginFor<T>, fee: BalanceOf<T>) -> DispatchResult {
-			T::FeeManagerOrigin::ensure_origin(origin)?;
-			AliasFee::<T>::put(fee);
-			Self::deposit_event(Event::AliasFeeSet { fee });
-			Ok(())
 		}
 
 		/// Remove a stale alias <-> account mapping.

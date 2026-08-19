@@ -38,7 +38,7 @@ use indiv_pallet_airdrop::{
 	vrf::transcript_for_event,
 };
 use indiv_pallet_game::{AirdropVrfs, GameTimes};
-use indiv_pallet_score::{AccountOrPerson, SCORE_CONTEXT};
+use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
 	crypto::{BandersnatchVrfVerifiable as Crypto, GenerateVerifiable},
 	traits::{
@@ -85,6 +85,10 @@ mod transaction_era;
 mod tx_payment_external_asset;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
+
+fn score_context() -> Context {
+	indiv_pallet_score::Pallet::<Runtime>::score_context()
+}
 
 fn recycler_ring_exponent() -> indiv_support::traits::RingExponent {
 	crate::people::RecyclerRingExponent::get()
