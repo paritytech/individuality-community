@@ -1,20 +1,26 @@
 name: Command Bot Tests
 
+# The `/cmd` bot is not live yet (cmd.yml has to land on the default branch before
+# issue_comment triggers it), so this suite runs on demand only and does not gate
+# pull requests. Restore the `pull_request` trigger together with `/cmd`:
+#
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, ready_for_review]
+
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test-cmd-bot:
-    runs-on: parity-int-ubuntu
-    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+    runs-on: parity-ubuntu
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
