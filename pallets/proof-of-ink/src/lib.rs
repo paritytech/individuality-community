@@ -1577,8 +1577,8 @@ pub mod pallet {
 						Err(Error::<T>::WrongFamily)?
 					};
 					let a32 = account.using_encoded(|d| {
-						// TODO(paritytech/individuality#227): bound an explicit conversion to `[u8; 32]` for the type
-						// `AccountId` such as `AsRef<[u8; 32]>`.
+						// TODO(paritytech/individuality#227): bound an explicit conversion to `[u8;
+						// 32]` for the type `AccountId` such as `AsRef<[u8; 32]>`.
 						// Currently we simply take the first 32 bytes of the account id.
 						let mut buf: [u8; 32] = Default::default();
 						let upper_bound = core::cmp::min(d.len(), buf.len());

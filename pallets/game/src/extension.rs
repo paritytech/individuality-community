@@ -273,7 +273,8 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for GameAsI
 
 				// Consume the invite.
 				// Note: if the transaction fails, the invite is still consumed here.
-				// TODO(paritytech/individuality#230): refactor to make signing up with invite 100% fail-free guaranteed.
+				// TODO(paritytech/individuality#230): refactor to make signing up with invite 100%
+				// fail-free guaranteed.
 				PendingInvites::<T>::remove(inviter, ticket);
 
 				Ok(GameAsInvitedValPre::UsingInvite(account))
