@@ -936,6 +936,30 @@ fn the_metadata_policy_refuses_a_value_on_every_write_path() {
 	});
 }
 
+/// The depositless mint's hook weight covers the metadata policy, which runs once per entry.
+///
+/// The only in-tree caller mints bare, so a policy charge missing here would cost nothing today
+/// and undercharge the first caller that mints with metadata.
+#[test]
+fn the_depositless_mint_hook_weight_covers_the_policy() {
+	use crate::{MintWithoutDeposit, OnPurseOccupied, ValidateMetadata};
+
+	let policy_weight = |pairs| {
+		<<Test as crate::Config>::MetadataPolicy as ValidateMetadata<
+			MetadataKeyOf<Test>,
+			MetadataValueOf<Test>,
+		>>::validate_weight(pairs)
+	};
+	let hook_weight = |pairs| <Scarcity as MintWithoutDeposit<u64>>::mint_hook_weight(pairs);
+
+	assert_eq!(hook_weight(0), RecordPurseOccupancy::on_mint_weight());
+	assert_eq!(
+		hook_weight(3),
+		RecordPurseOccupancy::on_mint_weight().saturating_add(policy_weight(3))
+	);
+	assert!(policy_weight(3).all_gt(frame_support::weights::Weight::zero()), "not tautological");
+}
+
 /// The policy's weight rides on every call that can write metadata, scaled by the pairs it
 /// carries, so a runtime cannot wire an expensive rule the calls do not pay for.
 #[test]
@@ -2576,9 +2600,11 @@ fn try_state_accepts_issuer_depositless_transferred_and_burned_states() {
 mod migration {
 	use super::*;
 	use crate::migration::{v1::MigrateToTransferability, MigrateV0ToV1};
+	#[cfg(feature = "try-runtime")]
+	use codec::Decode;
 	use frame_support::{
 		storage::unhashed,
-		traits::{GetStorageVersion, OnRuntimeUpgrade, UncheckedOnRuntimeUpgrade},
+		traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion, UncheckedOnRuntimeUpgrade},
 	};
 
 	/// Write an item definition in the shape stored before transferability existed.
@@ -2589,6 +2615,140 @@ mod migration {
 	fn put_old_definition(collection: u32, item: u32, deposit: u64) {
 		let old = (3u32, 2u32, 1u32, deposit);
 		unhashed::put_raw(&ItemDefs::<Test>::hashed_key_for(collection, item), &old.encode());
+	}
+
+	/// Build a collection and item through the pallet, then downgrade only the stored definition.
+	///
+	/// Leaves every counter, deposit and index exactly as a chain running the old code would have
+	/// them, which is what lets the state be checked as a whole after migrating.
+	fn downgrade_a_real_definition() {
+		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+		define(0);
+		let definition = ItemDefs::<Test>::get(0, 0).expect("the item was defined");
+		let old = (definition.supply, definition.live_supply, definition.metadata_count, {
+			let deposit: u64 = definition.deposit;
+			deposit
+		});
+		unhashed::put_raw(&ItemDefs::<Test>::hashed_key_for(0, 0), &old.encode());
+		assert_eq!(ItemDefs::<Test>::get(0, 0), None, "the downgrade must be unreadable");
+	}
+
+	/// The gate runs the translation on a chain still at version 0, and closes behind it.
+	///
+	/// Every other translating case drives the inner migration, so without this nothing exercises
+	/// the type the runtime actually wires.
+	#[test]
+	fn the_versioned_migration_translates_and_bumps_the_version() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<Scarcity>();
+			put_old_definition(0, 0, 77);
+
+			let weight = <MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				ItemDefs::<Test>::get(0, 0).expect("translated").transferability,
+				Transferability::Transferable
+			);
+			assert_eq!(Scarcity::on_chain_storage_version(), 1, "the gate must close behind it");
+			// One read and write for the one definition, one more read for the end of the
+			// prefix iteration, and a read and write for the version the gate checks and
+			// stamps.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			assert_eq!(weight, db.reads_writes(3, 2), "the translation must charge what it did");
+		});
+	}
+
+	/// Running the wired migration twice is safe, which is the property the gate exists for.
+	///
+	/// Sequenced the way a chain would reach it: migrate the old rows, define a soulbound item
+	/// against the new code, then upgrade again. The second run is the one that would decode that
+	/// item as its own four-field prefix and clear the flag if the version did not gate it.
+	#[test]
+	fn the_versioned_migration_is_idempotent() {
+		new_test_ext().execute_with(|| {
+			downgrade_a_real_definition();
+			StorageVersion::new(0).put::<Scarcity>();
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			assert_eq!(
+				ItemDefs::<Test>::get(0, 0).expect("translated").transferability,
+				Transferability::Transferable
+			);
+
+			define_as(0, Transferability::Soulbound);
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				ItemDefs::<Test>::get(0, 1).expect("the soulbound item exists").transferability,
+				Transferability::Soulbound,
+				"the second run must not decode the migrated value as its own prefix"
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// The translation leaves the pallet's own invariants satisfied, and unblocks what the
+	/// undecodable definition blocked.
+	///
+	/// Deletion is the case with the worst tail: a definition that cannot be read cannot be
+	/// deleted, so `item_count` never reaches zero, so the collection cannot be deleted and its
+	/// deposit stays held.
+	#[test]
+	fn a_translated_definition_is_usable_again() {
+		new_test_ext().execute_with(|| {
+			downgrade_a_real_definition();
+			assert_noop!(
+				Scarcity::delete_item(RuntimeOrigin::signed(OWNER), 0, 0),
+				Error::<Test>::UnknownItem
+			);
+
+			MigrateToTransferability::<Test>::on_runtime_upgrade();
+
+			assert_ok!(Scarcity::do_try_state());
+			assert_ok!(Scarcity::delete_item(RuntimeOrigin::signed(OWNER), 0, 0));
+			assert_ok!(Scarcity::delete_collection(RuntimeOrigin::signed(OWNER), 0));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// The try-runtime checks pass over the state the migration is meant for.
+	///
+	/// `pre_upgrade` has to count keys rather than entries, because the values do not decode
+	/// until the migration has run. Counting entries would report an empty map and make
+	/// `post_upgrade` fail an upgrade that had in fact succeeded.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_try_runtime_checks_span_the_translation() {
+		new_test_ext().execute_with(|| {
+			for (collection, item) in [(0, 0), (0, 1), (1, 0)] {
+				put_old_definition(collection, item, 5);
+			}
+			assert_eq!(ItemDefs::<Test>::iter().count(), 0, "nothing decodes before the migration");
+
+			let state = MigrateToTransferability::<Test>::pre_upgrade().expect("counts the keys");
+			assert_eq!(u32::decode(&mut &state[..]).unwrap(), 3, "keys are counted, not entries");
+
+			MigrateToTransferability::<Test>::on_runtime_upgrade();
+
+			assert_ok!(MigrateToTransferability::<Test>::post_upgrade(state));
+		});
+	}
+
+	/// `post_upgrade` fails when a definition does not survive, rather than reporting success.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_post_upgrade_check_catches_a_lost_definition() {
+		new_test_ext().execute_with(|| {
+			put_old_definition(0, 0, 5);
+			let state = MigrateToTransferability::<Test>::pre_upgrade().expect("counts the keys");
+
+			// A value that decodes as neither shape is dropped by `translate_values`, which is
+			// the loss the count is there to notice.
+			unhashed::put_raw(&ItemDefs::<Test>::hashed_key_for(0, 0), &[0xffu8]);
+			MigrateToTransferability::<Test>::on_runtime_upgrade();
+
+			assert!(MigrateToTransferability::<Test>::post_upgrade(state).is_err());
+		});
 	}
 
 	/// The old encoding is unreadable under the current type, and the migration recovers it.
