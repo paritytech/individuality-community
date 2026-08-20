@@ -28,6 +28,7 @@ use frame_support::{
 	dispatch::{DispatchErrorWithPostInfo, GetDispatchInfo},
 	parameter_types,
 	storage::with_transaction,
+	PalletId,
 };
 use frame_system::EnsureRoot;
 use indiv_support::traits::{
@@ -107,6 +108,7 @@ impl frame_system::Config for Test {
 #[derive_impl(pallet_balances::config_preludes::TestDefaultConfig)]
 impl pallet_balances::Config for Test {
 	type AccountStore = System;
+	type RuntimeHoldReason = RuntimeHoldReason;
 }
 
 impl alias_target::Config for Test {}
@@ -133,6 +135,9 @@ impl frame_support::traits::Contains<indiv_support::traits::Context> for LiteAcc
 
 impl crate::Config for Test {
 	type WeightInfo = ();
+	type Currency = Balances;
+	type PotId = LitePeoplePotId;
+	type RegistrationFee = LitePersonRegistrationFee;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = MockMemberService;
@@ -140,13 +145,15 @@ impl crate::Config for Test {
 	type LiteRingExponent = LiteRingExponentConst;
 	type LiteOnboardingSize = LiteOnboardingSizeConst;
 	type AttestationSignature = UintAuthorityId;
-	type LiteConsumerRegistrar = ();
+	type LiteConsumerRegistrar = MockConsumerRegistrar;
 	type AccountContexts = LiteAccountContexts;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = Helper;
 }
 
 parameter_types! {
+	pub storage LitePersonRegistrationFee: u64 = 10;
+	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
 	pub const NetworkSuffix: &'static [u8] = b"paseo";
 	pub const LiteCollectionOwnerConst: u32 = 42;
 	pub const LiteRingExponentConst: RingExponent = RingExponent::R2e9;
@@ -158,6 +165,26 @@ thread_local! {
 	static MOCK_COLLECTION_MEMBERS: RefCell<BTreeMap<Identifier, Vec<<Mock as verifiable::GenerateVerifiable>::Member>>> = const { RefCell::new(BTreeMap::new()) };
 	static MOCK_COLLECTION_REVISIONS: RefCell<BTreeMap<Identifier, RevisionIndex>> = const { RefCell::new(BTreeMap::new()) };
 	static MOCK_FAIL_NEXT_ADD_MEMBERS: RefCell<bool> = const { RefCell::new(false) };
+	static MOCK_REGISTERED_CONSUMERS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+	static MOCK_FAIL_NEXT_CONSUMER_REGISTRATION: RefCell<bool> = const { RefCell::new(false) };
+}
+
+pub struct MockConsumerRegistrar;
+impl indiv_support::traits::ConsumerRegistrar<u64> for MockConsumerRegistrar {
+	type Error = DispatchError;
+
+	fn register_lite_consumer(
+		account: u64,
+		_identifier_key: indiv_support::traits::CommunicationIdentifier,
+		_username: indiv_support::traits::Username,
+		_reserved_username: Option<indiv_support::traits::Username>,
+	) -> Result<(), Self::Error> {
+		if MOCK_FAIL_NEXT_CONSUMER_REGISTRATION.with(|flag| flag.replace(false)) {
+			return Err(DispatchError::Other("mock consumer registration failed"));
+		}
+		MOCK_REGISTERED_CONSUMERS.with(|consumers| consumers.borrow_mut().push(account));
+		Ok(())
+	}
 }
 
 pub fn mock_member_service_members(
@@ -191,12 +218,22 @@ pub fn mock_member_service_fail_next_add_members() {
 	});
 }
 
+pub fn mock_registered_consumers() -> Vec<u64> {
+	MOCK_REGISTERED_CONSUMERS.with(|consumers| consumers.borrow().clone())
+}
+
+pub fn mock_consumer_registrar_fail_next() {
+	MOCK_FAIL_NEXT_CONSUMER_REGISTRATION.with(|flag| *flag.borrow_mut() = true);
+}
+
 fn reset_mock_member_service_state() {
 	MOCK_COLLECTIONS.with(|collections| collections.borrow_mut().clear());
 	MOCK_COLLECTION_MEMBERS
 		.with(|members_by_collection| members_by_collection.borrow_mut().clear());
 	MOCK_COLLECTION_REVISIONS.with(|revisions| revisions.borrow_mut().clear());
 	MOCK_FAIL_NEXT_ADD_MEMBERS.with(|flag| *flag.borrow_mut() = false);
+	MOCK_REGISTERED_CONSUMERS.with(|consumers| consumers.borrow_mut().clear());
+	MOCK_FAIL_NEXT_CONSUMER_REGISTRATION.with(|flag| *flag.borrow_mut() = false);
 }
 
 pub struct MockMemberService;

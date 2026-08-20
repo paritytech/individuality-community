@@ -398,9 +398,7 @@ mod benches {
 		let sk = CryptoOf::<T>::new_secret([12; 32]);
 		let pk = CryptoOf::<T>::member_from_secret(&sk);
 
-		let mut msg = MSG_PREFIX.to_vec();
-		msg.extend_from_slice(&att.encode());
-		msg.extend_from_slice(&pk.encode());
+		let msg = Pallet::<T>::registration_message(&att, &pk);
 
 		let (_, att_sig) = T::BenchmarkHelper::sign_message(&msg[..]);
 		let proof_of_ownership = CryptoOf::<T>::sign(&sk, &msg[..]).unwrap();
@@ -416,6 +414,28 @@ mod benches {
 		assert!(crate::LitePeopleCollectionCreated::<T>::get());
 		frame_system::Pallet::<T>::assert_last_event(
 			crate::Event::<T>::PersonAttested { candidate: att, verifier: attester }.into(),
+		);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn register_with_fee() -> Result<(), BenchmarkError> {
+		let candidate: T::AccountId = whitelisted_caller();
+		let balance = T::RegistrationFee::get().saturating_add(T::Currency::minimum_balance());
+		assert_ok!(T::Currency::mint_into(&candidate, balance));
+		ensure_lite_collection::<T>()?;
+
+		let secret = CryptoOf::<T>::new_secret([13; 32]);
+		let ring_vrf_key = CryptoOf::<T>::member_from_secret(&secret);
+		let message = Pallet::<T>::registration_message(&candidate, &ring_vrf_key);
+		let proof_of_ownership = CryptoOf::<T>::sign(&secret, &message).unwrap();
+
+		#[extrinsic_call]
+		_(RawOrigin::Signed(candidate.clone()), ring_vrf_key, proof_of_ownership, None);
+
+		assert!(crate::LitePeople::<T>::contains_key(&candidate));
+		frame_system::Pallet::<T>::assert_last_event(
+			crate::Event::<T>::PersonRegisteredWithFee { candidate }.into(),
 		);
 		Ok(())
 	}
