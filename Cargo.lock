@@ -5080,6 +5080,7 @@ dependencies = [
  "indiv-pallet-people-lite",
  "indiv-support",
  "log",
+ "pallet-balances",
  "parity-scale-codec",
  "parking_lot",
  "scale-info",
