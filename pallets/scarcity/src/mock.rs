@@ -24,7 +24,7 @@ use frame_support::{
 		fungible::{self, HoldConsideration},
 		ConstU32, ConstU64, LinearStoragePrice, UnixTime,
 	},
-	weights::constants::RocksDbWeight,
+	weights::{constants::RocksDbWeight, Weight},
 };
 use sp_runtime::{
 	traits::{Identity, IdentityLookup},
@@ -75,6 +75,15 @@ impl UnixTime for MockUnixTime {
 type TestStoragePrice = LinearStoragePrice<ConstU64<1>, ConstU64<1>, u64>;
 
 parameter_types! {
+	/// Metadata entries one instance may carry. The integrity tests raise it.
+	pub storage MaxInstanceMetadata: u32 = 3;
+	/// Weight the mock policy charges per metadata pair. The integrity tests raise it.
+	pub storage PolicyWeightPerPair: Weight = Weight::from_parts(11, 22);
+	/// Weight the mock deletion hook charges. The integrity tests raise it.
+	pub storage DeletionHookWeight: Weight = Weight::from_parts(123, 45);
+}
+
+parameter_types! {
 	pub const ScarcityHoldReason: RuntimeHoldReason =
 		RuntimeHoldReason::Scarcity(crate::HoldReason::StorageDeposit);
 }
@@ -93,7 +102,7 @@ impl crate::Config for Test {
 	type MetadataDeposit = TestStoragePrice;
 	type MaxKeyLen = ConstU32<32>;
 	type MaxValueLen = ConstU32<256>;
-	type MaxInstanceMetadata = ConstU32<3>;
+	type MaxInstanceMetadata = MaxInstanceMetadata;
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
 	type OnCollectionDeleted = RecordCollectionDeletion;
@@ -114,8 +123,8 @@ impl crate::OnCollectionDeleted for RecordCollectionDeletion {
 		LastDeletedCollection::set(&Some(collection));
 	}
 
-	fn on_delete_weight() -> frame_support::weights::Weight {
-		frame_support::weights::Weight::from_parts(123, 45)
+	fn on_delete_weight() -> Weight {
+		DeletionHookWeight::get()
 	}
 }
 
@@ -157,8 +166,8 @@ impl<Key: AsRef<[u8]>, Value: AsRef<[u8]>> crate::ValidateMetadata<Key, Value>
 		Ok(())
 	}
 
-	fn validate_weight(pairs: u32) -> frame_support::weights::Weight {
-		frame_support::weights::Weight::from_parts(11, 22).saturating_mul(pairs as u64)
+	fn validate_weight(pairs: u32) -> Weight {
+		PolicyWeightPerPair::get().saturating_mul(pairs as u64)
 	}
 }
 

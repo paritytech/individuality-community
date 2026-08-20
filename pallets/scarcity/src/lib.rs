@@ -246,6 +246,7 @@ pub mod pallet {
 		transactional,
 	};
 	use frame_system::pallet_prelude::*;
+	use indiv_support::weight_budget::OcwWeightBudget;
 	#[cfg(any(test, feature = "try-runtime"))]
 	use sp_runtime::TryRuntimeError;
 	use sp_runtime::{
@@ -620,6 +621,31 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		/// Check that every call whose worst case a runtime sizes still fits a share of a block.
+		///
+		/// [`Config::MaxInstanceMetadata`] sets the entries a mint carries and a burn removes, and
+		/// the weights of [`Config::MetadataPolicy`], [`Config::OnPurseOccupied`] and
+		/// [`Config::OnCollectionDeleted`] ride on the calls that run them. A runtime that
+		/// overshoots on any of them produces a call that no block can hold.
+		fn integrity_test() {
+			let budget = OcwWeightBudget::from_normal_max::<T>();
+			let pairs = T::MaxInstanceMetadata::get();
+
+			budget.assert_fits(
+				"mint",
+				T::WeightInfo::mint(pairs)
+					.saturating_add(T::OnPurseOccupied::on_mint_weight())
+					.saturating_add(T::MetadataPolicy::validate_weight(pairs)),
+			);
+			budget.assert_fits("burn", T::WeightInfo::burn(pairs));
+			budget.assert_fits("force_burn", T::WeightInfo::force_burn(pairs));
+			budget.assert_fits(
+				"delete_collection",
+				T::WeightInfo::delete_collection()
+					.saturating_add(T::OnCollectionDeleted::on_delete_weight()),
+			);
+		}
+
 		#[cfg(feature = "try-runtime")]
 		fn try_state(_n: BlockNumberFor<T>) -> Result<(), TryRuntimeError> {
 			Self::do_try_state()

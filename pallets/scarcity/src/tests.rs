@@ -952,12 +952,17 @@ fn the_depositless_mint_hook_weight_covers_the_policy() {
 	};
 	let hook_weight = |pairs| <Scarcity as MintWithoutDeposit<u64>>::mint_hook_weight(pairs);
 
-	assert_eq!(hook_weight(0), RecordPurseOccupancy::on_mint_weight());
-	assert_eq!(
-		hook_weight(3),
-		RecordPurseOccupancy::on_mint_weight().saturating_add(policy_weight(3))
-	);
-	assert!(policy_weight(3).all_gt(frame_support::weights::Weight::zero()), "not tautological");
+	new_test_ext().execute_with(|| {
+		assert_eq!(hook_weight(0), RecordPurseOccupancy::on_mint_weight());
+		assert_eq!(
+			hook_weight(3),
+			RecordPurseOccupancy::on_mint_weight().saturating_add(policy_weight(3))
+		);
+		assert!(
+			policy_weight(3).all_gt(frame_support::weights::Weight::zero()),
+			"not tautological"
+		);
+	});
 }
 
 /// The policy's weight rides on every call that can write metadata, scaled by the pairs it
@@ -974,20 +979,76 @@ fn metadata_weights_include_the_policy() {
 		>>::validate_weight(pairs)
 	};
 
-	let declared =
-		crate::Call::<Test>::set_collection_metadata { collection: 0, key: key(b"k"), value: None }
-			.get_dispatch_info()
-			.call_weight;
-	assert_eq!(declared, <() as WeightInfo>::set_collection_metadata().saturating_add(policy(1)));
+	new_test_ext().execute_with(|| {
+		let declared = crate::Call::<Test>::set_collection_metadata {
+			collection: 0,
+			key: key(b"k"),
+			value: None,
+		}
+		.get_dispatch_info()
+		.call_weight;
+		assert_eq!(
+			declared,
+			<() as WeightInfo>::set_collection_metadata().saturating_add(policy(1))
+		);
 
-	let declared = crate::Call::<Test>::define_item {
-		collection: 0,
-		transferability: Transferability::Transferable,
-		metadata: metadata(&[(b"one", b"1"), (b"two", b"2")]),
+		let declared = crate::Call::<Test>::define_item {
+			collection: 0,
+			transferability: Transferability::Transferable,
+			metadata: metadata(&[(b"one", b"1"), (b"two", b"2")]),
+		}
+		.get_dispatch_info()
+		.call_weight;
+		assert_eq!(declared, <() as WeightInfo>::define_item(2).saturating_add(policy(2)));
+	});
+}
+
+/// The `integrity_test` holds each call a runtime sizes to a share of a block.
+///
+/// The drivers are the metadata entries a call carries and the weight of the runtime hooks, so
+/// these raise one of each. A runtime that overshoots produces a call that no block can hold.
+mod integrity {
+	use super::*;
+	use frame_support::{traits::Hooks, weights::Weight};
+
+	#[test]
+	fn passes_with_the_default_configuration() {
+		new_test_ext().execute_with(|| {
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
 	}
-	.get_dispatch_info()
-	.call_weight;
-	assert_eq!(declared, <() as WeightInfo>::define_item(2).saturating_add(policy(2)));
+
+	/// `mint` carries `MaxInstanceMetadata` entries and `burn` removes them, so the limit sets
+	/// the worst case of both.
+	#[test]
+	#[should_panic = "`mint` worst-case weight"]
+	fn rejects_an_oversized_instance_metadata_limit() {
+		new_test_ext().execute_with(|| {
+			MaxInstanceMetadata::set(&1_000_000);
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
+	}
+
+	/// The policy runs once per entry on every call that writes metadata, and `mint` is the one
+	/// that carries the most.
+	#[test]
+	#[should_panic = "`mint` worst-case weight"]
+	fn rejects_an_expensive_metadata_policy() {
+		new_test_ext().execute_with(|| {
+			PolicyWeightPerPair::set(&Weight::from_parts(u64::MAX / 100, 0));
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
+	}
+
+	/// The deletion hook runs on every `delete_collection`, which charges it up front.
+	#[test]
+	#[should_panic = "`delete_collection` worst-case weight"]
+	fn rejects_an_expensive_deletion_hook() {
+		new_test_ext().execute_with(|| {
+			DeletionHookWeight::set(&Weight::from_parts(u64::MAX / 100, 0));
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
+	}
 }
 
 #[test]
@@ -2298,14 +2359,16 @@ fn delete_collection_weight_includes_the_deletion_hook() {
 	use crate::weights::WeightInfo;
 	use frame_support::dispatch::GetDispatchInfo;
 
-	let declared = crate::Call::<Test>::delete_collection { collection: 0 }
-		.get_dispatch_info()
-		.call_weight;
-	assert_eq!(
-		declared,
-		<() as WeightInfo>::delete_collection()
-			.saturating_add(RecordCollectionDeletion::on_delete_weight())
-	);
+	new_test_ext().execute_with(|| {
+		let declared = crate::Call::<Test>::delete_collection { collection: 0 }
+			.get_dispatch_info()
+			.call_weight;
+		assert_eq!(
+			declared,
+			<() as WeightInfo>::delete_collection()
+				.saturating_add(RecordCollectionDeletion::on_delete_weight())
+		);
+	});
 }
 
 #[test]
@@ -2313,18 +2376,20 @@ fn mint_weight_includes_the_purse_occupancy_hook() {
 	use crate::{weights::WeightInfo, OnPurseOccupied};
 	use frame_support::dispatch::GetDispatchInfo;
 
-	let declared = crate::Call::<Test>::mint {
-		collection: 0,
-		item: 0,
-		to: RECIPIENT,
-		metadata: alloc::vec![],
-	}
-	.get_dispatch_info()
-	.call_weight;
-	assert_eq!(
-		declared,
-		<() as WeightInfo>::mint(0).saturating_add(RecordPurseOccupancy::on_mint_weight())
-	);
+	new_test_ext().execute_with(|| {
+		let declared = crate::Call::<Test>::mint {
+			collection: 0,
+			item: 0,
+			to: RECIPIENT,
+			metadata: alloc::vec![],
+		}
+		.get_dispatch_info()
+		.call_weight;
+		assert_eq!(
+			declared,
+			<() as WeightInfo>::mint(0).saturating_add(RecordPurseOccupancy::on_mint_weight())
+		);
+	});
 }
 
 /// Both mint entries notify, so a runtime hook cannot be reached by one and missed by the other.
