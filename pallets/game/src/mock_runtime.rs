@@ -950,6 +950,8 @@ parameter_types! {
 	pub const NetworkSuffix: &'static [u8] = b"paseo";
 	pub const LiteCollectionOwner: u32 = 2;
 	pub const LiteRingExp: RingExponent = RingExponent::R2e9;
+	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
+	pub const LitePersonRegistrationFee: u64 = 10;
 }
 
 /// The contexts in which lite people may bind an account, see
@@ -964,6 +966,9 @@ impl frame_support::traits::Contains<Context> for LiteAccountContexts {
 
 impl indiv_pallet_people_lite::Config for Test {
 	type WeightInfo = ();
+	type Currency = Balances;
+	type PotId = LitePeoplePotId;
+	type RegistrationFee = LitePersonRegistrationFee;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;

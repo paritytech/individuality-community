@@ -62,6 +62,7 @@ pub trait WeightInfo {
 	fn clear_attestation_allowance() -> Weight;
 	fn register_lite_consumer() -> Weight;
 	fn attest() -> Weight;
+	fn register_with_fee() -> Weight;
 	fn dispatch_as_signer() -> Weight;
 	fn set_alias_account() -> Weight;
 	fn unset_alias_account() -> Weight;
@@ -204,6 +205,11 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(1_371_129_000, 11671)
 			.saturating_add(T::DbWeight::get().reads(9_u64))
 			.saturating_add(T::DbWeight::get().writes(6_u64))
+	}
+	fn register_with_fee() -> Weight {
+		Weight::from_parts(1_374_397_000, 11671)
+			.saturating_add(T::DbWeight::get().reads(11_u64))
+			.saturating_add(T::DbWeight::get().writes(8_u64))
 	}
 	fn dispatch_as_signer() -> Weight {
 		// Proof Size summary in bytes:
@@ -411,6 +417,11 @@ impl WeightInfo for () {
 		Weight::from_parts(1_371_129_000, 11671)
 			.saturating_add(RocksDbWeight::get().reads(9_u64))
 			.saturating_add(RocksDbWeight::get().writes(6_u64))
+	}
+	fn register_with_fee() -> Weight {
+		Weight::from_parts(1_374_397_000, 11671)
+			.saturating_add(RocksDbWeight::get().reads(11_u64))
+			.saturating_add(RocksDbWeight::get().writes(8_u64))
 	}
 	fn dispatch_as_signer() -> Weight {
 		// Proof Size summary in bytes:

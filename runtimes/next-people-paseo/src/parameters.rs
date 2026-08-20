@@ -98,6 +98,15 @@ pub mod dynamic_params {
 		pub static PrizeSource: sp_runtime::AccountId32 =
 			PalletId(*b"pop/pads").into_account_truncating();
 	}
+
+	/// Lite-person registration pricing.
+	#[dynamic_pallet_params]
+	#[codec(index = 3)]
+	pub mod lite_personhood {
+		/// Non-refundable native fee required to register as a lite person.
+		#[codec(index = 0)]
+		pub static RegistrationFee: Balance = 75 * UNITS;
+	}
 }
 
 // `pallet_parameters` validates only the origin of an update, never the stored value, and the
@@ -182,6 +191,9 @@ pub type LongTermStorageAllowanceForPeople =
 	dynamic_params::bulletin_storage::LongTermStorageAllowanceForPeople;
 pub type LongTermStorageAllowanceForLitePeople =
 	dynamic_params::bulletin_storage::LongTermStorageAllowanceForLitePeople;
+
+/// Fee required to register as a lite person without device attestation.
+pub type LitePersonRegistrationFee = dynamic_params::lite_personhood::RegistrationFee;
 
 /// Any account is a valid prize source, so the value is read unclamped.
 pub type PeopleAirdropsPrizeSource = dynamic_params::people_airdrops::PrizeSource;

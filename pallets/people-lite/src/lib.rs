@@ -24,11 +24,16 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::borrowed_box)]
 extern crate alloc;
-use alloc::{boxed::Box, vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 use codec::Encode;
 use frame_support::{
 	dispatch::{DispatchResultWithPostInfo, PostDispatchInfo},
-	traits::IsSubType,
+	traits::{
+		fungible::{Inspect, Mutate},
+		tokens::Preservation,
+		IsSubType,
+	},
+	PalletId,
 };
 use indiv_support::{
 	traits::{
@@ -39,7 +44,7 @@ use indiv_support::{
 	tx_priority,
 };
 use sp_runtime::{
-	traits::{Dispatchable, IdentifyAccount, Verify},
+	traits::{AccountIdConversion, Dispatchable, IdentifyAccount, Verify},
 	Saturating,
 };
 use types::{
@@ -80,6 +85,10 @@ pub mod pallet {
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
 
+	/// Native balance used to pay the lite-person registration fee.
+	pub type BalanceOf<T> =
+		<<T as Config>::Currency as Inspect<<T as frame_system::Config>::AccountId>>::Balance;
+
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		fn integrity_test() {
@@ -99,6 +108,19 @@ pub mod pallet {
 	{
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
+
+		/// Native currency used to collect the lite-person registration fee.
+		type Currency: Mutate<Self::AccountId>;
+
+		/// Account identifier used to derive the account that receives registration fees.
+		#[pallet::constant]
+		type PotId: Get<PalletId>;
+
+		/// Fee required to register as a lite person without device attestation.
+		///
+		/// The getter can use a dynamic parameter or future pricing adapter without changing this
+		/// pallet.
+		type RegistrationFee: Get<BalanceOf<Self>>;
 
 		/// Network suffix appended to this pallet's product name.
 		#[pallet::constant]
@@ -201,6 +223,8 @@ pub mod pallet {
 		AttestationAllowanceIncreased { account: T::AccountId, count: u32 },
 		/// A new lite person was registered through attestation.
 		PersonAttested { candidate: T::AccountId, verifier: T::AccountId },
+		/// A new lite person was registered by paying the registration fee.
+		PersonRegisteredWithFee { candidate: T::AccountId },
 		/// A lite person was registered as a consumer.
 		ConsumerRegistered { account: T::AccountId },
 		/// An alias-to-account mapping was set or updated.
@@ -213,6 +237,11 @@ pub mod pallet {
 
 	#[pallet::extra_constants]
 	impl<T: Config> Pallet<T> {
+		/// The account that receives non-refundable lite-person registration fees.
+		pub fn lite_people_pot_id() -> T::AccountId {
+			T::PotId::get().into_account_truncating()
+		}
+
 		/// The context used to authenticate lite people.
 		pub fn auth_context() -> Context {
 			indiv_support::context::build_product_context(
@@ -252,6 +281,8 @@ pub mod pallet {
 		InvalidAliasContext,
 		/// The lite people member collection has not been initialized yet.
 		LitePeopleCollectionNotCreated,
+		/// The consumer registration account does not match the candidate.
+		InvalidConsumerRegistrationAccount,
 	}
 
 	#[pallet::call]
@@ -356,9 +387,7 @@ pub mod pallet {
 				.ok_or(Error::<T>::NoAttestationAllowance)?;
 			Self::ensure_lite_collection_created()?;
 
-			let msg = candidate.using_encoded(|c_bytes| {
-				ring_vrf_key.using_encoded(|rv_bytes| [&MSG_PREFIX[..], c_bytes, rv_bytes].concat())
-			});
+			let msg = Self::registration_message(&candidate, &ring_vrf_key);
 			ensure!(
 				CryptoOf::<T>::verify_signature(&proof_of_ownership, &msg[..], &ring_vrf_key),
 				Error::<T>::InvalidProofOfOwnership,
@@ -396,6 +425,84 @@ pub mod pallet {
 			}
 
 			Ok(Pays::No.into())
+		}
+
+		/// Register as a lite person by paying the configured native registration fee.
+		///
+		/// The origin must be the candidate's signed account. The candidate proves ownership of the
+		/// `ring_vrf_key` by signing the same registration message used by [`Self::attest`].
+		///
+		/// On success, this call transfers the configured fee to the pallet pot, stores lite
+		/// registration data in `LitePeople` and adds the ring VRF key to the lite member
+		/// collection. The fee is not refunded.
+		///
+		/// The lite member collection must already have been created via the
+		/// `migration::CreateLitePeopleCollection` runtime upgrade or
+		/// [`Call::create_lite_people_collection`].
+		///
+		/// - `ring_vrf_key`: The ring VRF key to be associated with the lite person.
+		/// - `proof_of_ownership`: The ring VRF signature proving ownership of `ring_vrf_key`.
+		/// - `consumer_registration`: Optional parameters to register the candidate as a lite
+		///   consumer. The request must contain a signature over the usual consumer payload with
+		///   the signed candidate account in both the account and verifier positions.
+		#[pallet::call_index(3)]
+		#[pallet::weight(if consumer_registration.is_some() {
+			<T as Config>::WeightInfo::register_with_fee()
+				.saturating_add(<T as Config>::WeightInfo::register_lite_consumer())
+		} else {
+			<T as Config>::WeightInfo::register_with_fee()
+		})]
+		pub fn register_with_fee(
+			origin: OriginFor<T>,
+			ring_vrf_key: MemberOf<T>,
+			proof_of_ownership: SignatureOf<T>,
+			consumer_registration: Option<LiteConsumerRegistrationParamsOf<T>>,
+		) -> DispatchResult {
+			let candidate = ensure_signed(origin)?;
+			ensure!(!LitePeople::<T>::contains_key(&candidate), Error::<T>::AlreadyRegistered);
+			ensure!(
+				T::MemberService::member_status(LITE_PEOPLE_MEMBER_IDENTIFIER, &ring_vrf_key)
+					.is_none(),
+				Error::<T>::KeyAlreadyInUse,
+			);
+			if let Some(params) = &consumer_registration {
+				ensure!(
+					params.account == candidate,
+					Error::<T>::InvalidConsumerRegistrationAccount
+				);
+			}
+			Self::ensure_lite_collection_created()?;
+
+			let msg = Self::registration_message(&candidate, &ring_vrf_key);
+			ensure!(
+				CryptoOf::<T>::verify_signature(&proof_of_ownership, &msg[..], &ring_vrf_key),
+				Error::<T>::InvalidProofOfOwnership,
+			);
+			let registration_fee = T::RegistrationFee::get();
+			let transferred = T::Currency::transfer(
+				&candidate,
+				&Self::lite_people_pot_id(),
+				registration_fee,
+				Preservation::Preserve,
+			)?;
+			debug_assert_eq!(transferred, registration_fee);
+			let ring_vrf_key_for_member_service = ring_vrf_key.clone();
+			LitePeople::<T>::insert(
+				&candidate,
+				LitePersonInfo { ring_vrf_key, method: RecognitionMethod::Fee },
+			);
+			T::MemberService::add_members(
+				LITE_PEOPLE_MEMBER_IDENTIFIER,
+				vec![ring_vrf_key_for_member_service],
+			)?;
+			frame_system::Pallet::<T>::inc_sufficients(&candidate);
+			Self::deposit_event(Event::PersonRegisteredWithFee { candidate: candidate.clone() });
+
+			if let Some(params) = consumer_registration {
+				Self::register_lite_consumer(params, &candidate)?;
+			}
+
+			Ok(())
 		}
 
 		#[pallet::call_index(5)]
@@ -524,6 +631,18 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
+		/// Creates the message a candidate signs to prove ownership of a ring VRF key.
+		pub(crate) fn registration_message(
+			candidate: &T::AccountId,
+			ring_vrf_key: &MemberOf<T>,
+		) -> Vec<u8> {
+			candidate.using_encoded(|candidate_bytes| {
+				ring_vrf_key.using_encoded(|key_bytes| {
+					[&MSG_PREFIX[..], candidate_bytes, key_bytes].concat()
+				})
+			})
+		}
+
 		/// Validates that the lite people collection can be created.
 		///
 		/// Returns a valid transaction if the collection doesn't exist yet,
