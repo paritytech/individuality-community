@@ -461,6 +461,7 @@ pub mod pallet {
 		) -> DispatchResult {
 			let candidate = ensure_signed(origin)?;
 			ensure!(!LitePeople::<T>::contains_key(&candidate), Error::<T>::AlreadyRegistered);
+			ensure!(!AccountToAlias::<T>::contains_key(&candidate), Error::<T>::AccountInUse);
 			ensure!(
 				T::MemberService::member_status(LITE_PEOPLE_MEMBER_IDENTIFIER, &ring_vrf_key)
 					.is_none(),

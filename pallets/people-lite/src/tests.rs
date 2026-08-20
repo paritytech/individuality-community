@@ -733,6 +733,37 @@ mod register_with_fee_tests {
 	}
 
 	#[test]
+	fn register_with_fee_rejects_candidate_account_bound_to_alias() {
+		new_test_ext().execute_with(|| {
+			let lite_account = 107;
+			let alias_account = 108;
+			let alias_secret = register_lite_person(109, lite_account, 30);
+			let (_, alias) = establish_alias(&alias_secret, alias_account);
+			fund_lite_person_fee(alias_account);
+			let candidate_secret = secret_from_seed(31);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(alias_account).into(),
+					member_from_secret(&candidate_secret),
+					sign_attest_with_secret(&candidate_secret, alias_account),
+					None,
+				),
+				crate::Error::<Test>::AccountInUse
+			);
+			assert_eq!(AccountToAlias::<Test>::get(alias_account), Some(alias));
+			assert!(!LitePeople::<Test>::contains_key(alias_account));
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(alias_account), 100);
+			assert_eq!(
+				pallet_balances::Pallet::<Test>::free_balance(
+					PeopleLitePallet::<Test>::lite_people_pot_id(),
+				),
+				0,
+			);
+		});
+	}
+
+	#[test]
 	fn register_with_fee_rejects_ring_key_already_in_use() {
 		new_test_ext().execute_with(|| {
 			let original_candidate = 98;
