@@ -30,15 +30,18 @@ jobs:
       - name: Check if user is a member of the organization
         id: is-member
         uses: actions/github-script@v9
+        env:
+          ORG: ${{ github.event.repository.owner.login }}
+          USERNAME: ${{ github.event.comment.user.login }}
         with:
           github-token: ${{ steps.generate_token.outputs.token }}
           result-encoding: string
           script: |
             const fs = require("fs");
-            try {
-              const org = '${{ github.event.repository.owner.login }}';
-              const username = '${{ github.event.comment.user.login }}';
+            const org = process.env.ORG;
+            const username = process.env.USERNAME;
 
+            try {
               const membership = await github.rest.orgs.checkMembershipForUser({
                   org: org,
                   username: username
@@ -251,11 +254,6 @@ jobs:
             core.setOutput('pr_branch', prBranch);
             core.setOutput('repo', repo);
 
-      - name: Use PR Branch Name and Repo
-        run: |
-          echo "The PR branch is ${{ steps.get-pr.outputs.pr_branch }}"
-          echo "The repository is ${{ steps.get-pr.outputs.repo }}"
-
   cmd:
     needs: [get-pr-branch, is-org-member]
     timeout-minutes: 1440 # 24 hours
@@ -274,16 +272,18 @@ jobs:
       - name: Build workflow link
         if: ${{ !contains(github.event.comment.body, '--quiet') }}
         id: build-link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           jobLink=$(curl -s \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs | jq '.jobs[] | select(.name | contains("${{ env.JOB_NAME }}")) | .html_url')
+            https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs | jq -r '.jobs[] | select(.name | contains("${{ env.JOB_NAME }}")) | .html_url')
 
           runLink=$(curl -s \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }} | jq '.html_url')
+            https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }} | jq -r '.html_url')
 
           echo "job_url=${jobLink}"
           echo "run_url=${runLink}"
@@ -293,10 +293,12 @@ jobs:
       - name: Comment PR (Start)
         if: ${{ !contains(github.event.comment.body, '--quiet') }}
         uses: actions/github-script@v9
+        env:
+          JOB_URL: ${{ steps.build-link.outputs.job_url }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            let job_url = ${{ steps.build-link.outputs.job_url }}
+            let job_url = process.env.JOB_URL;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -377,8 +379,9 @@ jobs:
         id: cmd
         env:
           CMD: ${{ steps.get-pr-comment.outputs.group2 }}
+          PR_BRANCH: ${{ needs.get-pr-branch.outputs.pr-branch }}
         run: |
-          echo "Running command: $CMD on branch ${{ needs.get-pr-branch.outputs.pr-branch }}"
+          echo "Running command: $CMD on branch $PR_BRANCH"
           python3 .github/scripts/cmd/cmd.py $CMD
           git status
           git diff
@@ -405,16 +408,18 @@ jobs:
 
       - name: Commit changes
         if: ${{ !contains(github.event.comment.body, '--dry-run') }}
+        env:
+          PR_BRANCH: ${{ needs.get-pr-branch.outputs.pr-branch }}
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             git config --local user.email "action@github.com"
             git config --local user.name "GitHub Action"
 
-            git pull origin ${{ needs.get-pr-branch.outputs.pr-branch }}
+            git pull origin "$PR_BRANCH"
             git add .
             git restore --staged Cargo.lock # ignore changes in Cargo.lock
             git commit -m "Update from ${{ github.actor }} running command '${{ steps.get-pr-comment.outputs.group2 }}'" || true
-            git push origin ${{ needs.get-pr-branch.outputs.pr-branch }}
+            git push origin "$PR_BRANCH"
           else
             echo "Nothing to commit";
           fi
@@ -467,18 +472,24 @@ jobs:
         env:
           WEIGHT_DEVIATION: "${{ steps.weight_deviation.outputs.result }}"
           DRY_RUN_DIFF: "${{ steps.dry-run-diff.outputs.diff }}"
+          RUN_URL: ${{ steps.build-link.outputs.run_url }}
         with:
           github-token: ${{ steps.generate_token.outputs.token }}
           script: |
-            let runUrl = ${{ steps.build-link.outputs.run_url }}
+            let runUrl = process.env.RUN_URL;
             let weightDeviation = process.env.WEIGHT_DEVIATION;
             let dryRunDiff = process.env.DRY_RUN_DIFF;
 
+            const fence = (text) => '`'.repeat(Math.max(3,
+              ...(text.match(/`+/g) || ['']).map(run => run.length + 1)));
+
             let extra = '';
             if (dryRunDiff) {
-              extra = `\n\n<details>\n\n<summary>🏃 Dry-run diff (steps=10, repeat=4, not committed):</summary>\n\n\`\`\`diff\n${dryRunDiff}\n\`\`\`\n\n</details>`;
+              const f = fence(dryRunDiff);
+              extra = `\n\n<details>\n\n<summary>🏃 Dry-run diff (steps=10, repeat=4, not committed):</summary>\n\n${f}diff\n${dryRunDiff}\n${f}\n\n</details>`;
             } else if (weightDeviation) {
-              extra = `\n\n<details>\n\n<summary>Runtime weight deviation:</summary>\n\n\`\`\`\n${weightDeviation}\n\`\`\`\n\n</details>`;
+              const f = fence(weightDeviation);
+              extra = `\n\n<details>\n\n<summary>Runtime weight deviation:</summary>\n\n${f}\n${weightDeviation}\n${f}\n\n</details>`;
             }
 
             github.rest.issues.createComment({
@@ -491,10 +502,12 @@ jobs:
       - name: Comment PR (Failure)
         if: ${{ failure() && !contains(github.event.comment.body, '--quiet') }}
         uses: actions/github-script@v9
+        env:
+          JOB_URL: ${{ steps.build-link.outputs.job_url }}
         with:
           github-token: ${{ steps.generate_token.outputs.token }}
           script: |
-            let jobUrl = ${{ steps.build-link.outputs.job_url }}
+            let jobUrl = process.env.JOB_URL;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
