@@ -148,6 +148,24 @@ fn root_parameter_update_changes_the_next_registration_fee() {
 }
 
 #[test]
+fn root_parameter_update_below_the_existential_deposit_uses_the_minimum_fee() {
+	new_test_ext().execute_with(|| {
+		let minimum_fee = ExistentialDeposit::get();
+		assert!(minimum_fee > 0);
+		let updated_fee = minimum_fee.saturating_sub(1);
+		assert_ok!(Parameters::set_parameter(
+			RuntimeOrigin::root(),
+			RuntimeParameters::LitePersonhood(
+				(lite_personhood::RegistrationFee, updated_fee).into()
+			),
+		));
+
+		assert_eq!(lite_personhood::RegistrationFee::get(), updated_fee);
+		assert_eq!(LitePersonRegistrationFee::get(), minimum_fee);
+	});
+}
+
+#[test]
 fn fee_registration_verifies_consumer_signature_with_the_candidate_as_verifier() {
 	new_test_ext().execute_with(|| {
 		let lite_pair = sr25519::Pair::from_seed(&[80u8; 32]);
