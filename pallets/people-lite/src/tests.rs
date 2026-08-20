@@ -440,6 +440,36 @@ fn attest_rejects_already_registered_candidate() {
 }
 
 #[test]
+fn attest_rejects_candidate_account_bound_to_alias() {
+	new_test_ext().execute_with(|| {
+		let lite_account = 72;
+		let alias_account = 73;
+		let alias_secret = register_lite_person(74, lite_account, 8);
+		let (_, alias) = establish_alias(&alias_secret, alias_account);
+		assert_eq!(AccountToAlias::<Test>::get(alias_account), Some(alias));
+
+		let verifier = 75;
+		AttestationAllowance::<Test>::insert(verifier, 1);
+		let candidate_secret = secret_from_seed(9);
+		let ring_vrf_key = member_from_secret(&candidate_secret);
+
+		assert_noop!(
+			PeopleLitePallet::<Test>::attest(
+				Some(verifier).into(),
+				alias_account,
+				sp_runtime::testing::UintAuthorityId(alias_account),
+				ring_vrf_key,
+				sign_attest_with_secret(&candidate_secret, alias_account),
+				None,
+			),
+			crate::Error::<Test>::AccountInUse
+		);
+		assert_eq!(AttestationAllowance::<Test>::get(verifier), 1);
+		assert!(!LitePeople::<Test>::contains_key(alias_account));
+	});
+}
+
+#[test]
 fn attest_rejects_duplicate_ring_vrf_key() {
 	new_test_ext().execute_with(|| {
 		let original_verifier = 80;
