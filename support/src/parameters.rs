@@ -68,6 +68,14 @@ impl<Value: Ord, Inner: Get<Value>, Maximum: Get<Value>> Get<Value> for AtMost<I
 	}
 }
 
+/// Clamps the inner value to at least the value supplied by `Minimum`.
+pub struct AtLeast<Inner, Minimum>(PhantomData<(Inner, Minimum)>);
+impl<Value: Ord, Inner: Get<Value>, Minimum: Get<Value>> Get<Value> for AtLeast<Inner, Minimum> {
+	fn get() -> Value {
+		Inner::get().max(Minimum::get())
+	}
+}
+
 /// Subtracts one with saturation from a `u32` getter.
 pub struct SaturatingSubOne<Inner>(PhantomData<Inner>);
 impl<Inner: Get<u32>> Get<u32> for SaturatingSubOne<Inner> {
@@ -144,6 +152,12 @@ mod tests {
 	fn at_most_preserves_in_range_values_and_clamps_the_maximum() {
 		assert_eq!(<AtMost<ConstU32<10>, ConstU32<20>> as Get<u32>>::get(), 10);
 		assert_eq!(<AtMost<ConstU32<30>, ConstU32<20>> as Get<u32>>::get(), 20);
+	}
+
+	#[test]
+	fn at_least_preserves_in_range_values_and_clamps_the_minimum() {
+		assert_eq!(<AtLeast<ConstU32<20>, ConstU32<10>> as Get<u32>>::get(), 20);
+		assert_eq!(<AtLeast<ConstU32<10>, ConstU32<20>> as Get<u32>>::get(), 20);
 	}
 
 	#[test]

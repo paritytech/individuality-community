@@ -25,6 +25,7 @@ use frame_support::{
 		fungible::{HoldConsideration, ItemOf},
 		ConstU128, ConstU32, ConstU8, ConstUint, Footprint, Get, LinearStoragePrice, Randomness,
 	},
+	PalletId,
 };
 #[cfg(feature = "runtime-benchmarks")]
 use indiv_support::traits::PersonalId;
@@ -49,13 +50,14 @@ use xcm::v5::{Location, WeightLimit};
 
 use crate::{
 	parameters::{
-		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePersonStatementLimit,
-		LiteStmtStoreSlotsPerPeriod, LongTermStorageAllowanceForLitePeople,
-		LongTermStorageAllowanceForPeople, LongTermStorageClaimsPerPeriod,
-		LongTermStorageCleanupLimit, LongTermStorageGraceWindow, LongTermStoragePeriodDuration,
-		NotificationAllowance, NotificationPeriodDuration, NotificationSlotsPerPeriod,
-		PeopleAirdropsPrizeSource, PersonStatementLimit, StmtStoreCleanupLimit,
-		StmtStoreGraceWindow, StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
+		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePersonRegistrationFee,
+		LitePersonStatementLimit, LiteStmtStoreSlotsPerPeriod,
+		LongTermStorageAllowanceForLitePeople, LongTermStorageAllowanceForPeople,
+		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
+		LongTermStoragePeriodDuration, NotificationAllowance, NotificationPeriodDuration,
+		NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource, PersonStatementLimit,
+		StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreReplacementCooldown,
+		StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -139,6 +141,8 @@ parameter_types! {
 		indiv_support::traits::RingExponent::R2e9;
 	/// Onboarding size for lite people collection.
 	pub const LitePeopleOnboardingSize: u32 = 3;
+	/// Pallet identifier used to derive the account that receives lite-person registration fees.
+	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
 	/// The page size for chunks manager.
 	pub const ChunkPageSize: u32 = 255;
 	/// Self-inclusion delay: 60 minutes.
@@ -1229,6 +1233,9 @@ impl indiv_pallet_people_lite::BenchmarkHelper<AccountId, Signature> for PeopleL
 
 impl indiv_pallet_people_lite::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people_lite::WeightInfo<Runtime>;
+	type Currency = Balances;
+	type PotId = LitePeoplePotId;
+	type RegistrationFee = LitePersonRegistrationFee;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;
