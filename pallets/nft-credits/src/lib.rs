@@ -69,7 +69,8 @@
 //! Every recorded root is queued in [`CreditTreeDeliveryQueue`] under a contiguous sequence number,
 //! and the offchain worker ships a message's worth per block with [`Pallet::send_credit_trees`]. A
 //! tree that never arrives is repaired by [`Pallet::replay_credit_trees`], which anyone may call
-//! and which carries no sequence number.
+//! and which carries no sequence number. One replay allowed per [`Config::ReplayCooldownSeconds`],
+//! so as not to congest the channel.
 //!
 //! ## Claiming
 //!
@@ -251,14 +252,21 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxCreditTreesPerMessage: Get<u32>;
 
+		/// Cooldown, in seconds, between credit tree replays.
+		///
+		/// [`Pallet::replay_credit_trees`] is permissionless, so this is what bounds the XCMP
+		/// traffic it can cause.
+		#[pallet::constant]
+		type ReplayCooldownSeconds: Get<u64>;
+
 		/// Per-tree weight surcharge for executing `receive_credit_trees` on
 		/// [`Config::NftClaimsParaId`], charged to the caller of
 		/// [`Pallet::replay_credit_trees`].
 		///
-		/// The fee it buys is what limits how much replay traffic anyone can cause, that call
-		/// being permissionless and deliberately not rate-limited, so set it to at least the
-		/// per-tree cost of `receive_credit_trees` in the claims chain's own generated weights,
-		/// proof size included. A value below that leaves the remote work underpaid.
+		/// This prices the remote work a replay causes; [`Config::ReplayCooldownSeconds`] is what
+		/// bounds how often one can happen. Set it to at least the per-tree cost of
+		/// `receive_credit_trees` in the claims chain's own generated weights, proof size
+		/// included.
 		#[pallet::constant]
 		type NftClaimsRemoteWeight: Get<Weight>;
 
@@ -414,6 +422,13 @@ pub mod pallet {
 		ValueQuery,
 	>;
 
+	/// The time of the last credit tree replay, in seconds.
+	///
+	/// [`Pallet::replay_credit_trees`] refuses to run again within
+	/// [`Config::ReplayCooldownSeconds`] of it.
+	#[pallet::storage]
+	pub type LastReplayTime<T: Config> = StorageValue<_, u64, OptionQuery>;
+
 	/// The sequence number the next queued credit tree is delivered under.
 	///
 	/// Only a tree that made it into [`CreditTreeDeliveryQueue`] consumes one, so the sequence the
@@ -475,6 +490,9 @@ pub mod pallet {
 		UnsortedReplayBlocks,
 		/// None of the blocks to replay has a credit tree.
 		NoCreditTreeForBlock,
+		/// A credit tree replay ran within `ReplayCooldownSeconds` of the last one. The window is
+		/// shared by every caller.
+		ReplayCooldownActive,
 		/// The replay does not fit what the HRMP channel to the NFT claims chain can carry in
 		/// one message.
 		ExceedsClaimsChannelCapacity,
@@ -564,11 +582,11 @@ pub mod pallet {
 		/// cannot disturb the claims chain's tracking of the live stream, and one the claims chain
 		/// already holds is ignored there rather than overwriting anything.
 		///
+		/// One replay runs per [`Config::ReplayCooldownSeconds`], counted from the last one by
+		/// [`LastReplayTime`].
+		///
 		/// The caller pays for the remote work, [`Config::NftClaimsRemoteWeight`] per tree on top
-		/// of this call's own weight, and that fee is the only thing limiting how often anyone may
-		/// repair. It is deliberately not rate-limited: a limit shared between award blocks would
-		/// let a replay of any retained root, including one already delivered, consume the repair
-		/// capacity of the trees that really are missing.
+		/// of this call's own weight.
 		///
 		/// ## Parameters
 		/// - `blocks`: The award blocks to resend, in strictly ascending order.
@@ -1353,8 +1371,7 @@ impl<T: Config> Pallet<T> {
 	/// Resends the credit trees of `blocks`, as [`Pallet::replay_credit_trees`] does once its
 	/// origin is checked.
 	///
-	/// Only the fee limits how often this may run, for the reason the call documents: any limit
-	/// shared between award blocks would let one replay suppress every other repair.
+	/// The cooldown holds how often this may run.
 	pub(crate) fn do_replay_credit_trees(
 		blocks: BoundedVec<BlockNumberFor<T>, T::MaxCreditTreesPerMessage>,
 	) -> DispatchResult {
@@ -1368,8 +1385,17 @@ impl<T: Config> Pallet<T> {
 		let updates = Self::resolve_credit_trees(blocks.iter().map(|block| (None, *block)));
 		ensure!(!updates.is_empty(), Error::<T>::NoCreditTreeForBlock);
 
+		let now = T::UnixTime::now().as_secs();
+		if let Some(last) = LastReplayTime::<T>::get() {
+			ensure!(
+				now.saturating_sub(last) >= T::ReplayCooldownSeconds::get(),
+				Error::<T>::ReplayCooldownActive
+			);
+		}
+
 		let count = updates.len() as u32;
 		Self::send_credit_tree_batch(updates)?;
+		LastReplayTime::<T>::put(now);
 
 		Self::deposit_event(Event::<T>::CreditTreesReplayed { count });
 
@@ -1530,6 +1556,11 @@ impl<T: Config> Pallet<T> {
 			"replay_credit_trees",
 			<T as Config>::WeightInfo::replay_credit_trees(max_trees)
 				.saturating_add(T::NftClaimsRemoteWeight::get().saturating_mul(max_trees.into())),
+		);
+
+		assert!(
+			!T::ReplayCooldownSeconds::get().is_zero(),
+			"`ReplayCooldownSeconds` must be at least one",
 		);
 
 		// A ring with no room retains no awards at all, leaving every claim to be rebuilt

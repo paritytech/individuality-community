@@ -717,6 +717,7 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// `replay_credit_trees`.
 	type MaxQueuedCreditTrees = ConstU32<256>;
 	type MaxCreditTreesPerMessage = ConstU32<32>;
+	type ReplayCooldownSeconds = ConstU64<60>;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
 	// Entries are the distinct blocks a claimant was awarded in, not a window of consecutive
 	// ones, so the bound counts games rather than time. One game awards a claimant at most
@@ -1154,8 +1155,8 @@ impl
 parameter_types! {
 	/// Upper bound on what one credit tree of a `receive_credit_trees` batch costs to execute on
 	/// the NFT claims chain. Charged to the caller of `replay_credit_trees`, so a repair pays for
-	/// the remote work it causes, and the only thing bounding how much replay traffic anyone can
-	/// cause.
+	/// the remote work it causes. What bounds replay traffic is `ReplayCooldownSeconds`; this
+	/// prices the work the replays that pass it cause.
 	///
 	/// Derived from the marginal per-tree cost of `receive_credit_trees` on Asset Hub: one
 	/// `CreditTrees` read and write, the per-tree execution term, and the `max_size` of a

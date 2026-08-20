@@ -69,6 +69,7 @@ impl crate::Config for Test {
 	type ChannelInfo = MockChannelInfo;
 	type MaxQueuedCreditTrees = MaxQueuedCreditTrees;
 	type MaxCreditTreesPerMessage = MaxCreditTreesPerMessage;
+	type ReplayCooldownSeconds = ReplayCooldownSeconds;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
 	type MaxRetainedAwardBlocks = MaxRetainedAwardBlocks;
 	type MaxCreditBlocksPerClaimant = MaxCreditBlocksPerClaimant;
@@ -108,6 +109,7 @@ parameter_types! {
 	/// Small, so that a test can fill the delivery queue in a few blocks.
 	pub storage MaxQueuedCreditTrees: u32 = 8;
 	pub storage MaxCreditTreesPerMessage: u32 = 4;
+	pub const ReplayCooldownSeconds: u64 = 60;
 	pub const NftClaimsRemoteWeight: Weight = Weight::from_parts(1_000, 0);
 }
 
