@@ -1374,6 +1374,40 @@ fn item_defs_are_immutable() {
 	});
 }
 
+/// A failed `transfer` charges its submitter, unlike the success path.
+///
+/// The purse-key origin pays nothing when a move lands, which is what lets a holder with no
+/// balance move an instance. A failure writes nothing, so the same transaction stays valid and
+/// waiving its fee too would buy unlimited block weight for free.
+#[test]
+fn a_failed_transfer_pays_its_fee() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		mint(0, OTHER);
+
+		let nft = NftsByOwner::<Test>::get(RECIPIENT).expect("the holder has an instance");
+		let error = Scarcity::transfer(nft_origin(RECIPIENT, nft), OTHER)
+			.expect_err("the destination already holds an instance");
+		assert_eq!(error.error, Error::<Test>::AddressOccupied.into());
+		assert_eq!(error.post_info.pays_fee, Pays::Yes);
+	});
+}
+
+/// A failed `burn` charges its submitter, for the reason given on `a_failed_transfer_pays_its_fee`.
+#[test]
+fn a_failed_burn_pays_its_fee() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+
+		let error = Scarcity::burn(RuntimeOrigin::signed(RECIPIENT))
+			.expect_err("burning needs the purse-key origin");
+		assert_eq!(error.error, sp_runtime::DispatchError::BadOrigin);
+		assert_eq!(error.post_info.pays_fee, Pays::Yes);
+	});
+}
+
 #[test]
 fn transfer_moves_ownership_and_updates_reverse_index() {
 	new_test_ext().execute_with(|| {

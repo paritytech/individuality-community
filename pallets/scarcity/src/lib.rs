@@ -781,9 +781,6 @@ pub mod pallet {
 		/// Fails for an instance of a [`Transferability::Soulbound`] definition.
 		#[pallet::call_index(3)]
 		#[pallet::weight(T::WeightInfo::transfer())]
-		#[pallet::feeless_if(|origin: &OriginFor<T>, _to: &T::AccountId| -> bool {
-			Pallet::<T>::is_nft_origin(origin)
-		})]
 		pub fn transfer(origin: OriginFor<T>, to: T::AccountId) -> DispatchResultWithPostInfo {
 			let Ok(Origin::Nft { owner, nft }) = origin.into() else {
 				return Err(DispatchError::BadOrigin.into());
@@ -814,9 +811,6 @@ pub mod pallet {
 		/// removed and its exact deposits are released.
 		#[pallet::call_index(4)]
 		#[pallet::weight(T::WeightInfo::burn(T::MaxInstanceMetadata::get()))]
-		#[pallet::feeless_if(|origin: &OriginFor<T>| -> bool {
-			Pallet::<T>::is_nft_origin(origin)
-		})]
 		#[transactional]
 		pub fn burn(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
 			let Ok(Origin::Nft { owner, nft }) = origin.into() else {
@@ -1010,11 +1004,6 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
-		fn is_nft_origin(origin: &OriginFor<T>) -> bool {
-			let converted: Result<Origin<T>, OriginFor<T>> = origin.clone().into();
-			matches!(converted, Ok(Origin::Nft { .. }))
-		}
-
 		fn increase_owner_deposit(
 			info: CollectionInfoOf<T>,
 			amount: BalanceOf<T>,
