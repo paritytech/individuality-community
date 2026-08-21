@@ -107,7 +107,10 @@ fn setup_multi_unload(
 	dest: u64,
 	signer: u64,
 ) -> (
-	Vec<UnloadRecyclerInput<<Test as Config>::MaxConsolidation>>,
+	BoundedVec<
+		UnloadRecyclerInput<<Test as Config>::MaxConsolidation>,
+		<Test as Config>::MaxConsolidation,
+	>,
 	BoundedVec<Proof, <Test as Config>::MaxConsolidation>,
 	Vec<Secret>,
 	Vec<Secret>,
@@ -165,7 +168,7 @@ fn setup_multi_unload(
 	let (proof1, alias1) = create_unload_proof(&secrets1[0], &members1, &proven_msg);
 	let (proof2, alias2) = create_unload_proof(&secrets2[0], &members2, &proven_msg);
 
-	let final_inputs = vec![
+	let final_inputs = bounded_vec![
 		UnloadRecyclerInput {
 			value: value1,
 			index: index1,
@@ -476,7 +479,7 @@ fn fee_above_max_is_rejected_early_and_refunds_the_unused_weight() {
 
 		let call = crate::Call::<Test>::unload_recyclers_into_external_asset_non_anonymous {
 			instance_id: TEST_INSTANCE_ID,
-			inputs: vec![input.clone()],
+			inputs: bounded_vec![input.clone()],
 			alias_proofs: proofs.clone(),
 			to: dest,
 			fee_currency: FeeCurrency::ExternalAsset,
@@ -488,7 +491,7 @@ fn fee_above_max_is_rejected_early_and_refunds_the_unused_weight() {
 		let err = Coinage::unload_recyclers_into_external_asset_non_anonymous(
 			RuntimeOrigin::signed(signer),
 			TEST_INSTANCE_ID,
-			vec![input],
+			bounded_vec![input],
 			proofs,
 			dest,
 			FeeCurrency::ExternalAsset,
@@ -705,7 +708,7 @@ fn empty_inputs_is_invalid_as_empty_inputs() {
 
 		let call = crate::Call::<Test>::unload_recyclers_into_external_asset_non_anonymous {
 			instance_id: TEST_INSTANCE_ID,
-			inputs: Vec::new(),
+			inputs: bounded_vec![],
 			alias_proofs: bounded_vec![],
 			to: CHARLIE,
 			fee_currency: FeeCurrency::ExternalAsset,
@@ -728,7 +731,7 @@ fn empty_inputs_fails_as_empty_inputs_call() {
 			Coinage::unload_recyclers_into_external_asset_non_anonymous(
 				RuntimeOrigin::signed(ALICE),
 				TEST_INSTANCE_ID,
-				Vec::new(),
+				bounded_vec![],
 				bounded_vec![],
 				CHARLIE,
 				FeeCurrency::ExternalAsset,
@@ -1024,7 +1027,7 @@ fn multiple_recyclers_with_mixed_valid_invalid_proofs_fails_call() {
 		let (_, alias2) = create_unload_proof(&secrets2[0], &members2, &wrong_proven_msg);
 
 		// Build final inputs with actual aliases
-		let final_inputs = vec![
+		let final_inputs: BoundedVec<RInput, <Test as Config>::MaxConsolidation> = bounded_vec![
 			UnloadRecyclerInput {
 				value: value1,
 				index: index1,
@@ -1398,7 +1401,7 @@ fn sponsored_non_anonymous_multi_unload_settles_the_load_deposit() {
 			build_non_anonymous_unload(instance_id, &secrets[0..2], 0, index, signer, 9_503);
 		let call = crate::Call::<Test>::unload_recyclers_into_external_asset_non_anonymous {
 			instance_id,
-			inputs: vec![input],
+			inputs: bounded_vec![input],
 			alias_proofs: proofs,
 			to: 9_503,
 			fee_currency: FeeCurrency::Native,
@@ -1409,5 +1412,110 @@ fn sponsored_non_anonymous_multi_unload_settles_the_load_deposit() {
 		assert_eq!(pot_held(instance_id, NATIVE_DEPOSIT_ID), 0);
 		assert_eq!(pot_free(instance_id, NATIVE_DEPOSIT_ID), free_before + 20);
 		check_load_deposit_invariant(instance_id, 0);
+	});
+}
+
+// ============================================================================
+// `inputs` length bound and the proof-count pre-check
+// ============================================================================
+
+/// The encoded call, with `inputs` replaced by `count` copies of one input.
+///
+/// Built from the encoding, not from the call type, because the point is what the decoder accepts:
+/// `inputs` is a `BoundedVec`, so the wire format carries a length the call type cannot express.
+fn encoded_multi_unload_with_inputs(count: u32) -> Vec<u8> {
+	let (input, proofs, _) = setup_single_unload(0, CHARLIE, ALICE, 0);
+	let inputs = alloc::vec![input; count as usize];
+
+	let mut encoded = alloc::vec![12u8];
+	encoded.extend(TEST_INSTANCE_ID.encode());
+	encoded.extend(inputs.encode());
+	encoded.extend(proofs.encode());
+	encoded.extend(CHARLIE.encode());
+	encoded.extend(FeeCurrency::Native.encode());
+	encoded.extend(native_max_fee_bound().encode());
+	encoded
+}
+
+/// `inputs` is bounded by `MaxConsolidation`, so a longer list never reaches dispatch: it is
+/// rejected while the extrinsic is decoded, before the call is weighed. Without the bound a
+/// `pallet_utility` batch can nest the call and bypass the [`AsCoinage`] extension, whose weight is
+/// the only thing that prices `inputs`.
+#[test]
+fn more_inputs_than_max_consolidation_does_not_decode() {
+	new_test_ext().execute_with(|| {
+		let max = <<Test as Config>::MaxConsolidation as Get<u32>>::get();
+
+		let over = encoded_multi_unload_with_inputs(max + 1);
+		assert!(crate::Call::<Test>::decode(&mut &over[..]).is_err());
+
+		// The bound itself is what rejects it: one fewer input decodes.
+		let at_bound = encoded_multi_unload_with_inputs(max);
+		assert!(crate::Call::<Test>::decode(&mut &at_bound[..]).is_ok());
+	});
+}
+
+/// One proof per alias is required before the fee is charged, the amounts are summed and `inputs`
+/// is hashed. The declared weight is a function of `alias_proofs.len()`, while the work is one
+/// recycler unload per input and one proof verification per alias, so a short `alias_proofs` buys
+/// work the weight does not cover.
+///
+/// The `max_fee` covers one unload and the call names two, so the fee bound is what rejects the
+/// call if the proof count is checked later.
+#[test]
+fn proof_count_is_checked_before_the_fee_bound_call() {
+	new_test_ext().execute_with(|| {
+		setup_balances();
+		let signer = ALICE;
+		let (inputs, proofs, _, _) = setup_multi_unload(CHARLIE, signer);
+		let one_proof: BoundedVec<Proof, <Test as Config>::MaxConsolidation> =
+			bounded_vec![proofs[0].clone()];
+
+		assert_noop!(
+			Coinage::unload_recyclers_into_external_asset_non_anonymous(
+				RuntimeOrigin::signed(signer),
+				TEST_INSTANCE_ID,
+				inputs,
+				one_proof,
+				CHARLIE,
+				FeeCurrency::Native,
+				Coinage::get_paid_unload_token_fee_in_native()
+			),
+			Error::<Test>::ProofAndAliasMismatch
+		);
+	});
+}
+
+/// An input with no aliases consumes no proof, so padding `inputs` with such entries keeps the
+/// proof count matching while adding a recycler unload per entry. They are rejected on the same
+/// pass as the proof count, which keeps `inputs.len()` at or below `alias_proofs.len()`.
+///
+/// The `max_fee` covers one unload and the padded call names two, so the fee bound is what rejects
+/// the call if the aliases are checked later.
+#[test]
+fn alias_less_input_is_rejected_before_the_fee_bound_call() {
+	new_test_ext().execute_with(|| {
+		setup_balances();
+		let signer = ALICE;
+		let (input, proofs, _) = setup_single_unload(0, CHARLIE, signer, 0);
+		let alias_less = UnloadRecyclerInput {
+			value: input.value,
+			index: input.index,
+			revision: input.revision,
+			aliases: bounded_vec![],
+		};
+
+		assert_noop!(
+			Coinage::unload_recyclers_into_external_asset_non_anonymous(
+				RuntimeOrigin::signed(signer),
+				TEST_INSTANCE_ID,
+				bounded_vec![alias_less, input],
+				proofs,
+				CHARLIE,
+				FeeCurrency::Native,
+				Coinage::get_paid_unload_token_fee_in_native()
+			),
+			Error::<Test>::EmptyInputs
+		);
 	});
 }
