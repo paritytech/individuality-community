@@ -884,6 +884,111 @@ fn redeem_credit_transfer_failure_preserves_credit_and_hold() {
 }
 
 #[test]
+fn offboard_releases_outstanding_credit() {
+	new_test_ext().execute_with(|| {
+		let user = 22;
+		let user_key = AccountOrPerson::Account(user);
+		let credit = 10;
+		let pot = PalletScore::score_pot_id();
+		PalletScore::onboard_for_recognition(&user).unwrap();
+		Participants::<Test>::mutate(&user_key, |participant| {
+			participant.as_mut().unwrap().credit = credit;
+		});
+		fund_score_pot(credit);
+		assert_ok!(Balances::hold(&HoldReason::Credit.into(), &pot, credit));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), credit);
+
+		PalletScore::offboard(&user_key);
+
+		assert!(!Participants::<Test>::contains_key(&user_key));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), 0);
+	});
+}
+
+#[test]
+fn offboard_with_zero_credit_leaves_other_credit_hold_untouched() {
+	new_test_ext().execute_with(|| {
+		let offboarded = 22;
+		let credit_holder = 23;
+		let offboarded_key = AccountOrPerson::Account(offboarded);
+		let credit_holder_key = AccountOrPerson::Account(credit_holder);
+		let credit = 10;
+		let pot = PalletScore::score_pot_id();
+		PalletScore::onboard_for_recognition(&offboarded).unwrap();
+		PalletScore::onboard_for_recognition(&credit_holder).unwrap();
+		Participants::<Test>::mutate(&credit_holder_key, |participant| {
+			participant.as_mut().unwrap().credit = credit;
+		});
+		fund_score_pot(credit);
+		assert_ok!(Balances::hold(&HoldReason::Credit.into(), &pot, credit));
+
+		PalletScore::offboard(&offboarded_key);
+
+		assert!(!Participants::<Test>::contains_key(&offboarded_key));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), credit);
+		assert_eq!(Participants::<Test>::get(&credit_holder_key).unwrap().credit, credit);
+	});
+}
+
+#[test]
+fn offboard_removes_participant_when_credit_hold_release_fails() {
+	new_test_ext().execute_with(|| {
+		let user = 22;
+		let user_key = AccountOrPerson::Account(user);
+		PalletScore::onboard_for_recognition(&user).unwrap();
+		Participants::<Test>::mutate(&user_key, |participant| {
+			participant.as_mut().unwrap().credit = 10;
+		});
+
+		PalletScore::offboard(&user_key);
+
+		assert!(!Participants::<Test>::contains_key(&user_key));
+	});
+}
+
+#[test]
+fn payout_credit_hold_matches_remaining_participant_credit_after_offboard() {
+	new_test_ext().execute_with(|| {
+		let offboarded = 11u64;
+		let remaining = 12u64;
+		let offboarded_key = AccountOrPerson::Account(offboarded);
+		let remaining_key = AccountOrPerson::Account(remaining);
+		let pot = PalletScore::score_pot_id();
+		PalletScore::onboard_for_recognition(&offboarded).unwrap();
+		PalletScore::onboard_for_recognition(&remaining).unwrap();
+		RoundsPointsForParticipant::<Test>::insert(0, &offboarded_key, 10);
+		RoundsPointsForParticipant::<Test>::insert(0, &remaining_key, 20);
+		CurrentRoundPoints::<Test>::put(30);
+		fund_score_pot(1_000);
+
+		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 60, 1, 10));
+		assert_ok!(exec_authorized_tx(Call::transition_round {
+			round_index: CurrentRoundIndex::<Test>::get()
+		}));
+		advance_to(11);
+		assert_ok!(exec_authorized_tx(Call::transition_round {
+			round_index: CurrentRoundIndex::<Test>::get()
+		}));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1_000 }));
+
+		let offboarded_credit = Participants::<Test>::get(&offboarded_key).unwrap().credit;
+		let remaining_credit = Participants::<Test>::get(&remaining_key).unwrap().credit;
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), 60);
+
+		PalletScore::offboard(&offboarded_key);
+
+		assert!(!Participants::<Test>::contains_key(&offboarded_key));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), remaining_credit);
+		assert_eq!(offboarded_credit + remaining_credit, 60);
+
+		let destination = 999u64;
+		assert_ok!(PalletScore::redeem_credit(RuntimeOrigin::signed(remaining), destination));
+		assert_eq!(Balances::balance(&destination), remaining_credit);
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), 0);
+	});
+}
+
+#[test]
 fn payout_for_offboarded_participant_is_recycled() {
 	new_test_ext().execute_with(|| {
 		// 1. Fund the pot enough for this test:
