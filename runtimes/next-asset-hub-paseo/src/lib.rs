@@ -2169,8 +2169,9 @@ parameter_types! {
 	pub const CreditTreeTtl: u64 = 90 * 24 * 60 * 60;
 }
 
-/// Creates the collection and item the benchmarks mint into, which on a live chain their owner
-/// has set up beforehand.
+/// What the claims benchmarks cannot set up themselves: the collection and item a claim mints
+/// into, the minter contract, the clock, and the HRMP channel a deletion message goes out over.
+/// On a live chain a collection owner and the relay chain's configuration provide these.
 #[cfg(feature = "runtime-benchmarks")]
 pub struct NftClaimsBenchmarkHelper;
 #[cfg(feature = "runtime-benchmarks")]
@@ -2219,6 +2220,33 @@ impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId> for NftClaimsBenchmarkH
 		// `pallet_timestamp` holds the clock in milliseconds, and its `set` is an inherent, so this
 		// writes the value straight to storage.
 		pallet_timestamp::Now::<Runtime>::put(secs.saturating_mul(1_000));
+	}
+
+	fn open_game_chain_channel(max_message_size: u32) {
+		use cumulus_pallet_parachain_system::RelevantMessagingState;
+		use cumulus_primitives_core::relay_chain::AbridgedHrmpChannel;
+
+		let channel = AbridgedHrmpChannel {
+			max_capacity: 1000,
+			max_total_size: 1_000_000,
+			max_message_size,
+			msg_count: 0,
+			total_size: 0,
+			mqc_head: None,
+		};
+		let game_chain = ParaId::from(PEOPLE_ID);
+		let mut messaging_state = RelevantMessagingState::<Runtime>::get().unwrap_or(
+			cumulus_pallet_parachain_system::relay_state_snapshot::MessagingStateSnapshot {
+				dmq_mqc_head: Default::default(),
+				relay_dispatch_queue_remaining_capacity: Default::default(),
+				ingress_channels: Vec::new(),
+				egress_channels: Vec::new(),
+			},
+		);
+		messaging_state.egress_channels.retain(|(id, _)| *id != game_chain);
+		messaging_state.egress_channels.push((game_chain, channel));
+		messaging_state.egress_channels.sort_by_key(|(id, _)| *id);
+		RelevantMessagingState::<Runtime>::put(messaging_state);
 	}
 }
 

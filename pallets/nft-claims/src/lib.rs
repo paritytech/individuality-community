@@ -47,7 +47,7 @@
 //!
 //! The NFT itself is a `pallet-scarcity` instance, minted with no storage deposit: the credit is
 //! what bounds the state a claim creates, since the game chain awards a credit once and
-//! [`ClaimedCredits`] spends it once. Scarcity purse keys hold one NFT each and take no
+//! [`ClaimedLeaves`] spends it once. Scarcity purse keys hold one NFT each and take no
 //! destination consent, so the call names the key to mint to rather than minting to the
 //! claimant's own account.
 //!
@@ -95,9 +95,9 @@
 //! Two paths remove a tree. Both tell the game chain to drop its own copy, so the trees each chain
 //! holds will be able to process all open claims.
 //!
-//! - **Fully claimed.** [`ClaimedCounts`] reaches the tree's `leaf_count`. Every credit the tree
-//!   commits to has been minted, so no proof can be built against it again, and the claim that
-//!   completes it removes it.
+//! - **Fully claimed.** The set bits of [`ClaimedLeaves`] reach the tree's `leaf_count`. Every
+//!   credit the tree commits to has been minted, so no proof can be built against it again, and the
+//!   claim that completes it removes it.
 //! - **Expiry.** A tree that is not fully claimed outlives [`Config::TreeTtl`]. The TTL runs from
 //!   the award block's own wall-clock time, which the game chain records in the tree, not from the
 //!   time the tree arrived here. [`Pallet::claim`] does not check the TTL, so the sweep that
@@ -244,6 +244,12 @@ pub trait BenchmarkHelper<AccountId> {
 	/// A sweep's validity depends on the clock, so a benchmark of it sets the clock. Only the
 	/// runtime knows which pallet holds it.
 	fn set_unix_time(secs: u64);
+
+	/// Opens a channel to the game chain that carries `max_message_size` bytes per message.
+	///
+	/// A benchmarked send reaches [`Config::XcmRouter`], which refuses a destination it has no
+	/// channel to. Only the runtime knows how its channels are made.
+	fn open_game_chain_channel(max_message_size: u32);
 }
 
 #[frame_support::pallet]

@@ -219,6 +219,10 @@ impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId32> for MockBenchmarkHelp
 	fn set_unix_time(secs: u64) {
 		MockNow::set(secs);
 	}
+
+	fn open_game_chain_channel(_max_message_size: u32) {
+		// Nothing in this crate removes a tree, so the pallet sends no deletion message.
+	}
 }
 
 impl indiv_pallet_nft_claims::Config for Test {

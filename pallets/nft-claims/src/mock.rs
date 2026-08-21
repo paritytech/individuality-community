@@ -439,6 +439,10 @@ impl pallet_nft_claims::BenchmarkHelper<u64> for MockBenchmarkHelper {
 	fn set_unix_time(secs: u64) {
 		set_now(secs);
 	}
+
+	fn open_game_chain_channel(_max_message_size: u32) {
+		// `MockXcmRouter` accepts every destination, so there is no channel to open.
+	}
 }
 
 impl pallet_nft_claims::Config for Test {

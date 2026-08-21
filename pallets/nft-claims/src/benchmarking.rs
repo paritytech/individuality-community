@@ -274,10 +274,14 @@ mod benches {
 	///
 	/// A read and a write of the queue cost its `MaxEncodedLen` whatever it holds. The cost of
 	/// rewriting a remainder therefore sits in the base, not in `n`.
+	///
+	/// The channel is sized to [`MIN_CHANNEL_MESSAGE_SIZE`], the room the `integrity_test` holds a
+	/// full deletion message to, so the message the send builds fits it.
 	#[benchmark]
 	fn send_tree_deletions(
 		n: Linear<1, { T::MaxTreeDeletionsPerMessage::get() }>,
 	) -> Result<(), BenchmarkError> {
+		T::BenchmarkHelper::open_game_chain_channel(MIN_CHANNEL_MESSAGE_SIZE as u32);
 		queue_deletions::<T>(n);
 		let origin = RawOrigin::Authorized;
 
