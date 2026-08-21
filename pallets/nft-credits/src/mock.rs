@@ -73,8 +73,39 @@ impl crate::Config for Test {
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
 	type MaxRetainedAwardBlocks = MaxRetainedAwardBlocks;
 	type MaxCreditBlocksPerClaimant = MaxCreditBlocksPerClaimant;
+	type EnsureClaimsChainOrigin = MockEnsureClaimsChainOrigin;
+	type MaxTreeDeletionsPerMessage = MaxTreeDeletionsPerMessage;
+	type ClaimsChainTreeTtl = ClaimsChainTreeTtl;
+	type MaxRootsPerSweep = MaxRootsPerSweep;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockCreditsBenchmarkHelper;
+}
+
+/// The account the mock accepts as the claims chain's XCM origin.
+pub const CLAIMS_CHAIN: sp_runtime::AccountId32 =
+	sp_runtime::AccountId32::new(*b"claims-chain____________________");
+
+/// Stands in for the origin check that authenticates the sibling parachain the trees are sent to.
+/// It rejects every other signer, which is what a test of a spoofed deletion asserts.
+pub struct MockEnsureClaimsChainOrigin;
+impl frame_support::traits::EnsureOrigin<RuntimeOrigin> for MockEnsureClaimsChainOrigin {
+	type Success = ();
+
+	fn try_origin(o: RuntimeOrigin) -> Result<Self::Success, RuntimeOrigin> {
+		match o.clone().into() {
+			Ok(frame_system::RawOrigin::Signed(who)) if who == CLAIMS_CHAIN => Ok(()),
+			_ => Err(o),
+		}
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn try_successful_origin() -> Result<RuntimeOrigin, ()> {
+		Ok(RuntimeOrigin::signed(CLAIMS_CHAIN))
+	}
+}
+
+pub fn claims_chain_origin() -> RuntimeOrigin {
+	RuntimeOrigin::signed(CLAIMS_CHAIN)
 }
 
 impl CreditsWeightInfo for MockWeightInfo {
@@ -95,6 +126,17 @@ impl CreditsWeightInfo for MockWeightInfo {
 	fn authorize_send_credit_trees() -> Weight {
 		Weight::from_parts(50, 0)
 	}
+	fn receive_tree_deletions(n: u32) -> Weight {
+		Weight::from_parts(300 + 10 * n as u64, 30 + n as u64)
+	}
+	/// Non-zero and scales with `n` in both dimensions, so the refund a sweep of a partly filled
+	/// bucket reports stays below its worst case.
+	fn sweep_expired_roots(n: u32) -> Weight {
+		Weight::from_parts(400 + 10 * n as u64, 40 + n as u64)
+	}
+	fn authorize_sweep_expired_roots() -> Weight {
+		Weight::from_parts(60, 0)
+	}
 }
 
 parameter_types! {
@@ -111,6 +153,13 @@ parameter_types! {
 	pub storage MaxCreditTreesPerMessage: u32 = 4;
 	pub const ReplayCooldownSeconds: u64 = 60;
 	pub const NftClaimsRemoteWeight: Weight = Weight::from_parts(1_000, 0);
+	pub storage MaxTreeDeletionsPerMessage: u32 = 4;
+	/// Small, so a test fills a bucket with a few roots.
+	pub storage MaxRootsPerSweep: u32 = 2;
+	/// A whole number of buckets, so a test states deadlines in whole days. The TTL the pallet sweeps
+	/// by is this plus `ROOT_TTL_GRACE`, which is a whole number of buckets as well.
+	pub storage ClaimsChainTreeTtl: u64 =
+		2 * indiv_support::credit_trees::EXPIRY_BUCKET_SECONDS as u64;
 }
 
 /// Captures the XCM messages the pallet sends to the NFT claims chain and can be made to fail
@@ -245,5 +294,9 @@ impl crate::benchmarking::BenchmarkHelper for MockCreditsBenchmarkHelper {
 		// `MockChannelInfo` reports an open channel unless a test closes it; only its per-message
 		// room has to be set, which is what decides how many trees a delivery takes.
 		set_claims_max_message_size(max_message_size);
+	}
+
+	fn set_unix_time(secs: u64) {
+		MOCK_UNIX_TIME.with(|now| *now.borrow_mut() = std::time::Duration::from_secs(secs));
 	}
 }

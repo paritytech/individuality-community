@@ -4888,11 +4888,13 @@ dependencies = [
  "log",
  "pallet-scarcity",
  "parity-scale-codec",
+ "parking_lot",
  "scale-info",
  "sp-api 42.0.0",
  "sp-core 41.0.0",
  "sp-io 46.0.0",
  "sp-runtime 47.0.0",
+ "staging-xcm",
 ]
 
 [[package]]
@@ -5128,6 +5130,7 @@ dependencies = [
  "scale-info",
  "sp-io 46.0.0",
  "sp-runtime 47.0.0",
+ "staging-xcm",
 ]
 
 [[package]]
@@ -5180,6 +5183,7 @@ dependencies = [
  "frame-support 47.0.0",
  "frame-system 47.0.0",
  "getrandom 0.2.17",
+ "log",
  "pallet-asset-conversion",
  "pallet-asset-conversion-tx-payment",
  "pallet-asset-tx-payment",

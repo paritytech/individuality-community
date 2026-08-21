@@ -21,6 +21,7 @@ use super::*;
 use codec::Encode;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
+use indiv_support::credit_trees::EXPIRY_BUCKET_SECONDS;
 use sp_runtime::{traits::One, transaction_validity::TransactionSource};
 
 /// What the benchmarks cannot set up themselves, because only the runtime knows how its XCM
@@ -29,6 +30,12 @@ pub trait BenchmarkHelper {
 	/// Opens an HRMP channel to the NFT claims chain that carries `max_message_size` bytes per
 	/// message, which is what decides how many credit trees one delivery takes.
 	fn open_nft_claims_channel(max_message_size: u32);
+
+	/// Moves [`indiv_pallet_game::Config::UnixTime`] to `secs` since the UNIX epoch.
+	///
+	/// A sweep's validity depends on the clock, so a benchmark of it sets the clock. Only the
+	/// runtime knows which pallet holds it.
+	fn set_unix_time(secs: u64);
 }
 
 #[benchmarks]
@@ -177,9 +184,102 @@ mod benches {
 		Ok(())
 	}
 
+	/// Worst case: every block named holds a root, so the call reads each one and removes both its
+	/// entries. A block whose root is already gone costs the read alone.
+	#[benchmark]
+	fn receive_tree_deletions(
+		n: Linear<1, { T::MaxTreeDeletionsPerMessage::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let blocks = record_roots::<T>(n);
+		let origin = T::EnsureClaimsChainOrigin::try_successful_origin()
+			.map_err(|_| BenchmarkError::Stop("failed to construct claims chain origin"))?;
+
+		#[extrinsic_call]
+		_(
+			origin as T::RuntimeOrigin,
+			BoundedVec::try_from(blocks).expect("n is bounded by MaxTreeDeletionsPerMessage"),
+		);
+
+		assert_eq!(NftClaimCreditRoots::<T>::iter().count(), 0);
+		assert_eq!(RootExpiries::<T>::iter().count(), 0);
+
+		Ok(())
+	}
+
+	/// Worst case for `n` removals: the bucket holds exactly `n` roots, so the call pays for every
+	/// removal. Below the limit it also takes the branch that moves the watermark on.
+	///
+	/// A drain that reaches the limit cannot tell that it emptied the bucket. At `n` equal to
+	/// [`Config::MaxRootsPerSweep`] that branch is unreachable, and the fit then charges the call
+	/// for one write it does not make.
+	#[benchmark]
+	fn sweep_expired_roots(
+		n: Linear<0, { T::MaxRootsPerSweep::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let bucket = expiry_bucket(ROOT_TIMESTAMP);
+		record_roots::<T>(n);
+		let origin = RawOrigin::Authorized;
+
+		#[extrinsic_call]
+		_(origin, bucket, BlockNumberFor::<T>::from(0u32));
+
+		assert_eq!(NftClaimCreditRoots::<T>::iter().count(), 0);
+		assert_eq!(RootExpiries::<T>::iter_prefix(bucket).count(), 0);
+		if n < T::MaxRootsPerSweep::get() {
+			assert_eq!(NextRootExpiryBucket::<T>::get(), Some(bucket.saturating_add(1)));
+		}
+
+		Ok(())
+	}
+
+	/// Authorizing a sweep reads the watermark and the clock. Neither grows with any input, so the
+	/// benchmark only needs a bucket whose TTL has run out.
+	#[benchmark]
+	fn authorize_sweep_expired_roots() -> Result<(), BenchmarkError> {
+		let bucket = expiry_bucket(ROOT_TIMESTAMP);
+		record_roots::<T>(1);
+		<T as Config>::BenchmarkHelper::set_unix_time(bucket_deadline(
+			bucket,
+			pallet::Pallet::<T>::root_ttl(),
+		));
+
+		#[block]
+		{
+			pallet::Pallet::<T>::authorize_sweep_expired_roots(TransactionSource::Local, &bucket)
+				.expect("must authorize");
+		}
+
+		Ok(())
+	}
+
 	// No `impl_benchmark_test_suite!`: a mock for this pallet is a mock of the whole game it sits
 	// on, which the game crate already has, so its tests are the ones that run these paths. The
 	// benchmarks themselves are exercised by `frame-omni-bencher` against the runtime.
+}
+
+/// The `timestamp` every benchmarked root commits to. It sits one whole bucket in, so the clock can
+/// reach the bucket's deadline.
+const ROOT_TIMESTAMP: u32 = EXPIRY_BUCKET_SECONDS;
+
+/// Records `n` roots, one per block, each filed under [`ROOT_TIMESTAMP`]'s expiry bucket, and
+/// returns their blocks.
+fn record_roots<T: Config>(n: u32) -> Vec<BlockNumberFor<T>> {
+	let blocks = (1..=n).map(BlockNumberFor::<T>::from).collect::<Vec<_>>();
+
+	for (index, block) in blocks.iter().enumerate() {
+		NftClaimCreditRoots::<T>::insert(
+			block,
+			NftClaimCreditTree {
+				game_index: 7,
+				root: CreditProofNode([index as u8; 32]),
+				leaf_count: 1,
+				timestamp: ROOT_TIMESTAMP,
+			},
+		);
+		pallet::Pallet::<T>::note_root_expiry(*block, ROOT_TIMESTAMP);
+	}
+
+	blocks
 }
 
 /// Records `n` credit trees, one per block, and queues every one of them for delivery.

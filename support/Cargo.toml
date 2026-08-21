@@ -15,6 +15,7 @@ ark-ed-on-bls12-381-bandersnatch-ext = { workspace = true }
 ark-ff = { workspace = true }
 ark-scale = { workspace = true, features = ["ec"] }
 codec = { workspace = true, features = ["derive"] }
+log = { workspace = true }
 scale-info = { workspace = true, features = ["derive"] }
 frame-support = { workspace = true }
 frame-system = { workspace = true }
@@ -47,6 +48,7 @@ std = [
 	"frame-support/std",
 	"frame-system/std",
 	"getrandom?/std",
+	"log/std",
 	"pallet-asset-conversion-tx-payment/std",
 	"pallet-asset-conversion/std",
 	"pallet-asset-tx-payment/std",

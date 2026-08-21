@@ -57,7 +57,13 @@ pub trait WeightInfo {
 	fn receive_credit_trees(n: u32, ) -> Weight;
 	fn claim_account(n: u32, ) -> Weight;
 	fn claim_person(n: u32, ) -> Weight;
+	fn claim_last_account(n: u32, ) -> Weight;
+	fn claim_last_person(n: u32, ) -> Weight;
 	fn set_collection_minter() -> Weight;
+	fn sweep_expired_trees(n: u32, ) -> Weight;
+	fn authorize_sweep_expired_trees() -> Weight;
+	fn send_tree_deletions(n: u32, ) -> Weight;
+	fn authorize_send_tree_deletions() -> Weight;
 }
 
 /// Weights for `indiv_pallet_nft_claims` using the Substrate node and recommended hardware.
@@ -65,8 +71,14 @@ pub struct SubstrateWeight<T>(PhantomData<T>);
 impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	/// Storage: `NftClaims::CreditTrees` (r:32 w:32)
 	/// Proof: `NftClaims::CreditTrees` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `NftClaims::TreeExpiries` (r:0 w:32)
+	/// Proof: `NftClaims::TreeExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
+	/// Storage: `NftClaims::NextExpiryBucket` (r:1 w:1)
+	/// Proof: `NftClaims::NextExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
 	/// Storage: `NftClaims::NextExpectedSequence` (r:1 w:1)
 	/// Proof: `NftClaims::NextExpectedSequence` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 32]`.
 	fn receive_credit_trees(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
@@ -76,10 +88,10 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(13_552_908, 1493)
 			// Standard Error: 2_834
 			.saturating_add(Weight::from_parts(3_008_810, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(1_u64))
+			.saturating_add(T::DbWeight::get().reads(2_u64))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
-			.saturating_add(T::DbWeight::get().writes(1_u64))
-			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 2531).saturating_mul(n.into()))
 	}
 	/// Storage: `NftClaims::CreditTrees` (r:1 w:0)
@@ -167,14 +179,103 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(2_u64))
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
+	/// The storage of `claim_account`, plus removing the fully claimed tree and its expiry entry and
+	/// queueing the deletion the game chain is owed.
+	/// Storage: `NftClaims::TreeExpiries` (r:0 w:1)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// The range of component `n` is `[0, 16]`.
+	fn claim_last_account(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `32000`
+		Weight::from_parts(95_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 32000))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(1_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(8_u64))
+			.saturating_add(T::DbWeight::get().writes(11_u64))
+	}
+	/// The storage of `claim_person`, plus removing the fully claimed tree and its expiry entry and
+	/// queueing the deletion the game chain is owed.
+	/// Storage: `NftClaims::TreeExpiries` (r:0 w:1)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// The range of component `n` is `[0, 16]`.
+	fn claim_last_person(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `32000`
+		Weight::from_parts(105_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 32000))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(1_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(9_u64))
+			.saturating_add(T::DbWeight::get().writes(11_u64))
+	}
+	/// Storage: `NftClaims::TreeExpiries` (r:32 w:32)
+	/// Storage: `NftClaims::CreditTrees` (r:0 w:32)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// Storage: `NftClaims::NextExpiryBucket` (r:0 w:1)
+	/// The range of component `n` is `[0, 32]`.
+	fn sweep_expired_trees(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3000 + n * (2519 ±0)`
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3000))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(4_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 2519).saturating_mul(n.into()))
+	}
+	/// Storage: `NftClaims::NextExpiryBucket` (r:1 w:0)
+	/// Proof: `NftClaims::NextExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	fn authorize_sweep_expired_trees() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `500`
+		Weight::from_parts(5_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 500))
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+	}
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// The range of component `n` is `[0, 64]`.
+	fn send_tree_deletions(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3500`
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3500))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(200_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:0)
+	fn authorize_send_tree_deletions() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3000`
+		Weight::from_parts(5_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3000))
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+	}
 }
 
 // For backwards compatibility and tests.
 impl WeightInfo for () {
 	/// Storage: `NftClaims::CreditTrees` (r:32 w:32)
 	/// Proof: `NftClaims::CreditTrees` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `NftClaims::TreeExpiries` (r:0 w:32)
+	/// Proof: `NftClaims::TreeExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
+	/// Storage: `NftClaims::NextExpiryBucket` (r:1 w:1)
+	/// Proof: `NftClaims::NextExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
 	/// Storage: `NftClaims::NextExpectedSequence` (r:1 w:1)
 	/// Proof: `NftClaims::NextExpectedSequence` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 32]`.
 	fn receive_credit_trees(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
@@ -184,10 +285,10 @@ impl WeightInfo for () {
 		Weight::from_parts(13_552_908, 1493)
 			// Standard Error: 2_834
 			.saturating_add(Weight::from_parts(3_008_810, 0).saturating_mul(n.into()))
-			.saturating_add(RocksDbWeight::get().reads(1_u64))
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
 			.saturating_add(RocksDbWeight::get().reads((1_u64).saturating_mul(n.into())))
-			.saturating_add(RocksDbWeight::get().writes(1_u64))
-			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
+			.saturating_add(RocksDbWeight::get().writes(2_u64))
+			.saturating_add(RocksDbWeight::get().writes((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 2531).saturating_mul(n.into()))
 	}
 	/// Storage: `NftClaims::CreditTrees` (r:1 w:0)
@@ -274,5 +375,88 @@ impl WeightInfo for () {
 		Weight::from_parts(31_068_000, 3712)
 			.saturating_add(RocksDbWeight::get().reads(2_u64))
 			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// The storage of `claim_account`, plus removing the fully claimed tree and its expiry entry and
+	/// queueing the deletion the game chain is owed.
+	/// Storage: `NftClaims::TreeExpiries` (r:0 w:1)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// The range of component `n` is `[0, 16]`.
+	fn claim_last_account(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `32000`
+		Weight::from_parts(95_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 32000))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(1_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(8_u64))
+			.saturating_add(RocksDbWeight::get().writes(11_u64))
+	}
+	/// The storage of `claim_person`, plus removing the fully claimed tree and its expiry entry and
+	/// queueing the deletion the game chain is owed.
+	/// Storage: `NftClaims::TreeExpiries` (r:0 w:1)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// The range of component `n` is `[0, 16]`.
+	fn claim_last_person(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `32000`
+		Weight::from_parts(105_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 32000))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(1_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(9_u64))
+			.saturating_add(RocksDbWeight::get().writes(11_u64))
+	}
+	/// Storage: `NftClaims::TreeExpiries` (r:32 w:32)
+	/// Storage: `NftClaims::CreditTrees` (r:0 w:32)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// Storage: `NftClaims::NextExpiryBucket` (r:0 w:1)
+	/// The range of component `n` is `[0, 32]`.
+	fn sweep_expired_trees(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3000 + n * (2519 ±0)`
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3000))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(4_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+			.saturating_add(RocksDbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(RocksDbWeight::get().writes(2_u64))
+			.saturating_add(RocksDbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 2519).saturating_mul(n.into()))
+	}
+	/// Storage: `NftClaims::NextExpiryBucket` (r:1 w:0)
+	/// Proof: `NftClaims::NextExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	fn authorize_sweep_expired_trees() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `500`
+		Weight::from_parts(5_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 500))
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+	}
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// The range of component `n` is `[0, 64]`.
+	fn send_tree_deletions(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3500`
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3500))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(200_000, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:0)
+	fn authorize_send_tree_deletions() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3000`
+		Weight::from_parts(5_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3000))
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
 	}
 }

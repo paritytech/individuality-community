@@ -5,7 +5,7 @@
 - @agents/extrinsics.md — authorized calls, fee refunds, error reporting, OCW patterns, integrity tests
 - @agents/benchmarking.md — weight functions, benchmarks, worst-case block-budget checks
 - @agents/testing.md — mock helpers, assertions, imports
-- @agents/git.md — branch naming and commit rules
+- @agents/git.md — branch naming, commit rules and describing changes
 - @agents/definition-of-done.md — gates a change must pass to be mergeable
 
 # Tasks

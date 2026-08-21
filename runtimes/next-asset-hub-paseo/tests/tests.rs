@@ -1304,8 +1304,9 @@ mod pgas_fees {
 
 				assert_ok!(Executive::apply_extrinsic(xt).unwrap());
 
-				assert!(indiv_pallet_nft_claims::ClaimedCredits::<Runtime>::contains_key(
-					1u32, leaf
+				assert!(indiv_pallet_nft_claims::Pallet::<Runtime>::leaf_is_claimed(
+					&indiv_pallet_nft_claims::ClaimedLeaves::<Runtime>::get(1u32),
+					0
 				));
 				assert!(pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&mint_to));
 
@@ -1740,6 +1741,266 @@ mod members_subscriber_xcm_budget {
 					"`{name}` worst-case weight {weight:?} exceeds the XCM message budget {budget:?}",
 				);
 			}
+		});
+	}
+}
+
+/// The removal of a credit tree, from the claim that mints its last credit to the message the game
+/// chain receives. These tests run against the runtime's own configuration, not the pallet's mock.
+mod credit_tree_removal {
+	use super::*;
+	use cumulus_primitives_core::XcmpMessageSource;
+	use frame_support::{pallet_prelude::TransactionSource, BoundedVec};
+	use indiv_pallet_nft_claims::{
+		ClaimantKind, CreditTrees, NextExpiryBucket, PendingTreeDeletions, TreeExpiries,
+	};
+	use indiv_support::{
+		credit_trees::{
+			bucket_deadline, credit_leaf, expiry_bucket, AwardBlock, CreditProofNode,
+			CreditTreeDelivery, NftClaimCreditTree,
+		},
+		identity::AccountOrPerson,
+	};
+	use next_asset_hub_paseo_runtime::{
+		Balances, CreditTreeTtl, ExistentialDeposit, NftClaims, Runtime, RuntimeEvent,
+		RuntimeOrigin, Scarcity, System, XcmpQueue,
+	};
+	use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, PEOPLE_ID};
+
+	const BLOCK: AwardBlock = 1;
+	/// A wall-clock time one whole bucket in, so the clock can reach its deadline.
+	const TIMESTAMP: u32 = indiv_support::credit_trees::EXPIRY_BUCKET_SECONDS;
+
+	fn game_chain_origin() -> RuntimeOrigin {
+		cumulus_pallet_xcm::Origin::SiblingParachain(PEOPLE_ID.into()).into()
+	}
+
+	fn set_now(secs: u64) {
+		pallet_timestamp::Now::<Runtime>::put(secs.saturating_mul(1_000));
+	}
+
+	/// Creates the collection and item a claim mints into, and registers it for claims as its owner
+	/// does beforehand. Returns the collection's identifier.
+	fn prepare_collection() -> pallet_scarcity::CollectionId {
+		use frame_support::traits::fungible::Mutate;
+		use indiv_pallet_nft_claims::ItemSelection;
+
+		let owner = AccountId::from([254u8; 32]);
+		Balances::set_balance(&owner, 1_000 * ExistentialDeposit::get());
+		let collection = pallet_scarcity::NextCollectionId::<Runtime>::get();
+		assert_ok!(Scarcity::do_create_collection(owner.clone()));
+		assert_ok!(Scarcity::do_define_item(
+			owner.clone(),
+			collection,
+			pallet_scarcity::Transferability::Transferable,
+			Vec::new()
+		));
+		assert_ok!(NftClaims::set_collection_minter(
+			RuntimeOrigin::signed(owner),
+			collection,
+			Some(ItemSelection::Random)
+		));
+
+		collection
+	}
+
+	/// Delivers a one-leaf tree for [`BLOCK`] that commits to `claimant`'s `credit`, as the game
+	/// chain does. Returns its leaf.
+	fn deliver_tree(
+		claimant: &AccountOrPerson<AccountId>,
+		credit: [u8; 32],
+	) -> indiv_support::credit_trees::NftClaimCreditLeaf {
+		let leaf = credit_leaf(claimant, &credit);
+		let tree = NftClaimCreditTree {
+			game_index: 0,
+			root: CreditProofNode(sp_io::hashing::blake2_256(&leaf.encode())),
+			leaf_count: 1,
+			timestamp: TIMESTAMP,
+		};
+		assert_ok!(NftClaims::receive_credit_trees(
+			game_chain_origin(),
+			indiv_support::credit_trees::CreditTreeBatch {
+				source_time: TIMESTAMP as u64,
+				trees: BoundedVec::truncate_from(vec![CreditTreeDelivery {
+					sequence: Some(0),
+					block: BLOCK,
+					tree,
+				}]),
+			}
+		));
+		leaf
+	}
+
+	fn ext() -> sp_io::TestExternalities {
+		let mut ext = ExtBuilder::<Runtime>::default().with_para_id(ASSET_HUB_ID.into()).build();
+		ext.execute_with(|| {
+			System::set_block_number(1);
+			set_now(TIMESTAMP as u64);
+			open_channel_to_game_chain();
+			// The router refuses a destination whose XCM version it does not know.
+			assert_ok!(PolkadotXcm::force_default_xcm_version(
+				RuntimeOrigin::root(),
+				Some(xcm::latest::VERSION)
+			));
+		});
+		ext
+	}
+
+	/// Opens the egress HRMP channel the deletions travel over. The router checks it before it
+	/// accepts a message.
+	fn open_channel_to_game_chain() {
+		use cumulus_pallet_parachain_system::RelevantMessagingState;
+		use cumulus_primitives_core::relay_chain::AbridgedHrmpChannel;
+
+		let channel = AbridgedHrmpChannel {
+			max_capacity: 1000,
+			max_total_size: 1_000_000,
+			max_message_size: 102_400,
+			msg_count: 0,
+			total_size: 0,
+			mqc_head: None,
+		};
+		RelevantMessagingState::<Runtime>::put(
+			cumulus_pallet_parachain_system::relay_state_snapshot::MessagingStateSnapshot {
+				dmq_mqc_head: Default::default(),
+				relay_dispatch_queue_remaining_capacity: Default::default(),
+				ingress_channels: Vec::new(),
+				egress_channels: vec![(PEOPLE_ID.into(), channel)],
+			},
+		);
+	}
+
+	#[test]
+	fn the_last_claim_of_a_tree_queues_the_game_chains_deletion() {
+		ext().execute_with(|| {
+			let collection = prepare_collection();
+			let claimant = AccountId::from([1u8; 32]);
+			let credit = [7u8; 32];
+			deliver_tree(&AccountOrPerson::Account(claimant.clone()), credit);
+			assert!(TreeExpiries::<Runtime>::contains_key(expiry_bucket(TIMESTAMP), BLOCK));
+
+			assert_ok!(NftClaims::claim(
+				RuntimeOrigin::signed(claimant),
+				ClaimantKind::Account,
+				BLOCK,
+				credit,
+				0,
+				Default::default(),
+				collection,
+				AccountId::from([2u8; 32])
+			));
+
+			assert!(
+				!CreditTrees::<Runtime>::contains_key(BLOCK),
+				"the fully claimed tree is removed"
+			);
+			assert_eq!(PendingTreeDeletions::<Runtime>::get().to_vec(), vec![BLOCK]);
+			// The spent leaf and the expiry entry that gets it removed outlive the tree.
+			assert!(indiv_pallet_nft_claims::Pallet::<Runtime>::leaf_is_claimed(
+				&indiv_pallet_nft_claims::ClaimedLeaves::<Runtime>::get(BLOCK),
+				0
+			));
+			assert!(TreeExpiries::<Runtime>::contains_key(expiry_bucket(TIMESTAMP), BLOCK));
+		});
+	}
+
+	#[test]
+	fn a_tree_past_its_deadline_is_swept_and_its_deletion_queued() {
+		ext().execute_with(|| {
+			let claimant = AccountId::from([1u8; 32]);
+			deliver_tree(&AccountOrPerson::Account(claimant), [7u8; 32]);
+			let bucket = expiry_bucket(TIMESTAMP);
+			assert_eq!(NextExpiryBucket::<Runtime>::get(), Some(bucket));
+
+			// One second before the bucket falls due, the pallet's own check rejects the sweep.
+			set_now(bucket_deadline(bucket, CreditTreeTtl::get()) - 1);
+			assert!(NftClaims::authorize_sweep_expired_trees(TransactionSource::Local, &bucket)
+				.is_err());
+
+			set_now(bucket_deadline(bucket, CreditTreeTtl::get()));
+			assert!(
+				NftClaims::authorize_sweep_expired_trees(TransactionSource::Local, &bucket).is_ok()
+			);
+			assert_ok!(NftClaims::sweep_expired_trees(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				bucket,
+				1
+			));
+
+			assert!(!CreditTrees::<Runtime>::contains_key(BLOCK));
+			assert_eq!(PendingTreeDeletions::<Runtime>::get().to_vec(), vec![BLOCK]);
+			assert_eq!(NextExpiryBucket::<Runtime>::get(), Some(bucket + 1));
+			assert!(System::events().iter().any(|record| matches!(
+				record.event,
+				RuntimeEvent::NftClaims(indiv_pallet_nft_claims::Event::CreditTreesExpired {
+					bucket: swept,
+					count,
+				}) if swept == bucket && count == 1
+			)));
+		});
+	}
+
+	#[test]
+	fn a_tree_delivered_past_its_deadline_is_not_stored() {
+		ext().execute_with(|| {
+			set_now(TIMESTAMP as u64 + CreditTreeTtl::get());
+
+			let claimant = AccountId::from([1u8; 32]);
+			deliver_tree(&AccountOrPerson::Account(claimant), [7u8; 32]);
+
+			assert!(!CreditTrees::<Runtime>::contains_key(BLOCK));
+			assert_eq!(NextExpiryBucket::<Runtime>::get(), None);
+		});
+	}
+
+	/// The message the deletions travel in has to name the dispatchable that receives them on the
+	/// game chain. Only configuration makes the two chains agree, so this compares the encoded
+	/// call against what next-people-paseo's own `RuntimeCall` encodes to.
+	#[test]
+	fn the_deletion_message_names_the_game_chains_dispatchable() {
+		use xcm::latest::{Instruction, Xcm};
+
+		ext().execute_with(|| {
+			let claimant = AccountId::from([1u8; 32]);
+			deliver_tree(&AccountOrPerson::Account(claimant), [7u8; 32]);
+			let bucket = expiry_bucket(TIMESTAMP);
+			set_now(bucket_deadline(bucket, CreditTreeTtl::get()));
+			assert_ok!(NftClaims::sweep_expired_trees(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				bucket,
+				1
+			));
+
+			// The sweep queued the one tree delivered, so `BLOCK` is the front it left.
+			assert_ok!(NftClaims::send_tree_deletions(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				BLOCK,
+				1
+			));
+			assert!(PendingTreeDeletions::<Runtime>::get().is_empty());
+
+			// The call the pallet built, read back out of the message it queued.
+			let encoded = XcmpQueue::take_outbound_messages(usize::MAX, &[])
+				.into_iter()
+				.find_map(|(para, data)| (u32::from(para) == PEOPLE_ID).then_some(data))
+				.expect("a message went to the game chain");
+			// The page carries a one-byte format prefix ahead of the versioned fragment.
+			let mut bytes = &encoded[1..];
+			let message: Xcm<()> = xcm::VersionedXcm::<()>::decode(&mut bytes)
+				.expect("the fragment decodes")
+				.try_into()
+				.expect("the fragment is the latest version");
+			let call = message
+				.0
+				.into_iter()
+				.find_map(|instruction| match instruction {
+					Instruction::Transact { call, .. } => Some(call.into_encoded()),
+					_ => None,
+				})
+				.expect("the XCM carries a Transact");
+
+			let expected = (57u8, 20u8, codec::Compact(1u32), BLOCK).encode();
+			assert_eq!(call, expected, "the pallet and call indices are the game chain's");
 		});
 	}
 }

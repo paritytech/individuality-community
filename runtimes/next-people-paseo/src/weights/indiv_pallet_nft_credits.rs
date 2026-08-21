@@ -160,4 +160,53 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 			.saturating_add(Weight::from_parts(0, 4559))
 			.saturating_add(T::DbWeight::get().reads(1))
 	}
+	/// Storage: `NftCredits::NftClaimCreditRoots` (r:64 w:64)
+	/// Proof: `NftCredits::NftClaimCreditRoots` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::RootExpiries` (r:0 w:64)
+	/// Proof: `NftCredits::RootExpiries` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[1, 64]`.
+	fn receive_tree_deletions(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `1000 + n * (2531 ±0)`
+		Weight::from_parts(6_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 1000))
+			// Standard Error: 6_000
+			.saturating_add(Weight::from_parts(2_500_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 2531).saturating_mul(n.into()))
+	}
+	/// Storage: `NftCredits::RootExpiries` (r:64 w:64)
+	/// Proof: `NftCredits::RootExpiries` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditRoots` (r:0 w:64)
+	/// Proof: `NftCredits::NftClaimCreditRoots` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NextRootExpiryBucket` (r:0 w:1)
+	/// Proof: `NftCredits::NextRootExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[0, 64]`.
+	fn sweep_expired_roots(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3000 + n * (2499 ±0)`
+		Weight::from_parts(8_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3000))
+			// Standard Error: 6_000
+			.saturating_add(Weight::from_parts(2_500_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes(1))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 2499).saturating_mul(n.into()))
+	}
+	/// Storage: `NftCredits::NextRootExpiryBucket` (r:1 w:0)
+	/// Proof: `NftCredits::NextRootExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	fn authorize_sweep_expired_roots() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4`
+		//  Estimated: `500`
+		// Minimum execution time: 4_000_000 picoseconds.
+		Weight::from_parts(4_500_000, 0)
+			.saturating_add(Weight::from_parts(0, 500))
+			.saturating_add(T::DbWeight::get().reads(1))
+	}
 }
