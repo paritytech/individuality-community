@@ -2897,6 +2897,10 @@ pub mod pallet {
 			OldRoots::<T>::get((*identifier, ring_index, BigEndianU32(revision)))
 				.map(|old_root| old_root.archived_at)
 		}
+
+		fn old_root_retention() -> u64 {
+			T::OldRootRetentionDuration::get()
+		}
 	}
 
 	impl<T: Config> MembershipMultiProver for Pallet<T> {

@@ -31,8 +31,10 @@ jobs:
           profile: production
 
       - name: Store srtool digest
+        env:
+          SRTOOL_JSON: ${{ steps.srtool_build.outputs.json }}
         run: |
-          echo '${{ steps.srtool_build.outputs.json }}' | jq > ${{ matrix.name }}_srtool_output.json
+          printf '%s' "$SRTOOL_JSON" | jq > "${{ matrix.name }}_srtool_output.json"
 
       - name: Upload ${{ matrix.name }} wasm
         uses: actions/upload-artifact@v7
