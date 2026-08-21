@@ -28,7 +28,7 @@ use crate::{
 use alloc::{vec, vec::Vec};
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use core::{cell::RefCell, ops::Range};
-use frame_support::{derive_impl, parameter_types};
+use frame_support::{derive_impl, parameter_types, traits::Get};
 use indiv_pallet_alias_accounts::types::AliasAccountInfo;
 use indiv_pallet_members_subscriber::types::NotifierEndpoint;
 use indiv_support::traits::{
@@ -106,7 +106,7 @@ impl Config for IntegrationTest {
 
 parameter_types! {
 	pub const ProofValidityWindow: u64 = 100;
-	pub const CleanupGracePeriod: u64 = 3600;
+	pub const MappingRetention: u64 = 86_400;
 	pub const PeopleLiteRingExp: RingExponent = RingExponent::R2e9;
 	pub const PeopleRingExp: RingExponent = RingExponent::R2e9;
 	pub const RingRootsNotifier: NotifierEndpoint = NotifierEndpoint {
@@ -329,12 +329,14 @@ impl indiv_pallet_alias_accounts::Config for IntegrationTest {
 	type MemberService = MembersSubscriber;
 	type UnixTime = MockUnixTime;
 	type ProofValidityWindow = ProofValidityWindow;
-	type CleanupGracePeriod = CleanupGracePeriod;
+	type MappingRetention = MappingRetention;
 	type PeopleLiteRingExponent = PeopleLiteRingExp;
 	type PeopleRingExponent = PeopleRingExp;
 	type Fungibles = PalletAssets;
 	type PgasAssetId = PgasAssetId;
 	type AliasFee = AliasFee;
+	type OffchainWorkerInterval = ConstU64<1>;
+	type MaxStaleAliasBatch = ConstU32<4>;
 }
 
 fn id_to_account(id: u64) -> AccountId32 {
@@ -551,11 +553,10 @@ fn gas_refund_none_path_cheaper_than_some_path() {
 	});
 }
 
-/// Exercises the `revision ≠ latest` branch of `find_valid_record`: the account is pinned to an
-/// older revision that is still within `CleanupGracePeriod`, so the lookup must return Full.
-/// This is the path that triggers the third storage read (`UnixTime::now()`) in alias-accounts.
+/// Exercises the non-latest-revision branch: the account is pinned to an older revision that
+/// the member service still retains, so the lookup must return Full.
 #[test]
-fn precompile_returns_full_for_stale_but_in_grace_revision() {
+fn precompile_returns_full_for_stale_but_retained_revision() {
 	new_integration_ext().execute_with(|| {
 		// `new_integration_ext` seeded revision 1 at `MOCK_NOW_INIT`. Push revision 2 as the
 		// new latest; with `MaxRecentRootsPerRing = 2` the window is now full.
@@ -566,7 +567,8 @@ fn precompile_returns_full_for_stale_but_in_grace_revision() {
 
 		seed_alias_at_revision(&target, *PEOPLE_IDENTIFIER, ALICE_ALIAS, TEST_CONTEXT, 1);
 
-		// `MOCK_NOW` is still `MOCK_NOW_INIT`, so `now - source_time = 0 < CleanupGracePeriod`.
+		// `MOCK_NOW` is still `MOCK_NOW_INIT`, well within the member service's retention of
+		// revision 1, which runs from revision 2's source time.
 		let info = call_precompile(1, &target, &TEST_CONTEXT);
 		assert_eq!(info.status as u8, FULL_STATUS);
 		assert_eq!(info.contextAlias.0, ALICE_ALIAS);
@@ -835,8 +837,8 @@ fn proof_precompile_returns_none_for_unsupported_status() {
 	});
 }
 
-/// Exercises the expired-revision `None` path: the alias points at a non-latest revision whose
-/// `source_time` is older than `now - CleanupGracePeriod`, so the lookup must return None.
+/// Exercises the expired-revision `None` path: the alias points at a non-latest revision that
+/// the member service no longer retains, so the lookup must return None.
 #[test]
 fn precompile_returns_none_for_alias_at_expired_revision() {
 	new_integration_ext().execute_with(|| {
@@ -847,10 +849,9 @@ fn precompile_returns_none_for_alias_at_expired_revision() {
 
 		seed_alias_at_revision(&target, *PEOPLE_IDENTIFIER, ALICE_ALIAS, TEST_CONTEXT, 1);
 
-		// Advance past the grace period for revision 1: strict `>` in `find_valid_record`.
-		let grace =
-			<IntegrationTest as indiv_pallet_alias_accounts::Config>::CleanupGracePeriod::get();
-		MOCK_NOW.with(|v| *v.borrow_mut() = MOCK_NOW_INIT + grace + 1);
+		// Advance to the retention deadline for revision 1, measured from revision 2's source time.
+		let retention = <<IntegrationTest as indiv_pallet_members_subscriber::Config>::OldRootRetentionDuration as Get<u64>>::get();
+		MOCK_NOW.with(|v| *v.borrow_mut() = MOCK_NOW_INIT + 1 + retention);
 
 		let info = call_precompile(1, &target, &TEST_CONTEXT);
 		assert_eq!(info.status as u8, NO_STATUS);

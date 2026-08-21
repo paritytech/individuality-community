@@ -979,6 +979,78 @@ mod merge_rings_tests {
 			);
 		});
 	}
+
+	#[test]
+	fn merge_rings_fails_for_append_only_collection() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+			create_append_only_collection(identifier, 1);
+
+			generate_members(identifier, 1, 10);
+			while MembersPallet::onboard_members(&identifier, false) == Ok(true) {}
+			assert_eq!(RingKeysStatus::<Test>::get(identifier, 0).total, 10);
+
+			// Move the top ring away so ring 0 is otherwise eligible for a merge.
+			manually_advance_to_ring(&identifier, 2);
+
+			assert_noop!(
+				MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 1, 0),
+				Error::<Test>::CollectionNotFlexible
+			);
+		});
+	}
+
+	#[test]
+	fn merge_rings_does_not_strand_higher_pages_of_append_only_ring() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+			let page_size = FlexibleRingExp::get().ring_capacity();
+
+			// `R2e10` exceeds the page size, so an append-only ring spans several pages. Its
+			// capacity is also more than twice the page size, so a full page 0 stays below the
+			// `max_ring_size / 2` merge threshold.
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::create_collection(
+				MockLocation(1),
+				&identifier,
+				1,
+				RingMode::AppendOnly,
+				RingExponent::R2e10,
+				None
+			));
+			assert!(RingExponent::R2e10.ring_capacity() > 2 * page_size);
+
+			// Onboard enough members for ring 0 to use a second page.
+			generate_members_with_offset(identifier, 1, 255, 0xB1);
+			generate_members_with_offset(identifier, 1, 5, 0xB2);
+			while MembersPallet::onboard_members(&identifier, false) == Ok(true) {}
+
+			assert_eq!(RingKeys::<Test>::get((&identifier, 0u32, 0u32)).len(), page_size as usize);
+			let page_one = RingKeys::<Test>::get((&identifier, 0u32, 1u32));
+			assert!(!page_one.is_empty());
+
+			// Move the top ring away so ring 0 is otherwise eligible for a merge. Ring 3 is
+			// unused, so its page 0 is empty and can hold all of ring 0's page 0.
+			manually_advance_to_ring(&identifier, 2);
+
+			assert_noop!(
+				MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 3, 0),
+				Error::<Test>::CollectionNotFlexible
+			);
+
+			// The members on the higher page keep their ring status and their position.
+			assert_eq!(RingKeys::<Test>::get((&identifier, 0u32, 1u32)), page_one);
+			assert_eq!(
+				RingKeysStatus::<Test>::get(identifier, 0).total,
+				page_size + page_one.len() as u32
+			);
+			for key in &page_one {
+				assert!(matches!(
+					Members::<Test>::get(identifier, key).unwrap(),
+					RingPosition::Included { ring_index: 0, ring_page: 1, .. }
+				));
+			}
+		});
+	}
 }
 
 mod set_onboarding_size_tests {

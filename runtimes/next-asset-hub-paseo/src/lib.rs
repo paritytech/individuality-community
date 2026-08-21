@@ -1724,13 +1724,16 @@ impl frame_support::traits::EnsureOriginWithArg<RuntimeOrigin, RuntimeParameters
 			StakingElection(_) =>
 				EitherOf::<EnsureRoot<AccountId>, StakingAdmin>::ensure_origin(origin.clone()),
 			// technical params, can be controlled by the fellowship voice.
-			Scheduler(_) | MessageQueue(_) => EitherOfDiverse::<
-				EnsureRoot<AccountId>,
-				WhitelistedCaller,
-			>::ensure_origin(origin.clone())
+			Scheduler(_) |
+			MessageQueue(_) |
+			AliasAccounts(
+				dynamic_params::alias_accounts::ParametersKey::StaleAliasSweepInterval(_),
+			) => EitherOfDiverse::<EnsureRoot<AccountId>, WhitelistedCaller>::ensure_origin(
+				origin.clone(),
+			)
 			.map(|_success| ()),
 			// Economic param.
-			AliasAccounts(_) =>
+			AliasAccounts(dynamic_params::alias_accounts::ParametersKey::AliasFee(_)) =>
 				<EnsureRoot<AccountId> as EnsureOrigin<RuntimeOrigin>>::ensure_origin(
 					origin.clone(),
 				)
@@ -1831,6 +1834,14 @@ pub mod dynamic_params {
 		/// `None` closes alias registration.
 		#[codec(index = 0)]
 		pub static AliasFee: Option<Balance> = None;
+
+		/// Blocks between the offchain worker's sweeps for stale alias mappings.
+		///
+		/// One sweep reads every mapping, and a mapping waits out `MappingRetention` before it can
+		/// go at all, so hours between sweeps cost nothing in timeliness. Governance raises this if
+		/// the scan proves expensive on a chain with many mappings.
+		#[codec(index = 1)]
+		pub static StaleAliasSweepInterval: BlockNumber = HOURS;
 	}
 }
 
@@ -2281,12 +2292,24 @@ impl indiv_pallet_alias_accounts::Config for Runtime {
 	type MemberService = MembersSubscriber;
 	type UnixTime = Timestamp;
 	type ProofValidityWindow = ConstU64<300>;
-	type CleanupGracePeriod = ConstU64<3600>;
+	// Above `MembersSubscriber`'s `OldRootRetentionDuration`, which is how long a superseded
+	// revision keeps resolving: a consumer reading the mapping without checking the revision has
+	// this long to stop relying on it.
+	type MappingRetention = ConstU64<{ 90 * 24 * 60 * 60 }>;
 	type PeopleLiteRingExponent = PeopleLiteRingExponent;
 	type PeopleRingExponent = PeopleRingExponent;
 	type Fungibles = Assets;
 	type PgasAssetId = PgasAssetId;
 	type AliasFee = dynamic_params::alias_accounts::AliasFee;
+	// Governance-tunable, and kept non-zero: a zero interval would divide by zero in the sweep.
+	type OffchainWorkerInterval = indiv_support::parameters::AtLeastOne<
+		dynamic_params::alias_accounts::StaleAliasSweepInterval,
+	>;
+	// A sweep verifies every mapping in the batch twice, once in `authorize` and once in the call,
+	// and the pallet's `integrity_test` holds that pair to half of `Normal.max_extrinsic`. Stale
+	// mappings arrive in bursts, one per member of a rebuilt ring, so a batch this size retires a
+	// ring's worth over a few sweeps rather than one mapping per transaction.
+	type MaxStaleAliasBatch = ConstU32<32>;
 }
 
 #[cfg(feature = "runtime-benchmarks")]

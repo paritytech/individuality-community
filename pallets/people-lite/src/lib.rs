@@ -377,6 +377,7 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			let verifier = ensure_signed(origin)?;
 			ensure!(!LitePeople::<T>::contains_key(&candidate), Error::<T>::AlreadyRegistered);
+			ensure!(!AccountToAlias::<T>::contains_key(&candidate), Error::<T>::AccountInUse);
 			ensure!(
 				T::MemberService::member_status(LITE_PEOPLE_MEMBER_IDENTIFIER, &ring_vrf_key)
 					.is_none(),
@@ -460,6 +461,7 @@ pub mod pallet {
 		) -> DispatchResult {
 			let candidate = ensure_signed(origin)?;
 			ensure!(!LitePeople::<T>::contains_key(&candidate), Error::<T>::AlreadyRegistered);
+			ensure!(!AccountToAlias::<T>::contains_key(&candidate), Error::<T>::AccountInUse);
 			ensure!(
 				T::MemberService::member_status(LITE_PEOPLE_MEMBER_IDENTIFIER, &ring_vrf_key)
 					.is_none(),
@@ -557,7 +559,7 @@ pub mod pallet {
 				T::AccountContexts::contains(&rev_ca.ca.context),
 				Error::<T>::InvalidAliasContext
 			);
-			ensure!(!LitePeople::<T>::contains_key(&account), Error::<T>::AccountInUse);
+			ensure!(!LitePeople::<T>::contains_key(&account), Error::<T>::AlreadyRegistered);
 
 			let old_account = AliasToAccount::<T>::get(&rev_ca.ca);
 			let old_rev_ca = old_account.as_ref().and_then(AccountToAlias::<T>::get);
