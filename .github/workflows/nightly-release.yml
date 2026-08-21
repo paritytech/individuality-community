@@ -4,7 +4,9 @@ name: Nightly Release
 # main, so downstream CI can test against the newest runtime features without
 # waiting for a versioned v* release. Pre-releases are marked prerelease and
 # never become the latest release. Each one carries a short diff of the PRs it
-# includes since the previous nightly.
+# includes since the previous nightly. A scheduled run is skipped when main has
+# no new commits since the previous nightly; a workflow_dispatch run always
+# releases.
 on:
   schedule:
     - cron: "3 2 * * *" # nightly, 02:03 UTC
@@ -18,7 +20,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-changes:
+    runs-on: parity-ubuntu
+    outputs:
+      new-commits: ${{ steps.check.outputs.new-commits }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # the previous nightly tag is needed for the commit count
+
+      - name: Count commits since previous nightly
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
+            --json tagName --jq '[.[].tagName | select(startswith("nightly-"))] | first // empty')
+          if [ -z "$PREV" ] || ! git rev-parse -q --verify "$PREV^{commit}" > /dev/null; then
+            echo "no previous nightly tag, releasing"
+            echo "new-commits=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          COUNT=$(git rev-list --count "$PREV..$GITHUB_SHA")
+          echo "$COUNT commits since $PREV"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "new-commits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "new-commits=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-runtimes:
+    needs: [check-changes]
+    if: github.event_name == 'workflow_dispatch' || needs.check-changes.outputs.new-commits == 'true'
     uses: ./.github/workflows/build-runtimes.yml
 
   publish-nightly:
