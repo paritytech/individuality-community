@@ -33,7 +33,7 @@ use frame_system::{
 };
 use indiv_pallet_members_subscriber::types::NotifierEndpoint;
 use indiv_support::traits::{
-	Alias, Identifier, RevisionIndex, RingExponent, RingIndex, PEOPLE_IDENTIFIER,
+	Alias, Identifier, MembershipProver, RevisionIndex, RingExponent, RingIndex, PEOPLE_IDENTIFIER,
 	PEOPLE_LITE_IDENTIFIER,
 };
 use scale_info::TypeInfo;
@@ -69,7 +69,8 @@ parameter_types! {
 	pub const SelfParaId: u32 = 1000;
 	pub const MaxMissingRootsPerCollection: u32 = 255;
 	pub const MaxDeletedRingsPerCollection: u32 = 100;
-	pub const MaxRingRootsPerCollection: u32 = 100;
+	pub const MaxGapScanPerBatch: u32 = 32;
+	pub const PurgePageSize: u32 = 100;
 	pub const MaxCollections: u32 = 10;
 	pub const ReplayCooldownSeconds: u64 = 60;
 	pub const MaxUpdatesPerBatch: u32 = 10;
@@ -310,11 +311,13 @@ pub fn set_mock_ring_root(identifier: Identifier, ring_index: RingIndex) {
 		source_time: now,
 		source_sequence: 0,
 	};
-	let mut roots = indiv_pallet_members_subscriber::RingRoots::<Test>::get(identifier, ring_index)
-		.unwrap_or_default();
-	roots.clear();
+	let mut roots = BoundedVec::new();
 	roots.try_push(record).expect("MaxRecentRootsPerRing > 0");
-	indiv_pallet_members_subscriber::RingRoots::<Test>::insert(identifier, ring_index, roots);
+	indiv_pallet_members_subscriber::Pallet::<Test>::set_current_ring_roots(
+		&identifier,
+		ring_index,
+		roots,
+	);
 	indiv_pallet_members_subscriber::RingCollectionExponents::<Test>::insert(
 		identifier,
 		RingExponent::R2e9,
@@ -372,7 +375,8 @@ impl indiv_pallet_members_subscriber::Config for Test {
 	type SelfParaId = SelfParaId;
 	type MaxMissingRootsPerCollection = MaxMissingRootsPerCollection;
 	type MaxDeletedRingsPerCollection = MaxDeletedRingsPerCollection;
-	type MaxRingRootsPerCollection = MaxRingRootsPerCollection;
+	type MaxGapScanPerBatch = MaxGapScanPerBatch;
+	type PurgePageSize = PurgePageSize;
 	type MaxUpdatesPerBatch = MaxUpdatesPerBatch;
 	type EnsureNotifierOrigin = MockEnsureNotifierOrigin;
 	type EnsureTerminationOrigin = EnsureRoot<u64>;
@@ -421,7 +425,9 @@ impl crate::benchmarking::BenchmarkHelper<Test> for () {
 				})
 				.expect("within MaxRecentRootsPerRing bound");
 		}
-		indiv_pallet_members_subscriber::RingRoots::<Test>::insert(*identifier, ring_index, roots);
+		indiv_pallet_members_subscriber::Pallet::<Test>::set_current_ring_roots(
+			identifier, ring_index, roots,
+		);
 		indiv_pallet_members_subscriber::RingCollectionExponents::<Test>::insert(
 			*identifier,
 			RingExponent::R2e9,
@@ -453,6 +459,7 @@ impl crate::benchmarking::BenchmarkHelper<Test> for () {
 // ========== DotNS Gateway Config ==========
 
 parameter_types! {
+	pub const NetworkSuffix: &'static [u8] = b"paseo";
 	pub const MockMaxContractCallWeight: frame_support::weights::Weight =
 		frame_support::weights::Weight::from_parts(500_000_000, 50_000);
 	pub const MockMaxValiditySeconds: u64 = 600;
@@ -461,6 +468,7 @@ parameter_types! {
 
 impl crate::Config for Test {
 	type WeightInfo = ();
+	type Suffix = NetworkSuffix;
 	type MemberService = MembersSubscriber;
 	type ContractCaller = MockContractCaller;
 	type AddressMapper = TestAddressMapper;
@@ -504,9 +512,11 @@ pub fn valid_proof(alias: Alias, message: &[u8]) -> MockProof {
 }
 
 pub fn people_revision() -> RevisionIndex {
-	indiv_pallet_members_subscriber::RingRoots::<Test>::get(*PEOPLE_IDENTIFIER, 0)
-		.and_then(|roots| roots.last().map(|record| record.revision))
-		.expect("people ring revision seeded in test ext")
+	<indiv_pallet_members_subscriber::Pallet<Test> as MembershipProver>::ring_revision(
+		PEOPLE_IDENTIFIER,
+		0,
+	)
+	.expect("people ring revision seeded in test ext")
 }
 
 pub fn invalid_proof() -> MockProof {

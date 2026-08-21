@@ -50,6 +50,7 @@ use frame_system::{
 	EnsureSigned,
 };
 use indiv_support::{
+	context::{build_product_context, personhood},
 	traits::{AddOnlyPeopleTrait, Alias, Context, CountedMembers, PeopleTrait},
 	tx_priority,
 	weight_budget::OcwWeightBudget,
@@ -67,8 +68,6 @@ pub mod pallet {
 	use super::*;
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
-
-	pub const SCORE_CONTEXT: Context = *b"pop:polkadot.network/score      ";
 
 	/// Upper bound on how many tiers a personhood-threshold schedule may contain.
 	///
@@ -154,6 +153,10 @@ pub mod pallet {
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 
+		/// Network suffix appended to this pallet's product name.
+		#[pallet::constant]
+		type Suffix: Get<&'static [u8]>;
+
 		/// Ensure origin is a person.
 		type EnsurePerson: EnsureOriginWithArg<OriginFor<Self>, Context, Success = Alias>
 			+ CountedMembers;
@@ -219,7 +222,7 @@ pub mod pallet {
 		/// The context used for the proofs required to authenticate as a personal alias in score
 		/// pallet.
 		pub fn score_context() -> Context {
-			SCORE_CONTEXT
+			build_product_context(personhood::PRODUCT_NAME, T::Suffix::get(), personhood::SCORE)
 		}
 	}
 
@@ -1254,7 +1257,7 @@ pub mod pallet {
 			<EnsureSigned<_> as EnsureOrigin<_>>::try_origin(origin)
 				.map(AccountOrPerson::Account)
 				.or_else(|origin| {
-					T::EnsurePerson::try_origin(origin, &SCORE_CONTEXT)
+					T::EnsurePerson::try_origin(origin, &Self::score_context())
 						.map(AccountOrPerson::Person)
 						.map_err(|_| Error::<T>::BadOriginNotPersonNotSigned.into())
 				})
@@ -1264,7 +1267,7 @@ pub mod pallet {
 		pub fn ensure_signed_or_participant_or_person(
 			origin: OriginFor<T>,
 		) -> Result<AccountOrPerson<T::AccountId>, DispatchError> {
-			T::EnsurePerson::try_origin(origin, &SCORE_CONTEXT)
+			T::EnsurePerson::try_origin(origin, &Self::score_context())
 				.map(AccountOrPerson::Person)
 				.or_else(|origin| {
 					Self::ensure_signed_or_participant(origin)
@@ -1290,7 +1293,7 @@ pub mod pallet {
 
 		/// Ensure the origin is a person.
 		pub fn ensure_person(origin: OriginFor<T>) -> Result<Alias, DispatchError> {
-			Ok(T::EnsurePerson::ensure_origin(origin, &SCORE_CONTEXT)?)
+			Ok(T::EnsurePerson::ensure_origin(origin, &Self::score_context())?)
 		}
 
 		/// Validates the authorized transaction for [Self::transition_round].

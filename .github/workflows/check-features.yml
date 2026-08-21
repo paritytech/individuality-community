@@ -1,0 +1,43 @@
+# Various checks to verify the cargo workspace and its crates are correctly configured.
+name: "Workspace features"
+
+on:
+  push:
+    branches: ["main", "release-*"]
+  pull_request:
+  workflow_dispatch:
+
+# cancel previous runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check workspace features
+    runs-on: parity-ubuntu
+    timeout-minutes: 10
+
+    steps:
+      - name: Install build-essential
+        run: sudo apt update && sudo apt install --assume-yes build-essential
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
+        with:
+          toolchain: stable
+          cache: false
+
+      - name: Install Zepter
+        run: cargo install --locked -q zepter && zepter --version
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Dont clone historic commits.
+
+      - name: Check features
+        run: |
+          zepter run check
+          # We will add this to the config file once its stabilized. Just run it in the CI for now.
+          zepter transpose dep lift-to-workspace 'regex:.*'

@@ -58,8 +58,9 @@ pub use types::*;
 pub use weights::WeightInfo;
 
 use frame_support::traits::{OriginTrait, UnixTime};
-use indiv_support::traits::{
-	Alias, Context, MembershipProver, RevisionIndex, RingExponent, RingIndex,
+use indiv_support::{
+	context::{build_product_context, personhood},
+	traits::{Alias, MembershipProver, RevisionIndex, RingExponent, RingIndex},
 };
 use sp_runtime::traits::{IdentifyAccount, Verify};
 use verifiable::GenerateVerifiable;
@@ -72,9 +73,6 @@ pub mod pallet {
 	use frame_support::{dispatch::PostDispatchInfo, pallet_prelude::*};
 	use frame_system::pallet_prelude::*;
 	use sp_core::H160;
-
-	/// Context used for ring proof verification in this pallet.
-	pub const DOTNS_GATEWAY_CONTEXT: Context = *b"pop:polkadot.network/dotns      ";
 
 	/// Message prefix for candidate signature verification during name reservation.
 	pub const RESERVE_MSG_PREFIX: &[u8] = b"pop:dotns-gateway:reserve";
@@ -101,6 +99,10 @@ pub mod pallet {
 	{
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
+
+		/// Network suffix appended to this pallet's product name.
+		#[pallet::constant]
+		type Suffix: Get<&'static [u8]>;
 
 		/// Ring-membership prover used to verify proofs sent to [`Pallet::register_name`].
 		type MemberService: MembershipProver<
@@ -550,15 +552,19 @@ pub mod pallet {
 			message: &[u8],
 		) -> Result<Alias, DispatchError> {
 			let identifier = collection.identifier();
+			let context = Self::proof_context();
 			let validated = T::MemberService::verify_membership(
-				identifier,
-				proof,
-				ring_index,
-				revision,
-				DOTNS_GATEWAY_CONTEXT,
-				message,
+				identifier, proof, ring_index, revision, context, message,
 			)?;
 			Ok(validated.alias)
+		}
+
+		pub fn proof_context() -> indiv_support::traits::Context {
+			build_product_context(
+				personhood::PRODUCT_NAME,
+				T::Suffix::get(),
+				personhood::DOTNS_GATEWAY,
+			)
 		}
 
 		/// Extracts the alias carried by [`Origin::PersonRegistration`], fails for any other

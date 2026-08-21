@@ -268,7 +268,7 @@ runtime-benchmarks = [
 	"sp-staking/runtime-benchmarks",
 	"system-parachains-common/runtime-benchmarks",
 	"system-parachains-constants/runtime-benchmarks",
-	"verifiable/insecure-deterministic-prover",
+	"verifiable/no-std-prover",
 	"xcm-builder/runtime-benchmarks",
 	"xcm-executor/runtime-benchmarks",
 	"xcm-runtime-apis/runtime-benchmarks",

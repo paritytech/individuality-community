@@ -1,0 +1,38 @@
+[
+  {
+    "name": "next-people-paseo",
+    "package": "next-people-paseo-runtime",
+    "path": "runtimes/next-people-paseo",
+    "header": ".github/scripts/cmd/file_header.txt",
+    "bench_features": "runtime-benchmarks",
+    "bench_flags": ""
+  },
+  {
+    "name": "next-asset-hub-paseo",
+    "package": "next-asset-hub-paseo-runtime",
+    "path": "runtimes/next-asset-hub-paseo",
+    "header": ".github/scripts/cmd/file_header.txt",
+    "bench_features": "runtime-benchmarks",
+    "bench_flags": ""
+  },
+  {
+    "name": "pallet-weights",
+    "package": "next-people-paseo-runtime",
+    "path": "pallets",
+    "header": ".github/scripts/cmd/file_header.txt",
+    "template": "templates/frame-weight-template.hbs",
+    "bench_features": "runtime-benchmarks",
+    "bench_flags": "",
+    "is_pallet_weights": true
+  },
+  {
+    "name": "asset-hub-pallet-weights",
+    "package": "next-asset-hub-paseo-runtime",
+    "path": "pallets",
+    "header": ".github/scripts/cmd/file_header.txt",
+    "template": "templates/frame-weight-template.hbs",
+    "bench_features": "runtime-benchmarks",
+    "bench_flags": "",
+    "is_pallet_weights": true
+  }
+]

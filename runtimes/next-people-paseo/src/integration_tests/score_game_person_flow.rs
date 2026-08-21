@@ -36,7 +36,7 @@ fn alias_player_flow() {
 		let amy_stmt_acc = pair_to_account_id(&amy_stmt_acc_pair);
 
 		// Create the alias in SCORE context and the required proof-of-ownership for the game
-		let amy_score_alias = Crypto::alias_in_context(&amy_secret, &SCORE_CONTEXT[..]).unwrap();
+		let amy_score_alias = Crypto::alias_in_context(&amy_secret, &score_context()[..]).unwrap();
 		let amy_stmt_acc_proof_of_ownership: MultiSignature = amy_stmt_acc_pair
 			.sign(
 				&(b"pop:game:stmt_account_for_alias:", amy_score_alias)
@@ -65,7 +65,7 @@ fn alias_player_flow() {
 			account: amy_alias_acc_pair.public().into(),
 			call_valid_at: frame_system::Pallet::<Runtime>::block_number(),
 		};
-		exec_as_alias_with_proof(&amy_secret, SCORE_CONTEXT, set_alias.into());
+		exec_as_alias_with_proof(&amy_secret, score_context(), set_alias.into());
 
 		// ─────────────────────────────────────
 		// Schedule 5 games and 12 payouts. Game #4 (= schedules[3]) carries two airdrop

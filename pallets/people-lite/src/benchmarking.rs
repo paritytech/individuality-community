@@ -69,10 +69,10 @@ mod benches {
 			.expect("ring exponent must convert to capacity");
 		let commitment = CryptoOf::<T>::open(capacity, member, ring_members.into_iter())
 			.map_err(|_| BenchmarkError::Stop("failed to open lite commitment"))?;
-		let (proof, alias) =
-			CryptoOf::<T>::create(commitment, secret, &crate::LITE_PEOPLE_AUTH_CONTEXT[..], msg)
-				.map_err(|_| BenchmarkError::Stop("failed to create lite proof"))?;
-		Ok((proof, ContextualAlias { alias, context: *crate::LITE_PEOPLE_AUTH_CONTEXT }))
+		let context = T::BenchmarkHelper::worst_case_account_context(Pallet::<T>::auth_context());
+		let (proof, alias) = CryptoOf::<T>::create(commitment, secret, &context[..], msg)
+			.map_err(|_| BenchmarkError::Stop("failed to create lite proof"))?;
+		Ok((proof, ContextualAlias { alias, context }))
 	}
 
 	/// Make sure the lite collection exists, whether or not the genesis preset created it.
@@ -209,7 +209,9 @@ mod benches {
 		});
 		let len = call.encode().len();
 		let msg = (0u8, &call).using_encoded(sp_io::hashing::blake2_256);
-		let (proof, _) = create_lite_auth_proof::<T>(&lite_member, &lite_secret, &msg)?;
+		let (proof, contextual_alias) =
+			create_lite_auth_proof::<T>(&lite_member, &lite_secret, &msg)?;
+		let context = contextual_alias.context;
 
 		// Force the replay check to traverse the full `Some(stored) + decode + comparison`
 		// path. Differs from the real `validated_rev_ca` in alias bytes, so equality is
@@ -217,17 +219,13 @@ mod benches {
 		let stale_rev_ca = RevisedContextualAlias {
 			revision: 0,
 			ring: 0,
-			ca: ContextualAlias { alias: [0xffu8; 32], context: *crate::LITE_PEOPLE_AUTH_CONTEXT },
+			ca: ContextualAlias { alias: [0xffu8; 32], context },
 		};
 		crate::AccountToAlias::<T>::insert(&alias_account, &stale_rev_ca);
 
-		let tx_ext =
-			crate::PeopleLiteAuth::<T>::new(Some(crate::PeopleLiteAuthData::AsLiteAliasWithProof(
-				proof,
-				0,
-				0,
-				*crate::LITE_PEOPLE_AUTH_CONTEXT,
-			)));
+		let tx_ext = crate::PeopleLiteAuth::<T>::new(Some(
+			crate::PeopleLiteAuthData::AsLiteAliasWithProof(proof, 0, 0, context),
+		));
 
 		#[block]
 		{
@@ -292,14 +290,16 @@ mod benches {
 		let inherited_implication = (0u8, &call);
 		let msg = (&inherited_implication, "revise", &alias_account, &nonce)
 			.using_encoded(sp_io::hashing::blake2_256);
-		let (proof, _) = create_lite_auth_proof::<T>(&lite_member, &lite_secret, &msg)?;
+		let (proof, contextual_alias) =
+			create_lite_auth_proof::<T>(&lite_member, &lite_secret, &msg)?;
+		let context = contextual_alias.context;
 		let tx_ext = crate::PeopleLiteAuth::<T>::new(Some(
 			crate::PeopleLiteAuthData::AsLiteAliasWithAccountRevised(
 				nonce,
 				proof,
 				0,
 				current_revision,
-				*crate::LITE_PEOPLE_AUTH_CONTEXT,
+				context,
 			),
 		));
 
@@ -398,9 +398,7 @@ mod benches {
 		let sk = CryptoOf::<T>::new_secret([12; 32]);
 		let pk = CryptoOf::<T>::member_from_secret(&sk);
 
-		let mut msg = MSG_PREFIX.to_vec();
-		msg.extend_from_slice(&att.encode());
-		msg.extend_from_slice(&pk.encode());
+		let msg = Pallet::<T>::registration_message(&att, &pk);
 
 		let (_, att_sig) = T::BenchmarkHelper::sign_message(&msg[..]);
 		let proof_of_ownership = CryptoOf::<T>::sign(&sk, &msg[..]).unwrap();
@@ -416,6 +414,28 @@ mod benches {
 		assert!(crate::LitePeopleCollectionCreated::<T>::get());
 		frame_system::Pallet::<T>::assert_last_event(
 			crate::Event::<T>::PersonAttested { candidate: att, verifier: attester }.into(),
+		);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn register_with_fee() -> Result<(), BenchmarkError> {
+		let candidate: T::AccountId = whitelisted_caller();
+		let balance = T::RegistrationFee::get().saturating_add(T::Currency::minimum_balance());
+		assert_ok!(T::Currency::mint_into(&candidate, balance));
+		ensure_lite_collection::<T>()?;
+
+		let secret = CryptoOf::<T>::new_secret([13; 32]);
+		let ring_vrf_key = CryptoOf::<T>::member_from_secret(&secret);
+		let message = Pallet::<T>::registration_message(&candidate, &ring_vrf_key);
+		let proof_of_ownership = CryptoOf::<T>::sign(&secret, &message).unwrap();
+
+		#[extrinsic_call]
+		_(RawOrigin::Signed(candidate.clone()), ring_vrf_key, proof_of_ownership, None);
+
+		assert!(crate::LitePeople::<T>::contains_key(&candidate));
+		frame_system::Pallet::<T>::assert_last_event(
+			crate::Event::<T>::PersonRegisteredWithFee { candidate }.into(),
 		);
 		Ok(())
 	}

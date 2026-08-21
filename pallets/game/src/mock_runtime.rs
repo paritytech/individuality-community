@@ -50,7 +50,7 @@ use frame_system::{
 };
 use indiv_pallet_game::*;
 use indiv_pallet_people::Origin::PersonalAlias;
-use indiv_pallet_score::{AccountOrPerson, SCORE_CONTEXT};
+use indiv_pallet_score::AccountOrPerson;
 use indiv_support::traits::{
 	CommunicationIdentifier, Context, ContextualAlias, RevisedContextualAlias, RingExponent,
 };
@@ -79,6 +79,14 @@ use verifiable::{mock::Mock, Alias, GenerateVerifiable};
 use xcm::v5::Location;
 
 pub(crate) const DEFAULT_IDENTIFIER_KEY: CommunicationIdentifier = [42u8; 65];
+
+pub fn score_context() -> Context {
+	indiv_pallet_score::Pallet::<Test>::score_context()
+}
+
+pub fn lite_people_auth_context() -> Context {
+	indiv_pallet_people_lite::Pallet::<Test>::auth_context()
+}
 
 /// Convert a `u64` to an `AccountId32`.
 pub fn id_to_account(id: u64) -> AccountId32 {
@@ -939,8 +947,11 @@ impl indiv_pallet_people::Config for Test {
 }
 
 parameter_types! {
+	pub const NetworkSuffix: &'static [u8] = b"paseo";
 	pub const LiteCollectionOwner: u32 = 2;
 	pub const LiteRingExp: RingExponent = RingExponent::R2e9;
+	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
+	pub const LitePersonRegistrationFee: u64 = 10;
 }
 
 /// The contexts in which lite people may bind an account, see
@@ -949,12 +960,16 @@ parameter_types! {
 pub struct LiteAccountContexts;
 impl frame_support::traits::Contains<Context> for LiteAccountContexts {
 	fn contains(context: &Context) -> bool {
-		context == &SCORE_CONTEXT
+		context == &score_context()
 	}
 }
 
 impl indiv_pallet_people_lite::Config for Test {
 	type WeightInfo = ();
+	type Currency = Balances;
+	type PotId = LitePeoplePotId;
+	type RegistrationFee = LitePersonRegistrationFee;
+	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;
 	type CollectionOwner = LiteCollectionOwner;
@@ -982,6 +997,7 @@ impl indiv_pallet_score::benchmarking::BenchmarkHelper<Test> for Test {
 
 impl indiv_pallet_score::Config for Test {
 	type WeightInfo = ();
+	type Suffix = NetworkSuffix;
 	type EnsurePerson = indiv_pallet_people::EnsurePersonalAliasInContext<Test>;
 	type ScorePotId = ScorePotId;
 	type Currency = Balances;
@@ -1536,17 +1552,17 @@ pub fn runtime_origin_for_lite_alias_in_context(
 	.into()
 }
 
-/// Create a runtime origin as a lite alias in the context of SCORE_CONTEXT.
+/// Create a runtime origin as a lite alias in the score context.
 pub fn runtime_origin_for_lite_alias(alias: &Alias) -> RuntimeOrigin {
-	runtime_origin_for_lite_alias_in_context(alias, &SCORE_CONTEXT)
+	runtime_origin_for_lite_alias_in_context(alias, &score_context())
 }
 
-/// Create a valid runtime origin as a personal alias in the context of SCORE_CONTEXT.
+/// Create a valid runtime origin as a personal alias in the score context.
 pub fn runtime_origin_for_alias(alias: &Alias) -> RuntimeOrigin {
 	PersonalAlias(RevisedContextualAlias {
 		revision: 0,
 		ring: 0,
-		ca: ContextualAlias { context: SCORE_CONTEXT, alias: *alias },
+		ca: ContextualAlias { context: score_context(), alias: *alias },
 	})
 	.into()
 }

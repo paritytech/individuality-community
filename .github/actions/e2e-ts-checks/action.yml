@@ -1,0 +1,34 @@
+name: Run e2e TypeScript checks
+description: Run the unified e2e TypeScript checks.
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v6
+      with:
+        version: 10.33.4
+        run_install: false
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version-file: e2e/.nvmrc
+        cache: pnpm
+        cache-dependency-path: e2e/pnpm-lock.yaml
+
+    - name: Install e2e dependencies
+      run: pnpm --dir e2e install --frozen-lockfile
+      shell: bash
+
+    - name: Lint e2e tests
+      run: pnpm --dir e2e run lint
+      shell: bash
+
+    - name: Typecheck e2e tests
+      run: pnpm --dir e2e run typecheck
+      shell: bash
+
+    - name: Check e2e formatting
+      run: pnpm --dir e2e run format:check
+      shell: bash

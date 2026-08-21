@@ -1,0 +1,191 @@
+name: "Test all features"
+
+on:
+  push:
+    branches: ["main", "release-*"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+
+# cancel previous runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-all:
+    runs-on: parity-large
+    timeout-minutes: 60
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+
+    steps:
+      - name: Install updates and protobuf-compiler
+        run: sudo apt update && sudo apt install --assume-yes cmake protobuf-compiler build-essential
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Load common env file
+        run: cat .github/env >> $GITHUB_ENV
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
+        with:
+          cache: false
+
+      - name: Install solc and resolc
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+
+          curl -sL --fail -o "$HOME/.local/bin/solc" \
+            "https://github.com/ethereum/solidity/releases/download/v${{ env.SOLC_VERSION }}/solc-static-linux"
+          chmod +x "$HOME/.local/bin/solc"
+          solc --version
+
+          curl -L --fail -o "$HOME/.local/bin/resolc" \
+            "https://github.com/paritytech/revive/releases/download/v${{ env.RESOLC_VERSION }}/resolc-x86_64-unknown-linux-musl"
+          chmod +x "$HOME/.local/bin/resolc"
+          resolc --version
+
+      - name: Install cargo-nextest
+        run: cargo install --locked cargo-nextest --version 0.9.66
+
+      - name: Fetch cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "individuality-cache-tests"
+
+      - name: Integration tests
+        run: cargo nextest run -p integration-tests --release --locked --cargo-quiet
+        env:
+          RUSTFLAGS: "-C debug-assertions -D warnings"
+
+      - name: All tests.
+        run: cargo nextest run --all --release --locked --cargo-quiet
+        env:
+          RUSTFLAGS: "-C debug-assertions -D warnings"
+
+      - name: All tests with all features.
+        run: cargo nextest run --all --release --locked --all-features --cargo-quiet
+        env:
+          RUSTFLAGS: "-C debug-assertions -D warnings"
+          SKIP_WASM_BUILD: 1
+
+  build-e2e-runtime-wasm:
+    runs-on: parity-large-new
+    timeout-minutes: 45
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build e2e runtime WASM artifacts
+        uses: ./.github/actions/build-e2e-runtime-wasm
+
+  e2e-ts-checks:
+    name: ts-checks
+    runs-on: parity-ubuntu
+    timeout-minutes: 20
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run e2e TypeScript checks
+        uses: ./.github/actions/e2e-ts-checks
+
+  test-runtime-upgrade:
+    runs-on: parity-ubuntu
+    timeout-minutes: 45
+    needs:
+      - build-e2e-runtime-wasm
+      - e2e-ts-checks
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run runtime upgrade Chopsticks suite
+        uses: ./.github/actions/test-runtime-upgrade
+  benchmark-runtime:
+    runs-on: parity-large
+    timeout-minutes: 60
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        runtime:
+          - name: next-people-paseo-runtime
+            package: next-people-paseo-runtime
+          - name: next-asset-hub-paseo-runtime
+            package: next-asset-hub-paseo-runtime
+
+    steps:
+      - name: Install updates and protobuf-compiler
+        run: sudo apt update && sudo apt install --assume-yes cmake protobuf-compiler build-essential clang
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Load common env file
+        run: cat .github/env >> $GITHUB_ENV
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
+        with:
+          cache: false
+
+      - name: Install solc and resolc
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+
+          curl -sL --fail -o "$HOME/.local/bin/solc" \
+            "https://github.com/ethereum/solidity/releases/download/v${{ env.SOLC_VERSION }}/solc-static-linux"
+          chmod +x "$HOME/.local/bin/solc"
+          solc --version
+
+          curl -L --fail -o "$HOME/.local/bin/resolc" \
+            "https://github.com/paritytech/revive/releases/download/v${{ env.RESOLC_VERSION }}/resolc-x86_64-unknown-linux-musl"
+          chmod +x "$HOME/.local/bin/resolc"
+          resolc --version
+
+      - name: Fetch cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "individuality-cache-benchmarks"
+
+      - name: Build frame-omni-bencher from source if OMNI_BENCHER_COMMIT is set
+        if: env.OMNI_BENCHER_COMMIT
+        run: |
+          cargo install --git https://github.com/paritytech/polkadot-sdk frame-omni-bencher --profile=production --rev $OMNI_BENCHER_COMMIT --root . -q --locked
+          mv ./bin/frame-omni-bencher .
+          ./frame-omni-bencher --version
+        shell: bash
+
+      - name: Download frame-omni-bencher if OMNI_BENCHER_COMMIT is not set
+        if: env.OMNI_BENCHER_COMMIT == null
+        run: |
+          curl -sL https://github.com/paritytech/polkadot-sdk/releases/download/$OMNI_BENCHER_POLKADOT_RELEASE_VERSION/frame-omni-bencher -o frame-omni-bencher
+          chmod +x ./frame-omni-bencher
+          ./frame-omni-bencher --version
+        shell: bash
+
+      - name: Test benchmarks ${{ matrix.runtime.name }}
+        run: |
+          PACKAGE_NAME=${{ matrix.runtime.package }}
+          RUNTIME_BLOB_NAME=$(echo $PACKAGE_NAME | sed 's/-/_/g').compact.compressed.wasm
+          RUNTIME_BLOB_PATH=./target/release/wbuild/$PACKAGE_NAME/$RUNTIME_BLOB_NAME
+          # build wasm
+          echo "Preparing wasm for benchmarking RUNTIME_BLOB_PATH=$RUNTIME_BLOB_PATH"
+          cargo build --release -p ${{ matrix.runtime.package }} --features=runtime-benchmarks -q --locked
+          # run benchmarking
+          echo "Running benchmarking for RUNTIME_BLOB_PATH=$RUNTIME_BLOB_PATH"
+          ./frame-omni-bencher v1 benchmark pallet --runtime $RUNTIME_BLOB_PATH --all --steps 2 --repeat 1 --min-duration 0 --genesis-builder runtime --exclude-pallets=pallet_xcm_benchmarks::fungible,pallet_xcm_benchmarks::generic,pallet_xcm --quiet
+        env:
+          RUSTFLAGS: "-C debug-assertions -D warnings"

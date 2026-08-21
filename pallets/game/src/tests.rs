@@ -7984,7 +7984,7 @@ mod sign_up_with_account_lite_invite {
 			assert_noop!(
 				invite(runtime_origin_for_lite_alias_in_context(
 					&LITE_ALIAS,
-					indiv_pallet_people_lite::LITE_PEOPLE_AUTH_CONTEXT
+					&lite_people_auth_context()
 				)),
 				DispatchError::BadOrigin
 			);

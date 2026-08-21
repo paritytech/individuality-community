@@ -471,7 +471,8 @@ fn submit_evidence_works() {
 		));
 		assert_eq!(AllocationCount::<Test>::get(), initial_alloc_count);
 
-		// TODO(paritytech/individuality#1121): test probable acceptable path (needs better judge_statement mock)
+		// TODO(paritytech/individuality#1121): test probable acceptable path (needs better
+		// judge_statement mock)
 
 		// Candidate can't call submit_evidence when they've already started
 		advance_by(1);
@@ -682,9 +683,11 @@ fn judged_happy_path_works() {
 				},
 				None => {
 					if *bannable {
-						// TODO(paritytech/individuality#1121): check ticket was burnt (needs better consideration mock)
+						// TODO(paritytech/individuality#1121): check ticket was burnt (needs better
+						// consideration mock)
 					} else {
-						// TODO(paritytech/individuality#1121): check ticket was dropped (needs better consideration mock)
+						// TODO(paritytech/individuality#1121): check ticket was dropped (needs
+						// better consideration mock)
 					}
 				},
 			}
@@ -997,8 +1000,8 @@ fn commit_works() {
 			Some(Candidate::Selected { allocation, .. })
 			if allocation == Allocation::Full
 		));
-		// TODO(paritytech/individuality#1121): assert that correct storage has been allocated when it's implemented
-		// e.g.:
+		// TODO(paritytech/individuality#1121): assert that correct storage has been allocated when
+		// it's implemented e.g.:
 		// assert_eq!(DataStore::<Test>::check_storage(CANDIDATE),
 		// 	(config.full_alloc_len, config.full_alloc_count)
 		// );
@@ -1022,8 +1025,8 @@ fn commit_works() {
 			Some(Candidate::Selected { allocation, .. })
 			if allocation == Allocation::Initial
 		));
-		// TODO(paritytech/individuality#1121): assert that correct storage has been allocated when it's implemented
-		// e.g.:
+		// TODO(paritytech/individuality#1121): assert that correct storage has been allocated when
+		// it's implemented e.g.:
 		// assert_eq!(DataStore::<Test>::check_storage(INITIAL_CANDIDATE),
 		// 	(config.init_alloc_len, config.init_alloc_count)
 		// );
@@ -1083,8 +1086,8 @@ fn commit_works() {
 			Some(Candidate::Selected { allocation, .. })
 			if allocation == Allocation::Initial
 		));
-		// TODO(paritytech/individuality#1121): assert that correct storage has been allocated when it's implemented
-		// e.g.:
+		// TODO(paritytech/individuality#1121): assert that correct storage has been allocated when
+		// it's implemented e.g.:
 		// assert_eq!(DataStore::<Test>::check_storage(CANDIDATE),
 		// 	(config.full_alloc_len, config.full_alloc_count)
 		// );

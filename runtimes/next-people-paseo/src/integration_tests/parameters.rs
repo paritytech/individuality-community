@@ -17,16 +17,16 @@
 use super::*;
 use crate::{
 	parameters::{
-		dynamic_params::{bulletin_storage, statement_storage},
+		dynamic_params::{bulletin_storage, people_airdrops, statement_storage},
 		RuntimeParameters, LONG_TERM_STORAGE_CLEANUP_LIMIT_CAP, STMT_STORE_CLEANUP_LIMIT_CAP,
 	},
 	Parameters,
 };
-use frame_support::{assert_noop, assert_ok, traits::Get};
+use frame_support::{assert_noop, assert_ok, traits::Get, PalletId};
 use indiv_pallet_resources::WeightInfo as ResourcesWeightInfo;
 use indiv_support::{parameters::StatementAllowanceParameter, weight_budget::OcwWeightBudget};
 use sp_keyring::Sr25519Keyring;
-use sp_runtime::DispatchError;
+use sp_runtime::{traits::AccountIdConversion, DispatchError};
 use sp_statement_store::StatementAllowance;
 
 type ResourcesWeights = <Runtime as indiv_pallet_resources::Config>::WeightInfo;
@@ -51,6 +51,14 @@ where
 	set_parameter(RuntimeParameters::BulletinStorage((key, value).into()));
 }
 
+/// Stores `value` for a people-airdrops parameter.
+fn set_people_airdrops_parameter<Key, Value>(key: Key, value: Value)
+where
+	people_airdrops::Parameters: From<(Key, Value)>,
+{
+	set_parameter(RuntimeParameters::PeopleAirdrops((key, value).into()));
+}
+
 #[test]
 fn parameters_default_to_the_initial_configuration() {
 	new_test_ext().execute_with(|| {
@@ -66,6 +74,19 @@ fn parameters_default_to_the_initial_configuration() {
 			<Runtime as indiv_pallet_resources::Config>::NotificationPeriodDuration::get(),
 			24 * 60 * 60
 		);
+	});
+}
+
+#[test]
+fn prize_source_updates_change_what_the_people_airdrops_pallet_reads() {
+	type PrizeSource = <Runtime as indiv_pallet_people_airdrops::Config>::PrizeSource;
+	new_test_ext().execute_with(|| {
+		let default: AccountId = PalletId(*b"pop/pads").into_account_truncating();
+		assert_eq!(PrizeSource::get(), default);
+
+		let updated = Sr25519Keyring::Alice.to_account_id();
+		set_people_airdrops_parameter(people_airdrops::PrizeSource, updated.clone());
+		assert_eq!(PrizeSource::get(), updated);
 	});
 }
 
@@ -308,6 +329,34 @@ fn cleanup_caps_fit_the_ocw_weight_budget() {
 				LONG_TERM_STORAGE_CLEANUP_LIMIT_CAP,
 			)
 			.saturating_add(ResourcesWeights::authorize_clear_expired_long_term_storage_aliases()),
+		);
+	});
+}
+
+#[test]
+fn subscriber_sent_calls_fit_the_xcm_message_budget() {
+	use indiv_pallet_members_notifier::WeightInfo as NotifierWeightInfo;
+
+	type NotifierWeights = <Runtime as indiv_pallet_members_notifier::Config>::WeightInfo;
+
+	new_test_ext().execute_with(|| {
+		let budget = crate::MessageQueueServiceWeight::get();
+
+		let unsubscribe = NotifierWeights::unsubscribe();
+		assert!(
+			unsubscribe.all_lte(budget),
+			"`unsubscribe` worst-case weight {unsubscribe:?} exceeds the XCM message budget {budget:?}",
+		);
+
+		let max_indices =
+			<Runtime as indiv_pallet_members_notifier::Config>::MaxUpdatesPerBatch::get();
+		let request_replay = NotifierWeights::request_replay(max_indices).saturating_add(
+			<Runtime as indiv_pallet_members_notifier::Config>::RequestReplayRemoteWeight::get()
+				.saturating_mul(max_indices.into()),
+		);
+		assert!(
+			request_replay.all_lte(budget),
+			"`request_replay` worst-case weight {request_replay:?} exceeds the XCM message budget {budget:?}",
 		);
 	});
 }

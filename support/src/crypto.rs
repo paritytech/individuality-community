@@ -22,6 +22,9 @@
 //! provided by `sp-crypto-ec-utils`. In `std` builds the original arkworks types are used
 //! directly, unless the `ec-crypto-hostcalls` feature is explicitly enabled.
 
+#[cfg(any(not(feature = "std"), feature = "ec-crypto-hostcalls"))]
+mod host_hooks;
+
 #[cfg(all(feature = "std", not(feature = "ec-crypto-hostcalls")))]
 mod bandersnatch {
 	pub use verifiable::ring::ark_vrf::suites::bandersnatch::BandersnatchSha512Ell2 as BandersnatchSuite;
@@ -55,8 +58,9 @@ mod bandersnatch {
 
 	impl Suite for BandersnatchSuite {
 		const SUITE_ID: &'static [u8] = <Upstream as Suite>::SUITE_ID;
-		// Host-accelerated elliptic curve type backed by `sp-crypto-ec-utils`.
-		type Affine = sp_crypto_ec_utils::ed_on_bls12_381_bandersnatch::EdwardsAffine;
+		// Host-accelerated elliptic curve type backed by the `sp-crypto-ec-utils`
+		// host functions through the local `host_hooks`.
+		type Affine = super::host_hooks::EdwardsAffine;
 		type Transcript = <Upstream as Suite>::Transcript;
 
 		// Bandersnatch hashes to curve with Elligator2, not the trait's try-and-increment
@@ -76,8 +80,9 @@ mod bandersnatch {
 	}
 
 	impl RingSuite for BandersnatchSuite {
-		// Host-accelerated pairing engine backed by `sp-crypto-ec-utils`.
-		type Pairing = sp_crypto_ec_utils::bls12_381::Bls12_381;
+		// Host-accelerated pairing engine backed by the `sp-crypto-ec-utils`
+		// host functions through the local `host_hooks`.
+		type Pairing = super::host_hooks::Bls12_381;
 		const ACCUMULATOR_BASE: AffinePoint = AffinePoint::new_unchecked(
 			<Upstream as RingSuite>::ACCUMULATOR_BASE.x,
 			<Upstream as RingSuite>::ACCUMULATOR_BASE.y,
@@ -191,6 +196,35 @@ pub use verifiable::GenerateVerifiable;
 
 /// The ring VRF verifiable type used across the project.
 pub type BandersnatchVrfVerifiable = verifiable::ring::RingVrfVerifiable<BandersnatchSuite>;
+
+/// Entropy backend for `getrandom` on targets without an OS source, i.e. the
+/// wasm benchmarking runtime. Ring proof blinding draws from it when benchmark
+/// setup creates proofs on-chain (`verifiable/no-std-prover`). Deterministic on
+/// purpose: benchmark runs stay reproducible, and predictable blinding is
+/// harmless outside production. Production runtimes are built without
+/// `runtime-benchmarks` and have no in-runtime prover at all.
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmark_entropy {
+	use core::sync::atomic::{AtomicU64, Ordering};
+
+	getrandom::register_custom_getrandom!(fill_from_counter);
+
+	fn fill_from_counter(dest: &mut [u8]) -> Result<(), getrandom::Error> {
+		static COUNTER: AtomicU64 = AtomicU64::new(0);
+		for chunk in dest.chunks_mut(8) {
+			let word = split_mix_64(COUNTER.fetch_add(1, Ordering::Relaxed));
+			chunk.copy_from_slice(&word.to_le_bytes()[..chunk.len()]);
+		}
+		Ok(())
+	}
+
+	fn split_mix_64(counter: u64) -> u64 {
+		let mut word = counter.wrapping_add(1).wrapping_mul(0x9E3779B97F4A7C15);
+		word = (word ^ (word >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+		word = (word ^ (word >> 27)).wrapping_mul(0x94D049BB133111EB);
+		word ^ (word >> 31)
+	}
+}
 
 #[cfg(test)]
 mod tests {

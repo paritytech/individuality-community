@@ -73,7 +73,8 @@ parameter_types! {
 	pub const SelfParaId: u32 = 1000;
 	pub const MaxMissingRootsPerCollection: u32 = 255;
 	pub const MaxDeletedRingsPerCollection: u32 = 100;
-	pub const MaxRingRootsPerCollection: u32 = 100;
+	pub const MaxGapScanPerBatch: u32 = 32;
+	pub const PurgePageSize: u32 = 100;
 	pub const MaxCollections: u32 = 10;
 	pub const ReplayCooldownSeconds: u64 = 60;
 	pub const MaxUpdatesPerBatch: u32 = 10;
@@ -202,7 +203,8 @@ impl crate::Config for Test {
 	type SelfParaId = SelfParaId;
 	type MaxMissingRootsPerCollection = MaxMissingRootsPerCollection;
 	type MaxDeletedRingsPerCollection = MaxDeletedRingsPerCollection;
-	type MaxRingRootsPerCollection = MaxRingRootsPerCollection;
+	type MaxGapScanPerBatch = MaxGapScanPerBatch;
+	type PurgePageSize = PurgePageSize;
 	type MaxUpdatesPerBatch = MaxUpdatesPerBatch;
 	type EnsureNotifierOrigin = MockEnsureNotifierOrigin;
 	type EnsureTerminationOrigin = frame_system::EnsureRoot<u64>;

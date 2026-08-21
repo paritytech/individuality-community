@@ -63,6 +63,7 @@ use frame_support::{
 	traits::{fungibles, IsSubType, OriginTrait, UnixTime},
 };
 use indiv_support::{
+	context::{build_product_context, personhood},
 	traits::{Alias, Context, MembershipProver},
 	tx_priority,
 	utils::BigEndianU32,
@@ -81,9 +82,6 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 	use fungibles::{Create as _, Inspect as _, Mutate as _};
-
-	/// Prefix for PGAS claim contexts.
-	pub const PGAS_CONTEXT_PREFIX: [u8; 8] = *b"pop:gas:";
 
 	/// Day index type. Uses big-endian encoding so that `Identity`-hashed storage
 	/// iteration yields days in ascending chronological order.
@@ -120,6 +118,10 @@ pub mod pallet {
 	{
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
+
+		/// Network suffix appended to this pallet's product name.
+		#[pallet::constant]
+		type Suffix: Get<&'static [u8]>;
 
 		/// Source of ring-VRF proof verification against subscribed ring roots.
 		///
@@ -452,14 +454,13 @@ pub mod pallet {
 
 		/// Build the context bytes for a PGAS claim.
 		///
-		/// Format: [`PGAS_CONTEXT_PREFIX`] (8 bytes) + day (u32 LE, 4 bytes) + slot_index (u32
-		/// LE, 4 bytes) + zeros (16 bytes).
+		/// The raw suffix contains the allocated family followed by the day and slot index.
 		pub fn build_gas_context(day: u32, slot_index: u32) -> Context {
-			let mut context = [0u8; 32];
-			context[..8].copy_from_slice(&PGAS_CONTEXT_PREFIX);
-			context[8..12].copy_from_slice(&day.to_le_bytes());
-			context[12..16].copy_from_slice(&slot_index.to_le_bytes());
-			context
+			build_product_context(
+				personhood::PRODUCT_NAME,
+				T::Suffix::get(),
+				personhood::pgas_claim(day, slot_index),
+			)
 		}
 
 		/// The current day index derived from [`Config::Clock`].

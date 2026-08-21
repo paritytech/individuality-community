@@ -26,6 +26,7 @@ use frame_support::{
 	parameter_types,
 	storage::with_transaction,
 	traits::{OffchainWorker, OriginTrait},
+	PalletId,
 };
 use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateBare, CreateTransaction, CreateTransactionBase},
@@ -49,6 +50,7 @@ pub use verifiable::{mock::Mock as MockCrypto, GenerateVerifiable};
 
 pub type Header = sp_runtime::generic::Header<u64, sp_runtime::traits::BlakeTwo256>;
 pub type TransactionExtension = (AuthorizeCall<Test>,);
+
 pub type Block = sp_runtime::generic::Block<Header, Extrinsic>;
 pub type Extrinsic = sp_runtime::generic::UncheckedExtrinsic<
 	AccountId32,
@@ -141,7 +143,7 @@ pub fn lite_person_origin(account: u64) -> RuntimeOrigin {
 
 /// Helper to mock the Person origin
 pub fn person_origin_for(alias_id: u64, ring: RingIndex, revision: u32) -> RuntimeOrigin {
-	person_origin_for_context(alias_id, RESOURCES_CONTEXT, ring, revision)
+	person_origin_for_context(alias_id, Resources::resources_context(), ring, revision)
 }
 
 /// Helper to mock the Person origin in a specific context.
@@ -246,6 +248,7 @@ frame_support::construct_runtime!(
 		Resources: crate,
 		People: indiv_pallet_people,
 		PeopleLite: indiv_pallet_people_lite,
+		Balances: pallet_balances,
 	}
 );
 
@@ -268,13 +271,18 @@ impl frame_system::Config for Test {
 	type BlockHashCount = ConstUint<250>;
 	type Version = ();
 	type PalletInfo = PalletInfo;
-	type AccountData = ();
+	type AccountData = pallet_balances::AccountData<u64>;
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
 	type SS58Prefix = ConstUint<42>;
 	type OnSetCode = ();
 	type MaxConsumers = frame_support::traits::ConstU32<16>;
+}
+
+#[derive_impl(pallet_balances::config_preludes::TestDefaultConfig)]
+impl pallet_balances::Config for Test {
+	type AccountStore = System;
 }
 
 impl indiv_pallet_chunks_manager::Config for Test {
@@ -416,6 +424,10 @@ impl indiv_pallet_people_lite::BenchmarkHelper<AccountId32, AccountAuthority> fo
 
 impl indiv_pallet_people_lite::Config for Test {
 	type WeightInfo = ();
+	type Currency = Balances;
+	type PotId = LitePeoplePotId;
+	type RegistrationFee = LitePersonRegistrationFee;
+	type Suffix = NetworkSuffix;
 	type AccountContexts = ();
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;
@@ -443,6 +455,9 @@ impl indiv_pallet_people::Config for Test {
 }
 
 parameter_types! {
+	pub storage LitePersonRegistrationFee: u64 = 10;
+	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
+	pub const NetworkSuffix: &'static [u8] = b"paseo";
 	pub LitePersonStatementLimit: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
 		max_size: 4 * 1024, // 4 KiB
 		max_count: 10,
@@ -499,6 +514,7 @@ impl benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 
 impl Config for Test {
 	type WeightInfo = ();
+	type Suffix = NetworkSuffix;
 	type MemberService = Members;
 	type MinUsernameLength = ConstU32<7>;
 	type PersonAuthDuration = ConstU32<20>;

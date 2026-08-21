@@ -116,7 +116,8 @@ parameter_types! {
 	pub const SelfParaId: u32 = 1000;
 	pub const MaxMissingRootsPerCollection: u32 = 255;
 	pub const MaxDeletedRingsPerCollection: u32 = 100;
-	pub const MaxRingRootsPerCollection: u32 = 100;
+	pub const MaxGapScanPerBatch: u32 = 32;
+	pub const PurgePageSize: u32 = 100;
 	pub const MaxCollections: u32 = 10;
 	pub const ReplayCooldownSeconds: u64 = 60;
 	pub const MaxUpdatesPerBatch: u32 = 10;
@@ -303,7 +304,8 @@ impl indiv_pallet_members_subscriber::Config for IntegrationTest {
 	type SelfParaId = SelfParaId;
 	type MaxMissingRootsPerCollection = MaxMissingRootsPerCollection;
 	type MaxDeletedRingsPerCollection = MaxDeletedRingsPerCollection;
-	type MaxRingRootsPerCollection = MaxRingRootsPerCollection;
+	type MaxGapScanPerBatch = MaxGapScanPerBatch;
+	type PurgePageSize = PurgePageSize;
 	type MaxUpdatesPerBatch = MaxUpdatesPerBatch;
 	type EnsureNotifierOrigin = MockEnsureNotifierOrigin;
 	type EnsureTerminationOrigin = frame_system::EnsureRoot<AccountId32>;
@@ -319,6 +321,7 @@ impl indiv_pallet_members_subscriber::Config for IntegrationTest {
 
 parameter_types! {
 	pub PgasAssetId: u32 = 1;
+	pub storage AliasFee: Option<u64> = None;
 }
 
 impl indiv_pallet_alias_accounts::Config for IntegrationTest {
@@ -331,7 +334,7 @@ impl indiv_pallet_alias_accounts::Config for IntegrationTest {
 	type PeopleRingExponent = PeopleRingExp;
 	type Fungibles = PalletAssets;
 	type PgasAssetId = PgasAssetId;
-	type FeeManagerOrigin = frame_system::EnsureRoot<AccountId32>;
+	type AliasFee = AliasFee;
 }
 
 fn id_to_account(id: u64) -> AccountId32 {
@@ -348,12 +351,13 @@ fn seed_ring_root(collection: Identifier, ring: RingIndex, revision: RevisionInd
 		source_time: now,
 		source_sequence: 0,
 	};
-	let mut roots =
-		indiv_pallet_members_subscriber::RingRoots::<IntegrationTest>::get(collection, ring)
-			.unwrap_or_default();
-	roots.clear();
+	let mut roots = frame_support::BoundedVec::new();
 	roots.try_push(record).expect("MaxRecentRootsPerRing > 0");
-	indiv_pallet_members_subscriber::RingRoots::<IntegrationTest>::insert(collection, ring, roots);
+	indiv_pallet_members_subscriber::Pallet::<IntegrationTest>::set_current_ring_roots(
+		&collection,
+		ring,
+		roots,
+	);
 }
 
 fn seed_alias(account: &AccountId32, collection: Identifier, alias: Alias, context: Context) {
@@ -387,11 +391,17 @@ fn push_ring_root(
 		source_time,
 		source_sequence: 0,
 	};
-	let mut roots =
-		indiv_pallet_members_subscriber::RingRoots::<IntegrationTest>::get(collection, ring)
-			.unwrap_or_default();
+	let mut roots = indiv_pallet_members_subscriber::Pallet::<IntegrationTest>::current_ring_roots(
+		&collection,
+		ring,
+	)
+	.unwrap_or_default();
 	roots.try_push(record).expect("MaxRecentRootsPerRing capacity exceeded");
-	indiv_pallet_members_subscriber::RingRoots::<IntegrationTest>::insert(collection, ring, roots);
+	indiv_pallet_members_subscriber::Pallet::<IntegrationTest>::set_current_ring_roots(
+		&collection,
+		ring,
+		roots,
+	);
 }
 
 const MOCK_NOW_INIT: u64 = 1_700_000_000;

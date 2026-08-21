@@ -233,6 +233,11 @@ pub mod pallet {
 			slot: BigEndianU256,
 			account_id: T::AccountId,
 		},
+		SlotRegistered {
+			event_id: EventId,
+			slot: BigEndianU256,
+			entry: RegistrationEntryOf<T>,
+		},
 		RegistrationClosed {
 			event_id: EventId,
 			effective_winners: u32,
@@ -1426,6 +1431,18 @@ pub mod pallet {
 			Ok(())
 		}
 
+		/// Register with a caller-supplied entropy slot; slot derivation rules are described in
+		/// [`crate::types::Airdrop::participate_with_slot`].
+		pub(crate) fn do_participate_with_slot(
+			event_id: EventId,
+			slot: BigEndianU256,
+			entry: RegistrationEntryOf<T>,
+		) -> DispatchResult {
+			Self::register_slot(event_id, slot, entry.clone())?;
+			Self::deposit_event(Event::<T>::SlotRegistered { event_id, slot, entry });
+			Ok(())
+		}
+
 		/// Claim a participant's winning ticket in the account of their choice.
 		pub(crate) fn do_claim(
 			event_id: EventId,
@@ -1657,6 +1674,14 @@ pub mod pallet {
 			signature: VrfSignature,
 		) -> DispatchResult {
 			Self::do_participate_with_account(account_id, event_id, signature)
+		}
+
+		fn participate_with_slot(
+			event_id: EventId,
+			slot: BigEndianU256,
+			entry: RegistrationEntryOf<T>,
+		) -> DispatchResult {
+			Self::do_participate_with_slot(event_id, slot, entry)
 		}
 
 		fn claim(
