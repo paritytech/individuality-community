@@ -559,7 +559,7 @@ pub mod pallet {
 				T::AccountContexts::contains(&rev_ca.ca.context),
 				Error::<T>::InvalidAliasContext
 			);
-			ensure!(!LitePeople::<T>::contains_key(&account), Error::<T>::AccountInUse);
+			ensure!(!LitePeople::<T>::contains_key(&account), Error::<T>::AlreadyRegistered);
 
 			let old_account = AliasToAccount::<T>::get(&rev_ca.ca);
 			let old_rev_ca = old_account.as_ref().and_then(AccountToAlias::<T>::get);

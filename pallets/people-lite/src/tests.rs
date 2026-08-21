@@ -1315,7 +1315,7 @@ fn set_alias_account_rejects_canonical_lite_account_as_alias_account() {
 		let err = exec_as_lite_alias_with_proof_tx(call, proof, 0)
 			.expect_err("canonical lite account must not enter alias storage");
 
-		assert_eq!(err.unwrap_dispatch().error, crate::Error::<Test>::AccountInUse.into());
+		assert_eq!(err.unwrap_dispatch().error, crate::Error::<Test>::AlreadyRegistered.into());
 		assert!(AccountToAlias::<Test>::get(lite_account).is_none());
 		assert!(AliasToAccount::<Test>::iter().next().is_none());
 	});
