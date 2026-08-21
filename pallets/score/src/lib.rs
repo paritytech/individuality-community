@@ -1107,12 +1107,32 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Offboard a participant, e.g. voluntarily leaves or is kicked out for inactivity.
+		/// Offboard a participant and release their unclaimed credit to the score pot.
+		///
+		/// The participant forfeits their credit. A failed release is logged and does not keep a
+		/// stale participant entry.
 		pub fn offboard(who: &AccountOrPerson<T::AccountId>) {
+			if let Some(score) = Participants::<T>::take(who) {
+				if !score.credit.is_zero() {
+					let pot = Self::score_pot_id();
+					match T::Currency::release(
+						&HoldReason::Credit.into(),
+						&pot,
+						score.credit,
+						Precision::Exact,
+					) {
+						Ok(released) => defensive_assert!(released == score.credit),
+						Err(error) => log::error!(
+							target: LOG_TARGET,
+							"Failed to release credit hold while offboarding participant: {error:?}."
+						),
+					}
+				}
+			}
+
 			if let AccountOrPerson::Account(account) = who {
 				frame_system::Pallet::<T>::dec_sufficients(account);
 			}
-			Participants::<T>::remove(who);
 		}
 
 		/// Start a new attendance report session.
