@@ -21,14 +21,14 @@ use frame_system::RawOrigin;
 #[test]
 fn genesis_config_sets_network_suffix() {
 	new_test_ext_with_suffix(b"test").execute_with(|| {
-		assert_eq!(NetworkSuffix::get(), b"test");
+		assert_eq!(NetworkSuffix::get().as_slice(), b"test");
 	});
 }
 
 #[test]
 fn default_genesis_uses_runtime_default() {
 	new_test_ext().execute_with(|| {
-		assert_eq!(NetworkSuffix::get(), b"paseo");
+		assert_eq!(NetworkSuffix::get().as_slice(), b"paseo");
 	});
 }
 
@@ -39,7 +39,7 @@ fn root_can_override_network_suffix() {
 			RuntimeOrigin::root(),
 			b"test".to_vec().try_into().unwrap()
 		));
-		assert_eq!(NetworkSuffix::get(), b"test");
+		assert_eq!(NetworkSuffix::get().as_slice(), b"test");
 		System::assert_last_event(
 			Event::NetworkSuffixSet {
 				old: b"paseo".to_vec().try_into().unwrap(),

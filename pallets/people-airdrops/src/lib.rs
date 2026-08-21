@@ -38,8 +38,6 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
-
 pub mod weights;
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -92,7 +90,7 @@ pub mod pallet {
 		type WeightInfo: WeightInfo;
 
 		/// Runtime-wide network suffix used to derive product contexts.
-		type Suffix: Get<Vec<u8>>;
+		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
 
 		/// Person origin resolving to the caller's alias in the supplied context. Only people in
 		/// the People collection can produce it, which is the pallet's entire airdrop eligibility

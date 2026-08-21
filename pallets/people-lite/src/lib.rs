@@ -123,7 +123,7 @@ pub mod pallet {
 		type RegistrationFee: Get<BalanceOf<Self>>;
 
 		/// Runtime-wide network suffix used to derive product contexts.
-		type Suffix: Get<Vec<u8>>;
+		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
 
 		/// The origin that can issue quotas to verifiers.
 		type AttestationAllowanceManager: EnsureOrigin<Self::RuntimeOrigin>;

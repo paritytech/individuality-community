@@ -1378,13 +1378,12 @@ parameter_types! {
 }
 
 parameter_types! {
-	pub DefaultNetworkSuffix: frame_support::BoundedVec<u8, ConstU32<16>> =
+	pub DefaultNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
 		b"paseo".to_vec().try_into().expect("default network suffix fits");
 }
 
 impl indiv_pallet_network_suffix::Config for Runtime {
 	type UpdateOrigin = EnsureRoot<Self::AccountId>;
-	type MaxSuffixLength = ConstU32<16>;
 	type DefaultSuffix = DefaultNetworkSuffix;
 	type WeightInfo = NetworkSuffixWeightInfo;
 }

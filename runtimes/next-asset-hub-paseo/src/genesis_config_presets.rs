@@ -88,6 +88,7 @@ fn asset_hub_paseo_genesis(
 		},
 		"networkSuffix": NetworkSuffixConfig {
 			network_suffix: b"paseo".to_vec().try_into().expect("network suffix fits"),
+			..Default::default()
 		},
 	"staking": {
 		"validatorCount": 100,

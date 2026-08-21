@@ -15,6 +15,8 @@
 // limitations under the License.
 
 //! Stores the network suffix used to derive product contexts.
+//!
+//! This pallet is intended for test networks and must not be used in production.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -32,8 +34,8 @@ mod tests;
 pub use pallet::*;
 pub use weights::WeightInfo;
 
-use alloc::vec::Vec;
 use frame_support::{pallet_prelude::*, traits::Get};
+use indiv_support::context::ProductContextNetworkSuffix;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -48,20 +50,16 @@ pub mod pallet {
 		/// Origin allowed to update the suffix.
 		type UpdateOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
-		/// Maximum network suffix length.
-		#[pallet::constant]
-		type MaxSuffixLength: Get<u32>;
-
 		/// Suffix used when storage has not been initialized, including runtime upgrades from a
 		/// version without this pallet.
-		type DefaultSuffix: Get<BoundedVec<u8, Self::MaxSuffixLength>>;
+		type DefaultSuffix: Get<ProductContextNetworkSuffix>;
 
 		/// Weight information for this pallet.
 		type WeightInfo: WeightInfo;
 	}
 
 	#[pallet::type_value]
-	pub fn DefaultNetworkSuffix<T: Config>() -> BoundedVec<u8, T::MaxSuffixLength> {
+	pub fn DefaultNetworkSuffix<T: Config>() -> ProductContextNetworkSuffix {
 		T::DefaultSuffix::get()
 	}
 
@@ -69,16 +67,13 @@ pub mod pallet {
 	#[pallet::storage]
 	#[pallet::getter(fn network_suffix)]
 	pub type NetworkSuffix<T: Config> =
-		StorageValue<_, BoundedVec<u8, T::MaxSuffixLength>, ValueQuery, DefaultNetworkSuffix<T>>;
+		StorageValue<_, ProductContextNetworkSuffix, ValueQuery, DefaultNetworkSuffix<T>>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
 		/// The network suffix changed.
-		NetworkSuffixSet {
-			old: BoundedVec<u8, T::MaxSuffixLength>,
-			new: BoundedVec<u8, T::MaxSuffixLength>,
-		},
+		NetworkSuffixSet { old: ProductContextNetworkSuffix, new: ProductContextNetworkSuffix },
 	}
 
 	#[pallet::error]
@@ -89,12 +84,14 @@ pub mod pallet {
 
 	#[pallet::genesis_config]
 	pub struct GenesisConfig<T: Config> {
-		pub network_suffix: BoundedVec<u8, T::MaxSuffixLength>,
+		pub network_suffix: ProductContextNetworkSuffix,
+		#[serde(skip)]
+		pub _phantom: PhantomData<T>,
 	}
 
 	impl<T: Config> Default for GenesisConfig<T> {
 		fn default() -> Self {
-			Self { network_suffix: T::DefaultSuffix::get() }
+			Self { network_suffix: T::DefaultSuffix::get(), _phantom: PhantomData }
 		}
 	}
 
@@ -113,7 +110,7 @@ pub mod pallet {
 		#[pallet::weight(T::WeightInfo::set_network_suffix(network_suffix.len() as u32))]
 		pub fn set_network_suffix(
 			origin: OriginFor<T>,
-			network_suffix: BoundedVec<u8, T::MaxSuffixLength>,
+			network_suffix: ProductContextNetworkSuffix,
 		) -> DispatchResult {
 			T::UpdateOrigin::ensure_origin(origin)?;
 			ensure!(!network_suffix.is_empty(), Error::<T>::EmptySuffix);
@@ -126,8 +123,8 @@ pub mod pallet {
 	}
 }
 
-impl<T: Config> Get<Vec<u8>> for Pallet<T> {
-	fn get() -> Vec<u8> {
-		NetworkSuffix::<T>::get().into_inner()
+impl<T: Config> Get<ProductContextNetworkSuffix> for Pallet<T> {
+	fn get() -> ProductContextNetworkSuffix {
+		NetworkSuffix::<T>::get()
 	}
 }

@@ -319,7 +319,8 @@ impl EnsureOriginWithArg<RuntimeOrigin, Context> for EnsurePersonMock {
 
 parameter_types! {
 	pub const PrizeSourceAccount: u64 = 7;
-	pub NetworkSuffix: Vec<u8> = b"paseo".to_vec();
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 }
 
 impl crate::Config for Test {

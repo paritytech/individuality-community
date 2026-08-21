@@ -154,7 +154,8 @@ impl crate::Config for Test {
 parameter_types! {
 	pub storage LitePersonRegistrationFee: u64 = 10;
 	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
-	pub NetworkSuffix: Vec<u8> = b"paseo".to_vec();
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 	pub const LiteCollectionOwnerConst: u32 = 42;
 	pub const LiteRingExponentConst: RingExponent = RingExponent::R2e9;
 	pub const LiteOnboardingSizeConst: u32 = 7;

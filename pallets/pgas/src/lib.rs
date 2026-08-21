@@ -43,8 +43,6 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
-
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
@@ -122,7 +120,7 @@ pub mod pallet {
 		type WeightInfo: WeightInfo;
 
 		/// Runtime-wide network suffix used to derive product contexts.
-		type Suffix: Get<Vec<u8>>;
+		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
 
 		/// Source of ring-VRF proof verification against subscribed ring roots.
 		///

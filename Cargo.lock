@@ -4883,6 +4883,7 @@ dependencies = [
  "frame-benchmarking",
  "frame-support 47.0.0",
  "frame-system 47.0.0",
+ "indiv-support",
  "parity-scale-codec",
  "scale-info",
  "sp-io 46.0.0",

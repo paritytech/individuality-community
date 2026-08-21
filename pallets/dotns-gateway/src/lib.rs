@@ -101,7 +101,7 @@ pub mod pallet {
 		type WeightInfo: WeightInfo;
 
 		/// Runtime-wide network suffix used to derive product contexts.
-		type Suffix: Get<Vec<u8>>;
+		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
 
 		/// Ring-membership prover used to verify proofs sent to [`Pallet::register_name`].
 		type MemberService: MembershipProver<

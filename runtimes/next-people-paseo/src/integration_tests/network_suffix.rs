@@ -16,7 +16,7 @@
 
 use super::*;
 use frame_support::{assert_ok, traits::Get};
-use indiv_support::context::{build_product_context, personhood};
+use indiv_support::context::{build_product_context, personhood, ProductContextNetworkSuffix};
 
 #[test]
 fn genesis_config_selects_network_suffix() {
@@ -26,7 +26,7 @@ fn genesis_config_selects_network_suffix() {
 		config.build_storage().expect("runtime genesis storage builds").into();
 
 	ext.execute_with(|| {
-		assert_eq!(<NetworkSuffix as Get<Vec<u8>>>::get(), b"test");
+		assert_eq!(<NetworkSuffix as Get<ProductContextNetworkSuffix>>::get().as_slice(), b"test");
 		assert_eq!(
 			Score::score_context(),
 			build_product_context(personhood::PRODUCT_NAME, b"test", personhood::SCORE),
@@ -42,7 +42,7 @@ fn root_suffix_override_updates_all_people_product_contexts() {
 			b"test".to_vec().try_into().unwrap(),
 		));
 
-		assert_eq!(<NetworkSuffix as Get<Vec<u8>>>::get(), b"test");
+		assert_eq!(<NetworkSuffix as Get<ProductContextNetworkSuffix>>::get().as_slice(), b"test");
 		assert_eq!(
 			Score::score_context(),
 			build_product_context(personhood::PRODUCT_NAME, b"test", personhood::SCORE),

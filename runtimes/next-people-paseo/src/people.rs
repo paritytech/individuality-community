@@ -18,8 +18,10 @@ use super::*;
 use assets_common::local_and_foreign_assets::TargetFromLeft;
 use codec::{Decode, Encode};
 use cumulus_primitives_core::Junction::{GeneralIndex, PalletInstance, Parachain};
+#[cfg(feature = "runtime-benchmarks")]
+use frame_support::BoundedVec;
 use frame_support::{
-	pallet_prelude::{BoundedVec, PhantomData},
+	pallet_prelude::PhantomData,
 	parameter_types,
 	traits::{
 		fungible::{HoldConsideration, ItemOf},
@@ -64,7 +66,7 @@ use crate::{
 pub const EXTERNAL_ASSET_ID: u32 = 50_000_413;
 
 parameter_types! {
-	pub DefaultNetworkSuffix: BoundedVec<u8, ConstU32<16>> =
+	pub DefaultNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
 		b"paseo".to_vec().try_into().expect("default network suffix fits");
 	pub const StaleAliasCleanupInterval: BlockNumber = 5 * MINUTES;
 	pub ExternalAssetLocation: Location = Location::new(
@@ -75,7 +77,6 @@ parameter_types! {
 
 impl indiv_pallet_network_suffix::Config for Runtime {
 	type UpdateOrigin = EnsureRoot<Self::AccountId>;
-	type MaxSuffixLength = ConstU32<16>;
 	type DefaultSuffix = DefaultNetworkSuffix;
 	type WeightInfo = NetworkSuffixWeightInfo;
 }

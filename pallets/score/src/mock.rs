@@ -217,7 +217,8 @@ impl indiv_pallet_people::Config for Test {
 }
 
 parameter_types! {
-	pub NetworkSuffix: Vec<u8> = b"paseo".to_vec();
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 }
 
 impl crate::Config for Test {

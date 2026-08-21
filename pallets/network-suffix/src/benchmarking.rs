@@ -26,8 +26,8 @@ mod benchmarks {
 	use super::*;
 
 	#[benchmark]
-	fn set_network_suffix(n: Linear<1, { T::MaxSuffixLength::get() }>) {
-		let suffix: BoundedVec<u8, T::MaxSuffixLength> = vec![b'x'; n as usize]
+	fn set_network_suffix(n: Linear<1, { indiv_support::context::MAX_NETWORK_SUFFIX_LENGTH }>) {
+		let suffix: ProductContextNetworkSuffix = vec![b'x'; n as usize]
 			.try_into()
 			.expect("benchmark length is within the configured bound");
 

@@ -14,7 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use frame_support::{derive_impl, parameter_types, traits::ConstU32, BoundedVec};
+use frame_support::{derive_impl, parameter_types};
+use indiv_support::context::ProductContextNetworkSuffix;
 use sp_runtime::BuildStorage;
 
 pub type Block = frame_system::mocking::MockBlock<Test>;
@@ -32,13 +33,12 @@ impl frame_system::Config for Test {
 }
 
 parameter_types! {
-	pub DefaultNetworkSuffix: BoundedVec<u8, ConstU32<16>> =
+	pub DefaultNetworkSuffix: ProductContextNetworkSuffix =
 		b"paseo".to_vec().try_into().expect("default suffix fits");
 }
 
 impl crate::Config for Test {
 	type UpdateOrigin = frame_system::EnsureRoot<Self::AccountId>;
-	type MaxSuffixLength = ConstU32<16>;
 	type DefaultSuffix = DefaultNetworkSuffix;
 	type WeightInfo = ();
 }
