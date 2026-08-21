@@ -553,12 +553,33 @@ pub trait MembershipProver {
 	/// Returns the unix timestamp in seconds at which the given revision was committed on
 	/// the source chain.
 	///
-	/// Returns `None` if the collection, ring, or revision is not currently retained.
+	/// Returns `None` if the collection, ring, or revision is not retained. An implementation that
+	/// dates a revision only once a successor supersedes it also returns `None` for the current
+	/// revision.
 	fn revision_source_time(
 		identifier: &Identifier,
 		ring_index: RingIndex,
 		revision: RevisionIndex,
 	) -> Option<u64>;
+	/// Returns the source time of the ring's newest root, which is when the ring last changed.
+	///
+	/// `None` means nothing dates the ring: it has no root, or the implementation does not date
+	/// the current revision. It never means the ring is gone, so a caller needs a fallback.
+	///
+	/// The default pairs [`Self::ring_revision`] with [`Self::revision_source_time`]. Override it
+	/// where the current root's time lives in separate storage, otherwise it returns `None` for
+	/// every ring.
+	fn latest_root_source_time(identifier: &Identifier, ring_index: RingIndex) -> Option<u64> {
+		let revision = Self::ring_revision(identifier, ring_index)?;
+		Self::revision_source_time(identifier, ring_index, revision)
+	}
+	/// How long, in seconds, a superseded revision keeps verifying once its successor is
+	/// committed.
+	///
+	/// Measured from the successor's source time, the same reference
+	/// [`Self::latest_root_source_time`] returns, so a caller can compare its own retention
+	/// against this one directly. Return zero only if superseded revisions stop verifying at once.
+	fn old_root_retention() -> u64;
 }
 
 /// Multi-context membership proof verification.

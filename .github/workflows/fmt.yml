@@ -31,4 +31,4 @@ jobs:
           cache: false
 
       - name: Rustfmt (check)
-        run: cargo +nightly-$RUST_NIGHTLY_VERSION fmt --all -- --check
+        run: cargo "+nightly-$RUST_NIGHTLY_VERSION" fmt --all -- --check
