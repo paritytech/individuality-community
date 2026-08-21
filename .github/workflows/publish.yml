@@ -13,7 +13,7 @@ jobs:
     uses: ./.github/workflows/build-runtimes.yml
 
   publish-release:
-    runs-on: parity-int-ubuntu
+    runs-on: parity-ubuntu
     needs: [build-runtimes]
     steps:
       - name: Checkout

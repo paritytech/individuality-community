@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-runtimes:
-    runs-on: parity-int-ubuntu
+    runs-on: parity-large
     strategy:
       matrix:
         include:
