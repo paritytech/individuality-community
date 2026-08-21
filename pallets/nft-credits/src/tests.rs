@@ -1729,12 +1729,53 @@ mod credit_tree_delivery {
 		});
 	}
 
-	// A replay of one tree must not stand in the way of repairing another, whoever asks and
-	// however often: the call is permissionless, so any limit they shared would let a replay of
-	// an already-delivered root suppress the repair of a tree that really is missing. What a
-	// repair costs is charged to its caller instead.
 	#[test]
-	fn replay_credit_trees_does_not_rate_limit_a_repair() {
+	fn rejected_replay_starts_no_cooldown() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			set_time(1_000);
+			queue_credit_tree(10);
+
+			assert_noop!(
+				NftCredits::replay_credit_trees(
+					RuntimeOrigin::signed(ALICE),
+					replay_blocks(vec![])
+				),
+				Error::<Test>::NoBlocksToReplay
+			);
+			assert_eq!(LastReplayTime::<Test>::get(), None);
+		});
+	}
+
+	#[test]
+	fn replay_credit_trees_rejects_a_second_replay_in_the_window() {
+		new_test_ext().execute_with(|| {
+			// `frame_system` drops events deposited at block zero.
+			System::set_block_number(1);
+			set_time(1_000);
+			queue_credit_tree(10);
+			queue_credit_tree(12);
+
+			assert_ok!(NftCredits::replay_credit_trees(
+				RuntimeOrigin::signed(BOB),
+				replay_blocks(vec![10])
+			));
+
+			// Another account, another tree, one second later.
+			set_time(1_001);
+			assert_noop!(
+				NftCredits::replay_credit_trees(
+					RuntimeOrigin::signed(ALICE),
+					replay_blocks(vec![12])
+				),
+				Error::<Test>::ReplayCooldownActive
+			);
+			assert_eq!(sent_credit_tree_xcms().len(), 1);
+		});
+	}
+
+	#[test]
+	fn replay_credit_trees_serves_a_repair_once_the_window_has_passed() {
 		new_test_ext().execute_with(|| {
 			// `frame_system` drops events deposited at block zero.
 			System::set_block_number(1);
@@ -1742,16 +1783,12 @@ mod credit_tree_delivery {
 			queue_credit_tree(10);
 			let missing = queue_credit_tree(12);
 
-			// An already-delivered tree, replayed by somebody else, in the same second.
-			assert_ok!(NftCredits::replay_credit_trees(
-				RuntimeOrigin::signed(BOB),
-				replay_blocks(vec![10])
-			));
 			assert_ok!(NftCredits::replay_credit_trees(
 				RuntimeOrigin::signed(BOB),
 				replay_blocks(vec![10])
 			));
 
+			set_time(1_000 + ReplayCooldownSeconds::get());
 			assert_ok!(NftCredits::replay_credit_trees(
 				RuntimeOrigin::signed(ALICE),
 				replay_blocks(vec![12])
@@ -1759,6 +1796,51 @@ mod credit_tree_delivery {
 			let batch = last_sent_credit_tree_batch();
 			assert_eq!(batch.trees.len(), 1);
 			assert_eq!(batch.trees[0].tree, missing);
+		});
+	}
+
+	#[test]
+	fn the_replay_cooldown_does_not_hold_up_the_delivery_stream() {
+		new_test_ext().execute_with(|| {
+			// `frame_system` drops events deposited at block zero.
+			System::set_block_number(1);
+			set_time(1_000);
+			queue_credit_tree(10);
+			queue_credit_tree(12);
+
+			assert_ok!(NftCredits::replay_credit_trees(
+				RuntimeOrigin::signed(BOB),
+				replay_blocks(vec![10])
+			));
+
+			// Still inside the window.
+			assert_ok!(NftCredits::send_credit_trees(authorized_origin(), 0, 0));
+			assert!(CreditTreeDeliveryQueue::<Test>::get().is_empty());
+			assert_eq!(sent_credit_tree_xcms().len(), 2);
+		});
+	}
+
+	#[test]
+	fn an_invalid_replay_reports_itself_inside_the_window() {
+		new_test_ext().execute_with(|| {
+			// `frame_system` drops events deposited at block zero.
+			System::set_block_number(1);
+			set_time(1_000);
+			queue_credit_tree(10);
+			queue_credit_tree(12);
+
+			assert_ok!(NftCredits::replay_credit_trees(
+				RuntimeOrigin::signed(BOB),
+				replay_blocks(vec![10])
+			));
+
+			assert_noop!(
+				NftCredits::replay_credit_trees(
+					RuntimeOrigin::signed(BOB),
+					replay_blocks(vec![12, 10])
+				),
+				Error::<Test>::UnsortedReplayBlocks
+			);
 		});
 	}
 
