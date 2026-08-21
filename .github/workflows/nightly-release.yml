@@ -79,10 +79,10 @@ jobs:
           set -euo pipefail
 
           # Previous nightly tag; on the first nightly fall back to the latest v* release.
-          PREV=$(gh release list --repo ${{ github.repository }} --exclude-drafts \
+          PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
             --json tagName --jq '[.[].tagName | select(startswith("nightly-"))] | first // empty')
           if [ -z "$PREV" ]; then
-            PREV=$(gh release list --repo ${{ github.repository }} --exclude-drafts \
+            PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
               --json tagName --jq '.[0].tagName')
           fi
           echo "diffing against $PREV"
@@ -90,11 +90,11 @@ jobs:
           # grep returns non-zero when no commit message carries a PR number (e.g.
           # the first nightly, or a diff with only squashed/non-PR commits), so
           # tolerate it and fall back to the empty-diff message below.
-          if gh api repos/${{ github.repository }}/compare/$PREV...${{ github.sha }} \
+          if gh api "repos/$GITHUB_REPOSITORY/compare/$PREV...$GITHUB_SHA" \
             --jq '.commits[] | .commit.message' \
             | grep -oE '\(#[0-9]+\)' | tr -d '()' | sort -u \
             | while read -r n; do
-                gh pr view "$n" --repo ${{ github.repository }} \
+                gh pr view "$n" --repo "$GITHUB_REPOSITORY" \
                   --json number,title --jq '"#\(.number) - \(.title)"'
               done > PR_DIFF.md; then
             :
