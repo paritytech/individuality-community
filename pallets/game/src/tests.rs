@@ -26,7 +26,9 @@ use frame_support::{
 	BoundedVec,
 };
 use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
-use indiv_support::traits::{AppendOnlyMembers, RingExponent, RingMode};
+use indiv_support::traits::{
+	AddOnlyPeopleTrait, AppendOnlyMembers, RingExponent, RingMode, RingPosition,
+};
 use sp_core::{crypto::VrfSecret, ed25519, sr25519, Pair};
 use sp_runtime::{testing::TestSignature, transaction_validity::InvalidTransaction, AccountId32};
 use sp_statement_store::Statement;
@@ -3487,6 +3489,162 @@ fn reach_lose_and_regain_personhood() {
 		}
 		assert!(Score::reached_personhood(&alice), "must have regained personhood");
 		assert_ok!(Score::register(RuntimeOrigin::signed(ALICE), None));
+	});
+}
+
+#[test]
+fn offboard_suspends_recognized_player() {
+	new_test_ext().execute_with(|| {
+		// Create the people collection first
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+
+		let alice = AccountOrPerson::Account(ALICE);
+
+		let mut schedule = GameSchedule::<u32, u128> {
+			game_play_time: 10,
+			rounds: 1,
+			max_group_size: 1,
+			..Default::default()
+		};
+		let attend_report: FullReport<Test> = vec![BoundedVec::default()].try_into().unwrap();
+
+		// Reach personhood and register, so ALICE is `Recognized`.
+		let mut safety = 0;
+		while !Score::reached_personhood(&alice) {
+			run_game_scenario(schedule.clone(), slice::from_ref(&alice), |_p| {
+				Some(attend_report.clone()) // attend
+			});
+			schedule.game_play_time += 10; // ensure times don't overlap
+			safety += 1;
+			assert!(safety < 200, "took too many games to reach personhood");
+		}
+		let (key, sk) = mock_key(1234);
+		let proof = {
+			let mut m = b"pop register using".to_vec();
+			m.extend_from_slice(&ALICE.encode()[..]);
+			Mock::sign(&sk, &m[..]).unwrap()
+		};
+		assert_ok!(Score::register(RuntimeOrigin::signed(ALICE), Some((key, proof))));
+
+		// Offboard while no game is ongoing.
+		assert_ok!(Game::offboard(RuntimeOrigin::signed(ALICE)));
+
+		assert!(!indiv_pallet_score::Participants::<Test>::contains_key(&alice));
+		// The offboard suspended the personhood: the member key is suspended in the people
+		// ring.
+		assert_eq!(
+			indiv_pallet_members::Members::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, key),
+			Some(RingPosition::Suspended)
+		);
+		// The mutation session opened by the offboard is closed again.
+		assert!(
+			indiv_pallet_members::RingsState::<Test>::get(PEOPLE_MEMBER_IDENTIFIER).append_only()
+		);
+	});
+}
+
+#[test]
+fn kickout_suspends_recognized_player() {
+	new_test_ext().execute_with(|| {
+		// Create the people collection first
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+
+		let player = AccountOrPerson::Account(ALICE);
+
+		// An archived kickable player whose recognition is `Recognized`, backed by a real
+		// person.
+		assert_ok!(indiv_pallet_score::Pallet::<Test>::onboard_for_recognition(&ALICE));
+		let id = People::reserve_new_id();
+		let (key, _sk) = mock_key(1234);
+		assert_ok!(People::recognize_personhood(id, Some(key)));
+		indiv_pallet_score::Participants::<Test>::mutate(&player, |p| {
+			p.as_mut().unwrap().recognition = indiv_pallet_score::Recognition::Recognized(id);
+		});
+		ArchivedPlayers::<Test>::insert(
+			&player,
+			ArchivedPlayer::Kickable { archived_since: 0, first_game: 0 },
+		);
+
+		let kickout_time: u64 = <Test as Config>::NonPlayingKickoutTime::get();
+		System::set_block_number(kickout_time + 1);
+
+		assert_ok!(Game::kickout(RuntimeOrigin::signed(EVE), ALICE));
+
+		assert!(!indiv_pallet_score::Participants::<Test>::contains_key(&player));
+		// The kickout suspended the personhood: the member key is suspended in the people
+		// ring.
+		assert_eq!(
+			indiv_pallet_members::Members::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, key),
+			Some(RingPosition::Suspended)
+		);
+		// The mutation session opened by the kickout is closed again.
+		assert!(
+			indiv_pallet_members::RingsState::<Test>::get(PEOPLE_MEMBER_IDENTIFIER).append_only()
+		);
+	});
+}
+
+#[test]
+fn offboard_fails_when_suspension_fails() {
+	new_test_ext().execute_with(|| {
+		let alice = AccountOrPerson::Account(ALICE);
+
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 25,
+			rounds: 2,
+			max_group_size: 2,
+			..Default::default()
+		};
+		run_game_scenario(schedule, slice::from_ref(&alice), |_player| {
+			Some(vec![BoundedVec::default(), BoundedVec::default()].try_into().unwrap())
+		});
+
+		// Make ALICE `Recognized` with a personal id that does not belong to any person, so
+		// the suspension on offboard fails.
+		indiv_pallet_score::Participants::<Test>::mutate(&alice, |p| {
+			p.as_mut().unwrap().recognition = indiv_pallet_score::Recognition::Recognized(404);
+		});
+
+		let err = Game::offboard(RuntimeOrigin::signed(ALICE)).unwrap_err();
+		assert_eq!(err.error, indiv_pallet_people::Error::<Test>::NotPerson.into());
+	});
+}
+
+#[test]
+fn kickout_fails_when_suspension_fails() {
+	new_test_ext().execute_with(|| {
+		let player = AccountOrPerson::Account(ALICE);
+
+		// An archived kickable player who is `Recognized` with a personal id that does not
+		// belong to any person, so the suspension on kickout fails.
+		assert_ok!(indiv_pallet_score::Pallet::<Test>::onboard_for_recognition(&ALICE));
+		indiv_pallet_score::Participants::<Test>::mutate(&player, |p| {
+			p.as_mut().unwrap().recognition = indiv_pallet_score::Recognition::Recognized(404);
+		});
+		ArchivedPlayers::<Test>::insert(
+			&player,
+			ArchivedPlayer::Kickable { archived_since: 0, first_game: 0 },
+		);
+
+		let kickout_time: u64 = <Test as Config>::NonPlayingKickoutTime::get();
+		System::set_block_number(kickout_time + 1);
+
+		let err = Game::kickout(RuntimeOrigin::signed(EVE), ALICE).unwrap_err();
+		assert_eq!(err.error, indiv_pallet_people::Error::<Test>::NotPerson.into());
 	});
 }
 
