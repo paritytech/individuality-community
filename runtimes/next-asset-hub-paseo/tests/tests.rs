@@ -1535,8 +1535,10 @@ mod credit_claimant_origin {
 	const SOURCE_TIME: u64 = 1_000_000;
 
 	/// Window `personhood_info` keeps accepting a superseded revision for.
-	fn grace() -> u64 {
-		<<Runtime as indiv_pallet_alias_accounts::Config>::CleanupGracePeriod as Get<u64>>::get()
+	fn retention() -> u64 {
+		<<Runtime as indiv_pallet_members_subscriber::Config>::OldRootRetentionDuration as Get<
+			u64,
+		>>::get()
 	}
 
 	fn signer() -> AccountId {
@@ -1544,7 +1546,7 @@ mod credit_claimant_origin {
 	}
 
 	/// Records `revisions` roots for ring 0 of the people collection, numbered from 0 and all
-	/// committed at [`SOURCE_TIME`]. The grace policy reads only the revision numbers and their
+	/// committed at [`SOURCE_TIME`]. The retention check reads only the revision numbers and their
 	/// source times, so an empty ring commitment stands in for the real root.
 	fn seed_ring(revisions: u32) {
 		let root = BandersnatchVrfVerifiable::finish_members(
@@ -1565,7 +1567,7 @@ mod credit_claimant_origin {
 		);
 	}
 
-	/// Moves the clock the grace policy reads to `SOURCE_TIME + offset` seconds. Writes `Now`
+	/// Moves the clock the retention check reads to `SOURCE_TIME + offset` seconds. Writes `Now`
 	/// directly, since `set_timestamp` runs Aura's `OnTimestampSet` hook, which requires the slot
 	/// to match.
 	fn set_now(offset: u64) {
@@ -1640,7 +1642,7 @@ mod credit_claimant_origin {
 		});
 	}
 
-	/// Revision 1 supersedes the binding's revision 0 and the grace period has passed, so
+	/// Revision 1 supersedes the binding's revision 0 and the retention has passed, so
 	/// `personhood_info` refuses the binding. The credit is awarded to the alias before the claim,
 	/// so the claim still resolves the same person.
 	#[test]
@@ -1648,7 +1650,7 @@ mod credit_claimant_origin {
 		sp_io::TestExternalities::default().execute_with(|| {
 			bind_alias();
 			seed_ring(2);
-			set_now(grace() + 1);
+			set_now(retention() + 1);
 			assert_eq!(personhood_alias(), None);
 
 			let origin = RuntimeOrigin::signed(signer());

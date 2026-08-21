@@ -769,6 +769,11 @@ impl indiv_support::traits::MembershipProver for MockAirdropMemberService {
 	) -> Option<u64> {
 		None
 	}
+
+	fn old_root_retention() -> u64 {
+		// This mock keeps no root history, so nothing is ever superseded.
+		0
+	}
 }
 
 /// Derive a deterministic 32-byte alias from the message bytes.

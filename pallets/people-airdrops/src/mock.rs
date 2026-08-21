@@ -224,6 +224,11 @@ impl MembershipProver for MockMemberService {
 	) -> Option<u64> {
 		None
 	}
+
+	fn old_root_retention() -> u64 {
+		// This mock keeps no root history, so nothing is ever superseded.
+		0
+	}
 }
 
 /// The account-based participation path is unused by these tests, so the conversion always
