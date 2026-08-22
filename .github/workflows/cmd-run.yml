@@ -127,7 +127,6 @@ jobs:
       CMD: ${{ github.event.inputs.cmd }}
       PR_BRANCH: ${{ github.event.inputs.pr_branch }}
       BASE_REPO: ${{ github.repository }}
-      BOT_DIR: ${{ runner.temp }}/cmd-bot
     outputs:
       weight_deviation: ${{ steps.weight_deviation.outputs.result }}
     steps:
@@ -213,6 +212,7 @@ jobs:
 
           # Run the bot scripts from the cmd-bot branch, not from the PR
           # checkout, so a PR cannot modify the code this job executes.
+          BOT_DIR="$RUNNER_TEMP/cmd-bot"
           rm -rf "$BOT_DIR"
           git clone --depth 1 --branch cmd-bot "https://github.com/$BASE_REPO" "$BOT_DIR"
 
@@ -240,7 +240,7 @@ jobs:
 
           report="$RUNNER_TEMP/weight-deviation.txt"
           status=0
-          python3 "$BOT_DIR/.github/scripts/weight_deviation.py" --base upstream/main --current HEAD > "$report" || status=$?
+          python3 "$RUNNER_TEMP/cmd-bot/.github/scripts/weight_deviation.py" --base upstream/main --current HEAD > "$report" || status=$?
 
           # Exit code 2 means high-variance changes were found. That is
           # informational for /cmd bench, so only fail on real errors.
