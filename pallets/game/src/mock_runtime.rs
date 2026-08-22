@@ -952,7 +952,8 @@ impl indiv_pallet_people::Config for Test {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 	pub const LiteCollectionOwner: u32 = 2;
 	pub const LiteRingExp: RingExponent = RingExponent::R2e9;
 	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");

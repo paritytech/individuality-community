@@ -479,7 +479,8 @@ impl pallet_pgas::benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 }
 
 impl pallet_pgas::Config for Test {

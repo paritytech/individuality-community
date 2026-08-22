@@ -98,6 +98,10 @@ fn people_paseo_genesis(
 			subscription_whitelist: people::asset_hub_subscription_whitelist(),
 			_phantom: Default::default()
 		},
+		network_suffix: NetworkSuffixConfig {
+			network_suffix: b"paseo".to_vec().try_into().expect("network suffix fits"),
+			..Default::default()
+		},
 		polkadot_xcm: PolkadotXcmConfig { safe_xcm_version: Some(SAFE_XCM_VERSION) },
 		sudo: SudoConfig { key: Some(sudo_key) },
 	})
