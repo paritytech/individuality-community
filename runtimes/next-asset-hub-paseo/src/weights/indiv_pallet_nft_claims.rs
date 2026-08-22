@@ -161,4 +161,87 @@ impl<T: frame_system::Config> indiv_pallet_nft_claims::WeightInfo for WeightInfo
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
+	/// The storage of `claim_account`, plus removing the fully claimed tree and its expiry entry and
+	/// queueing the deletion the game chain is owed.
+	/// Storage: `NftClaims::TreeExpiries` (r:0 w:1)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// The range of component `n` is `[0, 16]`.
+	fn claim_last_account(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `505`
+		//  Estimated: `6121`
+		Weight::from_parts(95_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 6121))
+			// Standard Error: 38_679
+			.saturating_add(Weight::from_parts(1_197_920, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(10))
+			.saturating_add(T::DbWeight::get().writes(10))
+	}
+	/// The storage of `claim_person`, plus removing the fully claimed tree and its expiry entry and
+	/// queueing the deletion the game chain is owed.
+	/// Storage: `NftClaims::TreeExpiries` (r:0 w:1)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// The range of component `n` is `[0, 16]`.
+	fn claim_last_person(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `795`
+		//  Estimated: `6136`
+		Weight::from_parts(105_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 6136))
+			// Standard Error: 38_679
+			.saturating_add(Weight::from_parts(1_197_920, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(11))
+			.saturating_add(T::DbWeight::get().writes(10))
+	}
+	/// Storage: `NftClaims::TreeExpiries` (r:64 w:64)
+	/// Storage: `NftClaims::CreditTrees` (r:0 w:64)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// Storage: `NftClaims::NextExpiryBucket` (r:0 w:1)
+	/// The range of component `n` is `[0, 64]`.
+	fn sweep_expired_trees(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3000 + n * (2519 ±0)`
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3000))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(4_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes(2))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 2519).saturating_mul(n.into()))
+	}
+	/// Storage: `NftClaims::NextExpiryBucket` (r:1 w:0)
+	/// Proof: `NftClaims::NextExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	fn authorize_sweep_expired_trees() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `500`
+		Weight::from_parts(5_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 500))
+			.saturating_add(T::DbWeight::get().reads(1))
+	}
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
+	/// The range of component `n` is `[0, 64]`.
+	fn send_tree_deletions(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3500`
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3500))
+			// Standard Error: 10_000
+			.saturating_add(Weight::from_parts(200_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:0)
+	fn authorize_send_tree_deletions() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3000`
+		Weight::from_parts(5_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3000))
+			.saturating_add(T::DbWeight::get().reads(1))
+	}
 }

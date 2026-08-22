@@ -59,6 +59,9 @@ pub trait WeightInfo {
 	fn send_credit_trees(n: u32, ) -> Weight;
 	fn replay_credit_trees(n: u32, ) -> Weight;
 	fn authorize_send_credit_trees() -> Weight;
+	fn receive_tree_deletions(n: u32, ) -> Weight;
+	fn sweep_expired_roots(n: u32, ) -> Weight;
+	fn authorize_sweep_expired_roots() -> Weight;
 }
 
 /// Weights for `indiv_pallet_nft_credits` using the Substrate node and recommended hardware.
@@ -166,6 +169,52 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(10_995_000, 4559)
 			.saturating_add(T::DbWeight::get().reads(1_u64))
 	}
+	/// Storage: `NftCredits::NftClaimCreditRoots` (r:64 w:64)
+	/// Proof: `NftCredits::NftClaimCreditRoots` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::RootExpiries` (r:0 w:64)
+	/// Proof: `NftCredits::RootExpiries` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[1, 64]`.
+	fn receive_tree_deletions(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `1000 + n * (2531 ±0)`
+		Weight::from_parts(6_000_000, 1000)
+			// Standard Error: 6_000
+			.saturating_add(Weight::from_parts(2_500_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 2531).saturating_mul(n.into()))
+	}
+	/// Storage: `NftCredits::RootExpiries` (r:64 w:64)
+	/// Proof: `NftCredits::RootExpiries` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditRoots` (r:0 w:64)
+	/// Proof: `NftCredits::NftClaimCreditRoots` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NextRootExpiryBucket` (r:0 w:1)
+	/// Proof: `NftCredits::NextRootExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[0, 64]`.
+	fn sweep_expired_roots(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3000 + n * (2499 ±0)`
+		Weight::from_parts(8_000_000, 3000)
+			// Standard Error: 6_000
+			.saturating_add(Weight::from_parts(2_500_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 2499).saturating_mul(n.into()))
+	}
+	/// Storage: `NftCredits::NextRootExpiryBucket` (r:1 w:0)
+	/// Proof: `NftCredits::NextRootExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	fn authorize_sweep_expired_roots() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4`
+		//  Estimated: `500`
+		// Minimum execution time: 4_000_000 picoseconds.
+		Weight::from_parts(4_500_000, 500)
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -270,6 +319,52 @@ impl WeightInfo for () {
 		//  Estimated: `4559`
 		// Minimum execution time: 10_213_000 picoseconds.
 		Weight::from_parts(10_995_000, 4559)
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+	}
+	/// Storage: `NftCredits::NftClaimCreditRoots` (r:64 w:64)
+	/// Proof: `NftCredits::NftClaimCreditRoots` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::RootExpiries` (r:0 w:64)
+	/// Proof: `NftCredits::RootExpiries` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[1, 64]`.
+	fn receive_tree_deletions(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `1000 + n * (2531 ±0)`
+		Weight::from_parts(6_000_000, 1000)
+			// Standard Error: 6_000
+			.saturating_add(Weight::from_parts(2_500_000, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(RocksDbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 2531).saturating_mul(n.into()))
+	}
+	/// Storage: `NftCredits::RootExpiries` (r:64 w:64)
+	/// Proof: `NftCredits::RootExpiries` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditRoots` (r:0 w:64)
+	/// Proof: `NftCredits::NftClaimCreditRoots` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NextRootExpiryBucket` (r:0 w:1)
+	/// Proof: `NftCredits::NextRootExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[0, 64]`.
+	fn sweep_expired_roots(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3000 + n * (2499 ±0)`
+		Weight::from_parts(8_000_000, 3000)
+			// Standard Error: 6_000
+			.saturating_add(Weight::from_parts(2_500_000, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+			.saturating_add(RocksDbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
+			.saturating_add(RocksDbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 2499).saturating_mul(n.into()))
+	}
+	/// Storage: `NftCredits::NextRootExpiryBucket` (r:1 w:0)
+	/// Proof: `NftCredits::NextRootExpiryBucket` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	fn authorize_sweep_expired_roots() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4`
+		//  Estimated: `500`
+		// Minimum execution time: 4_000_000 picoseconds.
+		Weight::from_parts(4_500_000, 500)
 			.saturating_add(RocksDbWeight::get().reads(1_u64))
 	}
 }

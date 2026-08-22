@@ -17,17 +17,28 @@
 //! Shared types for the NFT claim credit trees.
 //! The game pallet builds the commitments on the People chain and ships them over XCM.
 //! The nft-claims pallet receives them in a batch.
+//!
+//! Both chains expire what they hold on the same bucket scheme, one keyed by the tree's timestamp,
+//! and the helpers driving a sweep of it are shared so the two sweeps behave alike.
 
 use alloc::vec::Vec;
-use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use codec::{Decode, DecodeWithMemTracking, Encode, FullCodec, MaxEncodedLen};
 use frame_support::{
 	pallet_prelude::{BoundedVec, Get},
+	storage::{IterableStorageDoubleMap, StorageValue},
+	weights::Weight,
 	CloneNoBound, DebugNoBound, EqNoBound, PartialEqNoBound,
 };
 use scale_info::TypeInfo;
 use sp_core::H256;
+use sp_runtime::{
+	transaction_validity::{
+		InvalidTransaction, TransactionSource, TransactionValidityError, ValidTransaction,
+	},
+	SaturatedConversion,
+};
 
-use crate::identity::AccountOrPerson;
+use crate::{identity::AccountOrPerson, offchain::TX_LONGEVITY, tx_priority};
 
 /// An NFT claim credit earned by a player.
 /// Hashes one successful report of one player on another, in one round of one game.
@@ -110,6 +121,154 @@ pub type TreeSequence = u64;
 /// block number type.
 pub type AwardBlock = u32;
 
+/// The width of one expiry bucket, in seconds.
+///
+/// Both chains group a tree under `timestamp / EXPIRY_BUCKET_SECONDS`, so a sweep finds the trees
+/// that are due without reading the ones that are still live. A day holds many trees while games
+/// run, so a sweep walks buckets rather than trees. A tree also outlives its TTL by less than a
+/// day, which is the price of the grouping.
+pub const EXPIRY_BUCKET_SECONDS: u32 = 24 * 60 * 60;
+
+/// The bucket a tree is swept in, derived from the wall-clock time it commits to.
+pub type ExpiryBucket = u32;
+
+/// The bucket that holds the trees committed to at `timestamp`.
+pub fn expiry_bucket(timestamp: u32) -> ExpiryBucket {
+	timestamp / EXPIRY_BUCKET_SECONDS
+}
+
+/// How long, in seconds, the game chain keeps a credit root past the claims chain's deadline for
+/// the tree built from it.
+///
+/// The game chain holds the awards a claimant builds a proof from, so its root has to outlive the
+/// claims chain's copy of the tree. Adding this grace to the claims chain's TTL puts the two in
+/// that order without either runtime configuring it. It also covers the case the game chain's TTL
+/// exists for: a deletion message that never arrived.
+pub const ROOT_TTL_GRACE: u64 = 30 * 24 * 60 * 60;
+
+/// The wall-clock second at which every tree in `bucket` has outlived a TTL of `ttl` seconds.
+///
+/// The bucket's last timestamp decides this. A tree is therefore swept up to
+/// [`EXPIRY_BUCKET_SECONDS`] after its own deadline, and never before it.
+pub fn bucket_deadline(bucket: ExpiryBucket, ttl: u64) -> u64 {
+	// One second past the last timestamp the bucket holds.
+	let bucket_end = (u64::from(bucket) + 1).saturating_mul(u64::from(EXPIRY_BUCKET_SECONDS));
+	bucket_end.saturating_add(ttl)
+}
+
+/// Records in `Next` that `bucket` holds something to sweep.
+///
+/// The sweep starts at the earliest bucket ever filed, so a bucket earlier than the one held lowers
+/// it. Filing under a later bucket alone would leave the entry behind the sweep, where no sweep
+/// reads it. Only a bucket that lowers the watermark writes, because entries ordinarily arrive in
+/// ascending order and every one of them calls this.
+pub fn note_expiry_bucket<Next>(bucket: ExpiryBucket)
+where
+	Next: StorageValue<ExpiryBucket, Query = Option<ExpiryBucket>>,
+{
+	if Next::get().is_none_or(|next| bucket < next) {
+		Next::put(bucket);
+	}
+}
+
+/// What [`drain_expiry_bucket`] left behind in the bucket it took from.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BucketState {
+	/// The bucket is empty and the sweep has moved on to the next one.
+	Emptied,
+	/// The take hit its limit, so a further call has to sweep the same bucket again.
+	MoreToTake,
+}
+
+/// Takes up to `limit` of `bucket`'s entries out of `Expiries` and reports whether that emptied it.
+///
+/// A short take means the bucket is empty, and only then does `Next` move on to the bucket after
+/// it. Moving on one bucket per call keeps a stretch of buckets that hold nothing from becoming one
+/// unbounded pass. A bucket holding a multiple of `limit` therefore takes one further call that
+/// takes nothing.
+pub fn drain_expiry_bucket<Expiries, Next, Key>(
+	bucket: ExpiryBucket,
+	limit: u32,
+) -> (Vec<Key>, BucketState)
+where
+	Expiries: IterableStorageDoubleMap<ExpiryBucket, Key, ()>,
+	Next: StorageValue<ExpiryBucket, Query = Option<ExpiryBucket>>,
+	Key: FullCodec,
+{
+	let limit = limit as usize;
+	let drained = Expiries::drain_prefix(bucket)
+		.take(limit)
+		.map(|(key, ())| key)
+		.collect::<Vec<_>>();
+
+	if drained.len() < limit {
+		Next::put(bucket.saturating_add(1));
+		return (drained, BucketState::Emptied);
+	}
+
+	(drained, BucketState::MoreToTake)
+}
+
+/// The parts of a bucket sweep's validity only the sweeping pallet can name.
+pub struct BucketSweepTx {
+	/// Tag prefix of the sweep's `provides` tag, which is the pallet's call name. It must not be
+	/// empty.
+	pub tag: &'static str,
+	/// Reported for a source that is neither local nor in-block.
+	pub not_local: TransactionValidityError,
+	/// Reported when nothing has ever been filed, so there is no bucket to sweep.
+	pub nothing_to_sweep: TransactionValidityError,
+}
+
+/// Validates a sweep of `bucket`, `next` being the bucket the sweep is up to and `due` the second
+/// its entries have all outlived their TTL at.
+///
+/// Only a pallet's own offchain worker submits such a sweep, so this accepts local and in-block
+/// sources only. `bucket` must equal `next`, which orders retries: an earlier bucket is swept and
+/// `Stale`, a later one is `Future` until the sweep reaches it. A bucket that is not yet due is
+/// `Future` as well, because time alone makes that transaction valid.
+pub fn authorize_bucket_sweep<T: frame_system::Config>(
+	tx: BucketSweepTx,
+	source: TransactionSource,
+	bucket: ExpiryBucket,
+	next: Option<ExpiryBucket>,
+	now: u64,
+	due: u64,
+) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
+	if !matches!(source, TransactionSource::InBlock | TransactionSource::Local) {
+		return Err(tx.not_local);
+	}
+
+	let Some(next) = next else {
+		return Err(tx.nothing_to_sweep);
+	};
+	if bucket < next {
+		return Err(InvalidTransaction::Stale.into());
+	}
+	if bucket > next || now < due {
+		return Err(InvalidTransaction::Future.into());
+	}
+
+	// A finite longevity drops a stranded retry from the pool. Propagation is off because peers
+	// validate a gossiped transaction with a source of `External`, which this call rejects.
+	//
+	// The tag is the bucket, so every sweep of one bucket shares it and the pool keeps one attempt.
+	// A submitter that sweeps a bucket over successive blocks replaces its own pending attempt, so
+	// one block holds at most one sweep of a bucket.
+	let validity = ValidTransaction::with_tag_prefix(tx.tag)
+		.and_provides(next)
+		.priority(
+			tx_priority::BACKGROUND_PROGRESS
+				.saturating_add(frame_system::Pallet::<T>::block_number().saturated_into::<u64>()),
+		)
+		.longevity(TX_LONGEVITY)
+		.propagate(false)
+		.build()
+		.expect("tag prefix is not empty; qed");
+
+	Ok((validity, Weight::zero()))
+}
+
 /// The Merkle commitment to all NFT claim credits awarded in one block.
 /// Sent to Asset Hub, where a claimant mints an NFT by proving their leaf against [`Self::root`].
 #[derive(
@@ -136,9 +295,8 @@ pub struct NftClaimCreditTree {
 	/// Always this committed count, never one the claimant supplies: that would let them pick
 	/// which hash path is checked.
 	pub leaf_count: u32,
-	/// The block's wall-clock time in seconds since the UNIX epoch.
-	/// Useful to display the age of the tree.
-	/// May be used by chain data consumers, not used in the runtime.
+	/// The award block's wall-clock time in seconds since the UNIX epoch.
+	/// Both chains run the tree's TTL from it, so the deadline is the same on each.
 	pub timestamp: u32,
 }
 

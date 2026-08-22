@@ -2142,12 +2142,47 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	// next-people-paseo, so a proof carries at most 11 sibling hashes. 16 covers 65536 leaves,
 	// leaving room for that bound to grow without stranding the tail of a tree.
 	type MaxProofNodes = ConstU32<16>;
+	// The game pallet's `MaxCreditsPerBlock`. `ClaimedLeaves` holds one bit per leaf, so a block
+	// costs 150 bytes there, and a tree over this bound is refused rather than stored with leaves
+	// this chain cannot spend.
+	type MaxCreditsPerAwardBlock = ConstU32<1200>;
+	type UnixTime = Timestamp;
+	type TreeTtl = CreditTreeTtl;
+	// Above `MaxTreeDeletionsPerMessage`, so one sweep drops no deletion of its own, and with room
+	// for the trees fully claimed in the meantime. A deletion is four bytes, so the whole
+	// queue costs under a kilobyte of the proof budget.
+	type MaxQueuedTreeDeletions = ConstU32<128>;
+	// At or below the game pallet's `MaxTreeDeletionsPerMessage`. A larger message fails to decode
+	// there, and that chain's own TTL then removes the roots its deletions named.
+	//
+	// One sweep removes this many trees as well, once a block. One People-chain block awards at
+	// most one tree, so a day holds 43200 of them at 2 seconds a block, which 64 a block clears in
+	// about an hour of Asset Hub blocks. The rest of each block stays free for ordinary traffic.
+	type MaxTreeDeletionsPerMessage = ConstU32<64>;
+	type XcmRouter = crate::xcm_config::XcmRouter;
+	// The chain `EnsureGameChainOrigin` authenticates, and where the roots come from.
+	type GameChainLocation = crate::xcm_config::PeopleLocation;
+	// Matches the `NftCredits` index in next-people-paseo's `construct_runtime!`.
+	type GameChainPalletIndex = ConstU8<57>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftClaimsBenchmarkHelper;
 }
 
-/// Creates the collection and item the benchmarks mint into, which on a live chain their owner
-/// has set up beforehand.
+parameter_types! {
+	/// How long a credit stays claimable, counted from the People-chain block that awarded it.
+	///
+	/// This is the claim deadline. The sweep removes a tree past it, and nothing can mint that tree's
+	/// unclaimed credits again. Three months covers a player who mints a season's worth of games at
+	/// once, and keeps Asset Hub from holding a tree per non-empty block for the chain's lifetime.
+	///
+	/// next-people-paseo keeps a copy of this constant and derives the TTL for its own roots from it,
+	/// so a root outlives the tree built from it.
+	pub const CreditTreeTtl: u64 = 90 * 24 * 60 * 60;
+}
+
+/// What the claims benchmarks cannot set up themselves: the collection and item a claim mints
+/// into, the minter contract, the clock, and the HRMP channel a deletion message goes out over.
+/// On a live chain a collection owner and the relay chain's configuration provide these.
 #[cfg(feature = "runtime-benchmarks")]
 pub struct NftClaimsBenchmarkHelper;
 #[cfg(feature = "runtime-benchmarks")]
@@ -2190,6 +2225,39 @@ impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId> for NftClaimsBenchmarkH
 		)
 		.expect("benchmark minter contract is deployed; qed")
 		.address
+	}
+
+	fn set_unix_time(secs: u64) {
+		// `pallet_timestamp` holds the clock in milliseconds, and its `set` is an inherent, so this
+		// writes the value straight to storage.
+		pallet_timestamp::Now::<Runtime>::put(secs.saturating_mul(1_000));
+	}
+
+	fn open_game_chain_channel(max_message_size: u32) {
+		use cumulus_pallet_parachain_system::RelevantMessagingState;
+		use cumulus_primitives_core::relay_chain::AbridgedHrmpChannel;
+
+		let channel = AbridgedHrmpChannel {
+			max_capacity: 1000,
+			max_total_size: 1_000_000,
+			max_message_size,
+			msg_count: 0,
+			total_size: 0,
+			mqc_head: None,
+		};
+		let game_chain = ParaId::from(PEOPLE_ID);
+		let mut messaging_state = RelevantMessagingState::<Runtime>::get().unwrap_or(
+			cumulus_pallet_parachain_system::relay_state_snapshot::MessagingStateSnapshot {
+				dmq_mqc_head: Default::default(),
+				relay_dispatch_queue_remaining_capacity: Default::default(),
+				ingress_channels: Vec::new(),
+				egress_channels: Vec::new(),
+			},
+		);
+		messaging_state.egress_channels.retain(|(id, _)| *id != game_chain);
+		messaging_state.egress_channels.push((game_chain, channel));
+		messaging_state.egress_channels.sort_by_key(|(id, _)| *id);
+		RelevantMessagingState::<Runtime>::put(messaging_state);
 	}
 }
 
