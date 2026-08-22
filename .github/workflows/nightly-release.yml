@@ -1,0 +1,164 @@
+name: Nightly Release
+
+# Nightly (and on-demand) pre-release of the two paseo runtimes built from fresh
+# main, so downstream CI can test against the newest runtime features without
+# waiting for a versioned v* release. Pre-releases are marked prerelease and
+# never become the latest release. Each one carries a short diff of the PRs it
+# includes since the previous nightly. A scheduled run is skipped when main has
+# no new commits since the previous nightly; a workflow_dispatch run always
+# releases.
+on:
+  schedule:
+    - cron: "3 2 * * *" # nightly, 02:03 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: true
+
+jobs:
+  check-changes:
+    runs-on: parity-ubuntu
+    outputs:
+      new-commits: ${{ steps.check.outputs.new-commits }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # the previous nightly tag is needed for the commit count
+
+      - name: Count commits since previous nightly
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
+            --json tagName --jq '[.[].tagName | select(startswith("nightly-"))] | first // empty')
+          if [ -z "$PREV" ] || ! git rev-parse -q --verify "$PREV^{commit}" > /dev/null; then
+            echo "no previous nightly tag, releasing"
+            echo "new-commits=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          COUNT=$(git rev-list --count "$PREV..$GITHUB_SHA")
+          echo "$COUNT commits since $PREV"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "new-commits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "new-commits=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-runtimes:
+    needs: [check-changes]
+    if: github.event_name == 'workflow_dispatch' || needs.check-changes.outputs.new-commits == 'true'
+    uses: ./.github/workflows/build-runtimes.yml
+
+  publish-nightly:
+    runs-on: parity-ubuntu
+    needs: [build-runtimes]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # tag history is needed to compute the PR diff
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -name "*.wasm" -exec cp {} release-assets/ \;
+          find artifacts -name "*_srtool_output.json" -exec cp {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Add runtime info to changelog
+        run: |
+          CONTEXT=$(find artifacts -name '*_srtool_output.json')
+          SRTOOL() { <$(<<<$CONTEXT head -n1) jq -r .$1; }
+          WASM() { <${JSON} jq -r ".runtimes.compressed.subwasm.$1"; }
+
+          tee RELEASE_NOTES.md <<-EOF
+          # Runtime info
+          *These runtimes were built with **$(SRTOOL rustc)** using **[$(SRTOOL gen)](https://github.com/paritytech/srtool)***
+          EOF
+
+          for JSON in $(<<<$CONTEXT sort -sr)
+          do
+          RUNTIME_NAME=$(basename ${JSON} _srtool_output.json)
+          tee -a RELEASE_NOTES.md <<-EOF
+
+          ## ${RUNTIME_NAME}
+          ~~~
+          🏋️ Runtime Size:           $(numfmt --to iec-i --format "%.2f" $(WASM size)) ($(WASM size) bytes)
+          🗜 Compressed:             $(WASM 'compression | if .compressed then "Yes: \(1 - .size_compressed / .size_decompressed | . * 10000 | round / 100)%" else "No" end')
+          🔥 Core Version:           $(WASM 'core_version | "\(.specName)-\(.specVersion) \(.implName)-\(.implVersion).tx\(.transactionVersion).au\(.authoringVersion)"')
+          🎁 Metadata version:       V$(WASM metadata_version)
+          🗳️ Blake2-256 hash:        $(WASM blake2_256)
+          📦 IPFS:                   $(WASM ipfs_hash)
+          ~~~
+          EOF
+          done
+
+          cat RELEASE_NOTES.md
+
+      - name: Compute PR diff since previous nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Previous nightly tag; on the first nightly fall back to the latest v* release.
+          PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
+            --json tagName --jq '[.[].tagName | select(startswith("nightly-"))] | first // empty')
+          if [ -z "$PREV" ]; then
+            PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
+              --json tagName --jq '.[0].tagName')
+          fi
+          echo "diffing against $PREV"
+
+          # grep returns non-zero when no commit message carries a PR number (e.g.
+          # the first nightly, or a diff with only squashed/non-PR commits), so
+          # tolerate it and fall back to the empty-diff message below.
+          if gh api "repos/$GITHUB_REPOSITORY/compare/$PREV...$GITHUB_SHA" \
+            --jq '.commits[] | .commit.message' \
+            | grep -oE '\(#[0-9]+\)' | tr -d '()' | sort -u \
+            | while read -r n; do
+                gh pr view "$n" --repo "$GITHUB_REPOSITORY" \
+                  --json number,title --jq '"#\(.number) - \(.title)"'
+              done > PR_DIFF.md; then
+            :
+          fi
+
+          if [ ! -s PR_DIFF.md ]; then
+            echo "No PRs merged since the previous nightly." > PR_DIFF.md
+          fi
+          cat PR_DIFF.md
+
+      - name: Append PR diff to changelog
+        run: |
+          {
+            printf '\n## PRs included\n'
+            cat PR_DIFF.md
+          } >> RELEASE_NOTES.md
+
+      - name: Compute nightly tag
+        id: tag
+        run: echo "tag=nightly-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Create nightly pre-release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          prerelease: true
+          make_latest: false
+          files: |
+            release-assets/*.wasm
+          body_path: RELEASE_NOTES.md

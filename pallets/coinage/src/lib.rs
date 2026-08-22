@@ -3192,7 +3192,9 @@ pub mod pallet {
 			Self::unload_recyclers_into_external_asset_non_anonymous(
 				origin,
 				instance_id,
-				alloc::vec![input],
+				// `MaxConsolidation` is at least one, asserted by `integrity_test`, so the single
+				// input always fits.
+				BoundedVec::truncate_from(alloc::vec![input]),
 				alias_proofs,
 				to,
 				fee_currency,
@@ -3213,7 +3215,8 @@ pub mod pallet {
 		///
 		/// Parameters:
 		/// * `instance_id`: the instance every input unloads from.
-		/// * `inputs`: A list of inputs, specifying the recycler and aliases to unload.
+		/// * `inputs`: A list of inputs, specifying the recycler and aliases to unload. At most
+		///   [`Config::MaxConsolidation`] inputs, one alias of one input per proof.
 		/// * `alias_proofs`: the proofs for all aliases across all inputs, signed over a message
 		///   that includes the signer. The proofs must correspond sequentially to the aliases in
 		///   `inputs`.
@@ -3229,6 +3232,7 @@ pub mod pallet {
 		/// * All specified recyclers must exist.
 		/// * The alias proofs must correspond sequentially to the aliases in `inputs`.
 		/// * `inputs` must not be empty and each element must contain at least one alias.
+		/// * `alias_proofs` must hold exactly one proof per alias across all `inputs`.
 		/// * The signer must have sufficient balance to pay the fee (one fee per recycler).
 		/// * `max_fee` must cover the fee in `fee_currency`.
 		#[pallet::call_index(12)]
@@ -3238,11 +3242,7 @@ pub mod pallet {
 		pub fn unload_recyclers_into_external_asset_non_anonymous(
 			origin: OriginFor<T>,
 			instance_id: InstanceId,
-			// It could be better to have a bound on this vec, like we do for other unload calls,
-			// but given the origin is signed, the cost for a failing transaction will include the
-			// transaction length, and if the transaction is successful then it is bounded by
-			// `MaxConsolidation` (empty inputs are rejected) and it is charged for each input.
-			inputs: Vec<UnloadRecyclerInput<T::MaxConsolidation>>,
+			inputs: BoundedVec<UnloadRecyclerInput<T::MaxConsolidation>, T::MaxConsolidation>,
 			alias_proofs: BoundedVec<ProofOf<T>, T::MaxConsolidation>,
 			to: T::AccountId,
 			fee_currency: FeeCurrency,
@@ -3251,6 +3251,14 @@ pub mod pallet {
 			let signer = ensure_signed(origin)?;
 
 			ensure!(!inputs.is_empty(), Error::<T>::EmptyInputs);
+
+			// ensure lengths are a match and fail early if otherwise.
+			let mut input_count: u32 = 0;
+			for input in &inputs {
+				ensure!(!input.aliases.is_empty(), Error::<T>::EmptyInputs);
+				input_count = input_count.saturating_add(input.aliases.len() as u32);
+			}
+			ensure!(input_count as usize == alias_proofs.len(), Error::<T>::ProofAndAliasMismatch);
 
 			// Charge the fee first, before any proof is verified, and early exit with a refund if
 			// the signer cannot pay it or `max_fee` exceeded.
@@ -3274,13 +3282,9 @@ pub mod pallet {
 
 			let asset_unit = Self::instance(instance_id)?.asset_unit;
 
-			let input_count = inputs.iter().map(|input| input.aliases.len() as u32).sum();
-
 			// Calculate total amount
 			let mut total_amount: FungiblesBalanceOf<T> = Zero::zero();
 			for input in &inputs {
-				ensure!(!input.aliases.is_empty(), Error::<T>::EmptyInputs);
-
 				let amount_per_coin = Self::denomination_to_asset_amount(asset_unit, input.value)
 					.map_err(|e| e.into_pallet_error::<T>())?;
 				let amount_for_input =
