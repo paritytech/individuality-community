@@ -334,7 +334,7 @@ fn generate_alias_proof<T: Config>(
 
 	#[cfg(feature = "benchmark-proof-cache-regenerate")]
 	{
-		let cache_key = sp_core::hashing::blake2_256(&(&member, all_members, msg).encode());
+		let cache_key = sp_crypto_hashing::blake2_256(&(&member, all_members, msg).encode());
 		let encoded_proof = proof.encode();
 		emit_cache_entry(&cache_key, &encoded_proof, &alias);
 	}
@@ -574,7 +574,7 @@ mod benches {
 		);
 
 		let proven_msg =
-			sp_core::hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
+			sp_crypto_hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
 		let members_only: Vec<MemberOf<T>> =
 			members.iter().map(|(_, member)| member.clone()).collect();
 		let bounded_proofs: BoundedProofsOf<T> = members[..n as usize]
@@ -601,7 +601,7 @@ mod benches {
 		T::BenchmarkHelper::fund_account(&caller, total_asset_amount.saturating_mul(10u32.into()));
 
 		let proven_msg =
-			sp_core::hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
+			sp_crypto_hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
 		let mut alias_proofs = Vec::new();
 		for (secret, actual_ring_members) in &sign_data {
 			let (proof, _) = generate_alias_proof::<T>(secret, actual_ring_members, &proven_msg);
@@ -3753,7 +3753,7 @@ mod benches {
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
 		let inherited_implication = ((0u8, &runtime_call), (), ());
-		let proven_msg = sp_core::hashing::blake2_256(&inherited_implication.encode());
+		let proven_msg = sp_crypto_hashing::blake2_256(&inherited_implication.encode());
 
 		// Generate alias proof with proven_msg
 		let (alias_proof, _) = generate_alias_proof::<T>(secret, &members_only, &proven_msg);
@@ -3762,7 +3762,7 @@ mod benches {
 
 		// Create a people proof with intent message (alias_proofs ++ inherited_implication)
 		let context = pallet::free_unload_token_context(period, counter);
-		let intent_msg = sp_core::hashing::blake2_256(
+		let intent_msg = sp_crypto_hashing::blake2_256(
 			&[alias_proofs.encode(), inherited_implication.encode()].concat(),
 		);
 		let proof = T::BenchmarkHelper::create_people_proof(&context, &intent_msg, alias);
@@ -3821,7 +3821,7 @@ mod benches {
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
 		let inherited_implication = ((0u8, &runtime_call), (), ());
-		let proven_msg = sp_core::hashing::blake2_256(&inherited_implication.encode());
+		let proven_msg = sp_crypto_hashing::blake2_256(&inherited_implication.encode());
 
 		// Generate alias proof with proven_msg
 		let (alias_proof, _) = generate_alias_proof::<T>(secret, &members_only, &proven_msg);
@@ -3830,7 +3830,7 @@ mod benches {
 
 		// Create a lite people proof with intent message (alias_proofs ++ inherited_implication)
 		let context = pallet::free_unload_token_context(period, counter);
-		let intent_msg = sp_core::hashing::blake2_256(
+		let intent_msg = sp_crypto_hashing::blake2_256(
 			&[alias_proofs.encode(), inherited_implication.encode()].concat(),
 		);
 		let proof = T::BenchmarkHelper::create_lite_people_proof(&context, &intent_msg, alias);
@@ -3894,7 +3894,7 @@ mod benches {
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
 		let inherited_implication = ((0u8, &runtime_call), (), ());
-		let proven_msg = sp_core::hashing::blake2_256(&inherited_implication.encode());
+		let proven_msg = sp_crypto_hashing::blake2_256(&inherited_implication.encode());
 
 		// Generate alias proof with proven_msg
 		let (alias_proof, _) =
@@ -3903,7 +3903,7 @@ mod benches {
 			vec![alias_proof].try_into().unwrap();
 
 		// Generate paid token proof with intent message (alias_proofs ++ inherited_implication)
-		let intent_msg = sp_core::hashing::blake2_256(
+		let intent_msg = sp_crypto_hashing::blake2_256(
 			&[alias_proofs.encode(), inherited_implication.encode()].concat(),
 		);
 		let (paid_secret, _) = &paid_members[0];
@@ -3988,7 +3988,7 @@ mod benches {
 		// implication.
 		let retry_counter = 0u8;
 		let intent_msg = (&other_proofs, retry_counter, &inherited_implication)
-			.using_encoded(sp_core::hashing::blake2_256);
+			.using_encoded(sp_crypto_hashing::blake2_256);
 		let (first_alias_proof, _) = generate_alias_proof::<T>(secret, &members_only, &intent_msg);
 		let alias_proofs: BoundedVec<ProofOf<T>, T::MaxConsolidation> =
 			vec![first_alias_proof].try_into().unwrap();
