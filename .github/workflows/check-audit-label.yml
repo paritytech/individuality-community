@@ -5,6 +5,9 @@ on:
   pull_request:
     types: ["opened", "reopened", "synchronize", "labeled", "unlabeled"]
 
+# The job reads the label names from the event payload. It needs no repository access.
+permissions: {}
+
 # cancel previous runs
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -21,7 +24,10 @@ jobs:
       # status check as soon as a maintainer fixes the labels.
       - name: Check exactly one audit label is set
         env:
+          # Pass the expressions through the environment. Interpolating them into `run` would
+          # splice a label name into the shell source.
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -40,5 +46,5 @@ jobs:
             echo "::error::This pull request has $count audit labels ($names). Keep exactly one."
           fi
 
-          echo "The audit labels and their meanings are listed at https://github.com/${{ github.repository }}/labels"
+          echo "The audit labels and their meanings are listed at https://github.com/$REPO/labels"
           exit 1
