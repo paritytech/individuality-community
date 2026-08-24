@@ -89,6 +89,10 @@ impl<T: Config> ValidateProof for Pallet<T> {
 pub struct PersonRecord<Member, AccountId> {
 	// The key used for the person.
 	pub key: Member,
-	/// An optional privileged account that can send transaction on the behalf of the person.
+	/// An optional privileged account that can send transactions on behalf of the person.
+	///
+	/// Invariant: the account holds one sufficient reference tied to this field. Every write
+	/// that sets the field must `inc_sufficients` on the account and every write that clears
+	/// it must `dec_sufficients`.
 	pub account: Option<AccountId>,
 }
