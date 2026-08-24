@@ -769,6 +769,11 @@ impl indiv_support::traits::MembershipProver for MockAirdropMemberService {
 	) -> Option<u64> {
 		None
 	}
+
+	fn old_root_retention() -> u64 {
+		// This mock keeps no root history, so nothing is ever superseded.
+		0
+	}
 }
 
 /// Derive a deterministic 32-byte alias from the message bytes.
@@ -947,9 +952,12 @@ impl indiv_pallet_people::Config for Test {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 	pub const LiteCollectionOwner: u32 = 2;
 	pub const LiteRingExp: RingExponent = RingExponent::R2e9;
+	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
+	pub const LitePersonRegistrationFee: u64 = 10;
 }
 
 /// The contexts in which lite people may bind an account, see
@@ -964,6 +972,9 @@ impl frame_support::traits::Contains<Context> for LiteAccountContexts {
 
 impl indiv_pallet_people_lite::Config for Test {
 	type WeightInfo = ();
+	type Currency = Balances;
+	type PotId = LitePeoplePotId;
+	type RegistrationFee = LitePersonRegistrationFee;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;

@@ -75,6 +75,7 @@ indiv-pallet-people-lite = { workspace = true }
 indiv-pallet-proof-of-ink = { workspace = true }
 indiv-pallet-relay-randomness = { workspace = true }
 indiv-pallet-mob-rule = { workspace = true }
+indiv-pallet-network-suffix = { workspace = true }
 indiv-pallet-nft-credits = { workspace = true, features = ["testnet"] }
 indiv-support = { workspace = true, features = ["genesis"] }
 indiv-pallet-origin-restriction = { workspace = true }
@@ -151,6 +152,7 @@ std = [
 	"indiv-pallet-members-notifier/std",
 	"indiv-pallet-members/std",
 	"indiv-pallet-mob-rule/std",
+	"indiv-pallet-network-suffix/std",
 	"indiv-pallet-nft-credits/std",
 	"indiv-pallet-origin-restriction/std",
 	"indiv-pallet-people-airdrops/std",
@@ -241,6 +243,7 @@ runtime-benchmarks = [
 	"indiv-pallet-members-notifier/runtime-benchmarks",
 	"indiv-pallet-members/runtime-benchmarks",
 	"indiv-pallet-mob-rule/runtime-benchmarks",
+	"indiv-pallet-network-suffix/runtime-benchmarks",
 	"indiv-pallet-nft-credits/runtime-benchmarks",
 	"indiv-pallet-origin-restriction/runtime-benchmarks",
 	"indiv-pallet-people-airdrops/runtime-benchmarks",
@@ -307,6 +310,7 @@ try-runtime = [
 	"indiv-pallet-members-notifier/try-runtime",
 	"indiv-pallet-members/try-runtime",
 	"indiv-pallet-mob-rule/try-runtime",
+	"indiv-pallet-network-suffix/try-runtime",
 	"indiv-pallet-nft-credits/try-runtime",
 	"indiv-pallet-origin-restriction/try-runtime",
 	"indiv-pallet-people-airdrops/try-runtime",

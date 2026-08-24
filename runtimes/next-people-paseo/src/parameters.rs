@@ -4,7 +4,7 @@
 
 //! Governance-mutable Individuality runtime parameters.
 
-use crate::*;
+use crate::{ExistentialDeposit, *};
 use frame_support::{
 	dynamic_params::{dynamic_pallet_params, dynamic_params},
 	traits::{ConstU32, EnsureOrigin, EnsureOriginWithArg},
@@ -12,7 +12,7 @@ use frame_support::{
 };
 use indiv_pallet_resources::types::LongTermStorageAllocation;
 use indiv_support::parameters::{
-	AtLeastOne, AtMost, BenchmarkMax, SaturatingSubOne, StatementAllowanceGetter,
+	AtLeast, AtLeastOne, AtMost, BenchmarkMax, SaturatingSubOne, StatementAllowanceGetter,
 	StatementAllowanceParameter,
 };
 use sp_runtime::traits::AccountIdConversion;
@@ -98,6 +98,15 @@ pub mod dynamic_params {
 		pub static PrizeSource: sp_runtime::AccountId32 =
 			PalletId(*b"pop/pads").into_account_truncating();
 	}
+
+	/// Lite-person registration pricing.
+	#[dynamic_pallet_params]
+	#[codec(index = 3)]
+	pub mod lite_personhood {
+		/// Non-refundable native fee required to register as a lite person.
+		#[codec(index = 0)]
+		pub static RegistrationFee: Balance = 75 * UNITS;
+	}
 }
 
 // `pallet_parameters` validates only the origin of an update, never the stored value, and the
@@ -182,6 +191,13 @@ pub type LongTermStorageAllowanceForPeople =
 	dynamic_params::bulletin_storage::LongTermStorageAllowanceForPeople;
 pub type LongTermStorageAllowanceForLitePeople =
 	dynamic_params::bulletin_storage::LongTermStorageAllowanceForLitePeople;
+
+/// Fee required to register as a lite person without device attestation.
+///
+/// A stored value below the existential deposit cannot make registration free or prevent the fee
+/// pot account from existing.
+pub type LitePersonRegistrationFee =
+	AtLeast<dynamic_params::lite_personhood::RegistrationFee, ExistentialDeposit>;
 
 /// Any account is a valid prize source, so the value is read unclamped.
 pub type PeopleAirdropsPrizeSource = dynamic_params::people_airdrops::PrizeSource;

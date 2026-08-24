@@ -225,6 +225,11 @@ impl MembershipProver for MockMemberService {
 	) -> Option<u64> {
 		None
 	}
+
+	fn old_root_retention() -> u64 {
+		// This mock keeps no root history, so nothing is ever superseded.
+		0
+	}
 }
 
 /// The account-based participation path is unused by these tests, so the conversion always
@@ -320,7 +325,8 @@ impl EnsureOriginWithArg<RuntimeOrigin, Context> for EnsurePersonMock {
 
 parameter_types! {
 	pub const PrizeSourceAccount: u64 = 7;
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 }
 
 impl crate::Config for Test {

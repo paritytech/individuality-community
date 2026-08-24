@@ -432,6 +432,11 @@ impl MembershipProver for MockProver {
 	) -> Option<u64> {
 		None
 	}
+
+	fn old_root_retention() -> u64 {
+		// This mock keeps no root history, so nothing is ever superseded.
+		0
+	}
 }
 
 // ---- Config + helpers ----------------------------------------------------------------------
@@ -474,7 +479,8 @@ impl pallet_pgas::benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 }
 
 impl pallet_pgas::Config for Test {

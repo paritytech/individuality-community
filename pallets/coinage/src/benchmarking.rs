@@ -45,6 +45,10 @@ type SecretOf<T> = <CryptoOf<T> as GenerateVerifiable>::Secret;
 type ProofOf<T> = <CryptoOf<T> as GenerateVerifiable>::Proof;
 type SignatureOf<T> = <CryptoOf<T> as GenerateVerifiable>::Signature;
 type BoundedProofsOf<T> = BoundedVec<ProofOf<T>, <T as Config>::MaxConsolidation>;
+type BoundedInputsOf<T> = BoundedVec<
+	UnloadRecyclerInput<<T as Config>::MaxConsolidation>,
+	<T as Config>::MaxConsolidation,
+>;
 type BoundedAliasesOf<T> = BoundedVec<Alias, <T as Config>::MaxConsolidation>;
 
 struct MixedOutputScenario<T: Config> {
@@ -585,13 +589,8 @@ mod benches {
 
 	fn setup_multi_recycler_unload_non_anonymous<T: Config>(
 		n: u32,
-	) -> (
-		Vec<UnloadRecyclerInput<T::MaxConsolidation>>,
-		BoundedProofsOf<T>,
-		T::AccountId,
-		T::AccountId,
-		FungiblesBalanceOf<T>,
-	) {
+	) -> (BoundedInputsOf<T>, BoundedProofsOf<T>, T::AccountId, T::AccountId, FungiblesBalanceOf<T>)
+	{
 		common_setup::<T>();
 
 		let (inputs, sign_data, total_asset_amount) = setup_multi_recyclers::<T>(n, 0);
@@ -609,8 +608,9 @@ mod benches {
 			alias_proofs.push(proof);
 		}
 		let bounded_proofs: BoundedProofsOf<T> = alias_proofs.try_into().unwrap();
+		let bounded_inputs: BoundedInputsOf<T> = inputs.try_into().unwrap();
 
-		(inputs, bounded_proofs, caller, dest, total_asset_amount)
+		(bounded_inputs, bounded_proofs, caller, dest, total_asset_amount)
 	}
 
 	fn split_units_into_exact_output_pieces(total_units: u64, d: u32) -> Option<Vec<i8>> {
@@ -3469,7 +3469,7 @@ mod benches {
 
 		let call = Call::<T>::unload_recyclers_into_external_asset_non_anonymous {
 			instance_id: INSTANCE_ID,
-			inputs,
+			inputs: inputs.try_into().unwrap(),
 			alias_proofs: bounded_proofs,
 			to: account("dest", 0, 0),
 			fee_currency: FeeCurrency::ExternalAsset,

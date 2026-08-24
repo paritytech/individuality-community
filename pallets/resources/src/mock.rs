@@ -26,6 +26,7 @@ use frame_support::{
 	parameter_types,
 	storage::with_transaction,
 	traits::{OffchainWorker, OriginTrait},
+	PalletId,
 };
 use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateBare, CreateTransaction, CreateTransactionBase},
@@ -247,6 +248,7 @@ frame_support::construct_runtime!(
 		Resources: crate,
 		People: indiv_pallet_people,
 		PeopleLite: indiv_pallet_people_lite,
+		Balances: pallet_balances,
 	}
 );
 
@@ -269,13 +271,18 @@ impl frame_system::Config for Test {
 	type BlockHashCount = ConstUint<250>;
 	type Version = ();
 	type PalletInfo = PalletInfo;
-	type AccountData = ();
+	type AccountData = pallet_balances::AccountData<u64>;
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
 	type SystemWeightInfo = ();
 	type SS58Prefix = ConstUint<42>;
 	type OnSetCode = ();
 	type MaxConsumers = frame_support::traits::ConstU32<16>;
+}
+
+#[derive_impl(pallet_balances::config_preludes::TestDefaultConfig)]
+impl pallet_balances::Config for Test {
+	type AccountStore = System;
 }
 
 impl indiv_pallet_chunks_manager::Config for Test {
@@ -417,6 +424,9 @@ impl indiv_pallet_people_lite::BenchmarkHelper<AccountId32, AccountAuthority> fo
 
 impl indiv_pallet_people_lite::Config for Test {
 	type WeightInfo = ();
+	type Currency = Balances;
+	type PotId = LitePeoplePotId;
+	type RegistrationFee = LitePersonRegistrationFee;
 	type Suffix = NetworkSuffix;
 	type AccountContexts = ();
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
@@ -445,7 +455,10 @@ impl indiv_pallet_people::Config for Test {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub storage LitePersonRegistrationFee: u64 = 10;
+	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 	pub LitePersonStatementLimit: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
 		max_size: 4 * 1024, // 4 KiB
 		max_count: 10,

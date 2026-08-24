@@ -381,7 +381,8 @@ pub mod pallet {
 		KeyNotFound,
 		/// Could not push member into the ring.
 		CouldNotPush,
-		/// Ring cannot be merged if it's the top ring.
+		/// The ring index is not valid for the requested operation: it is the top ring used for
+		/// onboarding or it refers to an empty ring.
 		InvalidRing,
 		/// Ring cannot be built while there are suspensions pending.
 		SuspensionsPending,
@@ -422,6 +423,8 @@ pub mod pallet {
 		NotOnboarding,
 		/// There is no ring root to build.
 		NothingToBuild,
+		/// Only the rings of a flexible collection can be merged.
+		CollectionNotFlexible,
 	}
 
 	/// Custom transaction validity errors for authorize closures.
@@ -695,8 +698,11 @@ pub mod pallet {
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
 		/// Merge the members in two rings into a single, new ring. In order for the rings to be
-		/// eligible for merging, they must be below 1/2 of max capacity, have no pending
-		/// suspensions and not be the top ring used for onboarding.
+		/// eligible for merging, they must both be non-empty existing rings, be below 1/2 of max
+		/// capacity, have no pending suspensions and not be the top ring used for onboarding.
+		///
+		/// Only [`RingMode::Flexible`] collections can be merged. Their ring size never exceeds
+		/// `MaxFlexibleRingExponent`, so all keys of a ring live on page 0.
 		#[pallet::call_index(0)]
 		#[pallet::weight(T::WeightInfo::merge_rings())]
 		pub fn merge_rings(
@@ -710,6 +716,9 @@ pub mod pallet {
 				Collections::<T>::get(identifier).ok_or(Error::<T>::CollectionNotFound)?;
 			let max_ring_size = collection_info.ring_size.ring_capacity() as usize;
 
+			// `AppendOnly` collections can span several key pages, while this call only merges page
+			// 0. Merging them would strand the keys on the higher pages.
+			ensure!(collection_info.mode == RingMode::Flexible, Error::<T>::CollectionNotFlexible);
 			ensure!(
 				RingsState::<T>::get(identifier).append_only(),
 				Error::<T>::RemovalSessionInProgress
@@ -725,16 +734,16 @@ pub mod pallet {
 			);
 
 			// Enforce eligibility criteria.
-			// Note: merge_rings only works for Flexible collections which use a single page (page
-			// 0).
 			let (mut base_keys, mut base_ring_status) =
 				Self::ring_paged_keys_and_info(&identifier, base_ring_index, 0);
+			ensure!(!base_keys.is_empty(), Error::<T>::InvalidRing);
 			ensure!(base_keys.len() < max_ring_size / 2, Error::<T>::RingAboveMergeThreshold);
 			ensure!(
 				PendingSuspensions::<T>::decode_len(identifier, base_ring_index).unwrap_or(0) == 0,
 				Error::<T>::SuspensionsPending
 			);
 			let target_keys = RingKeys::<T>::get((identifier, target_ring_index, 0u32));
+			ensure!(!target_keys.is_empty(), Error::<T>::InvalidRing);
 			ensure!(target_keys.len() < max_ring_size / 2, Error::<T>::RingAboveMergeThreshold);
 			ensure!(
 				PendingSuspensions::<T>::decode_len(identifier, target_ring_index).unwrap_or(0) ==
@@ -1739,7 +1748,11 @@ pub mod pallet {
 						keys = RingKeys::<T>::get((*identifier, top_ring_index, ring_page_index));
 					}
 				}
-				RingKeys::<T>::insert((*identifier, top_ring_index, ring_page_index), keys);
+				// If the page is empty, no key was added and no need to write it, especially since
+				// it would not be removed.
+				if !keys.is_empty() {
+					RingKeys::<T>::insert((*identifier, top_ring_index, ring_page_index), keys);
+				}
 				ActiveMembers::<T>::mutate(identifier, |active| {
 					*active = active.saturating_add(to_include)
 				});
@@ -2896,6 +2909,10 @@ pub mod pallet {
 			// which they ceased to be the latest, meaning when they were archived.
 			OldRoots::<T>::get((*identifier, ring_index, BigEndianU32(revision)))
 				.map(|old_root| old_root.archived_at)
+		}
+
+		fn old_root_retention() -> u64 {
+			T::OldRootRetentionDuration::get()
 		}
 	}
 

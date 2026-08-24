@@ -191,7 +191,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 2_000_038,
+	spec_version: 2_000_039,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 21,
@@ -1379,7 +1379,22 @@ parameter_types! {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub DefaultNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("default network suffix fits");
+}
+
+impl indiv_pallet_network_suffix::Config for Runtime {
+	type UpdateOrigin = EnsureRoot<Self::AccountId>;
+	type DefaultSuffix = DefaultNetworkSuffix;
+	type WeightInfo = NetworkSuffixWeightInfo;
+}
+
+/// Conservatively reuse the heavier `pallet_parameters` setter weight.
+pub struct NetworkSuffixWeightInfo;
+impl indiv_pallet_network_suffix::WeightInfo for NetworkSuffixWeightInfo {
+	fn set_network_suffix(_s: u32) -> Weight {
+		<weights::pallet_parameters::WeightInfo<Runtime> as pallet_parameters::WeightInfo>::set_parameter()
+	}
 }
 
 impl indiv_pallet_dotns_gateway::Config for Runtime {
@@ -1725,13 +1740,16 @@ impl frame_support::traits::EnsureOriginWithArg<RuntimeOrigin, RuntimeParameters
 			StakingElection(_) =>
 				EitherOf::<EnsureRoot<AccountId>, StakingAdmin>::ensure_origin(origin.clone()),
 			// technical params, can be controlled by the fellowship voice.
-			Scheduler(_) | MessageQueue(_) => EitherOfDiverse::<
-				EnsureRoot<AccountId>,
-				WhitelistedCaller,
-			>::ensure_origin(origin.clone())
+			Scheduler(_) |
+			MessageQueue(_) |
+			AliasAccounts(
+				dynamic_params::alias_accounts::ParametersKey::StaleAliasSweepInterval(_),
+			) => EitherOfDiverse::<EnsureRoot<AccountId>, WhitelistedCaller>::ensure_origin(
+				origin.clone(),
+			)
 			.map(|_success| ()),
 			// Economic param.
-			AliasAccounts(_) =>
+			AliasAccounts(dynamic_params::alias_accounts::ParametersKey::AliasFee(_)) =>
 				<EnsureRoot<AccountId> as EnsureOrigin<RuntimeOrigin>>::ensure_origin(
 					origin.clone(),
 				)
@@ -1832,6 +1850,14 @@ pub mod dynamic_params {
 		/// `None` closes alias registration.
 		#[codec(index = 0)]
 		pub static AliasFee: Option<Balance> = None;
+
+		/// Blocks between the offchain worker's sweeps for stale alias mappings.
+		///
+		/// One sweep reads every mapping, and a mapping waits out `MappingRetention` before it can
+		/// go at all, so hours between sweeps cost nothing in timeliness. Governance raises this if
+		/// the scan proves expensive on a chain with many mappings.
+		#[codec(index = 1)]
+		pub static StaleAliasSweepInterval: BlockNumber = HOURS;
 	}
 }
 
@@ -2282,12 +2308,24 @@ impl indiv_pallet_alias_accounts::Config for Runtime {
 	type MemberService = MembersSubscriber;
 	type UnixTime = Timestamp;
 	type ProofValidityWindow = ConstU64<300>;
-	type CleanupGracePeriod = ConstU64<3600>;
+	// Above `MembersSubscriber`'s `OldRootRetentionDuration`, which is how long a superseded
+	// revision keeps resolving: a consumer reading the mapping without checking the revision has
+	// this long to stop relying on it.
+	type MappingRetention = ConstU64<{ 90 * 24 * 60 * 60 }>;
 	type PeopleLiteRingExponent = PeopleLiteRingExponent;
 	type PeopleRingExponent = PeopleRingExponent;
 	type Fungibles = Assets;
 	type PgasAssetId = PgasAssetId;
 	type AliasFee = dynamic_params::alias_accounts::AliasFee;
+	// Governance-tunable, and kept non-zero: a zero interval would divide by zero in the sweep.
+	type OffchainWorkerInterval = indiv_support::parameters::AtLeastOne<
+		dynamic_params::alias_accounts::StaleAliasSweepInterval,
+	>;
+	// A sweep verifies every mapping in the batch twice, once in `authorize` and once in the call,
+	// and the pallet's `integrity_test` holds that pair to half of `Normal.max_extrinsic`. Stale
+	// mappings arrive in bursts, one per member of a rebuilt ring, so a batch this size retires a
+	// ring's worth over a few sweeps rather than one mapping per transaction.
+	type MaxStaleAliasBatch = ConstU32<32>;
 }
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -2591,6 +2629,7 @@ construct_runtime!(
 		Parameters: pallet_parameters = 7,
 		MultiBlockMigrations: pallet_migrations = 8,
 		WeightReclaim: cumulus_pallet_weight_reclaim = 9,
+		NetworkSuffix: indiv_pallet_network_suffix = 154,
 
 		// Monetary stuff.
 		Balances: pallet_balances = 10,
@@ -2924,6 +2963,7 @@ mod benches {
 		[pallet_proxy, Proxy]
 		[pallet_scheduler, Scheduler]
 		[pallet_parameters, Parameters]
+		[indiv_pallet_network_suffix, NetworkSuffix]
 		[pallet_session, SessionBench::<Runtime>]
 		[pallet_uniques, Uniques]
 		[pallet_utility, Utility]

@@ -19,24 +19,25 @@ use crate::{
 		alias_target, exec_as_lite_alias_with_account_revised_tx,
 		exec_as_lite_alias_with_account_tx, exec_as_lite_alias_with_proof_tx,
 		exec_as_lite_alias_with_proof_tx_at_rev, exec_as_lite_person_tx, exec_signed_tx, exec_tx,
-		mock_member_service_delete_collection, mock_member_service_fail_next_add_members,
-		mock_member_service_members, mock_member_service_revision, new_test_ext, Extrinsic,
-		RuntimeCall, RuntimeEvent, RuntimeOrigin, Test, TransactionExecutionError,
-		OTHER_LITE_CONTEXT,
+		mock_consumer_registrar_fail_next, mock_member_service_delete_collection,
+		mock_member_service_fail_next_add_members, mock_member_service_members,
+		mock_member_service_revision, mock_registered_consumers, new_test_ext, Extrinsic,
+		LitePersonRegistrationFee, RuntimeCall, RuntimeEvent, RuntimeOrigin, Test,
+		TransactionExecutionError, OTHER_LITE_CONTEXT,
 	},
 	pallet::{AccountToAlias, AliasToAccount, AttestationAllowance, LitePeople},
 	EnsureLiteAliasInContext, LitePeopleCollectionCreated, MemberOf, Pallet as PeopleLitePallet,
-	ProofOf, LITE_PEOPLE_MEMBER_IDENTIFIER, MSG_PREFIX,
+	ProofOf, LITE_PEOPLE_MEMBER_IDENTIFIER,
 };
 use codec::Encode;
 use frame_support::{
 	assert_noop, assert_ok,
-	dispatch::Pays,
-	traits::{EnsureOriginWithArg, OnRuntimeUpgrade},
+	dispatch::{GetDispatchInfo, Pays},
+	traits::{fungible::InspectHold, Currency, EnsureOriginWithArg, OnRuntimeUpgrade},
 };
 use frame_system::Pallet;
 use indiv_support::traits::{AppendOnlyMembers, Context, ContextualAlias, RevisedContextualAlias};
-use sp_runtime::{transaction_validity::InvalidTransaction, DispatchError};
+use sp_runtime::{traits::Verify, transaction_validity::InvalidTransaction, DispatchError};
 use verifiable::GenerateVerifiable;
 
 const EXTENSION_VERSION: u8 = 0;
@@ -48,7 +49,7 @@ fn auth_context() -> Context {
 }
 
 fn attest_msg(who: u64, key: MemberOf<Test>) -> Vec<u8> {
-	[&MSG_PREFIX[..], &who.encode()[..], &key.encode()[..]].concat()
+	PeopleLitePallet::<Test>::registration_message(&who, &key)
 }
 
 fn secret_from_seed(seed: u8) -> SecretOfTest {
@@ -439,6 +440,36 @@ fn attest_rejects_already_registered_candidate() {
 }
 
 #[test]
+fn attest_rejects_candidate_account_bound_to_alias() {
+	new_test_ext().execute_with(|| {
+		let lite_account = 72;
+		let alias_account = 73;
+		let alias_secret = register_lite_person(74, lite_account, 8);
+		let (_, alias) = establish_alias(&alias_secret, alias_account);
+		assert_eq!(AccountToAlias::<Test>::get(alias_account), Some(alias));
+
+		let verifier = 75;
+		AttestationAllowance::<Test>::insert(verifier, 1);
+		let candidate_secret = secret_from_seed(9);
+		let ring_vrf_key = member_from_secret(&candidate_secret);
+
+		assert_noop!(
+			PeopleLitePallet::<Test>::attest(
+				Some(verifier).into(),
+				alias_account,
+				sp_runtime::testing::UintAuthorityId(alias_account),
+				ring_vrf_key,
+				sign_attest_with_secret(&candidate_secret, alias_account),
+				None,
+			),
+			crate::Error::<Test>::AccountInUse
+		);
+		assert_eq!(AttestationAllowance::<Test>::get(verifier), 1);
+		assert!(!LitePeople::<Test>::contains_key(alias_account));
+	});
+}
+
+#[test]
 fn attest_rejects_duplicate_ring_vrf_key() {
 	new_test_ext().execute_with(|| {
 		let original_verifier = 80;
@@ -467,6 +498,415 @@ fn attest_rejects_duplicate_ring_vrf_key() {
 		assert_eq!(AttestationAllowance::<Test>::get(verifier), 1);
 		assert!(!LitePeople::<Test>::contains_key(candidate));
 	});
+}
+
+mod register_with_fee_tests {
+	use super::*;
+	use crate::weights::WeightInfo;
+
+	fn fund_lite_person_fee(account: u64) {
+		let _ = pallet_balances::Pallet::<Test>::make_free_balance_be(&account, 100);
+	}
+
+	fn register_with_fee(user: u64, seed: u8) -> SecretOfTest {
+		Pallet::<Test>::set_block_number(1);
+		create_lite_collection();
+		fund_lite_person_fee(user);
+		let secret = secret_from_seed(seed);
+		let ring_vrf_key = member_from_secret(&secret);
+		let proof = sign_attest_with_secret(&secret, user);
+		assert_ok!(PeopleLitePallet::<Test>::register_with_fee(
+			Some(user).into(),
+			ring_vrf_key,
+			proof,
+			None,
+		));
+		secret
+	}
+
+	fn consumer_registration_params(
+		account: u64,
+	) -> crate::types::LiteConsumerRegistrationParams<u64, sp_runtime::testing::UintAuthorityId> {
+		crate::types::LiteConsumerRegistrationParams {
+			signature: sp_runtime::testing::UintAuthorityId(account),
+			account,
+			identifier_key: [7; 65],
+			username: indiv_support::traits::Username::try_from(b"liteperson.1".to_vec())
+				.expect("valid username"),
+			reserved_username: None,
+		}
+	}
+
+	fn invalid_consumer_registration_params(
+		account: u64,
+	) -> crate::types::LiteConsumerRegistrationParams<u64, sp_runtime::testing::UintAuthorityId> {
+		let mut params = consumer_registration_params(account);
+		params.signature = sp_runtime::testing::UintAuthorityId(account.saturating_add(1));
+		params
+	}
+
+	#[test]
+	fn register_with_fee_transfers_funds_and_registers_lite_person() {
+		new_test_ext().execute_with(|| {
+			let candidate = 90;
+			let secret = register_with_fee(candidate, 14);
+			let ring_vrf_key = member_from_secret(&secret);
+
+			assert!(matches!(
+				LitePeople::<Test>::get(candidate),
+				Some(crate::types::LitePersonInfo {
+					ring_vrf_key: stored_key,
+					method: crate::RecognitionMethod::Fee,
+				}) if stored_key == ring_vrf_key
+			));
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(candidate), 90);
+			assert_eq!(
+				pallet_balances::Pallet::<Test>::free_balance(
+					PeopleLitePallet::<Test>::lite_people_pot_id(),
+				),
+				LitePersonRegistrationFee::get(),
+			);
+			assert_eq!(pallet_balances::Pallet::<Test>::total_balance_on_hold(&candidate), 0);
+			assert_eq!(
+				mock_member_service_members(LITE_PEOPLE_MEMBER_IDENTIFIER),
+				vec![ring_vrf_key],
+			);
+			assert_eq!(Pallet::<Test>::account(candidate).sufficients, 1);
+			Pallet::<Test>::assert_last_event(
+				crate::Event::<Test>::PersonRegisteredWithFee { candidate }.into(),
+			);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_requires_initialized_collection() {
+		new_test_ext().execute_with(|| {
+			let candidate = 91;
+			fund_lite_person_fee(candidate);
+			let secret = secret_from_seed(15);
+			let key = member_from_secret(&secret);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(candidate).into(),
+					key,
+					sign_attest_with_secret(&secret, candidate),
+					None,
+				),
+				crate::Error::<Test>::LitePeopleCollectionNotCreated
+			);
+			assert!(LitePeople::<Test>::get(candidate).is_none());
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(candidate), 100);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_rejects_invalid_ownership_proof() {
+		new_test_ext().execute_with(|| {
+			create_lite_collection();
+			let candidate = 92;
+			fund_lite_person_fee(candidate);
+			let secret = secret_from_seed(16);
+			let wrong_secret = secret_from_seed(17);
+			let key = member_from_secret(&secret);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(candidate).into(),
+					key,
+					sign_attest_with_secret(&wrong_secret, candidate),
+					None,
+				),
+				crate::Error::<Test>::InvalidProofOfOwnership
+			);
+			assert!(LitePeople::<Test>::get(candidate).is_none());
+		});
+	}
+
+	#[test]
+	fn register_with_fee_rejects_insufficient_funds() {
+		new_test_ext().execute_with(|| {
+			create_lite_collection();
+			let candidate = 93;
+			let secret = secret_from_seed(18);
+			let key = member_from_secret(&secret);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(candidate).into(),
+					key,
+					sign_attest_with_secret(&secret, candidate),
+					None,
+				),
+				DispatchError::Arithmetic(sp_runtime::ArithmeticError::Underflow)
+			);
+			assert!(LitePeople::<Test>::get(candidate).is_none());
+			assert_eq!(Pallet::<Test>::account(candidate).sufficients, 0);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_preserves_the_candidate_account() {
+		new_test_ext().execute_with(|| {
+			create_lite_collection();
+			let candidate = 105;
+			let fee = LitePersonRegistrationFee::get();
+			let _ = pallet_balances::Pallet::<Test>::make_free_balance_be(&candidate, fee);
+			let secret = secret_from_seed(28);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(candidate).into(),
+					member_from_secret(&secret),
+					sign_attest_with_secret(&secret, candidate),
+					None,
+				),
+				DispatchError::Token(sp_runtime::TokenError::NotExpendable)
+			);
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(candidate), fee);
+			assert_eq!(
+				pallet_balances::Pallet::<Test>::free_balance(
+					PeopleLitePallet::<Test>::lite_people_pot_id(),
+				),
+				0,
+			);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_uses_the_current_fee_getter_value() {
+		new_test_ext().execute_with(|| {
+			create_lite_collection();
+			LitePersonRegistrationFee::set(&20);
+			let candidate = 106;
+			fund_lite_person_fee(candidate);
+			let secret = secret_from_seed(29);
+
+			assert_ok!(PeopleLitePallet::<Test>::register_with_fee(
+				Some(candidate).into(),
+				member_from_secret(&secret),
+				sign_attest_with_secret(&secret, candidate),
+				None,
+			));
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(candidate), 80);
+			assert_eq!(
+				pallet_balances::Pallet::<Test>::free_balance(
+					PeopleLitePallet::<Test>::lite_people_pot_id(),
+				),
+				20,
+			);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_rejects_registered_accounts_from_both_methods() {
+		new_test_ext().execute_with(|| {
+			let attested_candidate = 94;
+			register_lite_person(95, attested_candidate, 19);
+			fund_lite_person_fee(attested_candidate);
+			let deposit_secret = secret_from_seed(20);
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(attested_candidate).into(),
+					member_from_secret(&deposit_secret),
+					sign_attest_with_secret(&deposit_secret, attested_candidate),
+					None,
+				),
+				crate::Error::<Test>::AlreadyRegistered
+			);
+
+			let deposited_candidate = 96;
+			register_with_fee(deposited_candidate, 21);
+			let attested_secret = secret_from_seed(22);
+			assert_noop!(
+				PeopleLitePallet::<Test>::attest(
+					Some(97).into(),
+					deposited_candidate,
+					sp_runtime::testing::UintAuthorityId(deposited_candidate),
+					member_from_secret(&attested_secret),
+					sign_attest_with_secret(&attested_secret, deposited_candidate),
+					None,
+				),
+				crate::Error::<Test>::AlreadyRegistered
+			);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_rejects_candidate_account_bound_to_alias() {
+		new_test_ext().execute_with(|| {
+			let lite_account = 107;
+			let alias_account = 108;
+			let alias_secret = register_lite_person(109, lite_account, 30);
+			let (_, alias) = establish_alias(&alias_secret, alias_account);
+			fund_lite_person_fee(alias_account);
+			let candidate_secret = secret_from_seed(31);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(alias_account).into(),
+					member_from_secret(&candidate_secret),
+					sign_attest_with_secret(&candidate_secret, alias_account),
+					None,
+				),
+				crate::Error::<Test>::AccountInUse
+			);
+			assert_eq!(AccountToAlias::<Test>::get(alias_account), Some(alias));
+			assert!(!LitePeople::<Test>::contains_key(alias_account));
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(alias_account), 100);
+			assert_eq!(
+				pallet_balances::Pallet::<Test>::free_balance(
+					PeopleLitePallet::<Test>::lite_people_pot_id(),
+				),
+				0,
+			);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_rejects_ring_key_already_in_use() {
+		new_test_ext().execute_with(|| {
+			let original_candidate = 98;
+			let secret = register_lite_person(99, original_candidate, 23);
+			let candidate = 100;
+			fund_lite_person_fee(candidate);
+			let key = member_from_secret(&secret);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(candidate).into(),
+					key,
+					sign_attest_with_secret(&secret, candidate),
+					None,
+				),
+				crate::Error::<Test>::KeyAlreadyInUse
+			);
+			assert!(LitePeople::<Test>::get(candidate).is_none());
+		});
+	}
+
+	#[test]
+	fn register_with_fee_forwards_valid_consumer_registration() {
+		new_test_ext().execute_with(|| {
+			Pallet::<Test>::set_block_number(1);
+			create_lite_collection();
+			let candidate = 101;
+			fund_lite_person_fee(candidate);
+			let secret = secret_from_seed(24);
+			let call = RuntimeCall::PeopleLite(crate::Call::<Test>::register_with_fee {
+				ring_vrf_key: member_from_secret(&secret),
+				proof_of_ownership: sign_attest_with_secret(&secret, candidate),
+				consumer_registration: Some(consumer_registration_params(candidate)),
+			});
+
+			assert_ok!(exec_signed_tx(candidate, call));
+			assert_eq!(mock_registered_consumers(), vec![candidate]);
+			Pallet::<Test>::assert_last_event(
+				crate::Event::<Test>::ConsumerRegistered { account: candidate }.into(),
+			);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_rejects_invalid_consumer_registration_signature() {
+		new_test_ext().execute_with(|| {
+			create_lite_collection();
+			let candidate = 102;
+			fund_lite_person_fee(candidate);
+			let secret = secret_from_seed(25);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(candidate).into(),
+					member_from_secret(&secret),
+					sign_attest_with_secret(&secret, candidate),
+					Some(invalid_consumer_registration_params(candidate)),
+				),
+				crate::Error::<Test>::InvalidAttestationSignature
+			);
+			assert_eq!(mock_registered_consumers(), Vec::<u64>::new());
+			assert!(LitePeople::<Test>::get(candidate).is_none());
+		});
+	}
+
+	#[test]
+	fn register_with_fee_rejects_mismatched_consumer_registration_account() {
+		new_test_ext().execute_with(|| {
+			create_lite_collection();
+			let candidate = 103;
+			let consumer = 104;
+			fund_lite_person_fee(candidate);
+			let secret = secret_from_seed(26);
+			let params = consumer_registration_params(consumer);
+
+			assert!(params
+				.signature
+				.verify(&params.signing_payload(&candidate)[..], &params.account));
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(candidate).into(),
+					member_from_secret(&secret),
+					sign_attest_with_secret(&secret, candidate),
+					Some(params),
+				),
+				crate::Error::<Test>::InvalidConsumerRegistrationAccount
+			);
+			assert_eq!(mock_registered_consumers(), Vec::<u64>::new());
+			assert!(LitePeople::<Test>::get(candidate).is_none());
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(candidate), 100);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_rolls_back_when_consumer_registration_fails() {
+		new_test_ext().execute_with(|| {
+			create_lite_collection();
+			let candidate = 103;
+			fund_lite_person_fee(candidate);
+			let secret = secret_from_seed(26);
+			mock_consumer_registrar_fail_next();
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(candidate).into(),
+					member_from_secret(&secret),
+					sign_attest_with_secret(&secret, candidate),
+					Some(consumer_registration_params(candidate)),
+				),
+				DispatchError::Other("mock consumer registration failed")
+			);
+			assert_eq!(mock_registered_consumers(), Vec::<u64>::new());
+			assert!(LitePeople::<Test>::get(candidate).is_none());
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(candidate), 100);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_charges_weight_for_consumer_registration() {
+		new_test_ext().execute_with(|| {
+			let candidate = 104;
+			let secret = secret_from_seed(27);
+			let without_consumer = crate::Call::<Test>::register_with_fee {
+				ring_vrf_key: member_from_secret(&secret),
+				proof_of_ownership: sign_attest_with_secret(&secret, candidate),
+				consumer_registration: None,
+			};
+			let with_consumer = crate::Call::<Test>::register_with_fee {
+				ring_vrf_key: member_from_secret(&secret),
+				proof_of_ownership: sign_attest_with_secret(&secret, candidate),
+				consumer_registration: Some(consumer_registration_params(candidate)),
+			};
+
+			let without_consumer_weight = without_consumer.get_dispatch_info().call_weight;
+			let with_consumer_weight = with_consumer.get_dispatch_info().call_weight;
+			let registration_weight = <Test as crate::Config>::WeightInfo::register_with_fee();
+			let consumer_weight = <Test as crate::Config>::WeightInfo::register_lite_consumer();
+
+			assert_eq!(without_consumer_weight, registration_weight);
+			assert_eq!(with_consumer_weight, registration_weight.saturating_add(consumer_weight));
+			assert!(without_consumer_weight.all_lt(with_consumer_weight));
+		});
+	}
 }
 
 #[test]
@@ -875,7 +1315,7 @@ fn set_alias_account_rejects_canonical_lite_account_as_alias_account() {
 		let err = exec_as_lite_alias_with_proof_tx(call, proof, 0)
 			.expect_err("canonical lite account must not enter alias storage");
 
-		assert_eq!(err.unwrap_dispatch().error, crate::Error::<Test>::AccountInUse.into());
+		assert_eq!(err.unwrap_dispatch().error, crate::Error::<Test>::AlreadyRegistered.into());
 		assert!(AccountToAlias::<Test>::get(lite_account).is_none());
 		assert!(AliasToAccount::<Test>::iter().next().is_none());
 	});

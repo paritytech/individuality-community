@@ -979,6 +979,344 @@ mod merge_rings_tests {
 			);
 		});
 	}
+
+	#[test]
+	fn merge_rings_fails_for_append_only_collection() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+			create_append_only_collection(identifier, 1);
+
+			generate_members(identifier, 1, 10);
+			while MembersPallet::onboard_members(&identifier, false) == Ok(true) {}
+			assert_eq!(RingKeysStatus::<Test>::get(identifier, 0).total, 10);
+
+			// Move the top ring away so ring 0 is otherwise eligible for a merge.
+			manually_advance_to_ring(&identifier, 2);
+
+			assert_noop!(
+				MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 1, 0),
+				Error::<Test>::CollectionNotFlexible
+			);
+		});
+	}
+
+	#[test]
+	fn merge_rings_does_not_strand_higher_pages_of_append_only_ring() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+			let page_size = FlexibleRingExp::get().ring_capacity();
+
+			// `R2e10` exceeds the page size, so an append-only ring spans several pages. Its
+			// capacity is also more than twice the page size, so a full page 0 stays below the
+			// `max_ring_size / 2` merge threshold.
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::create_collection(
+				MockLocation(1),
+				&identifier,
+				1,
+				RingMode::AppendOnly,
+				RingExponent::R2e10,
+				None
+			));
+			assert!(RingExponent::R2e10.ring_capacity() > 2 * page_size);
+
+			// Onboard enough members for ring 0 to use a second page.
+			generate_members_with_offset(identifier, 1, 255, 0xB1);
+			generate_members_with_offset(identifier, 1, 5, 0xB2);
+			while MembersPallet::onboard_members(&identifier, false) == Ok(true) {}
+
+			assert_eq!(RingKeys::<Test>::get((&identifier, 0u32, 0u32)).len(), page_size as usize);
+			let page_one = RingKeys::<Test>::get((&identifier, 0u32, 1u32));
+			assert!(!page_one.is_empty());
+
+			// Move the top ring away so ring 0 is otherwise eligible for a merge. Ring 3 is
+			// unused, so its page 0 is empty and can hold all of ring 0's page 0.
+			manually_advance_to_ring(&identifier, 2);
+
+			assert_noop!(
+				MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 3, 0),
+				Error::<Test>::CollectionNotFlexible
+			);
+
+			// The members on the higher page keep their ring status and their position.
+			assert_eq!(RingKeys::<Test>::get((&identifier, 0u32, 1u32)), page_one);
+			assert_eq!(
+				RingKeysStatus::<Test>::get(identifier, 0).total,
+				page_size + page_one.len() as u32
+			);
+			for key in &page_one {
+				assert!(matches!(
+					Members::<Test>::get(identifier, key).unwrap(),
+					RingPosition::Included { ring_index: 0, ring_page: 1, .. }
+				));
+			}
+		});
+	}
+}
+
+/// `merge_rings` is a free call available to any signed account, so it must never accept ring
+/// indices that do not refer to two existing, populated rings. Otherwise it can be spammed to
+/// write junk into arbitrary ring indices, or to shuffle a real ring around the index space at no
+/// cost.
+mod merge_rings_spam_tests {
+	use super::*;
+
+	/// Keep building `ring_index` until every one of its keys is included in its root.
+	fn finish_ring_build(identifier: Identifier, ring_index: RingIndex) {
+		while let Some(to_include) = MembersPallet::should_build_ring(&identifier, ring_index, 255)
+		{
+			assert_ok!(MembersPallet::build_ring(&identifier, ring_index, to_include));
+		}
+	}
+
+	/// Add members with `add` and drive them all the way into a built `ring_index`.
+	fn build_ring_with_members<R>(
+		identifier: Identifier,
+		ring_index: RingIndex,
+		add: impl FnOnce() -> R,
+	) -> R {
+		let added = add();
+		while MembersPallet::onboard_members(&identifier, false) == Ok(true) {}
+		finish_ring_build(identifier, ring_index);
+		added
+	}
+
+	/// Calls `merge_rings` with far-out index pairs on a collection that has no ring at all, and
+	/// checks every call is rejected without writing any ring state.
+	#[test]
+	fn merge_rings_rejects_unused_ring_indices() {
+		TestExt::new().execute_with(|| {
+			System::set_block_number(1);
+			let identifier = TEST_IDENTIFIER;
+			create_test_collection(identifier, 1);
+
+			// No ring exists yet: the collection has no member at all.
+			assert_eq!(CurrentRingIndex::<Test>::get(identifier), 0);
+
+			for base in 1_000_000u32..1_000_010 {
+				assert_noop!(
+					MembersPallet::merge_rings(
+						RuntimeOrigin::signed(1),
+						identifier,
+						base,
+						base + 1_000,
+					),
+					Error::<Test>::InvalidRing
+				);
+			}
+
+			// No stale-ring markers and no ring statuses were written.
+			assert_eq!(StaleRings::<Test>::iter_prefix(identifier).count(), 0);
+			assert_eq!(RingKeysStatus::<Test>::iter_prefix(identifier).count(), 0);
+		});
+	}
+
+	/// Builds a real ring 0, then tries to pair it with never-used indices in both roles, checking
+	/// its root, status and member positions all stay put.
+	#[test]
+	fn merge_rings_cannot_relocate_a_ring_to_an_unused_index() {
+		TestExt::new().execute_with(|| {
+			System::set_block_number(1);
+			let identifier = TEST_IDENTIFIER;
+			create_test_collection(identifier, 1);
+
+			// Ring 0 gets 10 members, then the top ring moves to 1.
+			let members =
+				build_ring_with_members(identifier, 0, || generate_members(identifier, 1, 10));
+			manually_advance_to_ring(&identifier, 1);
+			assert!(Root::<Test>::contains_key(identifier, 0));
+
+			// Ring 0 cannot be moved to an index the collection never created a ring at, in either
+			// direction.
+			for base in 1_000_000u32..1_000_010 {
+				assert_noop!(
+					MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, base, 0),
+					Error::<Test>::InvalidRing
+				);
+				assert_noop!(
+					MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 0, base),
+					Error::<Test>::InvalidRing
+				);
+			}
+
+			// Ring 0 is untouched: its root still stands and its members did not move.
+			assert!(Root::<Test>::contains_key(identifier, 0));
+			assert!(!StaleRings::<Test>::contains_key(identifier, 0));
+			assert_eq!(RingKeysStatus::<Test>::get(identifier, 0).total, 10);
+			for (member, _) in &members {
+				assert!(matches!(
+					Members::<Test>::get(identifier, member),
+					Some(RingPosition::Included { ring_index: 0, .. })
+				));
+			}
+			assert_eq!(OldRoots::<Test>::iter().count(), 0);
+		});
+	}
+
+	/// Sets up two populated rings that are otherwise eligible to merge, and checks the top ring
+	/// used for onboarding is refused in either role.
+	#[test]
+	fn merge_rings_rejects_the_top_ring() {
+		TestExt::new().execute_with(|| {
+			System::set_block_number(1);
+			let identifier = TEST_IDENTIFIER;
+			create_test_collection(identifier, 1);
+
+			// Ring 0 gets 10 members, then ring 1 becomes the top ring and gets 10 members too.
+			// Both rings are populated and below the merge threshold, so the only thing standing in
+			// the way of a merge is that ring 1 is the top ring that onboards new candidates.
+			build_ring_with_members(identifier, 0, || generate_members(identifier, 1, 10));
+			manually_advance_to_ring(&identifier, 1);
+			build_ring_with_members(identifier, 1, || {
+				generate_members_with_offset(identifier, 1, 10, 0xAA)
+			});
+
+			assert_eq!(CurrentRingIndex::<Test>::get(identifier), 1);
+			assert_eq!(RingKeysStatus::<Test>::get(identifier, 0).total, 10);
+			assert_eq!(RingKeysStatus::<Test>::get(identifier, 1).total, 10);
+
+			assert_noop!(
+				MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 1, 0),
+				Error::<Test>::InvalidRing
+			);
+			assert_noop!(
+				MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 0, 1),
+				Error::<Test>::InvalidRing
+			);
+		});
+	}
+
+	/// Fills three rings of a mutable collection, removes 3/4 of each so they become mergeable,
+	/// merges ring 0 into ring 1 and then ring 1 into ring 2, and checks that neither merged-away
+	/// ring can take part in a merge again, in any combination.
+	///
+	/// A `Flexible` (mutable) collection can shrink its rings through removals, which is what makes
+	/// them eligible for merging in the first place. Once a ring has been merged away its keys live
+	/// on another ring, so it must not be possible to merge it a second time — otherwise this free
+	/// call could be replayed against every index the collection has ever used.
+	#[test]
+	fn merged_away_rings_cannot_be_merged_again() {
+		TestExt::new().execute_with(|| {
+			System::set_block_number(1);
+			let identifier = TEST_IDENTIFIER;
+			create_test_collection(identifier, 1);
+
+			let ring_size = RingExponent::R2e9.ring_capacity() as usize;
+			let merge_threshold = ring_size / 2;
+			assert_eq!((ring_size, merge_threshold), (255, 127));
+
+			// Fill three rings. Onboarding advances the top ring index as each ring fills up, so
+			// rings 0, 1 and 2 all end up populated and ring 3 becomes the top ring.
+			let ring_members: Vec<Vec<MemberOf<Test>>> = [0xA0u8, 0xB0, 0xC0]
+				.into_iter()
+				.map(|offset| {
+					generate_members_with_offset(identifier, 1, 255, offset)
+						.into_iter()
+						.map(|(member, _)| member)
+						.collect()
+				})
+				.collect();
+			while MembersPallet::onboard_members(&identifier, false) == Ok(true) {}
+			for ring_index in 0..3 {
+				finish_ring_build(identifier, ring_index);
+				assert_eq!(
+					RingKeysStatus::<Test>::get(identifier, ring_index).total,
+					ring_size as u32
+				);
+			}
+			assert_eq!(CurrentRingIndex::<Test>::get(identifier), 3);
+
+			// Remove 3/4 of each ring, rounded up: 192 of 255, leaving 63 keys per ring. Two rings
+			// can then be merged into a third and the result still stays under the threshold, so
+			// the chain of merges below is only ever blocked by the rings themselves being gone.
+			let removed_per_ring = ring_size * 3 / 4 + 1;
+			assert_eq!(removed_per_ring, 192);
+			let kept_per_ring = ring_size - removed_per_ring;
+			assert_eq!(kept_per_ring, 63);
+
+			assert_ok!(<MembersPallet as FlexibleMembers>::start_removal_session(&identifier));
+			for members in &ring_members {
+				let removals: Vec<_> = members.iter().take(removed_per_ring).copied().collect();
+				assert_ok!(<MembersPallet as FlexibleMembers>::remove_members(
+					&identifier,
+					&removals
+				));
+			}
+			assert_ok!(<MembersPallet as FlexibleMembers>::end_removal_session(&identifier));
+			for ring_index in 0..3 {
+				MembersPallet::remove_suspended_keys(&identifier, ring_index);
+				finish_ring_build(identifier, ring_index);
+				assert_eq!(
+					RingKeysStatus::<Test>::get(identifier, ring_index).total,
+					kept_per_ring as u32
+				);
+			}
+
+			// Merge ring 0 into ring 1, then ring 1 into ring 2. Every surviving key ends up on
+			// ring 2 and rings 0 and 1 are left behind as merged-away indices.
+			assert_ok!(MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 1, 0));
+			assert_eq!(RingKeysStatus::<Test>::get(identifier, 1).total, 2 * kept_per_ring as u32);
+			finish_ring_build(identifier, 1);
+			assert_ok!(MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 2, 1));
+			assert_eq!(RingKeysStatus::<Test>::get(identifier, 2).total, 3 * kept_per_ring as u32);
+
+			// Rings 0 and 1 are gone: no keys, no status, no root, and nothing queued to rebuild.
+			for merged_away in [0u32, 1] {
+				assert!(RingKeys::<Test>::get((&identifier, merged_away, 0u32)).is_empty());
+				assert!(!RingKeysStatus::<Test>::contains_key(identifier, merged_away));
+				assert!(!Root::<Test>::contains_key(identifier, merged_away));
+				assert!(!StaleRings::<Test>::contains_key(identifier, merged_away));
+			}
+			for members in &ring_members {
+				for member in members.iter().skip(removed_per_ring) {
+					assert!(matches!(
+						Members::<Test>::get(identifier, member),
+						Some(RingPosition::Included { ring_index: 2, .. })
+					));
+				}
+			}
+
+			// A merged-away ring cannot be merged again, in either role or in any combination:
+			// rings 0 and 1 hold no keys, so they are no longer rings at all.
+			for (base, target) in [(0u32, 1u32), (1, 0), (0, 2), (1, 2)] {
+				assert_noop!(
+					MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, base, target),
+					Error::<Test>::InvalidRing
+				);
+			}
+			// Ring 2 collected all three rings' keys, which puts it above the merge threshold, so
+			// it cannot absorb another ring either.
+			assert!(3 * kept_per_ring >= merge_threshold);
+			for (base, target) in [(2u32, 0u32), (2, 1), (2, 4)] {
+				assert_noop!(
+					MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, base, target),
+					Error::<Test>::RingAboveMergeThreshold
+				);
+			}
+			// Ring 3 is the top ring and the collection never created a ring 4; neither of them is
+			// a merge partner.
+			for (base, target) in [(3u32, 2u32), (2, 3), (0, 3), (3, 0), (4, 2)] {
+				assert_noop!(
+					MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, base, target),
+					Error::<Test>::InvalidRing
+				);
+			}
+
+			// After all the rejected attempts, ring 2 still holds every surviving key.
+			assert_eq!(RingKeysStatus::<Test>::get(identifier, 2).total, 3 * kept_per_ring as u32);
+			assert_eq!(RingKeys::<Test>::get((&identifier, 2u32, 0u32)).len(), 3 * kept_per_ring);
+			// Ring 2 is the only ring left with any state: rings 0 and 1 were cleaned up by the
+			// merges and the top ring 3 never had a member onboarded into it.
+			assert_eq!(RingKeysStatus::<Test>::iter_prefix(identifier).count(), 1);
+			// Ring 2 page 0 is the only `RingKeys` entry left. Rings 0 and 1 were cleaned up by
+			// the merges, and onboarding no longer stores the empty page it moves on to after
+			// filling one exactly, so no ring leaves a page behind that holds nothing.
+			let mut all_pages: Vec<_> = RingKeys::<Test>::iter_prefix((identifier,))
+				.map(|((ring_index, page_index), keys)| (ring_index, page_index, keys.len()))
+				.collect();
+			all_pages.sort();
+			assert_eq!(all_pages, vec![(2, 0, 3 * kept_per_ring)]);
+		});
+	}
 }
 
 mod set_onboarding_size_tests {

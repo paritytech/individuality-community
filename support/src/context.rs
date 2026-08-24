@@ -19,8 +19,15 @@
 use alloc::vec::Vec;
 
 use crate::traits::Context;
+use frame_support::{traits::ConstU32, BoundedVec};
 
 const PRODUCT_PREFIX: [u8; 8] = *b"product/";
+
+/// Maximum length of the network suffix appended to a product identifier.
+pub const MAX_NETWORK_SUFFIX_LENGTH: u32 = 16;
+
+/// Network suffix appended to product identifiers when constructing ring VRF contexts.
+pub type ProductContextNetworkSuffix = BoundedVec<u8, ConstU32<MAX_NETWORK_SUFFIX_LENGTH>>;
 
 /// The suffix appended to a product identifier when constructing a ring VRF context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

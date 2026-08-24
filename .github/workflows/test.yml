@@ -40,12 +40,12 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
 
           curl -sL --fail -o "$HOME/.local/bin/solc" \
-            "https://github.com/ethereum/solidity/releases/download/v${{ env.SOLC_VERSION }}/solc-static-linux"
+            "https://github.com/ethereum/solidity/releases/download/v$SOLC_VERSION/solc-static-linux"
           chmod +x "$HOME/.local/bin/solc"
           solc --version
 
           curl -L --fail -o "$HOME/.local/bin/resolc" \
-            "https://github.com/paritytech/revive/releases/download/v${{ env.RESOLC_VERSION }}/resolc-x86_64-unknown-linux-musl"
+            "https://github.com/paritytech/revive/releases/download/v$RESOLC_VERSION/resolc-x86_64-unknown-linux-musl"
           chmod +x "$HOME/.local/bin/resolc"
           resolc --version
 
@@ -146,12 +146,12 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
 
           curl -sL --fail -o "$HOME/.local/bin/solc" \
-            "https://github.com/ethereum/solidity/releases/download/v${{ env.SOLC_VERSION }}/solc-static-linux"
+            "https://github.com/ethereum/solidity/releases/download/v$SOLC_VERSION/solc-static-linux"
           chmod +x "$HOME/.local/bin/solc"
           solc --version
 
           curl -L --fail -o "$HOME/.local/bin/resolc" \
-            "https://github.com/paritytech/revive/releases/download/v${{ env.RESOLC_VERSION }}/resolc-x86_64-unknown-linux-musl"
+            "https://github.com/paritytech/revive/releases/download/v$RESOLC_VERSION/resolc-x86_64-unknown-linux-musl"
           chmod +x "$HOME/.local/bin/resolc"
           resolc --version
 
@@ -163,7 +163,7 @@ jobs:
       - name: Build frame-omni-bencher from source if OMNI_BENCHER_COMMIT is set
         if: env.OMNI_BENCHER_COMMIT
         run: |
-          cargo install --git https://github.com/paritytech/polkadot-sdk frame-omni-bencher --profile=production --rev $OMNI_BENCHER_COMMIT --root . -q --locked
+          cargo install --git https://github.com/paritytech/polkadot-sdk frame-omni-bencher --profile=production --rev "$OMNI_BENCHER_COMMIT" --root . -q --locked
           mv ./bin/frame-omni-bencher .
           ./frame-omni-bencher --version
         shell: bash
@@ -171,7 +171,7 @@ jobs:
       - name: Download frame-omni-bencher if OMNI_BENCHER_COMMIT is not set
         if: env.OMNI_BENCHER_COMMIT == null
         run: |
-          curl -sL https://github.com/paritytech/polkadot-sdk/releases/download/$OMNI_BENCHER_POLKADOT_RELEASE_VERSION/frame-omni-bencher -o frame-omni-bencher
+          curl -sL "https://github.com/paritytech/polkadot-sdk/releases/download/$OMNI_BENCHER_POLKADOT_RELEASE_VERSION/frame-omni-bencher" -o frame-omni-bencher
           chmod +x ./frame-omni-bencher
           ./frame-omni-bencher --version
         shell: bash

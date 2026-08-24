@@ -18,6 +18,8 @@ use super::*;
 use assets_common::local_and_foreign_assets::TargetFromLeft;
 use codec::{Decode, Encode};
 use cumulus_primitives_core::Junction::{GeneralIndex, PalletInstance, Parachain};
+#[cfg(feature = "runtime-benchmarks")]
+use frame_support::BoundedVec;
 use frame_support::{
 	pallet_prelude::PhantomData,
 	parameter_types,
@@ -25,6 +27,7 @@ use frame_support::{
 		fungible::{HoldConsideration, ItemOf},
 		ConstU128, ConstU32, ConstU8, ConstUint, Footprint, Get, LinearStoragePrice, Randomness,
 	},
+	PalletId,
 };
 #[cfg(feature = "runtime-benchmarks")]
 use indiv_support::traits::PersonalId;
@@ -38,8 +41,6 @@ use indiv_support::{
 use paseo_runtime_constants::system_parachain::{
 	NextAssetHubParaId, ASSET_HUB_ID, NEXT_ASSET_HUB_ID,
 };
-#[cfg(feature = "runtime-benchmarks")]
-use sp_runtime::BoundedVec;
 use sp_runtime::{
 	traits::{AccountIdConversion, ConstI8, ConstU16},
 	DispatchResult, MultiSignature, MultiSigner, Percent, SaturatedConversion,
@@ -49,13 +50,14 @@ use xcm::v5::{Location, WeightLimit};
 
 use crate::{
 	parameters::{
-		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePersonStatementLimit,
-		LiteStmtStoreSlotsPerPeriod, LongTermStorageAllowanceForLitePeople,
-		LongTermStorageAllowanceForPeople, LongTermStorageClaimsPerPeriod,
-		LongTermStorageCleanupLimit, LongTermStorageGraceWindow, LongTermStoragePeriodDuration,
-		NotificationAllowance, NotificationPeriodDuration, NotificationSlotsPerPeriod,
-		PeopleAirdropsPrizeSource, PersonStatementLimit, StmtStoreCleanupLimit,
-		StmtStoreGraceWindow, StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
+		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePersonRegistrationFee,
+		LitePersonStatementLimit, LiteStmtStoreSlotsPerPeriod,
+		LongTermStorageAllowanceForLitePeople, LongTermStorageAllowanceForPeople,
+		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
+		LongTermStoragePeriodDuration, NotificationAllowance, NotificationPeriodDuration,
+		NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource, PersonStatementLimit,
+		StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreReplacementCooldown,
+		StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -64,12 +66,27 @@ use crate::{
 pub const EXTERNAL_ASSET_ID: u32 = 50_000_413;
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub DefaultNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("default network suffix fits");
 	pub const StaleAliasCleanupInterval: BlockNumber = 5 * MINUTES;
 	pub ExternalAssetLocation: Location = Location::new(
 		1,
 		[Parachain(ASSET_HUB_ID), PalletInstance(50), GeneralIndex(EXTERNAL_ASSET_ID as u128)],
 	);
+}
+
+impl indiv_pallet_network_suffix::Config for Runtime {
+	type UpdateOrigin = EnsureRoot<Self::AccountId>;
+	type DefaultSuffix = DefaultNetworkSuffix;
+	type WeightInfo = NetworkSuffixWeightInfo;
+}
+
+/// Conservatively reuse the heavier `pallet_parameters` setter weight.
+pub struct NetworkSuffixWeightInfo;
+impl indiv_pallet_network_suffix::WeightInfo for NetworkSuffixWeightInfo {
+	fn set_network_suffix(_s: u32) -> frame_support::weights::Weight {
+		<weights::pallet_parameters::WeightInfo<Runtime> as pallet_parameters::WeightInfo>::set_parameter()
+	}
 }
 
 /// The full featured fungibles implementation with both regular and hold functionality.
@@ -139,6 +156,8 @@ parameter_types! {
 		indiv_support::traits::RingExponent::R2e9;
 	/// Onboarding size for lite people collection.
 	pub const LitePeopleOnboardingSize: u32 = 3;
+	/// Pallet identifier used to derive the account that receives lite-person registration fees.
+	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
 	/// The page size for chunks manager.
 	pub const ChunkPageSize: u32 = 255;
 	/// Self-inclusion delay: 60 minutes.
@@ -713,6 +732,7 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// `replay_credit_trees`.
 	type MaxQueuedCreditTrees = ConstU32<256>;
 	type MaxCreditTreesPerMessage = ConstU32<32>;
+	type ReplayCooldownSeconds = ConstU64<60>;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
 	// Entries are the distinct blocks a claimant was awarded in, not a window of consecutive
 	// ones, so the bound counts games rather than time. One game awards a claimant at most
@@ -1151,8 +1171,8 @@ impl
 parameter_types! {
 	/// Upper bound on what one credit tree of a `receive_credit_trees` batch costs to execute on
 	/// the NFT claims chain. Charged to the caller of `replay_credit_trees`, so a repair pays for
-	/// the remote work it causes, and the only thing bounding how much replay traffic anyone can
-	/// cause.
+	/// the remote work it causes. What bounds replay traffic is `ReplayCooldownSeconds`; this
+	/// prices the work the replays that pass it cause.
 	///
 	/// Derived from the marginal per-tree cost of `receive_credit_trees` on Asset Hub: one
 	/// `CreditTrees` read and write, the per-tree execution term, and the `max_size` of a
@@ -1230,6 +1250,9 @@ impl indiv_pallet_people_lite::BenchmarkHelper<AccountId, Signature> for PeopleL
 
 impl indiv_pallet_people_lite::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people_lite::WeightInfo<Runtime>;
+	type Currency = Balances;
+	type PotId = LitePeoplePotId;
+	type RegistrationFee = LitePersonRegistrationFee;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;

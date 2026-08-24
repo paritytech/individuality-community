@@ -23,6 +23,7 @@ members = [
 	"pallets/members-notifier",
 	"pallets/members-subscriber",
 	"pallets/mob-rule",
+	"pallets/network-suffix",
 	"pallets/nft-claims",
 	"pallets/nft-credits",
 	"pallets/origin-restriction",
@@ -139,6 +140,7 @@ indiv-pallet-members = { path = "pallets/members", default-features = false }
 indiv-pallet-members-notifier = { path = "pallets/members-notifier", default-features = false }
 indiv-pallet-members-subscriber = { path = "pallets/members-subscriber", default-features = false }
 indiv-pallet-mob-rule = { path = "pallets/mob-rule", default-features = false }
+indiv-pallet-network-suffix = { path = "pallets/network-suffix", default-features = false }
 indiv-pallet-nft-claims = { path = "pallets/nft-claims", default-features = false }
 indiv-pallet-nft-credits = { path = "pallets/nft-credits", default-features = false }
 indiv-pallet-origin-restriction = { path = "pallets/origin-restriction", default-features = false }
