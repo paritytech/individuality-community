@@ -1436,7 +1436,7 @@ version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
 dependencies = [
- "bitcoin_hashes 0.14.1",
+ "bitcoin_hashes 0.13.1",
  "rand 0.8.6",
  "rand_core 0.6.4",
  "serde",
@@ -3393,7 +3393,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6015,7 +6015,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6935,9 +6935,9 @@ dependencies = [
 
 [[package]]
 name = "pallet-revive"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b77d1b5539765351b93b8468eb087bbee646327023f45ea044d930fa856a99a9"
+checksum = "4b0e82c45e214c10923c5cc4ff08670eae967143e7d9c86b2ce4c3ef2adda9d6"
 dependencies = [
  "alloy-consensus",
  "alloy-core",
@@ -6988,9 +6988,9 @@ dependencies = [
 
 [[package]]
 name = "pallet-revive-fixtures"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4efb1cd2d84727d34254c1fb1eac34d77d94a812c59b8bf1d34dbd23de2b1b4b"
+checksum = "9da0e78089f1bf98c2dbedb73af08df683ae506fce741219c3ec3d49667cd6e2"
 dependencies = [
  "alloy-core",
  "anyhow",
@@ -7017,9 +7017,9 @@ dependencies = [
 
 [[package]]
 name = "pallet-revive-uapi"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c0cef0a48517471543a404f6ec497671b1ef1b6e78774ac24aee353527c896d"
+checksum = "67272383e7b7bee4f9d0e08a696a274a142047fe27edcc4501f525fdb0f2c963"
 dependencies = [
  "alloy-core",
  "bitflags 1.3.2",
@@ -9036,7 +9036,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11615,7 +11615,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -12628,7 +12628,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
