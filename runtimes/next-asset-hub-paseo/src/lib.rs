@@ -2841,6 +2841,7 @@ pub mod migrations {
 			pallet_session::migrations::v1::InitOffenceSeverity<Runtime>,
 		>,
 		cumulus_pallet_aura_ext::migration::MigrateV0ToV1<Runtime>,
+		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
 		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
 		pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
