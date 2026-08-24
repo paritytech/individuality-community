@@ -382,8 +382,7 @@ pub mod pallet {
 		/// Could not push member into the ring.
 		CouldNotPush,
 		/// The ring index is not valid for the requested operation: it is the top ring used for
-		/// onboarding, it refers to an empty ring, or the collection never created a ring at that
-		/// index.
+		/// onboarding or it refers to an empty ring.
 		InvalidRing,
 		/// Ring cannot be built while there are suspensions pending.
 		SuspensionsPending,
@@ -724,12 +723,13 @@ pub mod pallet {
 				RingsState::<T>::get(identifier).append_only(),
 				Error::<T>::RemovalSessionInProgress
 			);
-			// Identical rings cannot be merged.
-			ensure!(base_ring_index != target_ring_index, Error::<T>::InvalidRing);
-			// Top ring that onboards new candidates cannot be merged. Further index as well.
+			// Top ring that onboards new candidates cannot be merged. Identical rings cannot be
+			// merged.
 			let current_ring_index = CurrentRingIndex::<T>::get(identifier);
 			ensure!(
-				base_ring_index < current_ring_index && target_ring_index < current_ring_index,
+				base_ring_index != target_ring_index &&
+					base_ring_index != current_ring_index &&
+					target_ring_index != current_ring_index,
 				Error::<T>::InvalidRing
 			);
 
