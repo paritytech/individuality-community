@@ -144,7 +144,7 @@ impl From<[u8; 65]> for ChatKey {
 	DecodeWithMemTracking,
 )]
 pub struct AccountNameRecord {
-	/// The lite-person label (`<dns-stem>.<digits>`), if one was reserved.
+	/// The lite-person label (`<dns-stem>.<digits>`), if one was registered.
 	pub lite: Option<BaseLabel>,
 	/// The full-person label, if one was registered.
 	pub full: Option<BaseLabel>,
