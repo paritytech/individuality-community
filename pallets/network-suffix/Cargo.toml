@@ -1,12 +1,13 @@
 [package]
-name = "indiv-pallet-alias-accounts"
-description = "Pallet for managing alias-based authentication with bidirectional account mappings"
+name = "indiv-pallet-network-suffix"
+description = "Pallet storing the network suffix used by product contexts"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
+readme.workspace = true
 
 [lints]
 workspace = true
@@ -16,23 +17,15 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 codec = { workspace = true, features = ["derive"] }
-log = { workspace = true }
-scale-info = { workspace = true, features = ["derive"] }
 frame-benchmarking = { workspace = true, optional = true }
 frame-support = { workspace = true }
 frame-system = { workspace = true }
-sp-core = { workspace = true }
-sp-io = { workspace = true }
-sp-runtime = { workspace = true }
-
 indiv-support = { workspace = true }
-verifiable = { workspace = true }
+scale-info = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-pallet-assets = { workspace = true }
-parking_lot = { workspace = true }
-pallet-balances = { workspace = true }
-xcm = { workspace = true }
+sp-io = { workspace = true, default-features = true }
+sp-runtime = { workspace = true, default-features = true }
 
 [features]
 default = ["std"]
@@ -42,30 +35,17 @@ std = [
 	"frame-support/std",
 	"frame-system/std",
 	"indiv-support/std",
-	"log/std",
-	"pallet-assets/std",
-	"pallet-balances/std",
 	"scale-info/std",
-	"sp-core/std",
-	"sp-io/std",
-	"sp-runtime/std",
-	"verifiable/std",
-	"xcm/std",
 ]
 runtime-benchmarks = [
 	"frame-benchmarking/runtime-benchmarks",
 	"frame-support/runtime-benchmarks",
 	"frame-system/runtime-benchmarks",
 	"indiv-support/runtime-benchmarks",
-	"pallet-assets/runtime-benchmarks",
-	"pallet-balances/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
-	"xcm/runtime-benchmarks",
 ]
 try-runtime = [
 	"frame-support/try-runtime",
 	"frame-system/try-runtime",
-	"pallet-assets/try-runtime",
-	"pallet-balances/try-runtime",
 	"sp-runtime/try-runtime",
 ]

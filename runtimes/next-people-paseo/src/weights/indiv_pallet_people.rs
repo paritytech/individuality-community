@@ -176,14 +176,16 @@ impl<T: frame_system::Config> indiv_pallet_people::WeightInfo for WeightInfo<T> 
 	/// Proof: `Members::Root` (`max_values`: None, `max_size`: Some(1192), added: 3667, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:2 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn as_person_alias_with_account() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1867`
-		//  Estimated: `4657`
+		//  Estimated: `5169`
 		// Minimum execution time: 56_925_000 picoseconds.
 		Weight::from_parts(62_559_000, 0)
-			.saturating_add(Weight::from_parts(0, 4657))
-			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(Weight::from_parts(0, 5169))
+			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `People::AccountToPersonalId` (r:1 w:0)
@@ -208,14 +210,16 @@ impl<T: frame_system::Config> indiv_pallet_people::WeightInfo for WeightInfo<T> 
 	/// Proof: `Members::Root` (`max_values`: None, `max_size`: Some(1192), added: 3667, mode: `MaxEncodedLen`)
 	/// Storage: `People::AccountToAlias` (r:1 w:0)
 	/// Proof: `People::AccountToAlias` (`max_values`: None, `max_size`: Some(120), added: 2595, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:2 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn as_person_alias_with_proof() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1824`
-		//  Estimated: `4657`
+		//  Estimated: `5169`
 		// Minimum execution time: 16_129_208_000 picoseconds.
 		Weight::from_parts(16_201_985_000, 0)
-			.saturating_add(Weight::from_parts(0, 4657))
-			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(Weight::from_parts(0, 5169))
+			.saturating_add(T::DbWeight::get().reads(6))
 	}
 	/// Storage: `People::People` (r:1 w:0)
 	/// Proof: `People::People` (`max_values`: None, `max_size`: Some(89), added: 2564, mode: `MaxEncodedLen`)
@@ -238,14 +242,16 @@ impl<T: frame_system::Config> indiv_pallet_people::WeightInfo for WeightInfo<T> 
 	/// Proof: `Members::Root` (`max_values`: None, `max_size`: Some(1192), added: 3667, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:2 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn as_person_alias_with_account_revised() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1973`
-		//  Estimated: `4657`
+		//  Estimated: `5169`
 		// Minimum execution time: 16_448_072_000 picoseconds.
 		Weight::from_parts(16_498_187_000, 0)
-			.saturating_add(Weight::from_parts(0, 4657))
-			.saturating_add(T::DbWeight::get().reads(5))
+			.saturating_add(Weight::from_parts(0, 5169))
+			.saturating_add(T::DbWeight::get().reads(7))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
 	/// Storage: `Members::Collections` (r:1 w:1)

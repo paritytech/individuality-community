@@ -105,14 +105,16 @@ impl<T: frame_system::Config> indiv_pallet_dotns_gateway::WeightInfo for WeightI
 	/// Proof: `MembersSubscriber::RingRoots` (`max_values`: None, `max_size`: Some(2433), added: 4908, mode: `MaxEncodedLen`)
 	/// Storage: `DotnsGateway::AliasRegistration` (r:1 w:0)
 	/// Proof: `DotnsGateway::AliasRegistration` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn as_register_full_name_tx_ext() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `2894`
-		//  Estimated: `5898`
+		//  Estimated: `6410`
 		// Minimum execution time: 29_277_344_000 picoseconds.
 		Weight::from_parts(29_322_006_000, 0)
-			.saturating_add(Weight::from_parts(0, 5898))
-			.saturating_add(T::DbWeight::get().reads(5))
+			.saturating_add(Weight::from_parts(0, 6410))
+			.saturating_add(T::DbWeight::get().reads(6))
 	}
 	/// Storage: `DotnsGateway::AttestationAllowance` (r:1 w:1)
 	/// Proof: `DotnsGateway::AttestationAllowance` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)

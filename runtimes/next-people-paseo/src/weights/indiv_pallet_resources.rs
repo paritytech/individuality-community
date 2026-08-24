@@ -91,14 +91,16 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a8a88e3dd7409f195fd52db` (r:1 w:1)
 	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a8a88e3dd7409f195fd52db` (r:1 w:1)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn register_person_standalone() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1069`
-		//  Estimated: `6840`
+		//  Estimated: `7352`
 		// Minimum execution time: 92_862_000 picoseconds.
 		Weight::from_parts(97_096_000, 0)
-			.saturating_add(Weight::from_parts(0, 6840))
-			.saturating_add(T::DbWeight::get().reads(8))
+			.saturating_add(Weight::from_parts(0, 7352))
+			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().writes(6))
 	}
 	/// Storage: `Resources::AccountOfAlias` (r:1 w:1)
@@ -115,14 +117,16 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 	/// Proof: `Resources::UsernameOwnerOf` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
 	/// Storage: `Resources::ReservationOf` (r:0 w:10)
 	/// Proof: `Resources::ReservationOf` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn register_person_reservation() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `761`
-		//  Estimated: `4226`
+		//  Estimated: `4738`
 		// Minimum execution time: 91_337_000 picoseconds.
 		Weight::from_parts(112_283_000, 0)
-			.saturating_add(Weight::from_parts(0, 4226))
-			.saturating_add(T::DbWeight::get().reads(5))
+			.saturating_add(Weight::from_parts(0, 4738))
+			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().writes(15))
 	}
 	/// Storage: `Resources::AccountOfAlias` (r:1 w:0)
@@ -133,14 +137,16 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a8a88e3dd7409f195fd52db` (r:1 w:1)
 	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a8a88e3dd7409f195fd52db` (r:1 w:1)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn touch_person_authorization() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `432`
-		//  Estimated: `3897`
+		//  Estimated: `4409`
 		// Minimum execution time: 26_990_000 picoseconds.
 		Weight::from_parts(31_590_000, 0)
-			.saturating_add(Weight::from_parts(0, 3897))
-			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(Weight::from_parts(0, 4409))
+			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
 	/// Storage: `Resources::UsernameReservationQueue` (r:1 w:0)
@@ -283,14 +289,16 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 	/// Proof: `Resources::NotificationRegistrationByAlias` (`max_values`: None, `max_size`: Some(85), added: 2560, mode: `MaxEncodedLen`)
 	/// Storage: `Resources::NotificationAliasByAccount` (r:1 w:0)
 	/// Proof: `Resources::NotificationAliasByAccount` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn as_register_with_proof_tx_ext() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `2091`
-		//  Estimated: `5137`
+		//  Estimated: `5649`
 		// Minimum execution time: 29_221_392_000 picoseconds.
 		Weight::from_parts(29_267_426_000, 0)
-			.saturating_add(Weight::from_parts(0, 5137))
-			.saturating_add(T::DbWeight::get().reads(5))
+			.saturating_add(Weight::from_parts(0, 5649))
+			.saturating_add(T::DbWeight::get().reads(6))
 	}
 	/// Storage: `Timestamp::Now` (r:1 w:0)
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
@@ -302,14 +310,16 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 	/// Proof: `Resources::NotificationRegistrationByAlias` (`max_values`: None, `max_size`: Some(85), added: 2560, mode: `MaxEncodedLen`)
 	/// Storage: `Resources::NotificationAliasByAccount` (r:1 w:0)
 	/// Proof: `Resources::NotificationAliasByAccount` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn as_register_for_collection_tx_ext() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `2093`
-		//  Estimated: `5137`
+		//  Estimated: `5649`
 		// Minimum execution time: 28_938_213_000 picoseconds.
 		Weight::from_parts(28_984_288_000, 0)
-			.saturating_add(Weight::from_parts(0, 5137))
-			.saturating_add(T::DbWeight::get().reads(5))
+			.saturating_add(Weight::from_parts(0, 5649))
+			.saturating_add(T::DbWeight::get().reads(6))
 	}
 	/// Storage: `Timestamp::Now` (r:1 w:0)
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
@@ -471,14 +481,16 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 	/// Proof: `Members::Root` (`max_values`: None, `max_size`: Some(1672), added: 4147, mode: `MaxEncodedLen`)
 	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:0)
 	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(96), added: 2571, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn as_stmt_store_allowance_tx_ext() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `2217`
-		//  Estimated: `5137`
+		//  Estimated: `5649`
 		// Minimum execution time: 29_088_912_000 picoseconds.
 		Weight::from_parts(29_141_822_000, 0)
-			.saturating_add(Weight::from_parts(0, 5137))
-			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(Weight::from_parts(0, 5649))
+			.saturating_add(T::DbWeight::get().reads(5))
 	}
 	/// Storage: `XcmpQueue::DeliveryFeeFactor` (r:1 w:0)
 	/// Proof: `XcmpQueue::DeliveryFeeFactor` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
@@ -508,14 +520,16 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 	/// Proof: `Members::Root` (`max_values`: None, `max_size`: Some(1672), added: 4147, mode: `MaxEncodedLen`)
 	/// Storage: `Resources::SpentLongTermStorageAliases` (r:1 w:0)
 	/// Proof: `Resources::SpentLongTermStorageAliases` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn claim_long_term_storage_tx_ext() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `2093`
-		//  Estimated: `5137`
+		//  Estimated: `5649`
 		// Minimum execution time: 29_298_026_000 picoseconds.
 		Weight::from_parts(29_332_184_000, 0)
-			.saturating_add(Weight::from_parts(0, 5137))
-			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(Weight::from_parts(0, 5649))
+			.saturating_add(T::DbWeight::get().reads(5))
 	}
 	/// Storage: `Resources::SpentLongTermStorageAliases` (r:21 w:20)
 	/// Proof: `Resources::SpentLongTermStorageAliases` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
