@@ -121,13 +121,16 @@ pub type RuntimeClock = Timestamp;
 pub type RuntimeClock = BenchmarkClock;
 
 // The `AccountContexts` type, which must implement `trait Contains` and return true only for the
-// contexts the runtime supports.
+// contexts the runtime supports. Every pallet configured with
+// `indiv_pallet_people::EnsurePersonalAliasInContext` needs its context here, otherwise no account
+// can be bound to an alias in that context and the pallet's person origin is unreachable.
 pub struct AccountContexts;
 impl frame_support::traits::Contains<Context> for AccountContexts {
 	fn contains(l: &Context) -> bool {
 		l == &indiv_pallet_mob_rule::MOB_CONTEXT ||
 			l == &indiv_pallet_score::Pallet::<Runtime>::score_context() ||
-			l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context()
+			l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context() ||
+			l == &indiv_pallet_people_airdrops::Pallet::<Runtime>::people_airdrops_context()
 	}
 }
 
