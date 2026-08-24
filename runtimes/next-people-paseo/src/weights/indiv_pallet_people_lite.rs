@@ -88,14 +88,16 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 	/// Proof: `Members::Root` (`max_values`: None, `max_size`: Some(1192), added: 3667, mode: `MaxEncodedLen`)
 	/// Storage: `PeopleLite::AccountToAlias` (r:1 w:0)
 	/// Proof: `PeopleLite::AccountToAlias` (`max_values`: None, `max_size`: Some(120), added: 2595, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:2 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn as_lite_alias_with_proof_tx_ext() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1783`
-		//  Estimated: `4657`
+		//  Estimated: `5169`
 		// Minimum execution time: 16_215_036_000 picoseconds.
 		Weight::from_parts(16_256_243_000, 0)
-			.saturating_add(Weight::from_parts(0, 4657))
-			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(Weight::from_parts(0, 5169))
+			.saturating_add(T::DbWeight::get().reads(6))
 	}
 	/// Storage: `PeopleLite::AccountToAlias` (r:1 w:1)
 	/// Proof: `PeopleLite::AccountToAlias` (`max_values`: None, `max_size`: Some(120), added: 2595, mode: `MaxEncodedLen`)
@@ -107,14 +109,16 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 	/// Proof: `Members::Root` (`max_values`: None, `max_size`: Some(1192), added: 3667, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:2 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn as_lite_alias_with_account_revised_tx_ext() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1957`
-		//  Estimated: `4657`
+		//  Estimated: `5169`
 		// Minimum execution time: 16_389_142_000 picoseconds.
 		Weight::from_parts(16_410_941_000, 0)
-			.saturating_add(Weight::from_parts(0, 4657))
-			.saturating_add(T::DbWeight::get().reads(5))
+			.saturating_add(Weight::from_parts(0, 5169))
+			.saturating_add(T::DbWeight::get().reads(7))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
 	/// Storage: `PeopleLite::AttestationAllowance` (r:1 w:1)
