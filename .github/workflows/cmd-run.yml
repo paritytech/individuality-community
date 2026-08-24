@@ -48,32 +48,13 @@ env:
 jobs:
   before-cmd:
     runs-on: parity-ubuntu
-    env:
-      JOB_NAME: "cmd"
     outputs:
-      job_url: ${{ steps.build-link.outputs.job_url }}
       run_url: ${{ steps.build-link.outputs.run_url }}
     steps:
       - name: Build workflow link
-        if: ${{ github.event.inputs.is_quiet == 'false' }}
         id: build-link
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          jobLink=$(curl -s \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" | jq -r --arg job "$JOB_NAME" '.jobs[] | select(.name == $job) | .html_url')
-
-          runLink=$(curl -s \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" | jq -r '.html_url')
-
-          echo "job_url=${jobLink}"
-          echo "run_url=${runLink}"
-          echo "job_url=$jobLink" >> "$GITHUB_OUTPUT"
-          echo "run_url=$runLink" >> "$GITHUB_OUTPUT"
+          echo "run_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Comment PR (Start)
         if: ${{ github.event.inputs.is_quiet == 'false' }}
@@ -81,7 +62,7 @@ jobs:
         env:
           CMD: ${{ github.event.inputs.cmd }}
           PR_NUM: ${{ github.event.inputs.pr_num }}
-          JOB_URL: ${{ steps.build-link.outputs.job_url }}
+          RUN_URL: ${{ steps.build-link.outputs.run_url }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -89,7 +70,7 @@ jobs:
               issue_number: Number(process.env.PR_NUM),
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `Command "${process.env.CMD}" has started 🚀 [See logs here](${process.env.JOB_URL})`
+              body: `Command "${process.env.CMD}" has started 🚀 [See logs here](${process.env.RUN_URL})`
             })
 
       - name: Debug info
@@ -403,7 +384,7 @@ jobs:
         if: ${{ github.event.inputs.is_quiet == 'false' && contains(needs.*.result, 'failure') }}
         uses: actions/github-script@v9
         env:
-          JOB_URL: ${{ needs.before-cmd.outputs.job_url }}
+          RUN_URL: ${{ needs.before-cmd.outputs.run_url }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -411,7 +392,7 @@ jobs:
               issue_number: Number(process.env.PR_NUM),
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `Command "${process.env.CMD}" has failed ❌! [See logs here](${process.env.JOB_URL})`
+              body: `Command "${process.env.CMD}" has failed ❌! [See logs here](${process.env.RUN_URL})`
             })
 
       - name: Add confused reaction on failure
