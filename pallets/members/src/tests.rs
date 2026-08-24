@@ -1286,7 +1286,7 @@ mod merge_rings_spam_tests {
 			// Ring 2 collected all three rings' keys, which puts it above the merge threshold, so
 			// it cannot absorb another ring either.
 			assert!(3 * kept_per_ring >= merge_threshold);
-			for (base, target) in [(2u32, 0u32), (2, 1)] {
+			for (base, target) in [(2u32, 0u32), (2, 1), (2, 4)] {
 				assert_noop!(
 					MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, base, target),
 					Error::<Test>::RingAboveMergeThreshold
@@ -1294,7 +1294,8 @@ mod merge_rings_spam_tests {
 			}
 			// Ring 3 is the top ring and the collection never created a ring 4; neither of them is
 			// a merge partner.
-			for (base, target) in [(3u32, 2u32), (2, 3), (0, 3), (3, 0), (4, 2), (2, 4)] {
+			for (base, target) in [(3u32, 2u32), (2, 3), (0, 3), (3, 0), (4, 2)] {
+				dbg!(base, target);
 				assert_noop!(
 					MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, base, target),
 					Error::<Test>::InvalidRing
