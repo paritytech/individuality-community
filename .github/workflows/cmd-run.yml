@@ -1,0 +1,441 @@
+# Runs the /cmd command dispatched by cmd.yml. The dispatch targets the
+# protected cmd-bot branch, so the privileged jobs (before-cmd, after-cmd,
+# finish) and the bot scripts always come from cmd-bot, never from the PR.
+# The cmd job runs PR code, so it holds no secrets and only read permissions.
+#
+# Keep the cmd-bot branch in sync with main whenever this file or
+# .github/scripts changes.
+name: Command - Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      cmd:
+        description: "Command to run"
+        required: true
+      pr_num:
+        description: "PR number"
+        required: true
+      pr_branch:
+        description: "PR branch"
+        required: true
+      runner:
+        description: "Runner to use"
+        required: true
+      repo:
+        description: "Repository the PR branch lives in"
+        required: true
+      comment_id:
+        description: "Comment ID of the triggering /cmd comment"
+        required: true
+      requested_by:
+        description: "GitHub login of the user who triggered the command"
+        required: true
+      is_quiet:
+        description: "Quiet mode"
+        required: false
+        default: "false"
+
+permissions: # allow the action to comment on the PR
+  contents: read
+  issues: write
+  pull-requests: write
+  actions: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  before-cmd:
+    runs-on: parity-ubuntu
+    env:
+      JOB_NAME: "cmd"
+    outputs:
+      job_url: ${{ steps.build-link.outputs.job_url }}
+      run_url: ${{ steps.build-link.outputs.run_url }}
+    steps:
+      - name: Build workflow link
+        if: ${{ github.event.inputs.is_quiet == 'false' }}
+        id: build-link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          jobLink=$(curl -s \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" | jq -r --arg job "$JOB_NAME" '.jobs[] | select(.name == $job) | .html_url')
+
+          runLink=$(curl -s \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" | jq -r '.html_url')
+
+          echo "job_url=${jobLink}"
+          echo "run_url=${runLink}"
+          echo "job_url=$jobLink" >> "$GITHUB_OUTPUT"
+          echo "run_url=$runLink" >> "$GITHUB_OUTPUT"
+
+      - name: Comment PR (Start)
+        if: ${{ github.event.inputs.is_quiet == 'false' }}
+        uses: actions/github-script@v9
+        env:
+          CMD: ${{ github.event.inputs.cmd }}
+          PR_NUM: ${{ github.event.inputs.pr_num }}
+          JOB_URL: ${{ steps.build-link.outputs.job_url }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: Number(process.env.PR_NUM),
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Command "${process.env.CMD}" has started 🚀 [See logs here](${process.env.JOB_URL})`
+            })
+
+      - name: Debug info
+        env:
+          CMD: ${{ github.event.inputs.cmd }}
+          PR_NUM: ${{ github.event.inputs.pr_num }}
+          PR_BRANCH: ${{ github.event.inputs.pr_branch }}
+          RUNNER: ${{ github.event.inputs.runner }}
+          REPO: ${{ github.event.inputs.repo }}
+          COMMENT_ID: ${{ github.event.inputs.comment_id }}
+          REQUESTED_BY: ${{ github.event.inputs.requested_by }}
+          IS_QUIET: ${{ github.event.inputs.is_quiet }}
+        run: |
+          echo "Running command: $CMD"
+          echo "PR number: $PR_NUM"
+          echo "PR branch: $PR_BRANCH"
+          echo "Runner: $RUNNER"
+          echo "Repository: $REPO"
+          echo "Comment ID: $COMMENT_ID"
+          echo "Requested by: $REQUESTED_BY"
+          echo "Is quiet: $IS_QUIET"
+
+  cmd:
+    needs: [before-cmd]
+    runs-on: ${{ github.event.inputs.runner }}
+    timeout-minutes: 1440 # 24 hours
+    # This job builds and runs code from the PR branch, so it must not see
+    # secrets and gets read permissions only.
+    permissions:
+      contents: read
+      pull-requests: none
+      actions: none
+      issues: none
+    env:
+      CMD: ${{ github.event.inputs.cmd }}
+      PR_BRANCH: ${{ github.event.inputs.pr_branch }}
+      BASE_REPO: ${{ github.repository }}
+    outputs:
+      weight_deviation: ${{ steps.weight_deviation.outputs.result }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.inputs.repo }}
+          ref: ${{ github.event.inputs.pr_branch }}
+          # Needed by the weight-deviation script to resolve the merge-base
+          # between the PR branch and upstream main after benchmark commits.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install updates and dependencies
+        if: startsWith(github.event.inputs.cmd, 'bench')
+        run: .github/install-deps.sh
+
+      - name: Load common env file
+        run: cat .github/env >> "$GITHUB_ENV"
+
+      - name: Install nightly toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
+        if: startsWith(github.event.inputs.cmd, 'fmt')
+        with:
+          toolchain: nightly-${{ env.RUST_NIGHTLY_VERSION }}
+          components: rustfmt
+          cache: false
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
+        if: startsWith(github.event.inputs.cmd, 'bench')
+        with:
+          cache: false
+
+      - name: Build frame-omni-bencher from source if OMNI_BENCHER_COMMIT is set
+        if: startsWith(github.event.inputs.cmd, 'bench') && env.OMNI_BENCHER_COMMIT
+        run: |
+          cargo install --git https://github.com/paritytech/polkadot-sdk frame-omni-bencher --profile=production --rev "$OMNI_BENCHER_COMMIT" --root . -q --locked
+          sudo mv ./bin/frame-omni-bencher /usr/local/bin/frame-omni-bencher
+          frame-omni-bencher --version
+        shell: bash
+
+      - name: Download frame-omni-bencher
+        if: startsWith(github.event.inputs.cmd, 'bench') && env.OMNI_BENCHER_COMMIT == null
+        run: |
+          curl --max-time 10 --retry 5 --retry-delay 10 --retry-max-time 120 -sL \
+            "https://github.com/paritytech/polkadot-sdk/releases/download/$OMNI_BENCHER_POLKADOT_RELEASE_VERSION/frame-omni-bencher" \
+            -o frame-omni-bencher
+          chmod +x ./frame-omni-bencher
+          sudo mv ./frame-omni-bencher /usr/local/bin/frame-omni-bencher
+          frame-omni-bencher --version
+        shell: bash
+
+      - name: Install dependencies for fmt
+        if: startsWith(github.event.inputs.cmd, 'fmt')
+        run: |
+          curl -fsSL "https://github.com/tamasfe/taplo/releases/download/$TAPLO_VERSION/taplo-linux-x86.gz" | gunzip > taplo
+          chmod +x taplo
+          sudo mv taplo /usr/local/bin/
+
+      - name: Setup Cache
+        if: startsWith(github.event.inputs.cmd, 'bench')
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "individuality-cache-cmd"
+          # The cache is scoped to the cmd-bot ref, so only cmd runs can
+          # restore what this job saves.
+          save-if: true
+
+      - name: Run cmd
+        id: cmd
+        run: |
+          echo "Running command: $CMD on branch $PR_BRANCH"
+
+          git config user.name "cmd[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p /tmp/cmd
+
+          # Run the bot scripts from the cmd-bot branch, not from the PR
+          # checkout, so a PR cannot modify the code this job executes.
+          BOT_DIR="$RUNNER_TEMP/cmd-bot"
+          rm -rf "$BOT_DIR"
+          git clone --depth 1 --branch cmd-bot "https://github.com/$BASE_REPO" "$BOT_DIR"
+
+          # $CMD is word-split into arguments on purpose.
+          python3 "$BOT_DIR/.github/scripts/cmd/cmd.py" $CMD
+
+          git status > /tmp/cmd/git_status.log
+          git diff > /tmp/cmd/git_diff.log
+
+          # Commit locally so the weight-deviation step can compare HEAD
+          # against main; after-cmd applies the patch below and pushes.
+          git add -A
+          git diff HEAD -U0 > /tmp/cmd/command_diff.patch
+          git commit -m "tmp cmd: $CMD" || true
+
+      - name: Run weight deviation
+        id: weight_deviation
+        if: ${{ startsWith(github.event.inputs.cmd, 'bench') && !contains(github.event.inputs.cmd, '--dry-run') }}
+        shell: bash
+        run: |
+          # The checkout may be of a fork; compare against the base repo main.
+          git remote add upstream "https://github.com/$BASE_REPO" 2>/dev/null || \
+            git remote set-url upstream "https://github.com/$BASE_REPO"
+          git fetch -q upstream main
+
+          report="$RUNNER_TEMP/weight-deviation.txt"
+          status=0
+          python3 "$RUNNER_TEMP/cmd-bot/.github/scripts/weight_deviation.py" --base upstream/main --current HEAD > "$report" || status=$?
+
+          # Exit code 2 means high-variance changes were found. That is
+          # informational for /cmd bench, so only fail on real errors.
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+            cat "$report"
+            exit "$status"
+          fi
+
+          {
+            echo "### Runtime weight deviation"
+            echo
+            echo '```'
+            cat "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "result<<EOF"
+            cat "$report"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload command diff
+        uses: actions/upload-artifact@v7
+        with:
+          name: command-diff
+          path: /tmp/cmd/command_diff.patch
+
+      - name: Upload git status
+        uses: actions/upload-artifact@v7
+        with:
+          name: git-status
+          path: /tmp/cmd/git_status.log
+
+      - name: Upload git diff
+        uses: actions/upload-artifact@v7
+        with:
+          name: git-diff
+          path: /tmp/cmd/git_diff.log
+
+  after-cmd:
+    needs: [before-cmd, cmd]
+    runs-on: parity-ubuntu
+    env:
+      CMD: ${{ github.event.inputs.cmd }}
+      PR_BRANCH: ${{ github.event.inputs.pr_branch }}
+    steps:
+      # The default token does not retrigger CI on push, so the push must use
+      # the app token.
+      - name: Generate token
+        id: generate_token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CMD_BOT_APP_ID }}
+          private-key: ${{ secrets.CMD_BOT_APP_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.generate_token.outputs.token }}
+          repository: ${{ github.event.inputs.repo }}
+          ref: ${{ github.event.inputs.pr_branch }}
+
+      - name: Download command diff
+        if: ${{ !contains(github.event.inputs.cmd, '--dry-run') }}
+        uses: actions/download-artifact@v8
+        with:
+          name: command-diff
+          path: command-diff
+
+      - name: Apply and commit changes
+        if: ${{ !contains(github.event.inputs.cmd, '--dry-run') }}
+        env:
+          REQUESTED_BY: ${{ github.event.inputs.requested_by }}
+        run: |
+          git config user.name "cmd[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config pull.rebase false
+
+          git apply "command-diff/command_diff.patch" --unidiff-zero --allow-empty
+          rm -rf command-diff
+
+          git status
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git restore --staged Cargo.lock # ignore changes in Cargo.lock
+            git commit -m "Update from $REQUESTED_BY running command '$CMD'" || true
+
+            # Rebase on top of concurrent pushes and retry once.
+            if ! git push origin "HEAD:$PR_BRANCH"; then
+              git pull --rebase origin "$PR_BRANCH"
+              git push origin "HEAD:$PR_BRANCH"
+            fi
+          else
+            echo "Nothing to commit"
+          fi
+
+      - name: Download dry-run diff
+        if: ${{ contains(github.event.inputs.cmd, '--dry-run') }}
+        uses: actions/download-artifact@v8
+        with:
+          name: git-diff
+          path: git-diff
+
+      - name: Comment PR (End)
+        if: ${{ github.event.inputs.is_quiet == 'false' }}
+        uses: actions/github-script@v9
+        env:
+          CMD: ${{ github.event.inputs.cmd }}
+          PR_NUM: ${{ github.event.inputs.pr_num }}
+          RUN_URL: ${{ needs.before-cmd.outputs.run_url }}
+          WEIGHT_DEVIATION: "${{ needs.cmd.outputs.weight_deviation }}"
+          IS_DRY_RUN: ${{ contains(github.event.inputs.cmd, '--dry-run') }}
+        with:
+          github-token: ${{ steps.generate_token.outputs.token }}
+          script: |
+            const fs = require("fs");
+            let runUrl = process.env.RUN_URL;
+            let weightDeviation = process.env.WEIGHT_DEVIATION;
+
+            let dryRunDiff = '';
+            if (process.env.IS_DRY_RUN === 'true') {
+              dryRunDiff = fs.readFileSync('git-diff/git_diff.log', 'utf8');
+              // Truncate if too large for GitHub comment (max ~65k)
+              if (dryRunDiff.length > 60000) {
+                dryRunDiff = dryRunDiff.slice(0, 60000) + '\n\n... (truncated, diff too large for PR comment)';
+              }
+            }
+
+            const fence = (text) => '`'.repeat(Math.max(3,
+              ...(text.match(/`+/g) || ['']).map(run => run.length + 1)));
+
+            let extra = '';
+            if (dryRunDiff) {
+              const f = fence(dryRunDiff);
+              extra = `\n\n<details>\n\n<summary>🏃 Dry-run diff (steps=10, repeat=4, not committed):</summary>\n\n${f}diff\n${dryRunDiff}\n${f}\n\n</details>`;
+            } else if (weightDeviation) {
+              const f = fence(weightDeviation);
+              extra = `\n\n<details>\n\n<summary>Runtime weight deviation:</summary>\n\n${f}\n${weightDeviation}\n${f}\n\n</details>`;
+            }
+
+            github.rest.issues.createComment({
+              issue_number: Number(process.env.PR_NUM),
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Command "${process.env.CMD}" has finished ✅ [See logs here](${runUrl})${extra}`
+            })
+
+  finish:
+    needs: [before-cmd, cmd, after-cmd]
+    if: ${{ always() }}
+    runs-on: parity-ubuntu
+    env:
+      COMMENT_ID: ${{ github.event.inputs.comment_id }}
+      PR_NUM: ${{ github.event.inputs.pr_num }}
+      CMD: ${{ github.event.inputs.cmd }}
+    steps:
+      - name: Comment PR (Failure)
+        if: ${{ github.event.inputs.is_quiet == 'false' && contains(needs.*.result, 'failure') }}
+        uses: actions/github-script@v9
+        env:
+          JOB_URL: ${{ needs.before-cmd.outputs.job_url }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: Number(process.env.PR_NUM),
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Command "${process.env.CMD}" has failed ❌! [See logs here](${process.env.JOB_URL})`
+            })
+
+      - name: Add confused reaction on failure
+        if: ${{ contains(needs.*.result, 'failure') }}
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.reactions.createForIssueComment({
+              comment_id: Number(process.env.COMMENT_ID),
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              content: 'confused'
+            })
+
+      - name: Add reaction on success
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.reactions.createForIssueComment({
+              comment_id: Number(process.env.COMMENT_ID),
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              content: '+1'
+            })
