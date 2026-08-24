@@ -1106,10 +1106,12 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Offboard a participant, suspend recognised people and release unclaimed credit to the pot.
+		/// Offboard a participant, suspend recognised people and release unclaimed credit to the
+		/// pot.
 		///
 		/// The participant forfeits their credit when their record is removed. Suspension failures
-		/// return an error, while a failed credit release is logged and does not retain a stale entry.
+		/// return an error, while a failed credit release is logged and does not retain a stale
+		/// entry.
 		pub fn offboard(who: &AccountOrPerson<T::AccountId>) -> DispatchResult {
 			let maybe_recognition = Participants::<T>::get(who).map(|p| p.recognition);
 			if let Some(Recognized(id)) = maybe_recognition {
