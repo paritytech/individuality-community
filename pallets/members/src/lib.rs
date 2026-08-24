@@ -1748,7 +1748,11 @@ pub mod pallet {
 						keys = RingKeys::<T>::get((*identifier, top_ring_index, ring_page_index));
 					}
 				}
-				RingKeys::<T>::insert((*identifier, top_ring_index, ring_page_index), keys);
+				// If the page is empty, no key was added and no need to write it, especially since
+				// it would not be removed.
+				if !keys.is_empty() {
+					RingKeys::<T>::insert((*identifier, top_ring_index, ring_page_index), keys);
+				}
 				ActiveMembers::<T>::mutate(identifier, |active| {
 					*active = active.saturating_add(to_include)
 				});
