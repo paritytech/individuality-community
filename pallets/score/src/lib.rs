@@ -1107,11 +1107,26 @@ pub mod pallet {
 		}
 
 		/// Offboard a participant, e.g. voluntarily leaves or is kicked out for inactivity.
-		pub fn offboard(who: &AccountOrPerson<T::AccountId>) {
+		///
+		/// A `Recognized` participant is suspended in [`Config::People`] before their record is
+		/// removed, inside a mutation session opened and closed here. Removing the record makes
+		/// the suspension permanent.
+		///
+		/// Returns an error if the suspension or its mutation session fails.
+		pub fn offboard(who: &AccountOrPerson<T::AccountId>) -> DispatchResult {
+			let maybe_recognition = Participants::<T>::get(who).map(|p| p.recognition);
+			if let Some(Recognized(id)) = maybe_recognition {
+				with_storage_layer::<_, DispatchError, _>(|| {
+					T::People::start_people_set_mutation_session()?;
+					T::People::suspend_personhood(&[id])?;
+					T::People::end_people_set_mutation_session()
+				})?;
+			}
 			if let AccountOrPerson::Account(account) = who {
 				frame_system::Pallet::<T>::dec_sufficients(account);
 			}
 			Participants::<T>::remove(who);
+			Ok(())
 		}
 
 		/// Start a new attendance report session.
@@ -1155,6 +1170,9 @@ pub mod pallet {
 		/// `last_attended_game` is pinned to `game_index`; when `false`, `last_attended_game`
 		/// is left unchanged so it continues to point at the participant's most recent
 		/// actual attendance.
+		///
+		/// When suspending a `Recognized` participant fails in [`Config::People`], the
+		/// participant stays recognised.
 		///
 		/// Must be called within attendance report session. Attendance report session is started
 		/// and ended with `start_attendance_report_session` and `end_attendance_report_session`.
@@ -1203,7 +1221,7 @@ pub mod pallet {
 			let acquire_personhood =
 				!score.reached_personhood && score.score >= personhood_threshold;
 
-			let suspend_personhood = !attended &&
+			let mut suspend_personhood = !attended &&
 				score.reached_personhood &&
 				match score.recognition {
 					// Participants never lose personhood once they are externally recognised or
@@ -1224,6 +1242,25 @@ pub mod pallet {
 						window == 0 || misses > allowed_misses || score.score < personhood_threshold,
 				};
 
+			// A `Recognized` participant is suspended in `Config::People` first. With a valid
+			// state, it will not fail but, if it fails however, the participant stays recognised
+			// and keeps their personhood until the next attendance where, if they are absent, the
+			// suspension is retried.
+			if suspend_personhood {
+				if let Recognized(id) = score.recognition {
+					if T::People::suspend_personhood(&[id]).is_ok() {
+						score.recognition = Suspended(id);
+					} else {
+						log::error!(
+							target: LOG_TARGET,
+							"failed to suspend person {id}, the suspension is retried at the \
+							next qualifying absence"
+						);
+						suspend_personhood = false;
+					}
+				}
+			}
+
 			if acquire_personhood {
 				score.reached_personhood = true;
 			} else if suspend_personhood {
@@ -1233,16 +1270,6 @@ pub mod pallet {
 			score.has_ever_reached_personhood |= score.reached_personhood;
 
 			score.cashed_out = false;
-
-			match score.recognition {
-				Recognized(id) =>
-					if suspend_personhood {
-						let _ = T::People::suspend_personhood(&[id])
-							.defensive_proof("indiv-pallet-score: failed to suspend person");
-						score.recognition = Suspended(id);
-					},
-				NotRecognized | Suspended(_) | ExternallyRecognized => (),
-			}
 
 			Participants::<T>::insert(who, &score);
 

@@ -1252,6 +1252,11 @@ pub mod pallet {
 		///
 		/// There must be no game or the existing game must be in registration phase and the player
 		/// must have not signed up for the game.
+		///
+		/// A player whose pallet-score recognition is `Recognized` has their personhood suspended,
+		/// the same as an absence-triggered suspension. Offboarding is permanent. Playing as a
+		/// person again after a suspension and then re-recognition requires onboarding under a new
+		/// personal id with a new key.
 		#[pallet::call_index(4)]
 		#[pallet::weight(
 			<T as Config>::WeightInfo::offboard_account()
@@ -1307,7 +1312,7 @@ pub mod pallet {
 				Self::deposit_event(Event::<T>::StmtUsageRemoved { who: stmt_account.into() });
 			}
 
-			indiv_pallet_score::Pallet::<T>::offboard(&who);
+			indiv_pallet_score::Pallet::<T>::offboard(&who)?;
 
 			let actual_weight = match &who {
 				AccountOrPerson::Account(_) => <T as Config>::WeightInfo::offboard_account(),
@@ -1322,6 +1327,11 @@ pub mod pallet {
 		/// Kickout a kickable player that is not playing after `NonPlayingKickoutTime`.
 		///
 		/// The origin must be signed by an account.
+		///
+		/// A player whose pallet-score recognition is `Recognized` has their personhood suspended,
+		/// the same as an absence-triggered suspension. The kickout is permanent. Playing as a
+		/// person again after a suspension and then re-recognition requires onboarding under a new
+		/// personal id with a new key.
 		///
 		/// - `player`: The player to kickout. It must be archived and kickable with
 		///   `archived_since` older than `NonPlayingKickoutTime`.
@@ -1347,7 +1357,7 @@ pub mod pallet {
 				Error::<T>::Early
 			);
 
-			indiv_pallet_score::Pallet::<T>::offboard(&player);
+			indiv_pallet_score::Pallet::<T>::offboard(&player)?;
 
 			Self::deposit_event(Event::<T>::KickedOut { player });
 
