@@ -182,6 +182,16 @@ pub mod pallet {
 	pub type LiteLabelOwner<T: Config> =
 		StorageMap<_, Blake2_128Concat, BaseLabel, T::AccountId, OptionQuery>;
 
+	/// The dotNS labels each account acquired through this gateway.
+	///
+	/// Written on [`Pallet::reserve_name`] and [`Pallet::register_name`] only, so
+	/// labels that change purely contract-side (for example transfers) are not
+	/// reflected. Keyed by account so clients can watch a set of accounts with one
+	/// storage subscription.
+	#[pallet::storage]
+	pub type AccountNames<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, AccountNameRecord, OptionQuery>;
+
 	/// Address of the `RootGatewayDispatcher` contract. Must be set (via genesis or
 	/// [`Pallet::set_dispatcher_address`]) before [`Pallet::reserve_name`] or
 	/// [`Pallet::register_name`] can succeed.
@@ -384,6 +394,10 @@ pub mod pallet {
 			let contract_weight = Self::call_dispatcher(calldata)?;
 
 			LiteLabelOwner::<T>::insert(&lite_label, &candidate);
+			AccountNames::<T>::mutate(&candidate, |record| {
+				record.get_or_insert_with(AccountNameRecord::default).lite =
+					Some(lite_label.clone());
+			});
 
 			Self::deposit_event(Event::NameReserved {
 				candidate,
@@ -440,6 +454,9 @@ pub mod pallet {
 				RegistrationRecord { collection: Collection::People, account: who.clone() },
 			);
 			AccountAlias::<T>::insert(&who, alias);
+			AccountNames::<T>::mutate(&who, |record| {
+				record.get_or_insert_with(AccountNameRecord::default).full = Some(label.clone());
+			});
 
 			Self::deposit_event(Event::NameRegistered { alias, account: who, label, link });
 			Ok(PostDispatchInfo {
