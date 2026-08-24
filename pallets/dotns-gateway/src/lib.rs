@@ -184,10 +184,15 @@ pub mod pallet {
 
 	/// The dotNS labels each account acquired through this gateway.
 	///
-	/// Written on [`Pallet::reserve_name`] and [`Pallet::register_name`] only, so
-	/// labels that change purely contract-side (for example transfers) are not
-	/// reflected. Keyed by account so clients can watch a set of accounts with one
-	/// storage subscription.
+	/// Keyed by account so clients can watch a set of accounts with one storage
+	/// subscription.
+	///
+	/// Warning: this map is not the source of truth; the dotNS contracts are. It
+	/// is written on [`Pallet::reserve_name`] and [`Pallet::register_name`] only,
+	/// so a label that changes purely contract-side (for example a transfer) is
+	/// not reflected here and clients must re-verify on read via contract views.
+	/// The map is temporary and goes away once apps can observe contract storage
+	/// directly: <https://github.com/paritytech/individuality-community/issues/52>.
 	#[pallet::storage]
 	pub type AccountNames<T: Config> =
 		StorageMap<_, Blake2_128Concat, T::AccountId, AccountNameRecord, OptionQuery>;

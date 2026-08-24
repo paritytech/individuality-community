@@ -128,7 +128,7 @@ impl From<[u8; 65]> for ChatKey {
 
 /// The dotNS labels an account acquired through this gateway.
 ///
-/// `lite` is the most recently reserved lite-person label. `full` is the
+/// `lite` is the most recently registered lite-person label. `full` is the
 /// registered full-person label; the [`crate::AsDotnsGateway`] extension
 /// admits at most one full registration per account.
 #[derive(
