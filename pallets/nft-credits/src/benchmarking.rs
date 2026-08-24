@@ -36,46 +36,47 @@ mod benches {
 	use super::*;
 
 	// The `on_initialize` path that records a block's root. `n` is the number of leaves the tree
-	// is built over, swept over the whole range one block can award: the hashing, the awards'
+	// is built over, swept over the whole range one tree holds: the hashing, the awards'
 	// contribution to the proof size, and the retained ring all scale with it.
 	//
-	// The ring is set up full, so the run includes dropping the oldest award block, which is the
+	// The ring is set up full, so the run includes dropping the oldest retained tree, which is the
 	// worst case and the one every block pays for once the chain has been running.
 	#[benchmark]
-	fn build_credit_tree(
-		n: Linear<1, { T::MaxCreditsPerBlock::get() }>,
-	) -> Result<(), BenchmarkError> {
-		let retained = T::MaxRetainedAwardBlocks::get();
+	fn build_credit_tree(n: Linear<1, AWARDS_PER_TREE>) -> Result<(), BenchmarkError> {
+		let retained = T::MaxRetainedCreditTrees::get();
 		frame_system::Pallet::<T>::set_block_number((retained + 10).into());
 		let block = frame_system::Pallet::<T>::block_number();
 
-		let awards =
-			|count: u32| -> BoundedVec<NftClaimCreditAward<T::AccountId>, T::MaxCreditsPerBlock> {
-				(0..count)
-					.map(|i| NftClaimCreditAward {
+		// The awards of one buffer, written chunk by chunk the way awarding fills them.
+		let award_credits = |awarded_in: BlockNumberFor<T>, count: u32| {
+			for i in 0..count {
+				NftClaimCreditAwards::<T>::try_append(
+					awarded_in,
+					i / AWARDS_PER_CHUNK,
+					NftClaimCreditAward {
 						claimant: AccountOrPerson::Person(sp_io::hashing::blake2_256(&i.encode())),
 						credit: sp_io::hashing::blake2_256(&(i, b"credit").encode()),
-					})
-					.collect::<Vec<_>>()
-					.try_into()
-					.expect("count is bounded by MaxCreditsPerBlock")
-			};
-		NftClaimCreditAwards::<T>::insert(block, awards(n));
+					},
+				)
+				.expect("a chunk holds AWARDS_PER_CHUNK awards");
+			}
+		};
+		award_credits(block, n);
 
 		// The block that drops out of the ring, holding a full set of awards to remove.
 		let dropped: BlockNumberFor<T> = 1u32.into();
-		NftClaimCreditAwards::<T>::insert(dropped, awards(T::MaxCreditsPerBlock::get()));
-		NftClaimCreditAwardBlocks::<T>::put(BoundedVec::<
+		award_credits(dropped, AWARDS_PER_TREE);
+		RetainedCreditTreeBlocks::<T>::put(BoundedVec::<
 			BlockNumberFor<T>,
-			T::MaxRetainedAwardBlocks,
+			T::MaxRetainedCreditTrees,
 		>::truncate_from(
 			(1..=retained).map(Into::into).collect::<Vec<_>>()
 		));
 
-		PendingNftClaimCreditRootInfo::<T>::put(NftClaimCreditRootInfo {
-			game_index: 7,
-			timestamp: 1_234,
-		});
+		CreditBuffers::<T>::insert(
+			block,
+			CreditBuffer { game_index: 7, timestamp: 1_234, awards: n },
+		);
 
 		#[block]
 		{
@@ -85,8 +86,11 @@ mod benches {
 		let credit_root =
 			NftClaimCreditRoots::<T>::get(block).expect("a root is recorded for the block");
 		assert_eq!(credit_root.leaf_count, n);
-		assert_eq!(NftClaimCreditAwards::<T>::decode_len(block).unwrap_or(0) as u32, n);
-		assert!(!NftClaimCreditAwards::<T>::contains_key(dropped));
+		assert_eq!(
+			NftClaimCreditAwards::<T>::iter_prefix_values(block).count() as u32,
+			n.div_ceil(AWARDS_PER_CHUNK)
+		);
+		assert_eq!(NftClaimCreditAwards::<T>::iter_prefix_values(dropped).count(), 0);
 
 		Ok(())
 	}

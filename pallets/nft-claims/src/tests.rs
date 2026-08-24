@@ -19,7 +19,7 @@
 use crate::{mock::*, ClaimantKind, Config, CreditTrees, Event, NextExpectedSequence, WeightInfo};
 use frame_support::{assert_noop, assert_ok, dispatch::GetDispatchInfo, BoundedVec};
 use indiv_support::credit_trees::{
-	AwardBlock, CreditProofNode, CreditTreeDelivery, NftClaimCreditTree,
+	CreditProofNode, CreditTreeBlock, CreditTreeDelivery, NftClaimCreditTree,
 };
 use sp_runtime::DispatchError;
 
@@ -255,7 +255,7 @@ mod claim {
 	const PURSE: u64 = 100;
 
 	/// The block whose tree the tests claim against.
-	const BLOCK: AwardBlock = 10;
+	const BLOCK: CreditTreeBlock = 10;
 
 	/// The collection the tests mint into.
 	const COLLECTION: CollectionId = 3;
@@ -581,7 +581,7 @@ mod claim {
 					COLLECTION,
 					PURSE
 				),
-				Error::<Test>::UnknownAwardBlock
+				Error::<Test>::UnknownCreditTree
 			);
 		});
 	}

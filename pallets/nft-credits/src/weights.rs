@@ -64,12 +64,12 @@ pub trait WeightInfo {
 /// Weights for `indiv_pallet_nft_credits` using the Substrate node and recommended hardware.
 pub struct SubstrateWeight<T>(PhantomData<T>);
 impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
-	/// Storage: `NftCredits::PendingNftClaimCreditRootInfo` (r:1 w:1)
-	/// Proof: `NftCredits::PendingNftClaimCreditRootInfo` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBuffers` (r:1 w:1)
+	/// Proof: `NftCredits::CreditBuffers` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::NftClaimCreditAwards` (r:1 w:1)
 	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(78014), added: 80489, mode: `MaxEncodedLen`)
-	/// Storage: `NftCredits::NftClaimCreditAwardBlocks` (r:1 w:1)
-	/// Proof: `NftCredits::NftClaimCreditAwardBlocks` (`max_values`: Some(1), `max_size`: Some(1026), added: 1521, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::RetainedCreditTreeBlocks` (r:1 w:1)
+	/// Proof: `NftCredits::RetainedCreditTreeBlocks` (`max_values`: Some(1), `max_size`: Some(1026), added: 1521, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::NextCreditTreeSequence` (r:1 w:1)
 	/// Proof: `NftCredits::NextCreditTreeSequence` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::CreditTreeDeliveryQueue` (r:1 w:1)
@@ -88,8 +88,8 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(5_u64))
 			.saturating_add(T::DbWeight::get().writes(6_u64))
 	}
-	/// Storage: `NftCredits::PendingNftClaimCreditRootInfo` (r:1 w:0)
-	/// Proof: `NftCredits::PendingNftClaimCreditRootInfo` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBuffers` (r:1 w:0)
+	/// Proof: `NftCredits::CreditBuffers` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	fn build_credit_tree_empty() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `114`
@@ -170,12 +170,12 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 
 // For backwards compatibility and tests.
 impl WeightInfo for () {
-	/// Storage: `NftCredits::PendingNftClaimCreditRootInfo` (r:1 w:1)
-	/// Proof: `NftCredits::PendingNftClaimCreditRootInfo` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBuffers` (r:1 w:1)
+	/// Proof: `NftCredits::CreditBuffers` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::NftClaimCreditAwards` (r:1 w:1)
 	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(78014), added: 80489, mode: `MaxEncodedLen`)
-	/// Storage: `NftCredits::NftClaimCreditAwardBlocks` (r:1 w:1)
-	/// Proof: `NftCredits::NftClaimCreditAwardBlocks` (`max_values`: Some(1), `max_size`: Some(1026), added: 1521, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::RetainedCreditTreeBlocks` (r:1 w:1)
+	/// Proof: `NftCredits::RetainedCreditTreeBlocks` (`max_values`: Some(1), `max_size`: Some(1026), added: 1521, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::NextCreditTreeSequence` (r:1 w:1)
 	/// Proof: `NftCredits::NextCreditTreeSequence` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::CreditTreeDeliveryQueue` (r:1 w:1)
@@ -194,8 +194,8 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads(5_u64))
 			.saturating_add(RocksDbWeight::get().writes(6_u64))
 	}
-	/// Storage: `NftCredits::PendingNftClaimCreditRootInfo` (r:1 w:0)
-	/// Proof: `NftCredits::PendingNftClaimCreditRootInfo` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBuffers` (r:1 w:0)
+	/// Proof: `NftCredits::CreditBuffers` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	fn build_credit_tree_empty() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `114`

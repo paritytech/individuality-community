@@ -2153,9 +2153,9 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	type EnsureClaimant = EnsureCreditClaimant;
 	type Nfts = Scarcity;
 	type CollectionSelector = NftClaimsCollectionSelector;
-	// The game chain awards at most `MaxCreditsPerBlock` credits per block, 1200 on
-	// next-people-paseo, so a proof carries at most 11 sibling hashes. 16 covers 65536 leaves,
-	// leaving room for that bound to grow without stranding the tail of a tree.
+	// A credit tree holds at most the game chain's `AWARDS_PER_TREE` leaves, 2048, so a proof
+	// carries at most 11 sibling hashes. 16 covers 65536 leaves, leaving room for that constant to
+	// grow without stranding the tail of a tree.
 	type MaxProofNodes = ConstU32<16>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftClaimsBenchmarkHelper;

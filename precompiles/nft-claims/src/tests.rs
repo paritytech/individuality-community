@@ -337,7 +337,7 @@ fn mapped_nft_claims_errors_are_exhaustive() {
 	// The ABI covers only `set_collection_minter`; the claim and tree-delivery errors cannot
 	// surface through it.
 	const UNREACHABLE: [&str; 7] = [
-		"UnknownAwardBlock",
+		"UnknownCreditTree",
 		"LeafIndexOutOfBounds",
 		"AlreadyClaimed",
 		"InvalidProof",
