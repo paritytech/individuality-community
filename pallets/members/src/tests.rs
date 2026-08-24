@@ -1307,29 +1307,14 @@ mod merge_rings_spam_tests {
 			// Ring 2 is the only ring left with any state: rings 0 and 1 were cleaned up by the
 			// merges and the top ring 3 never had a member onboarded into it.
 			assert_eq!(RingKeysStatus::<Test>::iter_prefix(identifier).count(), 1);
-			// Ring 2 page 0 is the only place left holding keys.
-			let populated_pages: Vec<_> = RingKeys::<Test>::iter_prefix((identifier,))
-				.filter(|(_, keys)| !keys.is_empty())
-				.map(|((ring_index, page_index), keys)| (ring_index, page_index, keys.len()))
-				.collect();
-			assert_eq!(populated_pages, vec![(2, 0, 3 * kept_per_ring)]);
-
-			// FIXME: `onboard_members` leaves an empty page 1 behind on every ring it fills
-			// exactly, because the trailing `RingKeys::insert` writes the freshly incremented page
-			// index even when that page is empty. Flexible collections are single page, so these
-			// are storage dust that nothing ever reclaims: `merge_rings` and
-			// `remove_suspended_keys` only ever touch page 0. Pinned here so that fixing it breaks
-			// this assertion; the expectation then becomes `vec![(2, 0, 3 * kept_per_ring)]`,
-			// identical to `populated_pages` above.
+			// Ring 2 page 0 is the only `RingKeys` entry left. Rings 0 and 1 were cleaned up by
+			// the merges, and onboarding no longer stores the empty page it moves on to after
+			// filling one exactly, so no ring leaves a page behind that holds nothing.
 			let mut all_pages: Vec<_> = RingKeys::<Test>::iter_prefix((identifier,))
 				.map(|((ring_index, page_index), keys)| (ring_index, page_index, keys.len()))
 				.collect();
 			all_pages.sort();
-			assert_eq!(
-				all_pages,
-				vec![(0, 1, 0), (1, 1, 0), (2, 0, 3 * kept_per_ring), (2, 1, 0)],
-				"empty page 1 entries are leftover dust from onboarding, not live ring state"
-			);
+			assert_eq!(all_pages, vec![(2, 0, 3 * kept_per_ring)]);
 		});
 	}
 }
