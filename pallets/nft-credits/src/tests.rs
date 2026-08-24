@@ -688,20 +688,17 @@ fn assert_credit_proof(
 	award: &NftClaimCreditAward<AccountId32>,
 	leaf_index: u32,
 ) {
-	assert_eq!(proof.root, credit_root.root);
 	assert_eq!(proof.credit, award.credit);
-	assert_eq!(
-		proof.leaf,
-		NftCredits::compute_nft_claim_credit_leaf(&award.claimant, &award.credit)
-	);
 	assert_eq!(proof.leaf_index, leaf_index);
-	assert_eq!(proof.leaf_count, credit_root.leaf_count);
+	// The root, the leaf count and the leaf are the verifier's own: it holds the tree and it
+	// authenticated the claimant, so nothing here comes out of `proof`.
+	let leaf = NftCredits::compute_nft_claim_credit_leaf(&award.claimant, &award.credit);
 	assert!(binary_merkle_tree::verify_proof::<BlakeTwo256, _, _>(
 		&credit_root.root.into(),
 		proof.proof.iter().copied().map(H256::from).collect::<Vec<_>>(),
-		proof.leaf_count,
+		credit_root.leaf_count,
 		proof.leaf_index,
-		&proof.leaf
+		&leaf
 	));
 }
 

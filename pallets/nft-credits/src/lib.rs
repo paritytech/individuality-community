@@ -77,8 +77,9 @@
 //! Claiming happens on the claims chain, which never sees the credits themselves, only one root per
 //! block. A claimant proves their entitlement by presenting their credit with an inclusion proof:
 //! the sibling hashes that rehash the credit's leaf up to the root held for the block the credit
-//! was awarded in. A proof verifies only against that one root, and only for the claimant its leaf
-//! binds in, so no one else's credit and no other block's root can be minted against it.
+//! was awarded in. The claims chain recomputes the leaf from the origin it authenticated and the
+//! credit presented, and takes the root and the leaf count from its own copy of the tree, so a
+//! credit awarded to somebody else rehashes to a leaf that is in no tree.
 //!
 //! A claimant does not have to rebuild the tree themselves. The runtime API in [`runtime_api`]
 //! serves the proof material:
@@ -87,9 +88,9 @@
 //!   blocks they were awarded a credit in, against [`NftClaimCreditRoots`], so a claimant finds
 //!   their roots by one lookup instead of a scan.
 //! - `nft_claim_credit_proofs` returns, for one award block and one claimant, the inclusion proof
-//!   of each credit the claimant holds there: credit, leaf, leaf index, leaf count, root and
-//!   sibling hashes, which is what the claims chain verifies. `nft_claim_credit_proof_from_awards`
-//!   does the same for a pruned block, from awards the caller supplies.
+//!   of each credit the claimant holds there: the credit, its leaf index and the sibling hashes,
+//!   which is what the claims chain verifies. `nft_claim_credit_proof_from_awards` does the same
+//!   for a pruned block, from awards the caller supplies.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -1214,11 +1215,8 @@ impl<T: Config> Pallet<T> {
 		}
 
 		Ok(NftClaimCreditProof {
-			root: recorded.root,
 			credit,
-			leaf: proof.leaf,
 			leaf_index,
-			leaf_count: recorded.leaf_count,
 			proof: proof.proof.into_iter().map(CreditProofNode::from).collect::<Vec<_>>(),
 		})
 	}
