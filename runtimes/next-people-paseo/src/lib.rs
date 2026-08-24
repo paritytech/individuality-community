@@ -278,7 +278,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 1_000_035,
+	spec_version: 1_000_036,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 5,
@@ -1243,6 +1243,7 @@ construct_runtime!(
 		WeightReclaim: cumulus_pallet_weight_reclaim = 4,
 		RelayRandomness: indiv_pallet_relay_randomness = 5,
 		Parameters: pallet_parameters = 73,
+		NetworkSuffix: indiv_pallet_network_suffix = 74,
 
 		// Monetary stuff.
 		Balances: pallet_balances = 10,
@@ -1318,6 +1319,7 @@ mod benches {
 		[pallet_timestamp, Timestamp]
 		[pallet_migrations, MultiBlockMigrations]
 		[pallet_parameters, Parameters]
+		[indiv_pallet_network_suffix, NetworkSuffix]
 		[pallet_transaction_payment, TransactionPayment]
 		[pallet_assets, Assets]
 		[pallet_assets, Pool]
