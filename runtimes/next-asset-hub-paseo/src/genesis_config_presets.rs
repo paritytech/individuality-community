@@ -86,6 +86,10 @@ fn asset_hub_paseo_genesis(
 		"polkadotXcm": {
 			"safeXcmVersion": Some(SAFE_XCM_VERSION),
 		},
+		"networkSuffix": NetworkSuffixConfig {
+			network_suffix: b"paseo".to_vec().try_into().expect("network suffix fits"),
+			..Default::default()
+		},
 	"staking": {
 		"validatorCount": 100,
 		"devStakers": dev_stakers
