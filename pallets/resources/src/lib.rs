@@ -110,9 +110,8 @@ pub mod pallet {
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 
-		/// Network suffix appended to this pallet's product name.
-		#[pallet::constant]
-		type Suffix: Get<&'static [u8]>;
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
 
 		/// Trait allowing cryptographic proof of membership without exposing the underlying member.
 		/// Normally a Ring-VRF.
@@ -1571,7 +1570,7 @@ pub mod pallet {
 		}
 
 		fn build_context(suffix: ProductContextSuffix) -> Context {
-			build_product_context(personhood::PRODUCT_NAME, T::Suffix::get(), suffix)
+			build_product_context(personhood::PRODUCT_NAME, &T::Suffix::get(), suffix)
 		}
 
 		pub fn long_term_storage_period_from_timestamp(now_secs: u64) -> u32 {

@@ -1739,7 +1739,7 @@ mod notification {
 				Resources::notification_context(reference),
 				build_product_context(
 					personhood::PRODUCT_NAME,
-					<Test as Config>::Suffix::get(),
+					&<Test as Config>::Suffix::get(),
 					personhood::resources_notification(reference.period, reference.seq),
 				),
 			);
@@ -3764,7 +3764,7 @@ mod stmt_store_allowance {
 				Resources::stmt_store_slot_context(period, seq),
 				build_product_context(
 					personhood::PRODUCT_NAME,
-					<Test as Config>::Suffix::get(),
+					&<Test as Config>::Suffix::get(),
 					personhood::statement_store_slot(period, seq),
 				),
 			);

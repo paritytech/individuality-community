@@ -27,8 +27,8 @@ use frame_support::{
 };
 use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
 use indiv_support::traits::{
-	AppendOnlyMembers, ContextualAlias, RevisedContextualAlias, RingExponent, RingMode,
-	RingPosition,
+	AddOnlyPeopleTrait, AppendOnlyMembers, ContextualAlias, RevisedContextualAlias, RingExponent,
+	RingMode, RingPosition,
 };
 use sp_core::offchain::{
 	testing::{TestOffchainExt, TestTransactionPoolExt},
@@ -901,7 +901,7 @@ fn payout_for_offboarded_participant_is_recycled() {
 		CurrentRoundPoints::<Test>::put(30);
 
 		// 4. Offboard user A *before* the payout: remove from `Participants`.
-		PalletScore::offboard(&AccountOrPerson::Account(user_a));
+		assert_ok!(PalletScore::offboard(&AccountOrPerson::Account(user_a)));
 		assert!(!Participants::<Test>::contains_key(AccountOrPerson::Account(user_a)));
 
 		// 5. Schedule 1 round of 60; start and transition the round:
@@ -1567,6 +1567,127 @@ fn register_works_for_suspended_participant() {
 			PalletScore::register(RuntimeOrigin::signed(user), None),
 			Error::<Test>::Recognized
 		);
+	});
+}
+
+#[test]
+fn offboard_suspends_recognized_participant() {
+	new_test_ext().execute_with(|| {
+		// Create the people collection first
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+		advance_to(1);
+
+		let user = 11u64;
+		let who = AccountOrPerson::Account(user);
+
+		// Get to Recognized state.
+		PalletScore::onboard_for_recognition(&user).unwrap();
+		let (key, sk) = mock_key(user);
+		let proof = {
+			let mut msg = b"pop register using".to_vec();
+			msg.extend_from_slice(&user.encode()[..]);
+			Mock::sign(&sk, &msg[..]).unwrap()
+		};
+		Participants::<Test>::mutate(&who, |p| {
+			p.as_mut().unwrap().score = 21;
+			p.as_mut().unwrap().reached_personhood = true;
+		});
+		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), Some((key, proof))));
+
+		assert_ok!(PalletScore::offboard(&who));
+
+		assert!(!Participants::<Test>::contains_key(&who));
+		// The offboard suspended the person: their member key is suspended in the people ring.
+		assert_eq!(
+			indiv_pallet_members::Members::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, key),
+			Some(RingPosition::Suspended)
+		);
+		// The mutation session opened by the offboard is closed again.
+		assert!(
+			indiv_pallet_members::RingsState::<Test>::get(PEOPLE_MEMBER_IDENTIFIER).append_only()
+		);
+	});
+}
+
+#[test]
+fn offboard_fails_when_suspension_fails() {
+	new_test_ext().execute_with(|| {
+		let user = 11u64;
+		let who = AccountOrPerson::Account(user);
+
+		// A `Recognized` participant whose personal id does not belong to any person, so the
+		// suspension on offboard fails.
+		PalletScore::onboard_for_recognition(&user).unwrap();
+		Participants::<Test>::mutate(&who, |p| {
+			p.as_mut().unwrap().recognition = Recognized(404);
+		});
+
+		assert_noop!(PalletScore::offboard(&who), indiv_pallet_people::Error::<Test>::NotPerson);
+	});
+}
+
+/// A failed personhood suspension preserves the participant state and the next qualifying
+/// absence retries a suspension.
+#[test]
+fn set_attendance_retries_suspension_after_failure() {
+	new_test_ext().execute_with(|| {
+		// Create the people collection first
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+
+		let user = 11u64;
+		let who = AccountOrPerson::Account(user);
+
+		// A `Recognized` participant whose personal id does not belong to any person yet, so
+		// the suspension fails.
+		assert_ok!(PalletScore::onboard_for_recognition(&user));
+		Participants::<Test>::mutate(&who, |p| {
+			let p = p.as_mut().unwrap();
+			p.recognition = Recognized(0);
+			p.reached_personhood = true;
+			p.score = 21;
+		});
+
+		// No grace: any absence suspends.
+		let schedule: AbsenceGraceTiers = BoundedVec::try_from(vec![AbsenceGraceTier {
+			population_size_threshold: u32::MAX,
+			window: 0,
+			allowed_misses: 0,
+		}])
+		.unwrap();
+		assert_ok!(PalletScore::set_absence_grace_schedule(RuntimeOrigin::root(), schedule));
+
+		// First absence: the suspension fails, the participant stays recognised and keeps
+		// their personhood.
+		attend(&who, false);
+		let p = Participants::<Test>::get(&who).unwrap();
+		assert_eq!(p.recognition, Recognized(0));
+		assert!(p.reached_personhood);
+
+		// The person with that id now exists.
+		let id = People::reserve_new_id();
+		assert_eq!(id, 0);
+		let (key, _sk) = mock_key(user);
+		assert_ok!(People::recognize_personhood(id, Some(key)));
+
+		// The next absence retries the suspension, which now succeeds.
+		attend(&who, false);
+		let p = Participants::<Test>::get(&who).unwrap();
+		assert_eq!(p.recognition, Suspended(0));
+		assert!(!p.reached_personhood);
 	});
 }
 
