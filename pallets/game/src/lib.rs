@@ -32,7 +32,10 @@
 //!
 //! 4. **Shuffle**:
 //!    - After registration ends, `on_poll`/`on_idle` automatically triggers the transition to
-//!      shuffle phase.
+//!      shuffle phase, recording the current randomness moment.
+//!    - The shuffle waits for the randomness to rotate past the recorded moment, so no player could
+//!      know the shuffle seed while registration was still open, then captures it once and uses it
+//!      for the whole shuffle.
 //!    - Then the `on_poll`/`on_idle` will operate the shuffle until all player have been shuffled.
 //!    - Once the shuffling is complete, the pallet transitions to [`GameState::Reporting`].
 //!
@@ -256,7 +259,7 @@ use indiv_pallet_airdrop::types::{
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
 	credit_trees::AwardCredits,
-	traits::{Alias, CommunicationIdentifier, Context},
+	traits::{Alias, CommunicationIdentifier, Context, MomentRandomness},
 	weight_budget::OcwWeightBudget,
 };
 use sp_runtime::traits::{IdentifyAccount, Verify, Zero};
@@ -445,6 +448,12 @@ pub mod pallet {
 		/// (`max_winners × asset_amount` is transferred per scheduled game).
 		#[pallet::constant]
 		type AirdropSource: Get<Self::AccountId>;
+
+		/// Randomness source used to seed the shuffle.
+		///
+		/// The shuffle only accepts a value whose moment is past the moment registration closed
+		/// at, so the seed could not have been known while players were still signing up.
+		type Randomness: MomentRandomness<u32>;
 
 		#[cfg(feature = "runtime-benchmarks")]
 		type BenchmarkHelper: BenchmarkHelper<
@@ -1645,8 +1654,11 @@ pub mod pallet {
 			};
 			let now = T::UnixTime::now();
 			game.registration_ends = now.as_secs().try_into().unwrap_or(u32::MAX);
-			game.state =
-				GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } };
+			game.state = GameState::Shuffle {
+				step: ShuffleStep::Step1CaptureRandomness {
+					randomness_moment: T::Randomness::current_moment(),
+				},
+			};
 			Game::<T>::put(game);
 			Ok(())
 		}
@@ -2265,6 +2277,18 @@ pub mod pallet {
 			Ok(())
 		}
 
+		/// Return the randomness once it rotates past `randomness_moment`, the moment recorded
+		/// when registration closed.
+		///
+		/// Returns `None` while every available randomness value was already determinable
+		/// when registration was still open; the caller retries on a later block.
+		pub(crate) fn shuffle_step_capture_randomness(randomness_moment: u32) -> Option<[u8; 32]> {
+			match T::Randomness::randomness() {
+				Some((randomness, moment)) if moment > randomness_moment => Some(randomness),
+				_ => None,
+			}
+		}
+
 		/// Writes into `ShuffleRecognized` and `ShuffleNotRecognized`.
 		/// Update the `last_player_key` to the inserted player.
 		/// Update the `pending_attendance` for the game when a registered player is inserted.
@@ -2272,7 +2296,7 @@ pub mod pallet {
 			last_player_key: &mut Option<AccountOrPerson<T::AccountId>>,
 			pending_attendance: &mut u32,
 			rounds: u8,
-			parent_hash: &T::Hash,
+			randomness: &[u8; 32],
 		) -> StepResult {
 			let next_player = last_player_key
 				.clone()
@@ -2311,7 +2335,7 @@ pub mod pallet {
 
 				for round in 0..rounds {
 					let hash = sp_io::hashing::blake2_256(
-						(&parent_hash, &player_id, round).encode().as_ref(),
+						(&randomness, &player_id, round).encode().as_ref(),
 					);
 
 					if player_recognized_as_person {
@@ -2510,15 +2534,35 @@ pub mod pallet {
 				return;
 			}
 
-			let parent_hash = frame_system::Pallet::<T>::parent_hash();
-
 			// Per-round cache of the last drained key, used by `shuffle_step_retrieve` to resume
 			// iteration. Only meaningful within this single `shuffles` invocation.
 			let mut resume_cursors = vec![None; usize::from(game.rounds)];
 
 			for _ in 0..OP_UPPER_BOUND {
 				match step {
-					ShuffleStep::Step1Insert { ref mut last_iteration } => {
+					ShuffleStep::Step1CaptureRandomness { randomness_moment } => {
+						if weight_meter
+							.try_consume(
+								<T as Config>::WeightInfo::shuffle_step_capture_randomness(),
+							)
+							.is_err()
+						{
+							break;
+						}
+
+						let Some(randomness) =
+							Self::shuffle_step_capture_randomness(*randomness_moment)
+						else {
+							// The configured source (the relay chain block randomness, in the
+							// runtime) rotates every relay chain block, so a fresh value is
+							// expected within a block or two. The shuffle deadline cancels the
+							// game if it never shows up.
+							break;
+						};
+
+						*step = ShuffleStep::Step2Insert { randomness, last_iteration: None };
+					},
+					ShuffleStep::Step2Insert { randomness, ref mut last_iteration } => {
 						if weight_meter
 							.try_consume(<T as Config>::WeightInfo::shuffle_step_insert(
 								game.rounds.into(),
@@ -2532,12 +2576,12 @@ pub mod pallet {
 							last_iteration,
 							&mut game.pending_attendance,
 							game.rounds,
-							&parent_hash,
+							randomness,
 						);
 
 						match step_result {
 							StepResult::Finished => {
-								*step = ShuffleStep::Step2Retrieve {
+								*step = ShuffleStep::Step3Retrieve {
 									next_player_index: 0,
 									phase: ShuffleRetrievePhase::Recognized,
 								};
@@ -2545,7 +2589,7 @@ pub mod pallet {
 							StepResult::Continue => {},
 						}
 					},
-					ShuffleStep::Step2Retrieve { ref mut next_player_index, ref mut phase } => {
+					ShuffleStep::Step3Retrieve { ref mut next_player_index, ref mut phase } => {
 						if weight_meter
 							.try_consume(<T as Config>::WeightInfo::shuffle_step_retrieve(
 								game.rounds.into(),
@@ -2577,7 +2621,7 @@ pub mod pallet {
 										*next_player_index
 									},
 								};
-								*step = ShuffleStep::Step3ComputeWeights {
+								*step = ShuffleStep::Step4ComputeWeights {
 									last_iteration: None,
 									player_count: *next_player_index,
 									recognized_count,
@@ -2586,7 +2630,7 @@ pub mod pallet {
 							StepResult::Continue => {},
 						}
 					},
-					ShuffleStep::Step3ComputeWeights {
+					ShuffleStep::Step4ComputeWeights {
 						ref mut last_iteration,
 						player_count,
 						recognized_count,
@@ -2616,12 +2660,12 @@ pub mod pallet {
 						match step_result {
 							StepResult::Finished => {
 								*step =
-									ShuffleStep::Step4AwaitSession { player_count: *player_count };
+									ShuffleStep::Step5AwaitSession { player_count: *player_count };
 							},
 							StepResult::Continue => {},
 						}
 					},
-					ShuffleStep::Step4AwaitSession { player_count } => {
+					ShuffleStep::Step5AwaitSession { player_count } => {
 						if weight_meter
 							.try_consume(<T as Config>::WeightInfo::shuffle_step_start_session())
 							.is_err()
@@ -3324,8 +3368,14 @@ pub mod pallet {
 							GroupsSetting { max_per_group: game.max_group_size, player_count };
 
 						if group_setting.acceptable_player_count::<T>() {
+							// Record the watermark the shuffle seed must beat: registrations
+							// are public once included, so seeding the shuffle with randomness
+							// that was already public while registration was still open would
+							// let a player influence their position.
 							game.state = GameState::Shuffle {
-								step: ShuffleStep::Step1Insert { last_iteration: None },
+								step: ShuffleStep::Step1CaptureRandomness {
+									randomness_moment: T::Randomness::current_moment(),
+								},
 							};
 							log::trace!(
 								target: LOG_TARGET,

@@ -646,6 +646,7 @@ impl indiv_pallet_game::Config for Runtime {
 	type AirdropAssetBalance = Balance;
 	type Airdrop = Airdrop;
 	type AirdropSource = GameAirdropSource;
+	type Randomness = indiv_pallet_relay_randomness::RelayBlockRandomness<Runtime>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = GamePalletBenchmarkHelper;
 }
