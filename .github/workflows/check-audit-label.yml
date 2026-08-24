@@ -1,0 +1,44 @@
+# Ensure every pull request declares its audit level with exactly one `D<n>-` label.
+name: "Audit label"
+
+on:
+  pull_request:
+    types: ["opened", "reopened", "synchronize", "labeled", "unlabeled"]
+
+# cancel previous runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check audit label
+    runs-on: parity-ubuntu
+
+    steps:
+      # The label set comes from the event payload, so no checkout and no token are needed. The
+      # `labeled`/`unlabeled` triggers re-run the job with the updated payload, which refreshes the
+      # status check as soon as a maintainer fixes the labels.
+      - name: Check exactly one audit label is set
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+
+          audit=$(jq -c '[.[] | select(test("^D[0-9]+-"))]' <<<"$LABELS")
+          count=$(jq 'length' <<<"$audit")
+          names=$(jq -r 'join(", ")' <<<"$audit")
+
+          if [ "$count" -eq 1 ]; then
+            echo "Audit label: $names"
+            exit 0
+          fi
+
+          if [ "$count" -eq 0 ]; then
+            echo "::error::This pull request has no audit label. Add exactly one of the \`D<n>-\` labels."
+          else
+            echo "::error::This pull request has $count audit labels ($names). Keep exactly one."
+          fi
+
+          echo "The audit labels and their meanings are listed at https://github.com/${{ github.repository }}/labels"
+          exit 1
