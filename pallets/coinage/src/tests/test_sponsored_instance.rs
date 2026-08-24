@@ -1545,7 +1545,7 @@ fn non_anonymous_unloads_declare_the_deposit_settlement() {
 			setup_non_anonymous_unload(instance_id, SPONSORED_ASSET_ID, signer, to, 71);
 		let declared = crate::Call::<Test>::unload_recyclers_into_external_asset_non_anonymous {
 			instance_id,
-			inputs: vec![input.clone()],
+			inputs: bounded_vec![input.clone()],
 			alias_proofs: proofs.clone(),
 			to,
 			fee_currency: FeeCurrency::Native,
@@ -1561,7 +1561,7 @@ fn non_anonymous_unloads_declare_the_deposit_settlement() {
 		let post = Coinage::unload_recyclers_into_external_asset_non_anonymous(
 			RuntimeOrigin::signed(signer),
 			instance_id,
-			vec![input],
+			bounded_vec![input],
 			proofs,
 			to,
 			FeeCurrency::Native,

@@ -40,4 +40,4 @@ jobs:
 
       - name: Check crate versions
         run: |
-          psvm --version $POLKADOT_RELEASE_VERSION$POLKADOT_RELEASE_PATCH --check
+          psvm --version "$POLKADOT_RELEASE_VERSION$POLKADOT_RELEASE_PATCH" --check
