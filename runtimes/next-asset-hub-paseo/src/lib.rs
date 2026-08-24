@@ -191,7 +191,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 2_000_038,
+	spec_version: 2_000_039,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 21,
@@ -1378,7 +1378,22 @@ parameter_types! {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub DefaultNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("default network suffix fits");
+}
+
+impl indiv_pallet_network_suffix::Config for Runtime {
+	type UpdateOrigin = EnsureRoot<Self::AccountId>;
+	type DefaultSuffix = DefaultNetworkSuffix;
+	type WeightInfo = NetworkSuffixWeightInfo;
+}
+
+/// Conservatively reuse the heavier `pallet_parameters` setter weight.
+pub struct NetworkSuffixWeightInfo;
+impl indiv_pallet_network_suffix::WeightInfo for NetworkSuffixWeightInfo {
+	fn set_network_suffix(_s: u32) -> Weight {
+		<weights::pallet_parameters::WeightInfo<Runtime> as pallet_parameters::WeightInfo>::set_parameter()
+	}
 }
 
 impl indiv_pallet_dotns_gateway::Config for Runtime {
@@ -2613,6 +2628,7 @@ construct_runtime!(
 		Parameters: pallet_parameters = 7,
 		MultiBlockMigrations: pallet_migrations = 8,
 		WeightReclaim: cumulus_pallet_weight_reclaim = 9,
+		NetworkSuffix: indiv_pallet_network_suffix = 154,
 
 		// Monetary stuff.
 		Balances: pallet_balances = 10,
@@ -2946,6 +2962,7 @@ mod benches {
 		[pallet_proxy, Proxy]
 		[pallet_scheduler, Scheduler]
 		[pallet_parameters, Parameters]
+		[indiv_pallet_network_suffix, NetworkSuffix]
 		[pallet_session, SessionBench::<Runtime>]
 		[pallet_uniques, Uniques]
 		[pallet_utility, Utility]
