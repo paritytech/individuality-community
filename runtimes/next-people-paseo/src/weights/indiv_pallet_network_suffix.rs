@@ -20,7 +20,7 @@
 //! DATE: 2026-08-24, STEPS: `50`, REPEAT: `20`, LOW RANGE: `[]`, HIGH RANGE: `[]`
 //! WORST CASE MAP SIZE: `1000000`
 //! HOSTNAME: `parity-weights-f98d1a4d109862ab`, CPU: `Intel(R) Xeon(R) CPU @ 2.60GHz`
-//! WASM-EXECUTION: `Compiled`, CHAIN: `None`, DB CACHE: `1024`
+//! WASM-EXECUTION: `Compiled`, CHAIN: `None`, DB CACHE: 1024
 
 // Executed Command:
 // frame-omni-bencher
@@ -28,10 +28,10 @@
 // benchmark
 // pallet
 // --extrinsic=*
-// --runtime=target/production/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm
+// --runtime=target/production/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.wasm
 // --pallet=indiv_pallet_network_suffix
 // --header=/home/runner/actions-runner/_work/individuality-community/individuality-community/.github/scripts/cmd/file_header.txt
-// --output=/home/runner/actions-runner/_work/individuality-community/individuality-community/pallets/network-suffix/src/weights.rs
+// --output=./runtimes/next-people-paseo/src/weights
 // --wasm-execution=compiled
 // --steps=50
 // --repeat=20
@@ -41,55 +41,31 @@
 // --no-storage-info
 // --no-min-squares
 // --no-median-slopes
-// --template=templates/frame-weight-template.hbs
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 #![allow(unused_parens)]
 #![allow(unused_imports)]
 #![allow(missing_docs)]
-#![allow(dead_code)]
 
-use frame_support::{traits::Get, weights::{Weight, constants::RocksDbWeight}};
+use frame_support::{traits::Get, weights::Weight};
 use core::marker::PhantomData;
 
-/// Weight functions needed for `indiv_pallet_network_suffix`.
-pub trait WeightInfo {
-	fn set_network_suffix(n: u32, ) -> Weight;
-}
-
-/// Weights for `indiv_pallet_network_suffix` using the Substrate node and recommended hardware.
-pub struct SubstrateWeight<T>(PhantomData<T>);
-impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
+/// Weight functions for `indiv_pallet_network_suffix`.
+pub struct WeightInfo<T>(PhantomData<T>);
+impl<T: frame_system::Config> indiv_pallet_network_suffix::WeightInfo for WeightInfo<T> {
 	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:1)
 	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 16]`.
 	fn set_network_suffix(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `106`
+		//  Measured:  `72`
 		//  Estimated: `1502`
-		// Minimum execution time: 10_094_000 picoseconds.
-		Weight::from_parts(11_053_309, 1502)
-			// Standard Error: 917
-			.saturating_add(Weight::from_parts(1_099, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(1_u64))
-			.saturating_add(T::DbWeight::get().writes(1_u64))
-	}
-}
-
-// For backwards compatibility and tests.
-impl WeightInfo for () {
-	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:1)
-	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
-	/// The range of component `n` is `[1, 16]`.
-	fn set_network_suffix(n: u32, ) -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `106`
-		//  Estimated: `1502`
-		// Minimum execution time: 10_094_000 picoseconds.
-		Weight::from_parts(11_053_309, 1502)
-			// Standard Error: 917
-			.saturating_add(Weight::from_parts(1_099, 0).saturating_mul(n.into()))
-			.saturating_add(RocksDbWeight::get().reads(1_u64))
-			.saturating_add(RocksDbWeight::get().writes(1_u64))
+		// Minimum execution time: 9_434_000 picoseconds.
+		Weight::from_parts(10_167_321, 0)
+			.saturating_add(Weight::from_parts(0, 1502))
+			// Standard Error: 623
+			.saturating_add(Weight::from_parts(3_567, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 }
