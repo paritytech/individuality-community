@@ -73,7 +73,8 @@ use indiv_support::{
 	weight_budget::OcwWeightBudget,
 };
 use pallet_asset_conversion::{QuotePrice, Swap};
-use sp_core::{blake2_256, H256};
+use sp_core::H256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{
 	traits::{AccountIdConversion, CheckedAdd, CheckedMul, Convert, Zero},
 	ArithmeticError, SaturatedConversion, Saturating,
