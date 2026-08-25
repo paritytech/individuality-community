@@ -43,6 +43,7 @@ extern crate alloc;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
+pub mod migration;
 pub mod types;
 pub mod weights;
 
@@ -79,7 +80,12 @@ pub mod pallet {
 
 	const LOG_TARGET: &str = "runtime::indiv-pallet-dotns-gateway";
 
+	/// The in-code storage version. Bump it and add a migration when the layout of a
+	/// storage item changes; see [`migration`].
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -400,8 +406,9 @@ pub mod pallet {
 
 			LiteLabelOwner::<T>::insert(&lite_label, &candidate);
 			AccountNames::<T>::mutate(&candidate, |record| {
-				record.get_or_insert_with(AccountNameRecord::default).lite =
-					Some(lite_label.clone());
+				let record = record.get_or_insert_with(AccountNameRecord::default);
+				record.lite = Some(lite_label.clone());
+				record.chat = Some(chat_key);
 			});
 
 			Self::deposit_event(Event::NameReserved {
@@ -460,7 +467,12 @@ pub mod pallet {
 			);
 			AccountAlias::<T>::insert(&who, alias);
 			AccountNames::<T>::mutate(&who, |record| {
-				record.get_or_insert_with(AccountNameRecord::default).full = Some(label.clone());
+				let record = record.get_or_insert_with(AccountNameRecord::default);
+				record.full = Some(label.clone());
+				// A lite-linked registration inherits the chat key of the lite label.
+				if let Link::None(chat_key) = &link {
+					record.chat = Some(*chat_key);
+				}
 			});
 
 			Self::deposit_event(Event::NameRegistered { alias, account: who, label, link });

@@ -130,7 +130,9 @@ impl From<[u8; 65]> for ChatKey {
 ///
 /// `lite` is the most recently registered lite-person label. `full` is the
 /// registered full-person label; the [`crate::AsDotnsGateway`] extension
-/// admits at most one full registration per account.
+/// admits at most one full registration per account. `chat` is the ECDH chat
+/// key the labels resolve to; it is `None` only for lite labels backfilled by
+/// migration.
 #[derive(
 	Clone,
 	PartialEq,
@@ -148,6 +150,8 @@ pub struct AccountNameRecord {
 	pub lite: Option<BaseLabel>,
 	/// The full-person label, if one was registered.
 	pub full: Option<BaseLabel>,
+	/// The chat key shared by the account's labels, if known to the pallet.
+	pub chat: Option<ChatKey>,
 }
 
 /// Which ring membership collection the proof targets.
