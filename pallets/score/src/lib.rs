@@ -842,12 +842,12 @@ pub mod pallet {
 					Ok(())
 				},
 				Err(e) => {
-					defensive!("Unexpected error in this round, set the round finished.");
 					log::error!(
 						target: LOG_TARGET,
 						"Unexpected error in operate_payout_round: round: {round_index:?}, error: {e:?}."
 					);
-					RoundPayouts::<T>::remove(round_index);
+					Self::recycle_round_payout(round_index);
+					defensive!("Unexpected error in this round, set the round finished.");
 					Ok(())
 				},
 			}
@@ -1106,13 +1106,12 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Offboard a participant, e.g. voluntarily leaves or is kicked out for inactivity.
+		/// Offboard a participant, suspend recognised people and release unclaimed credit to the
+		/// pot.
 		///
-		/// A `Recognized` participant is suspended in [`Config::People`] before their record is
-		/// removed, inside a mutation session opened and closed here. Removing the record makes
-		/// the suspension permanent.
-		///
-		/// Returns an error if the suspension or its mutation session fails.
+		/// The participant forfeits their credit when their record is removed. Suspension failures
+		/// return an error, while a failed credit release is logged and does not retain a stale
+		/// entry.
 		pub fn offboard(who: &AccountOrPerson<T::AccountId>) -> DispatchResult {
 			let maybe_recognition = Participants::<T>::get(who).map(|p| p.recognition);
 			if let Some(Recognized(id)) = maybe_recognition {
@@ -1122,10 +1121,26 @@ pub mod pallet {
 					T::People::end_people_set_mutation_session()
 				})?;
 			}
+			if let Some(score) = Participants::<T>::take(who) {
+				if !score.credit.is_zero() {
+					let pot = Self::score_pot_id();
+					match T::Currency::release(
+						&HoldReason::Credit.into(),
+						&pot,
+						score.credit,
+						Precision::Exact,
+					) {
+						Ok(released) => defensive_assert!(released == score.credit),
+						Err(error) => log::error!(
+							target: LOG_TARGET,
+							"Failed to release credit hold while offboarding participant: {error:?}."
+						),
+					}
+				}
+			}
 			if let AccountOrPerson::Account(account) = who {
 				frame_system::Pallet::<T>::dec_sufficients(account);
 			}
-			Participants::<T>::remove(who);
 			Ok(())
 		}
 
@@ -1419,6 +1434,30 @@ pub mod pallet {
 				CurrentRoundPoints::<T>::put(new_round_points);
 			} else {
 				log::warn!(target: LOG_TARGET, "indiv-pallet-score: round points overflowed");
+			}
+		}
+
+		/// Remove a payout round and release its remaining payout hold to the pot.
+		///
+		/// A caller can run this after a reverted storage layer. The round is removed if the
+		/// release fails because no other path can release the hold of a started round.
+		pub(crate) fn recycle_round_payout(round_index: RoundIndex) {
+			let Some(round) = RoundPayouts::<T>::take(round_index) else { return };
+			if round.remaining_balance.is_zero() {
+				return
+			}
+
+			let pot = Self::score_pot_id();
+			if let Err(error) = T::Currency::release(
+				&HoldReason::Payout.into(),
+				&pot,
+				round.remaining_balance,
+				Precision::BestEffort,
+			) {
+				log::error!(
+					target: LOG_TARGET,
+					"Failed to recycle the payout hold of round {round_index:?}: {error:?}."
+				);
 			}
 		}
 
