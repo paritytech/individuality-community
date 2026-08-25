@@ -17,7 +17,9 @@
 //! # Origin restriction pallet and transaction extension
 //!
 //! This pallet tracks certain origin and limits how much total "fee usage" they can accumulate.
-//! Usage gradually recovers as blocks pass.
+//! Usage gradually recovers as the blocks of [`Config::BlockNumberProvider`] pass. A parachain
+//! configures the relay chain block number there, so the recovery rate does not depend on the
+//! local block production.
 //!
 //! First the entity is extracted from the restricted origin, the entity represents the granularity
 //! of usage tracking.
@@ -59,13 +61,12 @@ use frame_support::{
 	weights::WeightToFee,
 	DebugNoBound, Parameter,
 };
-use frame_system::pallet_prelude::BlockNumberFor;
 use pallet_transaction_payment::OnChargeTransaction;
 use scale_info::TypeInfo;
 use sp_runtime::{
 	traits::{
-		AsTransactionAuthorizedOrigin, DispatchInfoOf, DispatchOriginOf, Dispatchable, Implication,
-		PostDispatchInfoOf, TransactionExtension, ValidateResult,
+		AsTransactionAuthorizedOrigin, BlockNumberProvider, DispatchInfoOf, DispatchOriginOf,
+		Dispatchable, Implication, PostDispatchInfoOf, TransactionExtension, ValidateResult,
 	},
 	transaction_validity::{
 		InvalidTransaction, TransactionSource, TransactionValidityError, ValidTransaction,
@@ -80,7 +81,7 @@ use sp_runtime::{
 pub struct Allowance<Balance> {
 	/// The maximum usage allowed before transactions are restricted.
 	pub max: Balance,
-	/// The amount of usage recovered per block.
+	/// The amount of usage recovered per block of [`Config::BlockNumberProvider`].
 	pub recovery_per_block: Balance,
 }
 
@@ -115,7 +116,8 @@ pub mod pallet {
 	pub struct Usage<Balance, BlockNumber> {
 		/// The amount of usage consumed at block `at_block`.
 		pub used: Balance,
-		/// The block number at which the usage was last updated.
+		/// The block number at which the usage was last updated. It comes from
+		/// [`Config::BlockNumberProvider`], not from `frame_system`.
 		pub at_block: BlockNumber,
 	}
 
@@ -125,18 +127,16 @@ pub mod pallet {
 		<<T as pallet_transaction_payment::Config>::OnChargeTransaction as OnChargeTransaction<
 			T,
 		>>::Balance;
+	pub(crate) type BlockNumberOf<T> =
+		<<T as Config>::BlockNumberProvider as BlockNumberProvider>::BlockNumber;
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
 
 	/// The current usage for each entity.
 	#[pallet::storage]
-	pub type Usages<T: Config> = StorageMap<
-		_,
-		Blake2_128Concat,
-		T::RestrictedEntity,
-		Usage<BalanceOf<T>, BlockNumberFor<T>>,
-	>;
+	pub type Usages<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::RestrictedEntity, Usage<BalanceOf<T>, BlockNumberOf<T>>>;
 
 	#[pallet::config]
 	pub trait Config:
@@ -149,6 +149,12 @@ pub mod pallet {
 	{
 		/// The weight information for this pallet.
 		type WeightInfo: WeightInfo;
+
+		/// The block number used to measure the usage recovery.
+		///
+		/// A parachain must set the relay chain block number provider, so that the recovery rate
+		/// stays the same when the local block production changes.
+		type BlockNumberProvider: BlockNumberProvider;
 
 		/// The type that represent the entities tracked, its allowance and the conversion from
 		/// origin is bounded in [`RestrictedEntity`].
@@ -208,7 +214,7 @@ pub mod pallet {
 				return Err(Error::<T>::NoUsage.into())
 			};
 
-			let now = frame_system::Pallet::<T>::block_number();
+			let now = T::BlockNumberProvider::current_block_number();
 			let elapsed = now.saturating_sub(usage.at_block).saturated_into::<u32>();
 
 			let allowance = entity.allowance();
@@ -254,7 +260,7 @@ pub enum Val<T: Config> {
 		fee: BalanceOf<T>,
 		entity: T::RestrictedEntity,
 		/// The updated usage to persist in `prepare`.
-		usage: Usage<BalanceOf<T>, BlockNumberFor<T>>,
+		usage: Usage<BalanceOf<T>, BlockNumberOf<T>>,
 	},
 	NoCharge,
 }
@@ -308,7 +314,7 @@ impl<T: Config> TransactionExtension<T::RuntimeCall> for RestrictOrigin<T> {
 			return Err(InvalidTransaction::Call.into())
 		}
 
-		let now = frame_system::Pallet::<T>::block_number();
+		let now = T::BlockNumberProvider::current_block_number();
 		let mut usage = match Usages::<T>::get(&entity) {
 			Some(mut usage) => {
 				let elapsed = now.saturating_sub(usage.at_block).saturated_into::<u32>();

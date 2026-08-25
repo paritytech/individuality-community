@@ -799,13 +799,18 @@ impl cumulus_pallet_weight_reclaim::Config for Runtime {
 	type WeightInfo = weights::cumulus_pallet_weight_reclaim::WeightInfo<Runtime>;
 }
 
+/// The parachain produces `BLOCK_PROCESSING_VELOCITY` blocks per relay chain block. The recovery
+/// rates below are per relay chain block, so they scale by this factor to keep the same rate per
+/// unit of time.
+const PARA_BLOCKS_PER_RELAY_BLOCK: Balance = BLOCK_PROCESSING_VELOCITY as Balance;
+
 // TODO(paritytech/individuality#1124): choose good value.
 const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_MAX: Balance = UNITS;
-const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = CENTS;
-const POI_CANDIDATE_RECOVERY: Balance = CENTS;
-const ACCOUNT_PARTICIPANT_RECOVERY: Balance = CENTS;
+const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = CENTS * PARA_BLOCKS_PER_RELAY_BLOCK;
+const POI_CANDIDATE_RECOVERY: Balance = CENTS * PARA_BLOCKS_PER_RELAY_BLOCK;
+const ACCOUNT_PARTICIPANT_RECOVERY: Balance = CENTS * PARA_BLOCKS_PER_RELAY_BLOCK;
 const LITE_PERSON_AND_ALIAS_ALLOWANCE_MAX: Balance = UNITS;
-const LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = MILLICENTS;
+const LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = MILLICENTS * PARA_BLOCKS_PER_RELAY_BLOCK;
 
 #[derive(
 	Clone,
@@ -935,6 +940,7 @@ impl indiv_pallet_origin_restriction::BenchmarkHelper<OriginCaller, RuntimeCall>
 
 impl indiv_pallet_origin_restriction::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_origin_restriction::WeightInfo<Runtime>;
+	type BlockNumberProvider = RelaychainDataProvider<Runtime>;
 	type RestrictedEntity = RestrictedEntity;
 	type OperationAllowedOneTimeExcess = OperationAllowedOneTimeExcess;
 	#[cfg(feature = "runtime-benchmarks")]
