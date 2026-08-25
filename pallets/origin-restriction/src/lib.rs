@@ -116,8 +116,8 @@ pub mod pallet {
 	pub struct Usage<Balance, BlockNumber> {
 		/// The amount of usage consumed at block `at_block`.
 		pub used: Balance,
-		/// The block number at which the usage was last updated. It comes from
-		/// [`Config::BlockNumberProvider`], not from `frame_system`.
+		/// The block number at which the usage was last updated. (Provided by
+		/// [`Config::BlockNumberProvider`]).
 		pub at_block: BlockNumber,
 	}
 
