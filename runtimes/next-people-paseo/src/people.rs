@@ -38,8 +38,9 @@ use indiv_support::{
 	traits::{AllocateStorage, Context, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER},
 	utils::TypedGetToGet,
 };
-use paseo_runtime_constants::system_parachain::{
-	NextAssetHubParaId, ASSET_HUB_ID, NEXT_ASSET_HUB_ID,
+use paseo_runtime_constants::{
+	system_parachain::{NextAssetHubParaId, ASSET_HUB_ID, NEXT_ASSET_HUB_ID},
+	time::DAYS as RC_DAYS,
 };
 use sp_runtime::{
 	traits::{AccountIdConversion, ConstI8, ConstU16},
@@ -636,7 +637,8 @@ impl indiv_pallet_game::Config for Runtime {
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type InviteIssuer = EnsureRoot<Self::AccountId>;
 	type EnsureLiteAlias = indiv_pallet_people_lite::EnsureLiteAliasInContext<Runtime>;
-	type NonPlayingKickoutTime = ConstU32<{ 90 * DAYS }>;
+	type BlockNumberProvider = RelaychainDataProvider<Runtime>;
+	type NonPlayingKickoutTime = ConstU32<{ 90 * RC_DAYS }>;
 	type NativeFungible = Balances;
 	type PlayDeposit = HoldConsideration<
 		AccountId,

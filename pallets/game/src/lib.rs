@@ -106,9 +106,11 @@
 //! For account-based players: if after a game the player's score reach 0 then they are archived,
 //! their credibility is lost, in case of a deposit, the deposit is burned.
 //! When archived, to sign up for a game, they need to pay a new deposit.
-//! After [`Config::NonPlayingKickoutTime`] blocks, the archived account-based players can be kicked
-//! out and completely removed from indiv-pallet-game and indiv-pallet-score. If they come back,
-//! they are considered new players.
+//! After [`Config::NonPlayingKickoutTime`] blocks of [`Config::BlockNumberProvider`], the archived
+//! account-based players can be kicked out and completely removed from indiv-pallet-game and
+//! indiv-pallet-score. If they come back, they are considered new players. A parachain configures
+//! the relay chain block number there, so the kickout delay does not depend on the local block
+//! production.
 //!
 //! For alias-based players: if absent for one game, then they are archived, they can always sign-up
 //! again for free. Their credibility being given by their alias.
@@ -259,7 +261,7 @@ use indiv_support::{
 	traits::{Alias, CommunicationIdentifier, Context},
 	weight_budget::OcwWeightBudget,
 };
-use sp_runtime::traits::{IdentifyAccount, Verify, Zero};
+use sp_runtime::traits::{BlockNumberProvider, IdentifyAccount, Verify, Zero};
 use sp_statement_store::{
 	decrease_allowance_by, increase_allowance_by, runtime_api::statement_store, StatementAllowance,
 };
@@ -293,6 +295,10 @@ pub mod pallet {
 	/// Type alias to access the type of `Ticket`.
 	pub(crate) type TicketOf<T> =
 		<<<T as Config>::TicketSignature as Verify>::Signer as IdentifyAccount>::AccountId;
+
+	/// The block number of [`Config::BlockNumberProvider`].
+	pub type ProviderBlockNumberFor<T> =
+		<<T as Config>::BlockNumberProvider as BlockNumberProvider>::BlockNumber;
 
 	/// Native chain balance, used for the play deposit held on the `Balances` pallet.
 	pub type NativeBalanceOf<T> =
@@ -362,11 +368,18 @@ pub mod pallet {
 		/// and the alias identifies the lite person without linking to their account.
 		type EnsureLiteAlias: EnsureOriginWithArg<Self::RuntimeOrigin, Context, Success = Alias>;
 
-		/// The time after which a player that is not playing can be kicked out.
+		/// The block number used to measure the time since a player was archived.
+		///
+		/// A parachain must set the relay chain block number provider, so that the kickout delay
+		/// stays the same when the local block production changes.
+		type BlockNumberProvider: BlockNumberProvider;
+
+		/// The number of blocks of [`Config::BlockNumberProvider`] after which an archived player
+		/// can be kicked out.
 		///
 		/// This is only for account players, not persons.
 		#[pallet::constant]
-		type NonPlayingKickoutTime: Get<BlockNumberFor<Self>>;
+		type NonPlayingKickoutTime: Get<ProviderBlockNumberFor<Self>>;
 
 		/// Native chain fungible used to hold the play deposit. Only its [`Inspect::Balance`]
 		/// associated type is consumed by this pallet; the actual hold is taken by
@@ -525,12 +538,14 @@ pub mod pallet {
 		StorageValue<_, NativeBalanceOf<T>, ValueQuery, T::DefaultPlayDeposit>;
 
 	/// All the player with zero score but still onboarded in indiv_pallet_score.
+	///
+	/// The archival block number is provided by [`Config::BlockNumberProvider`].
 	#[pallet::storage]
 	pub type ArchivedPlayers<T: Config> = StorageMap<
 		_,
 		Blake2_128Concat,
 		AccountOrPerson<T::AccountId>,
-		ArchivedPlayer<BlockNumberFor<T>>,
+		ArchivedPlayer<ProviderBlockNumberFor<T>>,
 	>;
 
 	/// All the player in the game.
@@ -1340,7 +1355,7 @@ pub mod pallet {
 			let ArchivedPlayer::Kickable { archived_since, .. } = archived else {
 				return Err(Error::<T>::NotKickablePlayer.into());
 			};
-			let now = frame_system::Pallet::<T>::block_number();
+			let now = T::BlockNumberProvider::current_block_number();
 
 			ensure!(
 				now > archived_since.saturating_add(T::NonPlayingKickoutTime::get()),
@@ -2882,7 +2897,7 @@ pub mod pallet {
 			let archived_player = match disposition {
 				PlayerDisposition::ArchiveKickable => Some(ArchivedPlayer::Kickable {
 					first_game: player.first_game,
-					archived_since: frame_system::Pallet::<T>::block_number(),
+					archived_since: T::BlockNumberProvider::current_block_number(),
 				}),
 				PlayerDisposition::ArchiveUnkickable =>
 					Some(ArchivedPlayer::Unkickable { first_game: player.first_game }),

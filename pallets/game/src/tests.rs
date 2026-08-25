@@ -1340,7 +1340,6 @@ mod games_scheduling {
 fn kickout_scenarios() {
 	new_test_ext().execute_with(|| {
 		let kickout_time: u64 = <Test as Config>::NonPlayingKickoutTime::get();
-		use frame_system::Pallet as SystemPallet;
 
 		let alice_key = AccountOrPerson::Account(ALICE);
 
@@ -1358,16 +1357,21 @@ fn kickout_scenarios() {
 			"alice_account must be in ArchivedPlayers"
 		);
 
-		// Check `kickout` fails if not enough blocks have passed (Error::Early)
+		// The archival is stamped with the relay chain block number, not the parachain one.
 		let archived_since = match ArchivedPlayers::<Test>::get(&alice_key).unwrap() {
 			ArchivedPlayer::Kickable { archived_since, .. } => archived_since,
 			ArchivedPlayer::Unkickable { .. } => panic!("alice must be kickable"),
 		};
-		SystemPallet::<Test>::set_block_number(archived_since + kickout_time);
+		assert!(archived_since >= RELAY_BLOCK_GENESIS);
+		assert!(archived_since <= MockRelayBlockNumberProvider::current_block_number());
+		assert!(System::block_number() < RELAY_BLOCK_GENESIS);
+
+		// Check `kickout` fails if not enough relay chain blocks have passed (Error::Early)
+		MockRelayBlockNumberProvider::set_block_number(archived_since + kickout_time);
 		assert_noop!(Game::kickout(RuntimeOrigin::signed(EVE), ALICE), Error::<Test>::Early);
 
-		// Succeeds if enough blocks have passed
-		SystemPallet::<Test>::set_block_number(archived_since + kickout_time + 1);
+		// Succeeds if enough relay chain blocks have passed
+		MockRelayBlockNumberProvider::set_block_number(archived_since + kickout_time + 1);
 		assert_ok!(Game::kickout(RuntimeOrigin::signed(EVE), ALICE));
 
 		// The KickedOut event is emitted.
@@ -1383,6 +1387,33 @@ fn kickout_scenarios() {
 			None,
 			"kickout also removes from indiv_pallet_score"
 		);
+	});
+}
+
+/// The kickout delay is measured in relay chain blocks. Parachain blocks alone count for nothing.
+#[test]
+fn kickout_waits_for_relay_chain_blocks() {
+	new_test_ext().execute_with(|| {
+		let kickout_time: u64 = <Test as Config>::NonPlayingKickoutTime::get();
+		let alice_key = AccountOrPerson::Account(ALICE);
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 10,
+			rounds: 1,
+			max_group_size: 2,
+			..Default::default()
+		};
+
+		// ALICE doesn't report → archived as kickable.
+		run_game_scenario(schedule, slice::from_ref(&alice_key), |_player| None);
+		assert!(ArchivedPlayers::<Test>::contains_key(&alice_key));
+
+		// Parachain blocks on their own do not make the player kickable.
+		System::set_block_number(System::block_number() + 10 * kickout_time);
+		assert_noop!(Game::kickout(RuntimeOrigin::signed(EVE), ALICE), Error::<Test>::Early);
+
+		// The same count of relay chain blocks makes the player kickable.
+		advance_relay_by(kickout_time + 1);
+		assert_ok!(Game::kickout(RuntimeOrigin::signed(EVE), ALICE));
 	});
 }
 
@@ -1453,7 +1484,6 @@ fn offboard_retains_attendance_history() {
 #[test]
 fn kickout_retains_attendance_history() {
 	new_test_ext().execute_with(|| {
-		use frame_system::Pallet as SystemPallet;
 		let kickout_time: u64 = <Test as Config>::NonPlayingKickoutTime::get();
 		let alice = AccountOrPerson::Account(ALICE);
 		let schedule = GameSchedule::<u32, u128> {
@@ -1470,8 +1500,7 @@ fn kickout_retains_attendance_history() {
 		let earlier_game = 99u32;
 		Game::note_attendance(earlier_game, &alice);
 
-		let since = SystemPallet::<Test>::block_number();
-		SystemPallet::<Test>::set_block_number(since + kickout_time + 1);
+		advance_relay_by(kickout_time + 1);
 		assert_ok!(Game::kickout(RuntimeOrigin::signed(EVE), ALICE));
 
 		assert!(

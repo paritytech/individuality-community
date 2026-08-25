@@ -1788,8 +1788,8 @@ mod benches {
 		PlayerAttendanceHistory::<T>::insert(&player_aop, attendance);
 
 		// The time to kickout a player is respected
-		frame_system::Pallet::<T>::set_block_number(
-			frame_system::Pallet::<T>::block_number() +
+		T::BlockNumberProvider::set_block_number(
+			T::BlockNumberProvider::current_block_number() +
 				T::NonPlayingKickoutTime::get() +
 				One::one(),
 		);

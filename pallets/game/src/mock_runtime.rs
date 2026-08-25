@@ -63,8 +63,8 @@ use sp_runtime::{
 	},
 	testing::TestSignature,
 	traits::{
-		Applyable, BlakeTwo256, Checkable, DispatchInfoOf, IdentifyAccount, IdentityLookup,
-		TransactionExtension as TransactionExtensionTrait, ValidateResult, Verify,
+		Applyable, BlakeTwo256, BlockNumberProvider, Checkable, DispatchInfoOf, IdentifyAccount,
+		IdentityLookup, TransactionExtension as TransactionExtensionTrait, ValidateResult, Verify,
 	},
 	transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidityError},
 	AccountId32, BuildStorage, DispatchError, MultiSignature, Permill, TransactionOutcome, Weight,
@@ -1443,9 +1443,18 @@ pub fn block_skipped() -> bool {
 	System::block_number().is_multiple_of(GAME_PROCESS_SKIPPED_BLOCK as u64)
 }
 
+/// Advance only the relay chain by a certain number of blocks.
+pub fn advance_relay_by(b: RelayBlockNumber) {
+	MockRelayBlockNumberProvider::set_block_number(
+		MockRelayBlockNumberProvider::current_block_number() + b,
+	);
+}
+
+/// Advance the parachain by one block and the relay chain by as many blocks, and run the hooks.
 pub fn advance_process_with_weights(on_poll: Weight, on_idle: Weight) {
 	record_events();
 	let bn = System::block_number() + 1;
+	advance_relay_by(1);
 	System::run_to_block_with::<AllPalletsWithSystem>(
 		bn,
 		RunToBlockHooks::default().after_initialize(|bn| {
@@ -1461,6 +1470,7 @@ pub fn advance_process_with_weights(on_poll: Weight, on_idle: Weight) {
 pub fn advance_process_with_on_poll_only() {
 	record_events();
 	let bn = System::block_number() + 1;
+	advance_relay_by(1);
 	System::run_to_block_with::<AllPalletsWithSystem>(
 		bn,
 		RunToBlockHooks::default().after_initialize(|bn| {
@@ -1584,6 +1594,32 @@ pub fn mock_key(
 	(member, secret)
 }
 
+pub type RelayBlockNumber = u64;
+
+/// The mock relay chain block number at genesis. It is not zero, so a test that reads
+/// [`ArchivedPlayer::Kickable::archived_since`] fails if the pallet takes the parachain block
+/// number instead.
+pub const RELAY_BLOCK_GENESIS: RelayBlockNumber = 1_000;
+
+parameter_types! {
+	pub storage MockRelayBlockNumber: RelayBlockNumber = RELAY_BLOCK_GENESIS;
+}
+
+/// Stands in for the relay chain block number, moved by [`advance_process`] and
+/// [`advance_relay_by`].
+pub struct MockRelayBlockNumberProvider;
+impl BlockNumberProvider for MockRelayBlockNumberProvider {
+	type BlockNumber = RelayBlockNumber;
+
+	fn current_block_number() -> RelayBlockNumber {
+		MockRelayBlockNumber::get()
+	}
+
+	fn set_block_number(block: RelayBlockNumber) {
+		MockRelayBlockNumber::set(&block);
+	}
+}
+
 /// The game's own configuration, which the credits mock shares: the pallet is the same in both, and
 /// only who owns the credits differs.
 impl indiv_pallet_game::Config for Test {
@@ -1596,6 +1632,7 @@ impl indiv_pallet_game::Config for Test {
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type InviteIssuer = EnsureRoot<Self::AccountId>;
 	type EnsureLiteAlias = indiv_pallet_people_lite::EnsureLiteAliasInContext<Test>;
+	type BlockNumberProvider = MockRelayBlockNumberProvider;
 	type NonPlayingKickoutTime = ConstUint<1000>;
 	type NativeFungible = Balances;
 	type PlayDeposit = deposit::MockConsideration;

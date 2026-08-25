@@ -560,10 +560,15 @@ fn deposit_player_flow() {
 		// ─────────────────────────────────────
 		// Alice kickout bob
 		// ─────────────────────────────────────
+		// `advance_block` derives the relay chain block from the parachain block, so the parachain
+		// has to move `BLOCK_PROCESSING_VELOCITY` blocks per relay chain block of the kickout
+		// delay.
 		let now = frame_system::Pallet::<Runtime>::block_number();
-		let kickout_duration: u32 =
+		let kickout_duration: RelayBlockNumber =
 			<Runtime as indiv_pallet_game::Config>::NonPlayingKickoutTime::get();
-		frame_system::Pallet::<Runtime>::set_block_number(now + kickout_duration);
+		frame_system::Pallet::<Runtime>::set_block_number(
+			now + (kickout_duration + 1) * BLOCK_PROCESSING_VELOCITY,
+		);
 		advance_block();
 		let kickout = indiv_pallet_game::Call::<Runtime>::kickout { player: bob.clone() };
 		exec_signed(&Sr25519Keyring::Alice.pair(), kickout.into());
