@@ -72,6 +72,7 @@ mod coinage_paid_flow;
 mod coinage_people_flow;
 mod coinage_token_allowance;
 mod external_asset_teleport;
+mod fee_payment_any_asset;
 mod lite_people_free_tx;
 mod lite_people_game_flow;
 mod members_notifier_whitelist;
@@ -378,8 +379,10 @@ fn base_tx_ext(_call: RuntimeCall) -> TransactionExtension {
 		frame_system::CheckWeight::<Runtime>::new(),
 		pallet_skip_feeless_payment::SkipCheckIfFeeless::<
 			Runtime,
-			pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-		>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None)),
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
+		>::from(pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
+			0u128, None,
+		)),
 	)
 		.into()
 }

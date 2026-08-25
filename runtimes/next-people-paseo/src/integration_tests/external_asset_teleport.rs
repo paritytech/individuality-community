@@ -85,6 +85,45 @@ fn other_ah_asset_reserve_from_asset_hub_is_accepted() {
 	assert!(IsReserve::contains(&other, &AssetHubLocation::get()));
 }
 
+/// Only assets Asset Hub itself issues may be reserve transferred here from Asset Hub.
+///
+/// Accepting an asset from a chain that is not its real reserve gives it two reserves, and
+/// `ReserveAssetDeposited` mints locally, so the impostor reserve can credit this chain with
+/// holdings nobody is backing. The cases below are the ones that would actually hurt.
+#[test]
+fn only_asset_hub_native_assets_are_reserve_accepted_from_asset_hub() {
+	let asset_hub = AssetHubLocation::get();
+	let accepted = |asset: Location| IsReserve::contains(&(asset, 1_000u128).into(), &asset_hub);
+
+	// Asset Hub is the reserve for the assets it issues: trust backed assets and pool tokens.
+	assert!(accepted(Location::new(
+		1,
+		[Parachain(ASSET_HUB_ID), PalletInstance(50), GeneralIndex(4242)]
+	)));
+	assert!(accepted(Location::new(
+		1,
+		[Parachain(ASSET_HUB_ID), PalletInstance(55), GeneralIndex(7)]
+	)));
+
+	// PAS must never arrive as a reserve asset: `FungibleTransactor` has no checking account, so
+	// depositing it mints into `Balances`. PAS only ever arrives by teleport.
+	assert!(!accepted(RelayLocation::get()));
+
+	// Neither may Asset Hub vouch for assets it merely custodies.
+	assert!(!accepted(Location::new(2, [GlobalConsensus(NetworkId::Ethereum { chain_id: 1 })])));
+	assert!(!accepted(Location::new(2, [GlobalConsensus(NetworkId::Kusama)])));
+	assert!(!accepted(Location::new(1, [Parachain(2000), GeneralIndex(1)])));
+
+	// And an Asset Hub asset is only accepted *from* Asset Hub.
+	let ah_asset =
+		Location::new(1, [Parachain(ASSET_HUB_ID), PalletInstance(50), GeneralIndex(4242)]);
+	assert!(!IsReserve::contains(&(ah_asset.clone(), 1_000u128).into(), &RelayLocation::get()));
+	assert!(!IsReserve::contains(
+		&(ah_asset, 1_000u128).into(),
+		&Location::new(1, [Parachain(4242)])
+	));
+}
+
 #[test]
 fn other_ah_asset_reserve_from_relay_is_rejected() {
 	let other = ah_asset(u128::from(EXTERNAL_ASSET_ID + 1), 1_000);

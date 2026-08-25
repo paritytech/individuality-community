@@ -30,13 +30,14 @@ fn build_signed_ext_with_external_asset_payment(
 	let who_account = pair_to_account_id(who);
 
 	// update payment extension to pay in external asset with optional tip
-	tx_ext.0 .9 = pallet_skip_feeless_payment::SkipCheckIfFeeless::<
-		Runtime,
-		pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-	>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
-		tip,
-		Some(ExternalAssetLocation::get()),
-	));
+	tx_ext.0 .9 =
+		pallet_skip_feeless_payment::SkipCheckIfFeeless::<
+			Runtime,
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
+		>::from(pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
+			tip,
+			Some(ExternalAssetLocation::get()),
+		));
 
 	// update CheckNonce
 	{
