@@ -85,10 +85,10 @@ pub mod pallet {
 	/// transaction pool.
 	const TX_LONGEVITY: u64 = 8;
 
-	/// Retry window (in blocks) for offchain-worker transactions: retries within a window are
-	/// byte-identical and deduplicated by the transaction pool, while a window switch changes
-	/// the discriminator, and thus the transaction hash, escaping both mempool-level
-	/// deduplication and the pool rotator's inclusion ban.
+	/// Retry window, in blocks, for offchain-worker transactions.
+	/// Retries inside one window are byte-identical, so the transaction pool deduplicates them.
+	/// A window switch changes the discriminator and the transaction hash, so the retry passes
+	/// both pool deduplication and the rotator's ban on an already-included hash.
 	pub(crate) const TX_RETRY_WINDOW: u32 = 8;
 
 	/// Number of blocks between repeated failure warnings for offchain-worker transactions,
@@ -134,9 +134,9 @@ pub mod pallet {
 		type MaxDeletedRingsPerCollection: Get<u32>;
 
 		/// Number of ring indices the gap scan examines per `detect_missing_rings` call.
-		/// Must exceed `MaxUpdatesPerBatch`: the offchain worker scans one collection per run,
-		/// so at or below equality a collection never gains on its frontier and never releases
-		/// the slot to the next one.
+		/// Must exceed `MaxUpdatesPerBatch`. The offchain worker scans one collection per run, so
+		/// a smaller or equal value lets a collection's frontier advance at least as fast as its
+		/// cursor.
 		#[pallet::constant]
 		type MaxGapScanPerCall: Get<u32>;
 
@@ -352,6 +352,8 @@ pub mod pallet {
 		NothingToScan = 2,
 		/// Scanning with `deleted_indices` at capacity would record deleted indices as missing.
 		DeletedIndicesAtCapacity = 3,
+		/// Scanning cannot record another gap because `missing_indices` is full.
+		MissingIndicesAtCapacity = 4,
 	}
 
 	impl From<AuthorizeInvalidity> for TransactionValidityError {
@@ -438,6 +440,13 @@ pub mod pallet {
 			assert!(
 				T::OffchainWorkerInterval::get() > 0u32.into(),
 				"OffchainWorkerInterval must be greater than 0"
+			);
+
+			// Retries deduplicate only when several offchain worker runs share one retry window.
+			// At or above the window every run carries a fresh discriminator.
+			assert!(
+				T::OffchainWorkerInterval::get() < TX_RETRY_WINDOW.into(),
+				"OffchainWorkerInterval must be less than TX_RETRY_WINDOW"
 			);
 
 			let budget = OcwWeightBudget::from_normal_max::<T>();
@@ -825,9 +834,9 @@ pub mod pallet {
 
 		/// Validates a gap scan request.
 		///
-		/// Checks that the transaction is local/in-block, the subscription is active, the
-		/// gap scan cooldown since the last received batch has elapsed, the scan cursor is
-		/// behind the ring index frontier and `deleted_indices` is below capacity.
+		/// Checks that the transaction is local/in-block, the subscription is active, the gap scan
+		/// cooldown since the last received batch has elapsed, the scan cursor is behind the ring
+		/// index frontier and neither `deleted_indices` nor `missing_indices` is at capacity.
 		/// The scan cursor is part of the `provides` tag, so each page enters the pool once.
 		pub fn authorize_detect_missing_rings(
 			source: TransactionSource,
@@ -844,7 +853,9 @@ pub mod pallet {
 			let now = T::UnixTime::now().as_secs();
 			let last_batch = ProcessingState::<T>::get().last_batch_received_time;
 			if now.saturating_sub(last_batch) < T::GapScanCooldownSeconds::get() {
-				return Err(InvalidTransaction::Stale.into());
+				// The cooldown elapses on its own, so the pool keeps the transaction and
+				// revalidates it in a later view.
+				return Err(InvalidTransaction::Future.into());
 			}
 
 			let state = RingCollectionStates::<T>::get(identifier);
@@ -856,6 +867,10 @@ pub mod pallet {
 				return Err(AuthorizeInvalidity::DeletedIndicesAtCapacity.into());
 			}
 
+			if state.missing_indices.len() as u32 >= T::MaxMissingRootsPerCollection::get() {
+				return Err(AuthorizeInvalidity::MissingIndicesAtCapacity.into());
+			}
+
 			let validity = ValidTransaction::with_tag_prefix("members-subscriber:gap-scan")
 				.and_provides((identifier, state.next_scan_index))
 				.longevity(TX_LONGEVITY)
@@ -865,11 +880,14 @@ pub mod pallet {
 			Ok((validity, Weight::zero()))
 		}
 
-		/// Background-progress priority with a block-height bump.
-		/// Makes a fresh tx have higher priority than a tx with the same `provides` tag.
+		/// Background-progress priority raised by the block height. The bump makes a retry outbid
+		/// the stranded predecessor it replaces, which carries the same `provides` tag. The sum
+		/// is capped below [`tx_priority::USER_HIGH`], so the bump never leaves its band.
 		fn local_priority() -> u64 {
+			let bump = frame_system::Pallet::<T>::block_number().saturated_into::<u64>();
 			tx_priority::BACKGROUND_PROGRESS
-				.saturating_add(frame_system::Pallet::<T>::block_number().saturated_into::<u64>())
+				.saturating_add(bump)
+				.min(tx_priority::USER_HIGH.saturating_sub(1))
 		}
 	}
 
@@ -1227,8 +1245,7 @@ pub mod pallet {
 				return;
 			}
 
-			let collection_limit = T::MaxCollections::get() as usize;
-			for (identifier, state) in RingCollectionStates::<T>::iter().take(collection_limit) {
+			for (identifier, state) in RingCollectionStates::<T>::iter() {
 				if state.next_scan_index >= state.next_ring_index {
 					continue;
 				}

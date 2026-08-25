@@ -28,7 +28,7 @@ use crate::{
 	},
 	Pallet,
 };
-use indiv_support::traits::RingExponent;
+use indiv_support::{traits::RingExponent, tx_priority};
 
 const TEST_RING_EXPONENT: RingExponent = RingExponent::R2e9;
 use alloc::collections::BTreeSet;
@@ -2398,6 +2398,24 @@ mod offchain_worker {
 	}
 
 	#[test]
+	fn priority_stays_within_the_background_band() {
+		new_test_ext().execute_with(|| {
+			setup_active_with_missing(&[(1, 0)]);
+			let call = crate::pallet::Call::<Test>::replay_missing_roots {
+				identifier: PEOPLE,
+				indices: bounded_vec![1],
+				discriminator: 0,
+			};
+
+			System::set_block_number(tx_priority::USER_HIGH);
+			let validity = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
+
+			assert!(validity.priority >= tx_priority::BACKGROUND_PROGRESS);
+			assert!(validity.priority < tx_priority::USER_HIGH);
+		});
+	}
+
+	#[test]
 	fn submits_gap_scan_when_cursor_lags() {
 		new_test_ext().execute_with(|| {
 			setup_active_with_scan_lag(5);
@@ -2497,13 +2515,11 @@ mod offchain_worker {
 	fn gap_scan_skips_a_collection_pinned_by_full_missing_indices() {
 		new_test_ext().execute_with(|| {
 			setup_active_with_scan_lag(5);
-			// PEOPLE cannot record another gap, so its cursor would never advance.
 			let missing =
 				(0..MaxMissingRootsPerCollection::get()).map(|i| (i, 0)).collect::<Vec<_>>();
-			RingCollectionStates::<Test>::insert(
-				PEOPLE,
-				make_collection_ring_state(0, 1000, &missing, &[]),
-			);
+			let mut pinned = make_collection_ring_state(0, 1000, &missing, &[]);
+			pinned.next_scan_index = MaxMissingRootsPerCollection::get();
+			RingCollectionStates::<Test>::insert(PEOPLE, pinned);
 			RingCollectionStates::<Test>::insert(
 				PEOPLE_LITE,
 				make_collection_ring_state(0, 5, &[], &[]),
@@ -3142,7 +3158,7 @@ mod gap_scan {
 			let result = call.authorize(TransactionSource::InBlock).unwrap();
 			assert_eq!(
 				result.unwrap_err(),
-				TransactionValidityError::from(InvalidTransaction::Stale)
+				TransactionValidityError::from(InvalidTransaction::Future)
 			);
 
 			// Part 2 (same sequence) delivers the rest.
@@ -3206,9 +3222,10 @@ mod gap_scan {
 
 			let result = call.authorize(TransactionSource::InBlock).unwrap();
 
+			// The cooldown elapses on its own, so the pool keeps the transaction.
 			assert_eq!(
 				result.unwrap_err(),
-				TransactionValidityError::from(InvalidTransaction::Stale)
+				TransactionValidityError::from(InvalidTransaction::Future)
 			);
 		});
 	}
@@ -3246,6 +3263,28 @@ mod gap_scan {
 			assert_eq!(
 				result.unwrap_err(),
 				TransactionValidityError::from(InvalidTransaction::Custom(3))
+			);
+		});
+	}
+
+	#[test]
+	fn authorize_scan_rejects_when_missing_indices_at_capacity() {
+		new_test_ext().execute_with(|| {
+			setup_active_ocw_ready();
+			// Missing indices at capacity and the cursor above every recorded one, so a scan
+			// would stop at its first gap and leave the cursor, and the tag, unchanged.
+			let missing =
+				(0..MaxMissingRootsPerCollection::get()).map(|i| (i, 0)).collect::<Vec<_>>();
+			let mut pinned = make_collection_ring_state(0, 1000, &missing, &[]);
+			pinned.next_scan_index = MaxMissingRootsPerCollection::get();
+			RingCollectionStates::<Test>::insert(PEOPLE, pinned);
+			let call = gap_scan_call(PEOPLE);
+
+			let result = call.authorize(TransactionSource::InBlock).unwrap();
+
+			assert_eq!(
+				result.unwrap_err(),
+				TransactionValidityError::from(InvalidTransaction::Custom(4))
 			);
 		});
 	}
