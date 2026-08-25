@@ -29,7 +29,7 @@ use crate::{
 };
 use codec::Encode;
 use frame_support::{assert_err_ignore_postinfo, assert_ok, traits::fungibles::InspectHold};
-use sp_core::blake2_256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::bounded_vec;
 use verifiable::GenerateVerifiable;
 
