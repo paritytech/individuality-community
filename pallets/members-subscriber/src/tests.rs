@@ -2201,6 +2201,10 @@ mod recent_ring_roots {
 
 mod offchain_worker {
 	use super::*;
+	use crate::pallet::TX_RETRY_WINDOW;
+	use codec::Encode;
+	use frame_support::traits::Authorize;
+	use sp_runtime::transaction_validity::TransactionSource;
 
 	fn setup_active_with_missing(missing: &[(u32, u32)]) {
 		setup_active_ocw_ready();
@@ -2287,6 +2291,7 @@ mod offchain_worker {
 				vec![RuntimeCall::MembersSubscriber(crate::pallet::Call::replay_missing_roots {
 					identifier: PEOPLE,
 					indices: bounded_vec![1, 3],
+					discriminator: 0,
 				})]
 			);
 		});
@@ -2310,12 +2315,14 @@ mod offchain_worker {
 				crate::pallet::Call::replay_missing_roots {
 					identifier: PEOPLE,
 					indices: bounded_vec![1],
+					discriminator: 0,
 				}
 			)));
 			assert!(calls.contains(&RuntimeCall::MembersSubscriber(
 				crate::pallet::Call::replay_missing_roots {
 					identifier: PEOPLE_LITE,
 					indices: bounded_vec![5],
+					discriminator: 0,
 				}
 			)));
 		});
@@ -2347,6 +2354,47 @@ mod offchain_worker {
 			PEOPLE,
 			make_collection_ring_state(0, frontier, &[], &[]),
 		);
+	}
+
+	#[test]
+	fn replay_retry_changes_the_encoded_call_only_across_windows() {
+		new_test_ext().execute_with(|| {
+			let encoded_at = |block: u64| {
+				crate::pallet::Call::<Test>::replay_missing_roots {
+					identifier: PEOPLE,
+					indices: bounded_vec![1, 3],
+					discriminator: block / u64::from(TX_RETRY_WINDOW),
+				}
+				.encode()
+			};
+
+			// Retries inside one window are identical
+			assert_eq!(encoded_at(0), encoded_at(u64::from(TX_RETRY_WINDOW) - 1));
+
+			// A window switch produces a fresh transaction hash
+			assert_ne!(encoded_at(0), encoded_at(u64::from(TX_RETRY_WINDOW)));
+		});
+	}
+
+	#[test]
+	fn replay_retry_changes_prio_based_on_block_number() {
+		new_test_ext().execute_with(|| {
+			setup_active_with_missing(&[(1, 0)]);
+			let call = crate::pallet::Call::<Test>::replay_missing_roots {
+				identifier: PEOPLE,
+				indices: bounded_vec![1],
+				discriminator: 0,
+			};
+
+			System::set_block_number(1);
+			let first = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
+
+			System::set_block_number(2);
+			let retry = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
+
+			assert_eq!(first.provides, retry.provides);
+			assert!(retry.priority > first.priority);
+		});
 	}
 
 	#[test]

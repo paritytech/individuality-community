@@ -423,7 +423,7 @@ mod benches {
 			(0..n).collect::<Vec<_>>().try_into().expect("within bounds");
 
 		#[extrinsic_call]
-		_(SystemOrigin::Authorized, BENCH_IDENTIFIER, indices);
+		_(SystemOrigin::Authorized, BENCH_IDENTIFIER, indices, BlockNumberFor::<T>::zero());
 
 		// XCM sent and replay timestamp updated
 		assert!(ProcessingState::<T>::get().last_replay_request_time > 0);
@@ -470,7 +470,11 @@ mod benches {
 		let indices: BoundedVec<_, T::MaxMissingRootsPerCollection> =
 			(0..n).collect::<Vec<_>>().try_into().expect("within bounds");
 
-		let call = Call::<T>::replay_missing_roots { identifier: BENCH_IDENTIFIER, indices };
+		let call = Call::<T>::replay_missing_roots {
+			identifier: BENCH_IDENTIFIER,
+			indices,
+			discriminator: BlockNumberFor::<T>::zero(),
+		};
 
 		#[block]
 		{

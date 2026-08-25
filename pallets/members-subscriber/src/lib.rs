@@ -384,7 +384,7 @@ pub mod pallet {
 			let processing_state = ProcessingState::<T>::get();
 
 			Self::submit_gap_scan(block_number, discriminator, now, &processing_state);
-			Self::submit_replay_requests(block_number, now, &processing_state);
+			Self::submit_replay_requests(block_number, discriminator, now, &processing_state);
 		}
 
 		fn integrity_test() {
@@ -636,7 +636,9 @@ pub mod pallet {
 		/// Submitted by the offchain worker as an authorized transaction. Validates
 		/// that the subscription is active and that the provided indices are actually
 		/// missing before sending XCM replay requests.
-		#[pallet::authorize(Pallet::<T>::authorize_replay_missing_roots)]
+		#[pallet::authorize(|source, identifier, indices, _discriminator| {
+			Pallet::<T>::authorize_replay_missing_roots(source, identifier, indices)
+		})]
 		#[pallet::call_index(3)]
 		#[pallet::weight(Pallet::<T>::replay_missing_roots_worst_case_weight())]
 		#[pallet::weight_of_authorize(T::WeightInfo::authorize_replay_missing_roots(indices.len() as u32))]
@@ -644,6 +646,7 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			identifier: Identifier,
 			indices: BoundedVec<RingIndex, T::MaxMissingRootsPerCollection>,
+			_discriminator: BlockNumberFor<T>,
 		) -> DispatchResult {
 			ensure_authorized(origin)?;
 
@@ -784,7 +787,7 @@ pub mod pallet {
 				.and_provides(identifier)
 				.longevity(TX_LONGEVITY)
 				.propagate(false)
-				.priority(tx_priority::BACKGROUND_PROGRESS)
+				.priority(Self::local_priority())
 				.into();
 			Ok((validity, T::WeightInfo::authorize_replay_missing_roots(indices.len() as u32)))
 		}
@@ -1218,8 +1221,8 @@ pub mod pallet {
 			// Some rest time after the last received batch is given to account
 			// for incoming batches that may contain indices considered as missing
 			// in the current state.
-			if now.saturating_sub(processing_state.last_batch_received_time)
-				< T::GapScanCooldownSeconds::get()
+			if now.saturating_sub(processing_state.last_batch_received_time) <
+				T::GapScanCooldownSeconds::get()
 			{
 				return;
 			}
@@ -1265,6 +1268,7 @@ pub mod pallet {
 		/// Submits a replay transaction for each collection with missing ring indices.
 		fn submit_replay_requests(
 			block_number: BlockNumberFor<T>,
+			discriminator: BlockNumberFor<T>,
 			now: u64,
 			processing_state: &UpdatesProcessingState,
 		) {
@@ -1299,7 +1303,7 @@ pub mod pallet {
 				let indices: BoundedVec<_, T::MaxMissingRootsPerCollection> =
 					BoundedVec::truncate_from(state.missing_indices.keys().copied().collect());
 
-				let call = Call::replay_missing_roots { identifier, indices };
+				let call = Call::replay_missing_roots { identifier, indices, discriminator };
 				Self::submit_authorized_transaction(call, block_number);
 			}
 		}
