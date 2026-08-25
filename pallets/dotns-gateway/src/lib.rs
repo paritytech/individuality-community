@@ -406,9 +406,8 @@ pub mod pallet {
 
 			LiteLabelOwner::<T>::insert(&lite_label, &candidate);
 			AccountNames::<T>::mutate(&candidate, |record| {
-				let record = record.get_or_insert_with(AccountNameRecord::default);
-				record.lite = Some(lite_label.clone());
-				record.chat = Some(chat_key);
+				record.get_or_insert_with(AccountNameRecord::default).lite =
+					Some(NameEntry { label: lite_label.clone(), chat: Some(chat_key) });
 			});
 
 			Self::deposit_event(Event::NameReserved {
@@ -468,11 +467,17 @@ pub mod pallet {
 			AccountAlias::<T>::insert(&who, alias);
 			AccountNames::<T>::mutate(&who, |record| {
 				let record = record.get_or_insert_with(AccountNameRecord::default);
-				record.full = Some(label.clone());
-				// A lite-linked registration inherits the chat key of the lite label.
-				if let Link::None(chat_key) = &link {
-					record.chat = Some(*chat_key);
-				}
+				let chat = match &link {
+					Link::None(chat_key) => Some(*chat_key),
+					// The contracts copy the lite label's key to the full label. The pallet
+					// holds that key only when the linked label is the recorded one.
+					Link::LiteUsername(lite) => record
+						.lite
+						.as_ref()
+						.filter(|entry| entry.label == *lite)
+						.and_then(|entry| entry.chat),
+				};
+				record.full = Some(NameEntry { label: label.clone(), chat });
 			});
 
 			Self::deposit_event(Event::NameRegistered { alias, account: who, label, link });

@@ -16,7 +16,7 @@
 
 //! Storage migrations for the dotNS gateway pallet.
 
-use crate::{AccountNameRecord, AccountNames, Config, LiteLabelOwner, Pallet};
+use crate::{AccountNameRecord, AccountNames, Config, LiteLabelOwner, NameEntry, Pallet};
 use frame_support::{
 	migrations::VersionedMigration, pallet_prelude::*, traits::UncheckedOnRuntimeUpgrade,
 };
@@ -34,46 +34,81 @@ pub type MigrateV0ToV1<T> = VersionedMigration<
 
 pub mod v1 {
 	use super::*;
+	use crate::BaseLabel;
+
+	/// An account name record as stored before chat keys existed.
+	#[derive(Decode)]
+	pub struct OldAccountNameRecord {
+		pub lite: Option<BaseLabel>,
+		pub full: Option<BaseLabel>,
+	}
+
+	fn entry_without_chat(label: BaseLabel) -> NameEntry {
+		NameEntry { label, chat: None }
+	}
 
 	/// Use [`super::MigrateV0ToV1`] rather than this directly.
 	///
-	/// Fills [`AccountNames`] from [`LiteLabelOwner`] for lite labels registered before the
-	/// map existed. Only the label is recoverable from pallet storage: the chat key stays
-	/// `None` for these accounts. When an account owns several lite labels, the first one in
-	/// storage iteration order wins. Full labels need no backfill: no full registration
-	/// happened on any deployment before the map existed.
+	/// Translates any record stored in the two-field shape, then fills [`AccountNames`] from
+	/// [`LiteLabelOwner`] for lite labels registered before the map existed. Only the label is
+	/// recoverable from pallet storage: the chat key stays `None` for these accounts. When an
+	/// account owns several lite labels, the first one in storage iteration order wins. Full
+	/// labels need no backfill: no full registration happened on any deployment before the map
+	/// existed.
 	pub struct BackfillAccountNames<T>(PhantomData<T>);
 
 	impl<T: Config> UncheckedOnRuntimeUpgrade for BackfillAccountNames<T> {
 		fn on_runtime_upgrade() -> Weight {
+			let mut translated = 0u64;
+			AccountNames::<T>::translate_values(|old: OldAccountNameRecord| {
+				translated.saturating_inc();
+				Some(AccountNameRecord {
+					lite: old.lite.map(entry_without_chat),
+					full: old.full.map(entry_without_chat),
+				})
+			});
+
 			let mut reads = 1u64;
 			let mut writes = 0u64;
 			for (label, owner) in LiteLabelOwner::<T>::iter() {
-				reads.saturating_inc();
-				AccountNames::<T>::mutate(&owner, |record| {
-					let record = record.get_or_insert_with(AccountNameRecord::default);
-					if record.lite.is_none() {
-						record.lite = Some(label);
-						writes.saturating_inc();
-					}
-				});
+				// One read for the `LiteLabelOwner` entry, one for the record.
+				reads = reads.saturating_add(2);
+				let mut record = AccountNames::<T>::get(&owner).unwrap_or_default();
+				if record.lite.is_none() {
+					record.lite = Some(entry_without_chat(label));
+					AccountNames::<T>::insert(&owner, record);
+					writes.saturating_inc();
+				}
 			}
-			log::info!(target: LOG_TARGET, "backfilled {writes} lite labels into AccountNames");
-			T::DbWeight::get().reads_writes(reads.saturating_add(writes), writes)
+			log::info!(
+				target: LOG_TARGET,
+				"translated {translated} records, backfilled {writes} lite labels into AccountNames"
+			);
+			T::DbWeight::get().reads_writes(
+				reads.saturating_add(translated.saturating_add(1)),
+				writes.saturating_add(translated),
+			)
 		}
 
 		#[cfg(feature = "try-runtime")]
 		fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
-			Ok((LiteLabelOwner::<T>::iter().count() as u32).encode())
+			// Keys, not entries: two-field records do not decode under the current type.
+			let records = AccountNames::<T>::iter_keys().count() as u32;
+			let owners = LiteLabelOwner::<T>::iter().count() as u32;
+			Ok((records, owners).encode())
 		}
 
 		#[cfg(feature = "try-runtime")]
 		fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
-			let before = u32::decode(&mut &state[..]).map_err(|_| {
-				sp_runtime::TryRuntimeError::Other("pre_upgrade state is not a u32")
+			let (records, owners) = <(u32, u32)>::decode(&mut &state[..]).map_err(|_| {
+				sp_runtime::TryRuntimeError::Other("pre_upgrade state is not (u32, u32)")
 			})?;
 			ensure!(
-				LiteLabelOwner::<T>::iter().count() as u32 == before,
+				AccountNames::<T>::iter().count() as u32 >= records,
+				"a record did not survive the migration"
+			);
+			ensure!(
+				LiteLabelOwner::<T>::iter().count() as u32 == owners,
 				"LiteLabelOwner changed during the migration"
 			);
 			for (_, owner) in LiteLabelOwner::<T>::iter() {
