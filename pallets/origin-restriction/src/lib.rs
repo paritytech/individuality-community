@@ -127,7 +127,7 @@ pub mod pallet {
 		<<T as pallet_transaction_payment::Config>::OnChargeTransaction as OnChargeTransaction<
 			T,
 		>>::Balance;
-	pub(crate) type BlockNumberOf<T> =
+	pub(crate) type ProviderBlockNumberFor<T> =
 		<<T as Config>::BlockNumberProvider as BlockNumberProvider>::BlockNumber;
 
 	#[pallet::pallet]
@@ -135,8 +135,12 @@ pub mod pallet {
 
 	/// The current usage for each entity.
 	#[pallet::storage]
-	pub type Usages<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::RestrictedEntity, Usage<BalanceOf<T>, BlockNumberOf<T>>>;
+	pub type Usages<T: Config> = StorageMap<
+		_,
+		Blake2_128Concat,
+		T::RestrictedEntity,
+		Usage<BalanceOf<T>, ProviderBlockNumberFor<T>>,
+	>;
 
 	#[pallet::config]
 	pub trait Config:
@@ -260,7 +264,7 @@ pub enum Val<T: Config> {
 		fee: BalanceOf<T>,
 		entity: T::RestrictedEntity,
 		/// The updated usage to persist in `prepare`.
-		usage: Usage<BalanceOf<T>, BlockNumberOf<T>>,
+		usage: Usage<BalanceOf<T>, ProviderBlockNumberFor<T>>,
 	},
 	NoCharge,
 }
