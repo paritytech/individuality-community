@@ -83,9 +83,17 @@
 //! for them. Only this precompile announces: the pallet's metadata extrinsics change the same
 //! state without a log, as native moves do for `Transfer`, so a consumer that follows logs alone
 //! misses both.
-//! `tokenOfOwnerByIndex` is served for wallets that call it, but ERC-721 Enumerable is not claimed:
-//! that id also covers `totalSupply` and `tokenByIndex`, which need an instance counter the pallet
-//! does not keep.
+//! Two interfaces are served but not claimed, because an id covers every function of its
+//! interface. `tokenOfOwnerByIndex` answers for wallets that call it, while ERC-721 Enumerable's
+//! id also covers `totalSupply` and `tokenByIndex`, which need an instance counter the pallet does
+//! not keep. `owner()` answers under ERC-173's name, while that id also covers
+//! `transferOwnership`, which cannot exist here: a handover carries the collection's storage
+//! deposit, so the successor has to accept and fund it, which is why the handover is a nomination
+//! the successor claims.
+//!
+//! ERC-5192 is claimed, and a mint announces its token's status: `Locked` for an instance of a
+//! soulbound item, `Unlocked` otherwise. Transferability is fixed when the item is defined, so a
+//! mint is the only point at which either can be emitted.
 //!
 //! No function of either interface is payable, and both reject a call that attaches value
 //! before doing anything else. Accepting it would strand it: a precompile address has no code,

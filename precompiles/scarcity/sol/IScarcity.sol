@@ -24,9 +24,11 @@ interface IScarcityCollection {
 
     /// @dev Returns true for the ERC-165 (0x01ffc9a7), ERC-721 (0x80ac58cd),
     /// ERC-721 Metadata (0x5b5e139f), ERC-5192 (0xb45a3c0e), ERC-2981 (0x2a55205a) and
-    /// ERC-4906 (0x49064906) interface identifiers. ERC-721 Enumerable (0x780e9d63) is not
-    /// claimed: {tokenOfOwnerByIndex} is served but `totalSupply` and `tokenByIndex` are not,
-    /// and the identifier covers all three or none.
+    /// ERC-4906 (0x49064906) interface identifiers. Two more are deliberately not claimed,
+    /// because an identifier covers every function of its interface: ERC-721 Enumerable
+    /// (0x780e9d63) would need `totalSupply` and `tokenByIndex` beside {tokenOfOwnerByIndex},
+    /// and ERC-173 (0x7f5828d0) would need `transferOwnership` beside {owner}. Both of those
+    /// reads are served anyway, for tooling that calls them without asking first.
     function supportsInterface(bytes4 interfaceId) external view returns (bool);
 
     // ============================================================
@@ -135,9 +137,10 @@ interface IScarcityCollection {
     /// `royaltyBasisPoints` (a SCALE-encoded uint128, at most 10000), each resolved item, then
     /// collection scope. Answers the zero address and zero amount whenever those keys do not
     /// describe a usable royalty: unset, a receiver that is not an address or is the zero
-    /// address, points that do not decode, or a share above 10000. A settling marketplace is
-    /// never blocked by this call. Reverts only if `tokenId` is not a live instance of this
-    /// collection.
+    /// address, points that do not decode, or a share above 10000, so a misconfigured collection
+    /// never blocks a settling marketplace. Reverts if `tokenId` is not a live instance of this
+    /// collection, and if `salePrice` scaled by the basis points leaves the `uint256` range,
+    /// because a wrapped amount would quote a royalty unrelated to the sale.
     function royaltyInfo(uint256 tokenId, uint256 salePrice) external view returns (address receiver, uint256 royaltyAmount);
 
     // ============================================================
@@ -201,6 +204,15 @@ interface IScarcityCollection {
     /// @dev Emitted when {claimCollectionOwnership} moves ownership. Nomination emits nothing,
     /// because it moves no authority.
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    /// @dev The collection owner, identical to {collectionOwner}.
+    ///
+    /// Served under ERC-173's name because tooling calls it, but ERC-173 is not claimed: its
+    /// identifier covers `transferOwnership` too, and that call cannot exist here. A handover
+    /// carries the collection's storage deposit, so the successor has to accept it and be able
+    /// to fund it, which is what {nominateCollectionOwner} and {claimCollectionOwnership} are
+    /// for. A one-call transfer would charge an account that never agreed to pay.
+    function owner() external view returns (address);
 
     // ============================================================
     // Scarcity events

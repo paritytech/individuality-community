@@ -1134,7 +1134,12 @@ impl pallet_scarcity::Config for Runtime {
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
 	// A purse key needs no account, so `AutoMapper` never sees one. Registering it at mint time
 	// is what lets the ERC-721 view resolve its address back to the key.
+	#[cfg(not(feature = "runtime-benchmarks"))]
 	type OnPurseOccupied = indiv_precompile_scarcity::MapPurseKey<Runtime>;
+	// Every entry that occupies a key adds `on_purse_occupied_weight()` on its own, so a
+	// benchmark that ran the real handler would charge it twice.
+	#[cfg(feature = "runtime-benchmarks")]
+	type OnPurseOccupied = ();
 	// The collections are exposed as ERC-721 contracts, whose `name`, `symbol` and `tokenURI`
 	// are `string`. Held here so the rule covers the extrinsics too, not only the precompile.
 	type MetadataPolicy = indiv_precompile_scarcity::Erc721MetadataPolicy<Runtime>;

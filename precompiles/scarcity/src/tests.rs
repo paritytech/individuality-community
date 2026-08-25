@@ -116,12 +116,6 @@ fn assert_contract_event(contract: H160, event: impl IntoLogData) {
 	}));
 }
 
-/// Assert no EVM log was produced at all, whatever its shape.
-fn assert_no_contract_event() {
-	let emitted = contract_event_count();
-	assert_eq!(emitted, 0, "expected no EVM log, found {emitted}");
-}
-
 /// How many EVM logs were produced, whatever their shape.
 fn contract_event_count() -> usize {
 	System::events()
@@ -133,6 +127,12 @@ fn contract_event_count() -> usize {
 			)
 		})
 		.count()
+}
+
+/// Assert no EVM log was produced at all, whatever its shape.
+fn assert_no_contract_event() {
+	let emitted = contract_event_count();
+	assert_eq!(emitted, 0, "expected no EVM log, found {emitted}");
 }
 
 /// Assert exactly one EVM log was produced, and that it is `event` from `contract`.
@@ -1589,6 +1589,37 @@ fn holder_transfer_does_not_cross_collections() {
 	});
 }
 
+/// `owner()` answers as `collectionOwner()`, without claiming ERC-173.
+///
+/// The id covers `transferOwnership`, which cannot exist while a handover carries a deposit the
+/// successor has to fund, so serving the read alone is the honest half.
+#[test]
+fn owner_answers_without_claiming_erc173() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let target = collection_address(collection);
+
+		let owner = call_ok(&alice, target, IScarcityCollection::ownerCall {}.abi_encode());
+		let collection_owner =
+			call_ok(&alice, target, IScarcityCollection::collectionOwnerCall {}.abi_encode());
+		assert_eq!(owner, collection_owner, "the two names must not drift apart");
+
+		let data = call_ok(
+			&alice,
+			target,
+			IScarcityCollection::supportsInterfaceCall {
+				interfaceId: [0x7f, 0x58, 0x28, 0xd0].into(),
+			}
+			.abi_encode(),
+		);
+		assert!(
+			!IScarcityCollection::supportsInterfaceCall::abi_decode_returns(&data).unwrap(),
+			"ERC-173 must not be claimed while `transferOwnership` is absent"
+		);
+	});
+}
+
 /// The ABI flag reaches the pallet, in both positions.
 ///
 /// The rest of the soulbound coverage defines its items through the pallet, so nothing else
@@ -1802,6 +1833,26 @@ fn oversized_token_id_answers_unknown() {
 			&alice,
 			collection_address(collection),
 			IScarcityCollection::ownerOfCall { tokenId: U256::MAX }.abi_encode(),
+			"unknown token",
+		);
+	});
+}
+
+/// `tokenURI` rejects a token that names no live instance, rather than resolving the metadata
+/// scopes and answering the empty string an instance with no URI set receives.
+///
+/// The id is in range and unallocated, so this reaches the liveness check rather than the
+/// conversion `oversized_token_id_answers_unknown` stops at.
+#[test]
+fn token_uri_rejects_an_unknown_token() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+
+		call_reverted_with(
+			&alice,
+			collection_address(collection),
+			IScarcityCollection::tokenURICall { tokenId: U256::from(1u64) }.abi_encode(),
 			"unknown token",
 		);
 	});
@@ -2271,6 +2322,7 @@ fn all_collection_calls(
 		}),
 		IScarcityCollectionCalls::forceBurn(IScarcityCollection::forceBurnCall { tokenId: token }),
 		IScarcityCollectionCalls::collectionOwner(IScarcityCollection::collectionOwnerCall {}),
+		IScarcityCollectionCalls::owner(IScarcityCollection::ownerCall {}),
 		IScarcityCollectionCalls::itemSupply(IScarcityCollection::itemSupplyCall { item }),
 		IScarcityCollectionCalls::instanceInfo(IScarcityCollection::instanceInfoCall {
 			tokenId: token,
