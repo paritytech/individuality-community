@@ -478,6 +478,58 @@ fn operate_payout_round_fails_if_no_round() {
 }
 
 #[test]
+fn recycled_round_releases_its_payout_hold() {
+	new_test_ext().execute_with(|| {
+		let pot = PalletScore::score_pot_id();
+		fund_score_pot(1_000);
+		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), 200);
+
+		let round_index = 0;
+		RoundPayouts::<Test>::insert(
+			round_index,
+			RoundPayout { remaining_balance: 100, point_price: 1, remainder: 0, total_points: 100 },
+		);
+
+		PalletScore::recycle_round_payout(round_index);
+
+		assert!(RoundPayouts::<Test>::get(round_index).is_none());
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), 100);
+	});
+}
+
+#[test]
+fn recycling_unknown_round_leaves_payout_hold_untouched() {
+	new_test_ext().execute_with(|| {
+		let pot = PalletScore::score_pot_id();
+		fund_score_pot(1_000);
+		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
+
+		PalletScore::recycle_round_payout(7);
+
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), 200);
+	});
+}
+
+#[test]
+fn recycling_empty_round_leaves_payout_hold_untouched() {
+	new_test_ext().execute_with(|| {
+		let pot = PalletScore::score_pot_id();
+		fund_score_pot(1_000);
+		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
+		RoundPayouts::<Test>::insert(
+			0,
+			RoundPayout { remaining_balance: 0, point_price: 1, remainder: 0, total_points: 100 },
+		);
+
+		PalletScore::recycle_round_payout(0);
+
+		assert!(RoundPayouts::<Test>::get(0).is_none());
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), 200);
+	});
+}
+
+#[test]
 fn round_task_authorization_advertises_expected_validity() {
 	new_test_ext().execute_with(|| {
 		fund_score_pot(1_000);

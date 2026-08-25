@@ -847,7 +847,7 @@ pub mod pallet {
 						target: LOG_TARGET,
 						"Unexpected error in operate_payout_round: round: {round_index:?}, error: {e:?}."
 					);
-					RoundPayouts::<T>::remove(round_index);
+					Self::recycle_round_payout(round_index);
 					Ok(())
 				},
 			}
@@ -1434,6 +1434,30 @@ pub mod pallet {
 				CurrentRoundPoints::<T>::put(new_round_points);
 			} else {
 				log::warn!(target: LOG_TARGET, "indiv-pallet-score: round points overflowed");
+			}
+		}
+
+		/// Remove a payout round and release its remaining payout hold to the pot.
+		///
+		/// A caller can run this after a reverted storage layer. The round is removed if the
+		/// release fails because no other path can release the hold of a started round.
+		pub(crate) fn recycle_round_payout(round_index: RoundIndex) {
+			let Some(round) = RoundPayouts::<T>::take(round_index) else { return };
+			if round.remaining_balance.is_zero() {
+				return
+			}
+
+			let pot = Self::score_pot_id();
+			if let Err(error) = T::Currency::release(
+				&HoldReason::Payout.into(),
+				&pot,
+				round.remaining_balance,
+				Precision::BestEffort,
+			) {
+				log::error!(
+					target: LOG_TARGET,
+					"Failed to recycle the payout hold of round {round_index:?}: {error:?}."
+				);
 			}
 		}
 
