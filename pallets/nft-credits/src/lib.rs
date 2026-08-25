@@ -1138,9 +1138,9 @@ impl<T: Config> Pallet<T> {
 	/// block's awards in an extrinsic's proof would be paid for by every other extrinsic in
 	/// the block.
 	///
-	/// One call hashes the block's leaf set once, however many proofs it returns, so the cost is
-	/// bounded by [`Config::MaxCreditsPerBlock`] and does not grow with the credits the claimant
-	/// holds.
+	/// A call with at least one proof derives the leaves and builds the block's tree once.
+	/// [`Config::MaxCreditsPerBlock`] bounds the tree hash count, regardless of the proof count.
+	/// Each proof adds only its own sibling hashes.
 	pub fn nft_claim_credit_proofs(
 		award_block: BlockNumberFor<T>,
 		claimant: &AccountOrPerson<T::AccountId>,
@@ -1154,14 +1154,17 @@ impl<T: Config> Pallet<T> {
 			return Err(NftClaimCreditProofError::AwardsPruned);
 		}
 
-		let leaves = Self::nft_claim_credit_leaves(&awards);
 		let claimed = awards
 			.iter()
 			.enumerate()
 			.filter(|(_, award)| &award.claimant == claimant)
 			.map(|(leaf_index, award)| (leaf_index as u32, award.credit))
 			.collect::<Vec<_>>();
+		if claimed.is_empty() {
+			return Ok(Vec::new());
+		}
 
+		let leaves = Self::nft_claim_credit_leaves(&awards);
 		Self::credit_proofs(&recorded, &leaves, &claimed)
 	}
 
