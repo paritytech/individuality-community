@@ -62,7 +62,7 @@ pub mod pallet {
 	use super::*;
 	use frame_support::{
 		pallet_prelude::*,
-		traits::{Defensive, EnsureOrigin, UnixTime},
+		traits::{Defensive, EnsureOrigin, GetCallName, UnixTime},
 	};
 	use frame_system::{
 		offchain::{CreateAuthorizedTransaction, SubmitTransaction},
@@ -76,13 +76,24 @@ pub mod pallet {
 		tx_priority,
 		weight_budget::OcwWeightBudget,
 	};
+	use sp_runtime::SaturatedConversion;
 	use xcm::v5::{Location, SendXcm};
 
 	const LOG_TARGET: &str = "pallet-members-subscriber";
 
 	/// Number of blocks that an offchain worker transaction of this pallet stays valid in the
 	/// transaction pool.
-	const TX_LONGEVITY: u64 = 3;
+	const TX_LONGEVITY: u64 = 8;
+
+	/// Retry window (in blocks) for offchain-worker transactions: retries within a window are
+	/// byte-identical and deduplicated by the transaction pool, while a window switch changes
+	/// the discriminator, and thus the transaction hash, escaping both mempool-level
+	/// deduplication and the pool rotator's inclusion ban.
+	pub(crate) const TX_RETRY_WINDOW: u32 = 8;
+
+	/// Number of blocks between repeated failure warnings for offchain-worker transactions,
+	/// so that an eventual transaction-pool stall is not logged at each block.
+	const STALL_WARN_PERIOD: u32 = 32;
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -123,9 +134,9 @@ pub mod pallet {
 		type MaxDeletedRingsPerCollection: Get<u32>;
 
 		/// Number of ring indices the gap scan examines per `detect_missing_rings` call.
-		/// One call runs per collection per offchain worker execution, so this value and
-		/// `OffchainWorkerInterval` together bound how fast the scan catches up with the
-		/// ring index frontier.
+		/// Must exceed `MaxUpdatesPerBatch`: the offchain worker scans one collection per run,
+		/// so at or below equality a collection never gains on its frontier and never releases
+		/// the slot to the next one.
 		#[pallet::constant]
 		type MaxGapScanPerCall: Get<u32>;
 
@@ -295,6 +306,11 @@ pub mod pallet {
 			/// Number of missing indices in this chunk.
 			indices_count: u32,
 		},
+		/// A notifier deletion could not be tracked because `deleted_indices` is full.
+		DeletedIndicesAtCapacity {
+			/// Ring collection identifier.
+			identifier: Identifier,
+		},
 	}
 
 	// ========== Errors ==========
@@ -354,8 +370,11 @@ pub mod pallet {
 				return;
 			}
 
+			// A discriminator of a retry window to enable pool-level deduplication.
+			let discriminator = block_number / TX_RETRY_WINDOW.into();
+
 			// Purging stale ring data also while the subscription is Terminated
-			Self::submit_ring_purge();
+			Self::submit_ring_purge(block_number, discriminator);
 
 			if !matches!(Subscription::<T>::get(), SubscriptionStatus::Active { .. }) {
 				return;
@@ -364,8 +383,8 @@ pub mod pallet {
 			let now = T::UnixTime::now().as_secs();
 			let processing_state = ProcessingState::<T>::get();
 
-			Self::submit_gap_scans(now, &processing_state);
-			Self::submit_replay_requests(now, &processing_state);
+			Self::submit_gap_scan(block_number, discriminator, now, &processing_state);
+			Self::submit_replay_requests(block_number, now, &processing_state);
 		}
 
 		fn integrity_test() {
@@ -387,7 +406,10 @@ pub mod pallet {
 
 			assert!(T::MaxUpdatesPerBatch::get() > 0, "MaxUpdatesPerBatch must be greater than 0");
 
-			assert!(T::MaxGapScanPerCall::get() > 0, "MaxGapScanPerCall must be greater than 0");
+			assert!(
+				T::MaxGapScanPerCall::get() > T::MaxUpdatesPerBatch::get(),
+				"MaxGapScanPerCall must be greater than MaxUpdatesPerBatch"
+			);
 
 			assert!(
 				T::GapScanCooldownSeconds::get() > 0,
@@ -639,11 +661,18 @@ pub mod pallet {
 		/// Removes a page of stale-generation `RingRoots` entries.
 		///
 		/// Submitted by the offchain worker as an authorized transaction.
-		#[pallet::authorize(Pallet::<T>::authorize_purge_stale_ring_roots)]
+		#[pallet::authorize(|source, _generation, _page, _discriminator| {
+			Pallet::<T>::authorize_purge_stale_ring_roots(source)
+		})]
 		#[pallet::call_index(4)]
 		#[pallet::weight(T::WeightInfo::purge_stale_ring_roots(T::PurgePageSize::get()))]
 		#[pallet::weight_of_authorize(T::WeightInfo::authorize_purge_stale_ring_roots())]
-		pub fn purge_stale_ring_roots(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
+		pub fn purge_stale_ring_roots(
+			origin: OriginFor<T>,
+			_generation: Generation,
+			_page: u32,
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
 
 			// `authorize` rejects a purge that is absent or names the live generation, so this
@@ -679,20 +708,20 @@ pub mod pallet {
 		/// indices for replay.
 		///
 		/// Submitted by the offchain worker as an authorized transaction.
-		#[pallet::authorize(Pallet::<T>::authorize_detect_missing_rings)]
+		#[pallet::authorize(|source, identifier, _scan_from, _discriminator| {
+			Pallet::<T>::authorize_detect_missing_rings(source, identifier)
+		})]
 		#[pallet::call_index(5)]
 		#[pallet::weight(T::WeightInfo::detect_missing_rings(T::MaxGapScanPerCall::get()))]
 		#[pallet::weight_of_authorize(T::WeightInfo::authorize_detect_missing_rings())]
 		pub fn detect_missing_rings(
 			origin: OriginFor<T>,
 			identifier: Identifier,
+			_scan_from: RingIndex,
+			_discriminator: BlockNumberFor<T>,
 		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
-
 			let scanned = Self::detect_missing_rings_in_collection(identifier);
-
-			// Refunding overcharged weight because actual work is proportional to the indices the
-			// scan reached
 			Ok(Some(T::WeightInfo::detect_missing_rings(scanned)).into())
 		}
 	}
@@ -786,7 +815,7 @@ pub mod pallet {
 				.and_provides(progress)
 				.longevity(TX_LONGEVITY)
 				.propagate(false)
-				.priority(tx_priority::BACKGROUND_PROGRESS)
+				.priority(Self::local_priority())
 				.into();
 			Ok((validity, T::WeightInfo::authorize_purge_stale_ring_roots()))
 		}
@@ -828,9 +857,16 @@ pub mod pallet {
 				.and_provides((identifier, state.next_scan_index))
 				.longevity(TX_LONGEVITY)
 				.propagate(false)
-				.priority(tx_priority::BACKGROUND_PROGRESS)
+				.priority(Self::local_priority())
 				.into();
 			Ok((validity, Weight::zero()))
+		}
+
+		/// Background-progress priority with a block-height bump.
+		/// Makes a fresh tx have higher priority than a tx with the same `provides` tag.
+		fn local_priority() -> u64 {
+			tx_priority::BACKGROUND_PROGRESS
+				.saturating_add(frame_system::Pallet::<T>::block_number().saturated_into::<u64>())
 		}
 	}
 
@@ -920,6 +956,7 @@ pub mod pallet {
 			let identifier = batch.identifier;
 			let generation = CurrentGeneration::<T>::get();
 			let mut state = RingCollectionStates::<T>::get(identifier);
+			let mut deleted_at_capacity = false;
 
 			state.next_ring_index = state.next_ring_index.max(batch.next_ring_index);
 
@@ -982,18 +1019,23 @@ pub mod pallet {
 								 cannot track ring index {}",
 								update.ring_index,
 							);
+							deleted_at_capacity = true;
 						}
 					},
 				}
 			}
 
 			RingCollectionStates::<T>::insert(identifier, state);
+
+			// One event per batch, so that a batch of untracked deletions reports once
+			if deleted_at_capacity {
+				Self::deposit_event(Event::DeletedIndicesAtCapacity { identifier });
+			}
 		}
 
 		/// Detects and records missing ring roots in the collection.
-		/// The scan resumes at `next_scan_index` and covers at most `MaxGapScanPerCall`
-		/// indices.
-		/// Returns the number of indices checked, for the weight refund in the calling function.
+		/// The scan resumes at `next_scan_index` and covers at most `MaxGapScanPerCall` indices.
+		/// Returns the number of indices examined, for the caller's weight refund.
 		pub(crate) fn detect_missing_rings_in_collection(identifier: Identifier) -> u32 {
 			let state = RingCollectionStates::<T>::get(identifier);
 
@@ -1152,45 +1194,80 @@ pub mod pallet {
 		}
 
 		/// Submits a purge transaction when stale ring data awaits removal.
-		fn submit_ring_purge() {
-			if QueuedRingPurge::<T>::exists() {
-				let call = Call::purge_stale_ring_roots {};
-				Self::submit_authorized_transaction(call, "Purge Stale Ring Roots");
-			}
+		fn submit_ring_purge(block_number: BlockNumberFor<T>, discriminator: BlockNumberFor<T>) {
+			let Some(progress) = QueuedRingPurge::<T>::get() else {
+				return;
+			};
+
+			let call = Call::purge_stale_ring_roots {
+				generation: progress.generation,
+				page: progress.page,
+				discriminator,
+			};
+			Self::submit_authorized_transaction(call, block_number);
 		}
 
-		/// Submits a gap-scan transaction for each collection whose scan cursor is behind the
-		/// ring index frontier.
-		fn submit_gap_scans(now: u64, processing_state: &UpdatesProcessingState) {
+		/// Submits one gap-scan transaction for the first collection whose scan cursor is behind
+		/// the ring index frontier.
+		fn submit_gap_scan(
+			block_number: BlockNumberFor<T>,
+			discriminator: BlockNumberFor<T>,
+			now: u64,
+			processing_state: &UpdatesProcessingState,
+		) {
 			// Some rest time after the last received batch is given to account
 			// for incoming batches that may contain indices considered as missing
 			// in the current state.
-			if now.saturating_sub(processing_state.last_batch_received_time) <
-				T::GapScanCooldownSeconds::get()
+			if now.saturating_sub(processing_state.last_batch_received_time)
+				< T::GapScanCooldownSeconds::get()
 			{
 				return;
 			}
 
-			for (identifier, state) in RingCollectionStates::<T>::iter() {
+			let collection_limit = T::MaxCollections::get() as usize;
+			for (identifier, state) in RingCollectionStates::<T>::iter().take(collection_limit) {
 				if state.next_scan_index >= state.next_ring_index {
 					continue;
 				}
 
-				if state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get() {
-					log::warn!(
-						target: LOG_TARGET,
-						"Skipped gap scan: deleted_indices at capacity for collection {identifier:?}",
+				if state.missing_indices.len() as u32 >= T::MaxMissingRootsPerCollection::get() {
+					Self::warn_periodically(
+						block_number,
+						format_args!(
+							"gap scan skipped: missing_indices at capacity for collection \
+							 {identifier:?}"
+						),
 					);
 					continue;
 				}
 
-				let call = Call::detect_missing_rings { identifier };
-				Self::submit_authorized_transaction(call, "Detect Missing Rings");
+				if state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get() {
+					Self::warn_periodically(
+						block_number,
+						format_args!(
+							"gap scan skipped: deleted_indices at capacity for collection \
+							 {identifier:?}"
+						),
+					);
+					continue;
+				}
+
+				let call = Call::detect_missing_rings {
+					identifier,
+					scan_from: state.next_scan_index,
+					discriminator,
+				};
+				Self::submit_authorized_transaction(call, block_number);
+				return;
 			}
 		}
 
 		/// Submits a replay transaction for each collection with missing ring indices.
-		fn submit_replay_requests(now: u64, processing_state: &UpdatesProcessingState) {
+		fn submit_replay_requests(
+			block_number: BlockNumberFor<T>,
+			now: u64,
+			processing_state: &UpdatesProcessingState,
+		) {
 			let cooldown = T::ReplayCooldownSeconds::get();
 
 			// Cooldown 1: Giving some time for multi-part batches to arrive
@@ -1208,10 +1285,13 @@ pub mod pallet {
 					continue;
 				}
 
-				if state.deleted_indices.len() as u32 == T::MaxDeletedRingsPerCollection::get() {
-					log::warn!(
-						target: LOG_TARGET,
-						"Skipped replay: deleted_indices at capacity for collection {identifier:?}",
+				if state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get() {
+					Self::warn_periodically(
+						block_number,
+						format_args!(
+							"replay skipped: deleted_indices at capacity for collection \
+							 {identifier:?}"
+						),
 					);
 					continue;
 				}
@@ -1220,24 +1300,31 @@ pub mod pallet {
 					BoundedVec::truncate_from(state.missing_indices.keys().copied().collect());
 
 				let call = Call::replay_missing_roots { identifier, indices };
-				Self::submit_authorized_transaction(call, "Replay Missing Roots");
+				Self::submit_authorized_transaction(call, block_number);
 			}
 		}
 
-		/// Submits an authorized transaction from the offchain worker and logs the result.
-		fn submit_authorized_transaction(call: Call<T>, description: &str) {
-			let tx = T::create_authorized_transaction(call.into());
-			match SubmitTransaction::<T, _>::submit_transaction(tx) {
-				Ok(()) => log::debug!(
-					target: LOG_TARGET,
-					"offchain worker: submitted authorized transaction for `{description}`"
-				),
-				Err(()) => log::warn!(
-					target: LOG_TARGET,
-					"offchain worker: failed to submit authorized transaction for \
-					 `{description}`"
-				),
+		/// Logs a warning once per `STALL_WARN_PERIOD` blocks, and a debug message otherwise.
+		fn warn_periodically(block_number: BlockNumberFor<T>, message: core::fmt::Arguments) {
+			if (block_number % STALL_WARN_PERIOD.into()).is_zero() {
+				log::warn!(target: LOG_TARGET, "offchain worker: {message}");
+			} else {
+				log::debug!(target: LOG_TARGET, "offchain worker: {message}");
 			}
+		}
+
+		/// Submits an authorized transaction from the offchain worker with stall-aware logging.
+		fn submit_authorized_transaction(call: Call<T>, block_number: BlockNumberFor<T>) {
+			let call_name = call.get_call_name();
+			let tx = T::create_authorized_transaction(call.into());
+			if SubmitTransaction::<T, _>::submit_transaction(tx).is_ok() {
+				log::debug!(target: LOG_TARGET, "offchain worker: submitted `{call_name}`");
+				return;
+			}
+			Self::warn_periodically(
+				block_number,
+				format_args!("`{call_name}` repeatedly rejected by the transaction pool"),
+			);
 		}
 
 		/// Sends a replay request to the notifier via XCM.
