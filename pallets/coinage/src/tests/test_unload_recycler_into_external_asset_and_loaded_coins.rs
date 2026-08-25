@@ -25,7 +25,7 @@ use frame_support::{
 };
 use frame_system::AuthorizeCall;
 use indiv_support::traits::Alias;
-use sp_core::blake2_256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{bounded_vec, testing::UintAuthorityId};
 use verifiable::GenerateVerifiable;
 
