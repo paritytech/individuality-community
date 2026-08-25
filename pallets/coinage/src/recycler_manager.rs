@@ -258,9 +258,9 @@ impl<T: Config> RecyclerManager<T> {
 
 	/// Unload tokens from a recycler.
 	///
-	/// Verifies all proofs in one batch via
-	/// `MemberService::verify_memberships_in_ring()`, then sequentially checks expected
-	/// aliases, already-unloaded status, and marks each alias.
+	/// Rejects duplicate aliases before verifying all proofs in one batch via
+	/// `MemberService::verify_memberships_in_ring()`. It then sequentially checks expected aliases,
+	/// already-unloaded status, and marks each alias.
 	pub fn unload(
 		instance_id: InstanceId,
 		value: Denomination,
@@ -275,6 +275,10 @@ impl<T: Config> RecyclerManager<T> {
 			Self::validate_recycler_revision(instance_id, value, index, revision),
 			Error::<T>::InvalidRecyclerRevision
 		);
+		let mut seen_aliases = BTreeSet::new();
+		for alias in aliases {
+			ensure!(seen_aliases.insert(*alias), Error::<T>::RecyclerAlreadyUnloaded);
+		}
 
 		let identifier = Pallet::<T>::recycler_collection_identifier(instance_id, value);
 
