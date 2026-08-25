@@ -45,6 +45,10 @@ type SecretOf<T> = <CryptoOf<T> as GenerateVerifiable>::Secret;
 type ProofOf<T> = <CryptoOf<T> as GenerateVerifiable>::Proof;
 type SignatureOf<T> = <CryptoOf<T> as GenerateVerifiable>::Signature;
 type BoundedProofsOf<T> = BoundedVec<ProofOf<T>, <T as Config>::MaxConsolidation>;
+type BoundedInputsOf<T> = BoundedVec<
+	UnloadRecyclerInput<<T as Config>::MaxConsolidation>,
+	<T as Config>::MaxConsolidation,
+>;
 type BoundedAliasesOf<T> = BoundedVec<Alias, <T as Config>::MaxConsolidation>;
 
 struct MixedOutputScenario<T: Config> {
@@ -330,7 +334,7 @@ fn generate_alias_proof<T: Config>(
 
 	#[cfg(feature = "benchmark-proof-cache-regenerate")]
 	{
-		let cache_key = sp_core::hashing::blake2_256(&(&member, all_members, msg).encode());
+		let cache_key = sp_crypto_hashing::blake2_256(&(&member, all_members, msg).encode());
 		let encoded_proof = proof.encode();
 		emit_cache_entry(&cache_key, &encoded_proof, &alias);
 	}
@@ -570,7 +574,7 @@ mod benches {
 		);
 
 		let proven_msg =
-			sp_core::hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
+			sp_crypto_hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
 		let members_only: Vec<MemberOf<T>> =
 			members.iter().map(|(_, member)| member.clone()).collect();
 		let bounded_proofs: BoundedProofsOf<T> = members[..n as usize]
@@ -585,13 +589,8 @@ mod benches {
 
 	fn setup_multi_recycler_unload_non_anonymous<T: Config>(
 		n: u32,
-	) -> (
-		Vec<UnloadRecyclerInput<T::MaxConsolidation>>,
-		BoundedProofsOf<T>,
-		T::AccountId,
-		T::AccountId,
-		FungiblesBalanceOf<T>,
-	) {
+	) -> (BoundedInputsOf<T>, BoundedProofsOf<T>, T::AccountId, T::AccountId, FungiblesBalanceOf<T>)
+	{
 		common_setup::<T>();
 
 		let (inputs, sign_data, total_asset_amount) = setup_multi_recyclers::<T>(n, 0);
@@ -602,15 +601,16 @@ mod benches {
 		T::BenchmarkHelper::fund_account(&caller, total_asset_amount.saturating_mul(10u32.into()));
 
 		let proven_msg =
-			sp_core::hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
+			sp_crypto_hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
 		let mut alias_proofs = Vec::new();
 		for (secret, actual_ring_members) in &sign_data {
 			let (proof, _) = generate_alias_proof::<T>(secret, actual_ring_members, &proven_msg);
 			alias_proofs.push(proof);
 		}
 		let bounded_proofs: BoundedProofsOf<T> = alias_proofs.try_into().unwrap();
+		let bounded_inputs: BoundedInputsOf<T> = inputs.try_into().unwrap();
 
-		(inputs, bounded_proofs, caller, dest, total_asset_amount)
+		(bounded_inputs, bounded_proofs, caller, dest, total_asset_amount)
 	}
 
 	fn split_units_into_exact_output_pieces(total_units: u64, d: u32) -> Option<Vec<i8>> {
@@ -3469,7 +3469,7 @@ mod benches {
 
 		let call = Call::<T>::unload_recyclers_into_external_asset_non_anonymous {
 			instance_id: INSTANCE_ID,
-			inputs,
+			inputs: inputs.try_into().unwrap(),
 			alias_proofs: bounded_proofs,
 			to: account("dest", 0, 0),
 			fee_currency: FeeCurrency::ExternalAsset,
@@ -3753,7 +3753,7 @@ mod benches {
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
 		let inherited_implication = ((0u8, &runtime_call), (), ());
-		let proven_msg = sp_core::hashing::blake2_256(&inherited_implication.encode());
+		let proven_msg = sp_crypto_hashing::blake2_256(&inherited_implication.encode());
 
 		// Generate alias proof with proven_msg
 		let (alias_proof, _) = generate_alias_proof::<T>(secret, &members_only, &proven_msg);
@@ -3762,7 +3762,7 @@ mod benches {
 
 		// Create a people proof with intent message (alias_proofs ++ inherited_implication)
 		let context = pallet::free_unload_token_context(period, counter);
-		let intent_msg = sp_core::hashing::blake2_256(
+		let intent_msg = sp_crypto_hashing::blake2_256(
 			&[alias_proofs.encode(), inherited_implication.encode()].concat(),
 		);
 		let proof = T::BenchmarkHelper::create_people_proof(&context, &intent_msg, alias);
@@ -3821,7 +3821,7 @@ mod benches {
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
 		let inherited_implication = ((0u8, &runtime_call), (), ());
-		let proven_msg = sp_core::hashing::blake2_256(&inherited_implication.encode());
+		let proven_msg = sp_crypto_hashing::blake2_256(&inherited_implication.encode());
 
 		// Generate alias proof with proven_msg
 		let (alias_proof, _) = generate_alias_proof::<T>(secret, &members_only, &proven_msg);
@@ -3830,7 +3830,7 @@ mod benches {
 
 		// Create a lite people proof with intent message (alias_proofs ++ inherited_implication)
 		let context = pallet::free_unload_token_context(period, counter);
-		let intent_msg = sp_core::hashing::blake2_256(
+		let intent_msg = sp_crypto_hashing::blake2_256(
 			&[alias_proofs.encode(), inherited_implication.encode()].concat(),
 		);
 		let proof = T::BenchmarkHelper::create_lite_people_proof(&context, &intent_msg, alias);
@@ -3894,7 +3894,7 @@ mod benches {
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
 		let inherited_implication = ((0u8, &runtime_call), (), ());
-		let proven_msg = sp_core::hashing::blake2_256(&inherited_implication.encode());
+		let proven_msg = sp_crypto_hashing::blake2_256(&inherited_implication.encode());
 
 		// Generate alias proof with proven_msg
 		let (alias_proof, _) =
@@ -3903,7 +3903,7 @@ mod benches {
 			vec![alias_proof].try_into().unwrap();
 
 		// Generate paid token proof with intent message (alias_proofs ++ inherited_implication)
-		let intent_msg = sp_core::hashing::blake2_256(
+		let intent_msg = sp_crypto_hashing::blake2_256(
 			&[alias_proofs.encode(), inherited_implication.encode()].concat(),
 		);
 		let (paid_secret, _) = &paid_members[0];
@@ -3988,7 +3988,7 @@ mod benches {
 		// implication.
 		let retry_counter = 0u8;
 		let intent_msg = (&other_proofs, retry_counter, &inherited_implication)
-			.using_encoded(sp_core::hashing::blake2_256);
+			.using_encoded(sp_crypto_hashing::blake2_256);
 		let (first_alias_proof, _) = generate_alias_proof::<T>(secret, &members_only, &intent_msg);
 		let alias_proofs: BoundedVec<ProofOf<T>, T::MaxConsolidation> =
 			vec![first_alias_proof].try_into().unwrap();

@@ -28,7 +28,7 @@ use indiv_pallet_coinage::{
 	UNLOADING_RECYCLER_CONTEXT,
 };
 use indiv_support::traits::Alias;
-use sp_core::blake2_256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::bounded_vec;
 
 /// Helper function to build the unload extrinsic using AsUnloadTokenFromOutput.
@@ -565,7 +565,7 @@ fn coinage_non_anonymous_multi_recycler() {
 		let alias_2: Alias =
 			Crypto::alias_in_context(&alice_secret_2, &UNLOADING_RECYCLER_CONTEXT[..]).unwrap();
 
-		let inputs = vec![
+		let inputs: BoundedVec<_, <Runtime as CoinageConfig>::MaxConsolidation> = bounded_vec![
 			indiv_pallet_coinage::UnloadRecyclerInput {
 				value: denomination_1,
 				index: idx_1,

@@ -62,7 +62,8 @@ use indiv_support::{
 	utils::BigEndianU256,
 	weight_budget::OcwWeightBudget,
 };
-use sp_core::{blake2_256, hexdisplay::HexDisplay};
+use sp_core::hexdisplay::HexDisplay;
+use sp_crypto_hashing::blake2_256;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -89,9 +90,8 @@ pub mod pallet {
 	pub trait Config: frame_system::Config + CreateAuthorizedTransaction<Call<Self>> {
 		type WeightInfo: WeightInfo;
 
-		/// Network suffix appended to the personhood product name.
-		#[pallet::constant]
-		type Suffix: Get<&'static [u8]>;
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
 
 		/// Person origin resolving to the caller's alias in the supplied context. Only people in
 		/// the People collection can produce it, which is the pallet's entire airdrop eligibility
@@ -145,7 +145,7 @@ pub mod pallet {
 		pub fn people_airdrops_context() -> Context {
 			indiv_support::context::build_product_context(
 				indiv_support::context::personhood::PRODUCT_NAME,
-				T::Suffix::get(),
+				&T::Suffix::get(),
 				indiv_support::context::personhood::PEOPLE_AIRDROPS,
 			)
 		}

@@ -40,7 +40,7 @@ use assets_common::local_and_foreign_assets::{ForeignAssetReserveData, TargetFro
 use assets_common::migrations::foreign_assets_reserves::ForeignAssetsReservesMigration;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use cumulus_pallet_parachain_system::{RelayNumberMonotonicallyIncreases, RelaychainDataProvider};
-use cumulus_primitives_core::{AggregateMessageOrigin, ParaId};
+use cumulus_primitives_core::{AggregateMessageOrigin, ParaId, VerifySchedulingSignature};
 #[cfg(not(feature = "runtime-benchmarks"))]
 use frame_support::traits::NeverEnsureOrigin;
 use frame_support::{
@@ -242,6 +242,7 @@ pub type UncheckedExtrinsic =
 pub type Migrations = (
 	pallet_collator_selection::migration::v2::MigrationToV2<Runtime>,
 	cumulus_pallet_xcmp_queue::migration::v6::MigrateV5ToV6<Runtime>,
+	cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_members_notifier::migration::SeedSubscriptionWhitelist<
 		Runtime,
@@ -278,7 +279,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 1_000_035,
+	spec_version: 1_000_036,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 5,
@@ -488,6 +489,7 @@ impl cumulus_pallet_parachain_system::Config for Runtime {
 	type ConsensusHook = ConsensusHook;
 	type WeightInfo = weights::cumulus_pallet_parachain_system::WeightInfo<Runtime>;
 	type RelayParentOffset = ConstU32<RELAY_PARENT_OFFSET>;
+	type SchedulingSignatureVerifier = ();
 }
 
 impl indiv_pallet_relay_randomness::Config for Runtime {
@@ -1243,6 +1245,7 @@ construct_runtime!(
 		WeightReclaim: cumulus_pallet_weight_reclaim = 4,
 		RelayRandomness: indiv_pallet_relay_randomness = 5,
 		Parameters: pallet_parameters = 73,
+		NetworkSuffix: indiv_pallet_network_suffix = 74,
 
 		// Monetary stuff.
 		Balances: pallet_balances = 10,
@@ -1318,6 +1321,7 @@ mod benches {
 		[pallet_timestamp, Timestamp]
 		[pallet_migrations, MultiBlockMigrations]
 		[pallet_parameters, Parameters]
+		[indiv_pallet_network_suffix, NetworkSuffix]
 		[pallet_transaction_payment, TransactionPayment]
 		[pallet_assets, Assets]
 		[pallet_assets, Pool]
@@ -1369,6 +1373,16 @@ impl_runtime_apis! {
 	impl cumulus_primitives_core::RelayParentOffsetApi<Block> for Runtime {
 		fn relay_parent_offset() -> u32 {
 			RELAY_PARENT_OFFSET
+		}
+
+		fn max_claim_queue_offset() -> u8 {
+			cumulus_pallet_parachain_system::Pallet::<Runtime>::max_claim_queue_offset()
+		}
+	}
+
+	impl cumulus_primitives_core::SchedulingV3EnabledApi<Block> for Runtime {
+		fn scheduling_v3_enabled() -> bool {
+			<Runtime as cumulus_pallet_parachain_system::Config>::SchedulingSignatureVerifier::V3_SCHEDULING_ENABLED
 		}
 	}
 
