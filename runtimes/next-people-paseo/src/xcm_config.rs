@@ -20,14 +20,12 @@ use super::{
 	AccountId, AllPalletsWithSystem, Balances, ParachainInfo, ParachainSystem, PolkadotXcm,
 	Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, WeightToFee, XcmpQueue,
 };
-use crate::{
-	people::{ExternalAssetLocation, FungibleExternalAsset},
-	AssetRate, Assets, Balance, TransactionByteFee, CENTS,
-};
+use crate::{people::ExternalAssetLocation, AssetRate, Assets, Balance, TransactionByteFee, CENTS};
+use cumulus_primitives_utility::TakeFirstAssetTrader;
 use frame_support::{
 	parameter_types,
 	traits::{
-		tokens::{imbalance::ResolveTo, ConversionToAssetBalance},
+		tokens::imbalance::{ResolveAssetTo, ResolveTo},
 		ConstU32, Contains, ContainsPair, Disabled, Equals, Everything, EverythingBut, Nothing,
 		ProcessMessageError,
 	},
@@ -37,8 +35,8 @@ use pallet_collator_selection::StakingPotAccountId;
 use pallet_xcm::XcmPassthrough;
 use parachains_common::{
 	xcm_config::{
-		AllSiblingSystemParachains, ConcreteAssetFromSystem, ParentRelayOrSiblingParachains,
-		RelayOrOtherSystemParachains,
+		AllSiblingSystemParachains, AssetFeeAsExistentialDepositMultiplier,
+		ConcreteAssetFromSystem, ParentRelayOrSiblingParachains, RelayOrOtherSystemParachains,
 	},
 	TREASURY_PALLET_ID,
 };
@@ -302,18 +300,43 @@ impl ContainsPair<Asset, Location> for AssetHubReserveAsset {
 }
 
 pub type WeightToNativeFee = WeightToFee;
-pub struct WeightToExternalAssetFee;
-impl frame_support::weights::WeightToFee for WeightToExternalAssetFee {
-	type Balance = Balance;
 
-	fn weight_to_fee(weight: &Weight) -> Self::Balance {
-		let native_fee = WeightToNativeFee::weight_to_fee(weight);
+/// Prices weight in any asset that governance registered a rate for in `pallet-asset-rate`.
+///
+/// The weight is first priced in PAS, then converted to the asset at the registered rate. Assets
+/// without a rate are rejected, which makes the trader fall through to the next component.
+pub type WeightToAssetRateFee =
+	AssetFeeAsExistentialDepositMultiplier<Runtime, WeightToNativeFee, AssetRate, ()>;
 
-		AssetRate::to_asset_balance(native_fee, ExternalAssetLocation::get())
-			// Using max value will make the payment fail and go to the next trader component.
-			.unwrap_or(Balance::MAX)
-	}
-}
+/// Buys XCM execution weight with any asset governance registered a rate for, taking it in kind
+/// at that rate.
+///
+/// The fee is deposited *in that asset* into the staking pot, and a deposit that fails is burned
+/// rather than refunded. `pallet-assets` refuses to open an account for an asset that is not
+/// `is_sufficient` in an account with no provider reference, and refuses any deposit below the
+/// asset's `min_balance`. So a rated asset must be registered `is_sufficient = true` with a
+/// `min_balance` no larger than the smallest fee, or the staking pot must be given the asset, or
+/// the existential deposit in PAS, before the rate is registered.
+pub type AssetRateTrader = TakeFirstAssetTrader<
+	AccountId,
+	WeightToAssetRateFee,
+	AssetsConvertedConcreteId,
+	Assets,
+	ResolveAssetTo<StakingPotAccountId<Runtime>, Assets>,
+>;
+
+/// All ways of paying for execution fees via XCM: PAS, or any asset with a rate registered in
+/// `pallet-asset-rate` (the external asset being the first such asset).
+pub type Traders = (
+	UsingComponents<
+		WeightToNativeFee,
+		RelayLocation,
+		AccountId,
+		Balances,
+		ResolveTo<StakingPotAccountId<Runtime>, Balances>,
+	>,
+	AssetRateTrader,
+);
 
 pub struct XcmConfig;
 impl xcm_executor::Config for XcmConfig {
@@ -332,22 +355,7 @@ impl xcm_executor::Config for XcmConfig {
 		RuntimeCall,
 		MaxInstructions,
 	>;
-	type Trader = (
-		UsingComponents<
-			WeightToNativeFee,
-			RelayLocation,
-			AccountId,
-			Balances,
-			ResolveTo<StakingPotAccountId<Runtime>, Balances>,
-		>,
-		UsingComponents<
-			WeightToExternalAssetFee,
-			ExternalAssetLocation,
-			AccountId,
-			FungibleExternalAsset,
-			ResolveTo<StakingPotAccountId<Runtime>, FungibleExternalAsset>,
-		>,
-	);
+	type Trader = Traders;
 	type ResponseHandler = PolkadotXcm;
 	type AssetTrap = PolkadotXcm;
 	type SubscriptionService = PolkadotXcm;
