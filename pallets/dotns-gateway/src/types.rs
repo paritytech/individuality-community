@@ -126,6 +126,30 @@ impl From<[u8; 65]> for ChatKey {
 	}
 }
 
+/// The dotNS labels an account acquired through this gateway.
+///
+/// `lite` is the most recently registered lite-person label. `full` is the
+/// registered full-person label; the [`crate::AsDotnsGateway`] extension
+/// admits at most one full registration per account.
+#[derive(
+	Clone,
+	PartialEq,
+	Eq,
+	Debug,
+	Default,
+	Encode,
+	Decode,
+	MaxEncodedLen,
+	TypeInfo,
+	DecodeWithMemTracking,
+)]
+pub struct AccountNameRecord {
+	/// The lite-person label (`<dns-stem>.<digits>`), if one was registered.
+	pub lite: Option<BaseLabel>,
+	/// The full-person label, if one was registered.
+	pub full: Option<BaseLabel>,
+}
+
 /// Which ring membership collection the proof targets.
 #[derive(
 	Clone, PartialEq, Eq, Debug, Encode, Decode, MaxEncodedLen, TypeInfo, DecodeWithMemTracking,

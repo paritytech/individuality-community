@@ -21,10 +21,10 @@ use frame_support::{assert_noop, assert_ok};
 use crate::{
 	mock::*,
 	pallet::{
-		AccountAlias, AliasRegistration, AttestationAllowance, DispatcherAddress, Error,
-		LiteLabelOwner,
+		AccountAlias, AccountNames, AliasRegistration, AttestationAllowance, DispatcherAddress,
+		Error, LiteLabelOwner,
 	},
-	types::{BaseLabel, ChatKey, Collection, DispatcherRevert, Link},
+	types::{AccountNameRecord, BaseLabel, ChatKey, Collection, DispatcherRevert, Link},
 	weights::WeightInfo,
 };
 use sp_core::H160;
@@ -279,6 +279,11 @@ mod reservation {
 			assert_eq!(calls[0].0, DispatcherAddr::get());
 			assert_eq!(calls[0].2, 0);
 
+			assert_eq!(
+				AccountNames::<Test>::get(ALICE),
+				Some(AccountNameRecord { lite: Some(base_name(ALICE_LITE)), full: None })
+			);
+
 			System::assert_last_event(
 				crate::Event::<Test>::NameReserved {
 					candidate: ALICE,
@@ -293,6 +298,68 @@ mod reservation {
 			// Reservation is free for the caller.
 			let info = result.unwrap();
 			assert_eq!(info.pays_fee, frame_support::dispatch::Pays::No);
+		});
+	}
+
+	#[test]
+	fn later_reservation_overwrites_account_lite_label() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			set_attestation_allowance(ATTESTER, 5);
+
+			assert_ok!(DotnsGateway::reserve_name(
+				RuntimeOrigin::signed(ATTESTER),
+				ALICE,
+				valid_candidate_signature(ALICE),
+				base_name(ALICE_LITE),
+				default_chat_key(),
+				None,
+				SIGNED_AT_NOW
+			));
+			assert_ok!(DotnsGateway::reserve_name(
+				RuntimeOrigin::signed(ATTESTER),
+				ALICE,
+				valid_candidate_signature(ALICE),
+				base_name(BOB_LITE),
+				default_chat_key(),
+				None,
+				SIGNED_AT_NOW
+			));
+
+			assert_eq!(
+				AccountNames::<Test>::get(ALICE),
+				Some(AccountNameRecord { lite: Some(base_name(BOB_LITE)), full: None })
+			);
+		});
+	}
+
+	#[test]
+	fn reservation_preserves_registered_full_label() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			set_attestation_allowance(ATTESTER, 5);
+			AccountNames::<Test>::insert(
+				ALICE,
+				AccountNameRecord { lite: None, full: Some(base_name(ALICE_BASE)) },
+			);
+
+			assert_ok!(DotnsGateway::reserve_name(
+				RuntimeOrigin::signed(ATTESTER),
+				ALICE,
+				valid_candidate_signature(ALICE),
+				base_name(ALICE_LITE),
+				default_chat_key(),
+				None,
+				SIGNED_AT_NOW
+			));
+
+			assert_eq!(
+				AccountNames::<Test>::get(ALICE),
+				Some(AccountNameRecord {
+					lite: Some(base_name(ALICE_LITE)),
+					full: Some(base_name(ALICE_BASE))
+				})
+			);
 		});
 	}
 
@@ -683,6 +750,10 @@ mod registration {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			seed_lite_owner(ALICE_LITE, ALICE);
+			AccountNames::<Test>::insert(
+				ALICE,
+				AccountNameRecord { lite: Some(base_name(ALICE_LITE)), full: None },
+			);
 			let link = Link::LiteUsername(base_name(ALICE_LITE));
 			let bn = base_name(ALICE_BASE);
 
@@ -699,6 +770,15 @@ mod registration {
 			let record = AliasRegistration::<Test>::get(alias_a()).expect("record exists");
 			assert_eq!(record.collection, Collection::People);
 			assert_eq!(record.account, ALICE);
+
+			// Full label added, existing lite label preserved.
+			assert_eq!(
+				AccountNames::<Test>::get(ALICE),
+				Some(AccountNameRecord {
+					lite: Some(base_name(ALICE_LITE)),
+					full: Some(base_name(ALICE_BASE))
+				})
+			);
 
 			// Contract call dispatched to dispatcher address.
 			let calls = get_contract_calls();
@@ -740,6 +820,10 @@ mod registration {
 			let record = AliasRegistration::<Test>::get(alias_a()).expect("record exists");
 			assert_eq!(record.account, ALICE);
 			assert_eq!(AccountAlias::<Test>::get(ALICE), Some(alias_a()));
+			assert_eq!(
+				AccountNames::<Test>::get(ALICE),
+				Some(AccountNameRecord { lite: None, full: Some(base_name(ALICE_BASE)) })
+			);
 
 			System::assert_last_event(
 				crate::Event::<Test>::NameRegistered {
