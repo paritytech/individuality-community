@@ -17,6 +17,7 @@
 use crate::{
 	extension::{AsCoinage, AsCoinageInfo},
 	mock::*,
+	paid_tkn_manager::PaidTknManager,
 	*,
 };
 use codec::Encode;
@@ -93,6 +94,39 @@ fn member_key_already_used_fail() {
 		let res = Executive::apply_extrinsic(ext2);
 		assert_ok!(res.as_ref());
 		assert_err!(res.unwrap(), Error::<Test>::MemberKeyAlreadyUsed);
+	});
+}
+
+#[test]
+fn paid_tkn_manager_rejects_used_member_before_verifying_signature() {
+	new_test_ext().execute_with(|| {
+		let member_secret = get_secret(1);
+		let member = CryptoOf::<Test>::member_from_secret(&member_secret);
+		let invalid_signature_secret = get_secret(2);
+		let invalid_proof =
+			CryptoOf::<Test>::sign(&invalid_signature_secret, &1u64.encode()).unwrap();
+		PaidUnloadTokenMembers::<Test>::insert(member, ());
+
+		// The signature is invalid for `member`. The used-key error proves it was not verified.
+		assert_err!(
+			PaidTknManager::<Test>::add_member(1, member, invalid_proof),
+			Error::<Test>::MemberKeyAlreadyUsed
+		);
+	});
+}
+
+#[test]
+fn paid_tkn_manager_rejects_invalid_member_before_verifying_signature() {
+	new_test_ext().execute_with(|| {
+		let signature_secret = get_secret(1);
+		let invalid_proof = CryptoOf::<Test>::sign(&signature_secret, &1u64.encode()).unwrap();
+
+		// The signature belongs to a different key. The invalid-key error proves it was not
+		// verified.
+		assert_err!(
+			PaidTknManager::<Test>::add_member(1, [0; 32], invalid_proof),
+			Error::<Test>::InvalidMemberKey
+		);
 	});
 }
 

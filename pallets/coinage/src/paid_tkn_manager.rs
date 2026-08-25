@@ -84,8 +84,8 @@ impl<T: Config> PaidTknManager<T> {
 
 	/// Add a member key to the paid unload token system.
 	///
-	/// Verifies the proof of ownership, ensures the member key is not already used, computes
-	/// the current time period, ensures the collection exists, and delegates to
+	/// Ensures the member key is valid and not already used, then verifies the proof of ownership.
+	/// It computes the current time period, ensures the collection exists, and delegates to
 	/// `Config::MemberService::add_members`. The on-poll proactive path creates the
 	/// collection ahead of time, while this remains as a fallback.
 	pub fn add_member(
@@ -93,16 +93,16 @@ impl<T: Config> PaidTknManager<T> {
 		member: MemberOf<T>,
 		proof_of_ownership: <CryptoOf<T> as GenerateVerifiable>::Signature,
 	) -> DispatchResult {
-		ensure!(
-			CryptoOf::<T>::verify_signature(&proof_of_ownership, &caller.encode()[..], &member),
-			Error::<T>::InvalidProofOfOwnership
-		);
 		if pallet::PaidUnloadTokenMembers::<T>::contains_key(&member) {
 			return Err(Error::<T>::MemberKeyAlreadyUsed.into());
 		}
 		if !CryptoOf::<T>::is_member_valid(&member) {
 			return Err(Error::<T>::InvalidMemberKey.into());
 		}
+		ensure!(
+			CryptoOf::<T>::verify_signature(&proof_of_ownership, &caller.encode()[..], &member),
+			Error::<T>::InvalidProofOfOwnership
+		);
 
 		let period = Self::current_period();
 
