@@ -77,6 +77,7 @@ mod lite_people_game_flow;
 mod members_notifier_whitelist;
 mod migrations;
 mod network_suffix;
+mod nft_credits_integrity;
 mod parameters;
 mod people_airdrops_flow;
 mod score_game_deposit_flow;

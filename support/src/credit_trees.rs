@@ -101,16 +101,17 @@ pub fn credit_leaf<AccountId: Encode>(
 
 /// The position of a credit tree in the order the game pallet queued them for delivery.
 /// Contiguous, so the receiver can tell that a tree never arrived.
-/// Award blocks are not contiguous, because a block that awarded no credit has no tree.
+/// Tree blocks are not contiguous, because a block that awarded no credit has no tree.
 pub type TreeSequence = u64;
 
-/// The People-chain block a set of NFT claim credits was awarded in.
-/// Both chains key a credit tree by it.
+/// The People-chain block whose `on_initialize` committed a set of NFT claim credits to a tree.
+/// Both chains key a credit tree by it. It is at or after the block each of those credits was
+/// earned in, because a full tree spills the credits that follow it into a later block's.
 /// Fixed to `u32` so the XCM payload and the claim chain's storage stay free of a foreign chain's
 /// block number type.
-pub type AwardBlock = u32;
+pub type CreditTreeBlock = u32;
 
-/// The Merkle commitment to all NFT claim credits awarded in one block.
+/// The Merkle commitment to the NFT claim credits one block committed.
 /// Sent to Asset Hub, where a claimant mints an NFT by proving their leaf against [`Self::root`].
 #[derive(
 	Encode,
@@ -129,7 +130,7 @@ pub struct NftClaimCreditTree {
 	/// Only one game runs at a time, so every leaf belongs to this game.
 	/// Carried so a game's trees can be grouped without mapping blocks to games.
 	pub game_index: u32,
-	/// The binary Merkle root over the block's leaves, in award order.
+	/// The binary Merkle root over the block's leaves, in the order the credits were awarded.
 	pub root: CreditProofNode,
 	/// The number of leaves in the tree.
 	/// A proof cannot be checked without it: the count decides how an odd layer was rehashed.
@@ -165,7 +166,7 @@ pub struct CreditTreeDelivery {
 	/// The receiver leaves its gap tracking untouched for an unsequenced tree.
 	pub sequence: Option<TreeSequence>,
 	/// The block whose credits the tree commits to.
-	pub block: AwardBlock,
+	pub block: CreditTreeBlock,
 	/// The commitment itself.
 	pub tree: NftClaimCreditTree,
 }
@@ -197,9 +198,9 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 /// The pallet holding them reads the game's own state, so the dependency runs that way and the
 /// game reaches it through this trait.
 ///
-/// The `award_*` methods return how many credits were really awarded, which is fewer than asked
-/// for whenever a slot was already taken or the block had no room, and is what a caller debits
-/// from the capacity it reserved.
+/// The `award_*` methods return how many credits were really awarded, which is fewer than asked for
+/// whenever a slot was already taken, and is what a caller debits from the capacity it reserved
+/// with [`AwardCredits::remaining_capacity`]. A credit awarded with nowhere to record it is lost.
 pub trait AwardCredits<AccountId> {
 	/// Award the credit `attester` earns `attestee` by reporting them a person in `round` of
 	/// `game_index`, from `attester_position` in their group.
@@ -223,11 +224,15 @@ pub trait AwardCredits<AccountId> {
 		award_time: u32,
 	) -> u32;
 
-	/// How many further credits the current block can award.
+	/// How many further credits of `game_index` can be recorded right now.
 	///
-	/// A caller that cannot split its awards across blocks checks this first; the value falls as
-	/// the block awards.
-	fn remaining_capacity() -> u32;
+	/// A caller that cannot split its awards across blocks checks this first, and defers or refuses
+	/// the whole batch while the value is below what the batch awards. It falls as credits are
+	/// awarded and rises again as the blocks commit them.
+	///
+	/// The game is a parameter because a tree carries one game index: room left over by another
+	/// game's credits is not room for `game_index`'s.
+	fn remaining_capacity(game_index: u32) -> u32;
 
 	/// Clear up to `limit` of `game_index`'s awarded-credit slots, resuming from `cursor`.
 	/// Returns where to resume, or `None` once the game has none left.
@@ -268,7 +273,7 @@ impl<AccountId> AwardCredits<AccountId> for () {
 		0
 	}
 
-	fn remaining_capacity() -> u32 {
+	fn remaining_capacity(_: u32) -> u32 {
 		u32::MAX
 	}
 

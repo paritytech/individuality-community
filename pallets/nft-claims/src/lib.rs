@@ -18,7 +18,7 @@
 //!
 //! Holds the Merkle roots committing to the NFT claim credits the game pallet awards on the
 //! People chain. A claim is verified against them, by an inclusion proof of the credit's leaf
-//! under the root of the block it was awarded in.
+//! under the root of the block that committed it.
 //!
 //! The commitments and the minting live in one pallet on purpose: the roots have exactly one
 //! consumer, the claim, so there is nothing to be gained from splitting the two apart.
@@ -75,15 +75,15 @@
 //!
 //! ## Missing trees
 //!
-//! Award blocks are not contiguous, since a block that awarded no credit has no tree, so a
+//! Tree blocks are not contiguous, since a block that committed no credit has no tree, so a
 //! missing tree cannot be spotted from the block numbers. Each tree of the live stream instead
 //! carries a contiguous sequence number, and a batch whose first sequence is ahead of the one
 //! expected means the trees in between never arrived: [`Event::CreditTreesMissing`] names them.
-//! Recovering them is a `replay_credit_trees` call on the game pallet, naming the award blocks,
+//! Recovering them is a `replay_credit_trees` call on the game pallet, naming the tree blocks,
 //! which anyone can submit. A resent tree carries no sequence number and leaves the tracking of
 //! the live stream alone.
 //!
-//! The sequences a gap names are turned back into those award blocks on the game chain. Its
+//! The sequences a gap names are turned back into those tree blocks on the game chain. Its
 //! `CreditTreesSent` event lists the blocks one message delivered, in the order they go out, and
 //! its `send_credit_trees` call names the sequence the run starts at, so walking the run pairs
 //! each sequence with a block. The sequences left out of it are the ones the game pallet spent on
@@ -115,7 +115,7 @@ use frame_support::{
 };
 use indiv_support::{
 	credit_trees::{
-		credit_leaf, AwardBlock, CreditProofNode, NftClaimCredit, NftClaimCreditLeaf,
+		credit_leaf, CreditProofNode, CreditTreeBlock, NftClaimCredit, NftClaimCreditLeaf,
 		NftClaimCreditTree, TreeSequence,
 	},
 	identity::AccountOrPerson,
@@ -241,8 +241,8 @@ pub mod pallet {
 
 		/// Maximum number of sibling hashes an inclusion proof may carry.
 		///
-		/// A tree of `n` leaves needs `ceil(log2(n))` of them, so this must cover the game
-		/// chain's `MaxCreditsPerBlock`: a lower bound leaves the tail of a large tree unclaimable.
+		/// A tree of `n` leaves needs `ceil(log2(n))` of them, so this must cover the leaves the
+		/// game chain puts in one tree: a lower bound leaves the tail of a large tree unclaimable.
 		#[pallet::constant]
 		type MaxProofNodes: Get<u32>;
 
@@ -251,11 +251,11 @@ pub mod pallet {
 		type BenchmarkHelper: BenchmarkHelper<Self::AccountId>;
 	}
 
-	/// The Merkle commitment to the NFT claim credits awarded in one People-chain block, keyed
-	/// by that block.
+	/// The Merkle commitment to the NFT claim credits one People-chain block committed, keyed by
+	/// that block.
 	#[pallet::storage]
 	pub type CreditTrees<T: Config> =
-		StorageMap<_, Twox64Concat, AwardBlock, NftClaimCreditTree, OptionQuery>;
+		StorageMap<_, Twox64Concat, CreditTreeBlock, NftClaimCreditTree, OptionQuery>;
 
 	/// The sequence number of the next tree expected from the game pallet's live stream.
 	///
@@ -263,24 +263,25 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type NextExpectedSequence<T: Config> = StorageValue<_, TreeSequence, ValueQuery>;
 
-	/// The leaves of an award block's tree that have been claimed.
+	/// The leaves of each tree that have been claimed, keyed by the tree's block.
 	/// A leaf commits to one claimant holding one credit, so it identifies the claim on its own.
 	/// Entries are kept for good: dropping one would let that credit mint a second NFT.
 	#[pallet::storage]
 	pub type ClaimedCredits<T: Config> = StorageDoubleMap<
 		_,
 		Twox64Concat,
-		AwardBlock,
+		CreditTreeBlock,
 		Identity,
 		NftClaimCreditLeaf,
 		(),
 		OptionQuery,
 	>;
 
-	/// How many of an award block's leaves have been claimed.
+	/// How many of a tree's leaves have been claimed.
 	/// Against the tree's `leaf_count`, this tells whether anything is left to claim.
 	#[pallet::storage]
-	pub type ClaimedCounts<T: Config> = StorageMap<_, Twox64Concat, AwardBlock, u32, ValueQuery>;
+	pub type ClaimedCounts<T: Config> =
+		StorageMap<_, Twox64Concat, CreditTreeBlock, u32, ValueQuery>;
 
 	/// The collections whose owners accept claims, each bound to the registering owner and the
 	/// [`ItemSelection`] deciding the item. A collection with no entry cannot be claimed into.
@@ -294,7 +295,7 @@ pub mod pallet {
 		/// Credit trees were received and stored.
 		CreditTreesReceived { count: u32, stored: u32 },
 		/// Trees of the live stream never arrived. The game pallet's `CreditTreesSent` events
-		/// resolve these sequences to the award blocks they were delivered under, and a
+		/// resolve these sequences to the tree blocks they were delivered under, and a
 		/// `replay_credit_trees` naming those blocks recovers the trees.
 		///
 		/// A sequence that resolves to no block is one the game pallet spent on a tree it had
@@ -302,11 +303,11 @@ pub mod pallet {
 		CreditTreesMissing { from_sequence: TreeSequence, to_sequence: TreeSequence },
 		/// A tree was received for a block that already holds a different root. The stored
 		/// root is kept, so the proofs built against it stay valid.
-		CreditTreeConflict { block: AwardBlock },
-		/// A credit awarded in `block` was claimed, minting `instance` of `collection`'s `item`
+		CreditTreeConflict { block: CreditTreeBlock },
+		/// A credit `block` committed was claimed, minting `instance` of `collection`'s `item`
 		/// to the purse key `owner`.
 		CreditClaimed {
-			block: AwardBlock,
+			block: CreditTreeBlock,
 			leaf: NftClaimCreditLeaf,
 			collection: CollectionId,
 			item: ItemIndex,
@@ -314,7 +315,7 @@ pub mod pallet {
 			instance: InstanceId,
 		},
 		/// Every credit committed to by `block`'s tree has now been claimed.
-		TreeFullyClaimed { block: AwardBlock },
+		TreeFullyClaimed { block: CreditTreeBlock },
 		/// `collection`'s owner registered it for claims with `selection`, or withdrew it with
 		/// `None`.
 		CollectionMinterSet { collection: CollectionId, selection: Option<ItemSelection> },
@@ -322,10 +323,10 @@ pub mod pallet {
 
 	#[pallet::error]
 	pub enum Error<T> {
-		/// No tree is held for the award block, so nothing can be proven against it. The tree may
+		/// No tree is held for the block, so nothing can be proven against it. The tree may
 		/// still be on its way, or have been lost, in which case a `replay_credit_trees` on the
 		/// game pallet delivers it.
-		UnknownAwardBlock,
+		UnknownCreditTree,
 		/// The leaf index is not one of the tree's leaves.
 		LeafIndexOutOfBounds,
 		/// The credit has already been claimed and mints one NFT only.
@@ -408,7 +409,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Mints the NFT of one NFT claim credit the game chain awarded in `block`.
+		/// Mints the NFT of one NFT claim credit the game chain committed in `block`'s tree.
 		///
 		/// The credit is spent by the claim: its leaf is recorded, and a second claim of the same
 		/// credit fails, whoever submits it.
@@ -420,8 +421,8 @@ pub mod pallet {
 		/// - `claimant`: Which of the signer's identities the credit was awarded to. A person
 		///   claims as [`ClaimantKind::Person`], which resolves to the alias their account is bound
 		///   to.
-		/// - `block`: The People-chain block the credit was awarded in, which names the tree the
-		///   proof is verified against.
+		/// - `block`: The People-chain block whose tree committed the credit, which is the tree the
+		///   proof is verified against. It is at or after the block the credit was earned in.
 		/// - `credit`: The credit being claimed. Hashed together with the origin's identity into
 		///   the leaf, so a credit of somebody else's rehashes to a leaf that is in no tree.
 		/// - `leaf_index`: The position of that leaf in the block's leaves, in award order.
@@ -447,7 +448,7 @@ pub mod pallet {
 		pub fn claim(
 			origin: OriginFor<T>,
 			claimant: ClaimantKind,
-			block: AwardBlock,
+			block: CreditTreeBlock,
 			credit: NftClaimCredit,
 			leaf_index: u32,
 			proof: BoundedVec<CreditProofNode, T::MaxProofNodes>,
@@ -465,7 +466,7 @@ pub mod pallet {
 				.map_err(|e| e.with_weight(base))?;
 
 			let tree = CreditTrees::<T>::get(block)
-				.ok_or(Error::<T>::UnknownAwardBlock.with_weight(base))?;
+				.ok_or(Error::<T>::UnknownCreditTree.with_weight(base))?;
 			ensure!(
 				leaf_index < tree.leaf_count,
 				Error::<T>::LeafIndexOutOfBounds.with_weight(base)
@@ -625,7 +626,7 @@ pub mod pallet {
 			use alloc::collections::BTreeMap;
 			use sp_runtime::TryRuntimeError;
 
-			let mut counted = BTreeMap::<AwardBlock, u32>::new();
+			let mut counted = BTreeMap::<CreditTreeBlock, u32>::new();
 			for (block, _leaf, ()) in ClaimedCredits::<T>::iter() {
 				if !CreditTrees::<T>::contains_key(block) {
 					return Err(TryRuntimeError::Other("claimed credit has no tree"));
@@ -820,9 +821,9 @@ pub mod pallet {
 }
 
 impl<T: Config> Pallet<T> {
-	/// The commitment held for `block`, which a claim for a credit awarded in that block is
+	/// The commitment held for `block`, which a claim for a credit that block committed is
 	/// verified against.
-	pub fn credit_tree(block: AwardBlock) -> Option<NftClaimCreditTree> {
+	pub fn credit_tree(block: CreditTreeBlock) -> Option<NftClaimCreditTree> {
 		CreditTrees::<T>::get(block)
 	}
 }

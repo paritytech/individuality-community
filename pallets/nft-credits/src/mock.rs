@@ -62,7 +62,6 @@ frame_support::construct_runtime!(
 
 impl crate::Config for Test {
 	type WeightInfo = MockWeightInfo;
-	type MaxCreditsPerBlock = MaxCreditsPerBlock;
 	type XcmRouter = MockXcmRouter;
 	type NftClaimsParaId = NftClaimsParaId;
 	type NftClaimsPalletIndex = NftClaimsPalletIndex;
@@ -71,7 +70,7 @@ impl crate::Config for Test {
 	type MaxCreditTreesPerMessage = MaxCreditTreesPerMessage;
 	type ReplayCooldownSeconds = ReplayCooldownSeconds;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
-	type MaxRetainedAwardBlocks = MaxRetainedAwardBlocks;
+	type MaxRetainedCreditTrees = MaxRetainedCreditTrees;
 	type MaxCreditBlocksPerClaimant = MaxCreditBlocksPerClaimant;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockCreditsBenchmarkHelper;
@@ -98,10 +97,7 @@ impl CreditsWeightInfo for MockWeightInfo {
 }
 
 parameter_types! {
-	/// Generous by default: tests submit every player's report within one block, which a real
-	/// block's weight limit would never allow. Tests covering a full leaf buffer lower it.
-	pub storage MaxCreditsPerBlock: u32 = 20_000;
-	pub storage MaxRetainedAwardBlocks: u32 = 16;
+	pub storage MaxRetainedCreditTrees: u32 = 16;
 	/// Tests covering the index dropping its oldest block lower it.
 	pub storage MaxCreditBlocksPerClaimant: u32 = 16;
 	pub const NftClaimsParaId: ParaId = ParaId::new(1000);

@@ -38,7 +38,7 @@ fn credit(i: u32) -> NftClaimCredit {
 	credit
 }
 
-/// A batch of `n` trees of the live stream, one per award block, as the game pallet sends it.
+/// A batch of `n` trees of the live stream, one per block, as the game pallet sends it.
 ///
 /// The sequence numbers start at one, so a receiver still expecting zero sees the batch as
 /// ahead of the stream.
@@ -63,7 +63,7 @@ fn batch<T: Config>(n: u32) -> CreditTreeBatch<T> {
 	CreditTreeBatch::<T> { source_time: 1_000, trees }
 }
 
-/// Records the tree of an award block committing to `2^n` credits of `claimant` and returns what
+/// Records a block's tree committing to `2^n` credits of `claimant` and returns what
 /// a claim of one of them needs: the block, the credit, its leaf index and the sibling hashes.
 ///
 /// The last leaf is picked, which is the deepest, so the proof carries all `n` hashes and every
@@ -72,7 +72,7 @@ fn claimable_credit<T: Config>(
 	claimant: &AccountOrPerson<T::AccountId>,
 	n: u32,
 ) -> Result<
-	(AwardBlock, NftClaimCredit, u32, BoundedVec<CreditProofNode, T::MaxProofNodes>),
+	(CreditTreeBlock, NftClaimCredit, u32, BoundedVec<CreditProofNode, T::MaxProofNodes>),
 	BenchmarkError,
 > {
 	let leaf_count = 1u32 << n;
@@ -84,7 +84,7 @@ fn claimable_credit<T: Config>(
 	let leaf_index = leaf_count - 1;
 	let proof = binary_merkle_tree::merkle_proof::<BlakeTwo256, _, _>(leaves, leaf_index);
 
-	let block: AwardBlock = 1;
+	let block: CreditTreeBlock = 1;
 	CreditTrees::<T>::insert(
 		block,
 		NftClaimCreditTree { game_index: 1, root: proof.root.into(), leaf_count, timestamp: 1_000 },

@@ -776,6 +776,9 @@ pub mod pallet {
 		/// `claim_airdrop`: the claimant is not recognized in pallet-score, or their most recent
 		/// attended game does not match the `game_index` of the airdrop.
 		NotEligibleForAirdrop,
+		/// `report`: fewer NFT claim credits can be recorded right now than the report may award.
+		/// Submit it again once later blocks have committed the buffered credits.
+		CreditCapacityExhausted,
 	}
 
 	/// A reason for this pallet placing a hold on funds.
@@ -1072,6 +1075,11 @@ pub mod pallet {
 		/// `Report::Person` vote awards an attendance NFT claim credit to the attestee immediately;
 		/// `Report::NotPerson` awards nothing.
 		///
+		/// The call is refused with `Error::CreditCapacityExhausted` while fewer credits can be
+		/// recorded than the report may award, counting every entry as a `Person` vote. It awards
+		/// all of its credits or none, so refusing it keeps a credit from being earned and then
+		/// dropped. Submit it again once later blocks have committed the buffered credits.
+		///
 		/// After the votes from the report are counted, the reporter and each of the reported
 		/// players whose attendance can now be determined are processed early. This lets the
 		/// game skip the player-process phase entirely when every player has been processed by
@@ -1111,6 +1119,22 @@ pub mod pallet {
 				return Err(Error::<T>::NoReporting.into());
 			};
 
+			ensure!(full_report.len() == game.rounds as usize, Error::<T>::InvalidReport);
+
+			// Number of co-player entries across all rounds. The loop below validates that each
+			// round's report length matches the reporter's real group membership, so this
+			// flattened length is the exact per-item cost driver charged as `e` in the weight.
+			let co_player_entries = full_report.iter().map(|round| round.len() as u32).sum::<u32>();
+
+			// A report awards one credit per `Person` vote and cannot leave part of them to a later
+			// block, so it is refused whole while fewer than that can be recorded. Every entry is
+			// counted here, because the votes themselves are read below, after the state changes
+			// have begun.
+			ensure!(
+				T::NftClaimCredits::remaining_capacity(game_index) >= co_player_entries,
+				Error::<T>::CreditCapacityExhausted
+			);
+
 			// Use the vote weight snapshotted during the shuffle phase rather than a dynamic
 			// `reached_personhood` lookup: if the reporter was early-enacted as `Attended`
 			// mid-reporting and crossed the personhood threshold, their live weight would
@@ -1123,13 +1147,6 @@ pub mod pallet {
 					player_info.sent_report = true;
 					Ok(player_info.vote_weight)
 				})?;
-
-			ensure!(full_report.len() == game.rounds as usize, Error::<T>::InvalidReport);
-
-			// Number of co-player entries across all rounds. The loop below validates that each
-			// round's report length matches the reporter's real group membership, so this
-			// flattened length is the exact per-item cost driver charged as `e` in the weight.
-			let co_player_entries = full_report.iter().map(|round| round.len() as u32).sum::<u32>();
 
 			let reporter_indices =
 				PlayerToIndex::<T>::get(&who).ok_or(Error::<T>::NotRegistered)?;
@@ -3003,14 +3020,14 @@ pub mod pallet {
 				<T as Config>::WeightInfo::player_process_step1_inner_loop(game.rounds as u32);
 			let award_time = T::UnixTime::now().as_secs() as u32;
 			// A player's backfill cannot be split across blocks, so a player is only processed
-			// while its worst case still fits what the block can award and no credit ever has to
-			// be dropped. The remaining players are processed in a later block, which starts with
-			// its own awards. Only the credits really awarded are debited, so players that award
-			// nothing (non-attendees) or less than their worst case (credits already awarded
-			// during reporting) do not shorten the block.
+			// while its worst case still fits what the credit buffers can hold and no credit ever
+			// has to be dropped. The remaining players are processed in a later block, by which
+			// time a committed tree has freed a buffer. Only the credits really awarded are
+			// debited, so players that award nothing (non-attendees) or less than their worst case
+			// (credits already awarded during reporting) do not shorten the block.
 			let max_credits_per_player =
 				Self::max_attestations(game.rounds as u32, game.max_group_size);
-			let mut credit_capacity = T::NftClaimCredits::remaining_capacity();
+			let mut credit_capacity = T::NftClaimCredits::remaining_capacity(game.index);
 			let mut next_player = iterator.next();
 
 			for _ in 0..OP_UPPER_BOUND {

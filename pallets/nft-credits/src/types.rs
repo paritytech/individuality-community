@@ -33,6 +33,11 @@ use scale_info::TypeInfo;
 /// the round and the [`indiv_pallet_game::AttesterPosition`] by `Pallet::credit_slot`.
 pub type CreditSlot = u32;
 
+/// One chunk of a block's awards in [`crate::NftClaimCreditAwards`], as the second key of that map.
+/// Chunk `c` holds the awards at leaf indices `c * AWARDS_PER_CHUNK` upwards, so it is
+/// `leaf_index / AWARDS_PER_CHUNK` for the award being written or read.
+pub type ChunkIndex = u32;
+
 /// The set of credits one claimant has been awarded in one game, held as one bit per
 /// [`CreditSlot`].
 ///
@@ -92,10 +97,10 @@ impl AwardedCredits {
 	}
 }
 
-/// One NFT claim credit as its block awarded it, which is the preimage of one
+/// One NFT claim credit as its tree block committed it, which is the preimage of one
 /// [`NftClaimCreditLeaf`].
 ///
-/// Kept per award block in [`crate::NftClaimCreditAwards`] for as long as the block's awards are
+/// Kept per tree block in [`crate::NftClaimCreditAwards`] for as long as the block's awards are
 /// retained, so a claim can be proven from state alone. Distinct from
 /// [`crate::AwardedNftClaimCredits`], which only marks which of a game's credit slots a claimant
 /// has had awarded.
@@ -109,28 +114,33 @@ pub struct NftClaimCreditAward<AccountId> {
 	pub credit: NftClaimCredit,
 }
 
-/// The fields a block's `NftClaimCreditTree` carries besides the root, recorded when the
-/// block's first credit is awarded and read back when the root is computed.
+/// One buffer of awards waiting for its tree, held in [`crate::CreditBuffers`]: the fields the
+/// `NftClaimCreditTree` built over it carries, and its running award count.
 ///
-/// They are kept alongside the leaves rather than derived when the root is computed: the game can
-/// be over by then, so its index is no longer readable.
+/// Written when the buffer's first credit is awarded, updated by every award after it and read back
+/// when the root is computed. The game index is kept here rather than derived at that point,
+/// because the game can be over by then.
 #[derive(
 	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Debug, Clone, PartialEq, Eq,
 )]
-pub struct NftClaimCreditRootInfo {
-	/// The game the block's credits were awarded in.
+pub struct CreditBuffer {
+	/// The game every credit in the buffer was awarded in. A tree carries one game index, so a
+	/// credit of another game starts a buffer of its own.
 	pub game_index: GameIdx,
-	/// The block's wall-clock time in seconds since the UNIX epoch.
+	/// The wall-clock time of the buffer's first award, in seconds since the UNIX epoch.
 	pub timestamp: u32,
+	/// How many awards the buffer holds, which is the leaf index the next one takes. Counted here
+	/// so that awarding reads no chunk to find the buffer's end.
+	pub awards: u32,
 }
 
-/// The inclusion proof of one NFT claim credit against the `NftClaimCreditTree` of the block it
-/// was awarded in, as returned by [`crate::Pallet::nft_claim_credit_proofs`].
+/// The inclusion proof of one NFT claim credit against the `NftClaimCreditTree` of the block that
+/// committed it, as returned by [`crate::Pallet::nft_claim_credit_proofs`].
 ///
 /// Everything Asset Hub needs to verify one claim, so a wallet forwards it as it is.
 #[derive(Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug, Clone, PartialEq, Eq)]
 pub struct NftClaimCreditProof {
-	/// The root the proof verifies against, as recorded for the award block.
+	/// The root the proof verifies against, as recorded for the tree block.
 	pub root: CreditProofNode,
 	/// The credit being claimed, which the claimant sends along so that Asset Hub can recompute
 	/// [`Self::leaf`] and see who may mint.
@@ -149,11 +159,11 @@ pub struct NftClaimCreditProof {
 /// Why no [`NftClaimCreditProof`] could be built for a claim.
 #[derive(Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug, Clone, PartialEq, Eq)]
 pub enum NftClaimCreditProofError {
-	/// The block has no `NftClaimCreditTree`, so it awarded no credit.
-	UnknownAwardBlock,
+	/// The block has no `NftClaimCreditTree`, so it committed no credit.
+	UnknownCreditTree,
 	/// The block's awards are no longer on chain, its root having dropped out of the retained
-	/// window. The awards have to be supplied from the block's `NftClaimCreditAwarded` events
-	/// instead.
+	/// window. The awards have to be supplied from the `NftClaimCreditAwarded` events naming the
+	/// block instead.
 	AwardsPruned,
 	/// The given awards are not as many as the block's root was computed over.
 	LeafCountMismatch {
@@ -163,6 +173,6 @@ pub enum NftClaimCreditProofError {
 	/// `leaf_index` is not a leaf of the block's tree.
 	LeafIndexOutOfBounds,
 	/// The given awards rehash to a different root than the one recorded for the block, so they
-	/// are not the block's awards, or not in award order.
+	/// are not the block's awards, or not in leaf order.
 	RootMismatch,
 }

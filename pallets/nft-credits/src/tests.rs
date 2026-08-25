@@ -210,7 +210,7 @@ fn credit_block_index_keys_the_root_the_credit_lands_in() {
 		let report_open = schedule.game_play_time;
 		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(report_open as u64));
 
-		let award_block = System::block_number();
+		let tree_block = System::block_number();
 		let report: FullReport<Test> =
 			vec![vec![Report::Person].try_into().unwrap()].try_into().unwrap();
 		assert_ok!(Game::report(RuntimeOrigin::signed(ALICE), report.clone()));
@@ -223,9 +223,9 @@ fn credit_block_index_keys_the_root_the_credit_lands_in() {
 
 		// The indexed block is what a wallet redeems with: it keys the root committing to the
 		// credit's leaf, which carries the game index and the award timestamp.
-		assert_eq!(NftClaimCreditBlocks::<Test>::get(&alice).to_vec(), vec![award_block]);
+		assert_eq!(NftClaimCreditBlocks::<Test>::get(&alice).to_vec(), vec![tree_block]);
 		advance_process();
-		let credit_root = NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded");
+		let credit_root = NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded");
 		assert_eq!(credit_root.game_index, 1);
 		assert_eq!(credit_root.timestamp, report_open);
 	});
@@ -441,6 +441,12 @@ fn notperson_credit_backfilled_when_attendee_already_attended() {
 	});
 }
 
+/// Every award the tree of `block` holds, in leaf order. Reads a whole tree's worth of chunks, so
+/// it also sees awards the buffer's own count leaves out.
+fn awards_of(block: BlockNumberFor<Test>) -> Vec<NftClaimCreditAward<AccountId32>> {
+	NftCredits::block_awards(block, AWARDS_PER_TREE)
+}
+
 /// The leaf a credit awarded to `claimant` by `attester` in round 0 of game 1 contributes.
 fn credit_leaf(
 	attester: &AccountOrPerson<AccountId32>,
@@ -472,14 +478,14 @@ fn awarded_credits_are_committed_to_the_awarding_block_root() {
 		let report: FullReport<Test> =
 			vec![vec![Report::Person].try_into().unwrap()].try_into().unwrap();
 
-		let award_block = System::block_number();
+		let tree_block = System::block_number();
 		assert_ok!(Game::report(RuntimeOrigin::signed(ALICE), report.clone()));
 		assert_ok!(Game::report(RuntimeOrigin::signed(BOB), report));
 
 		// ALICE reported first, so BOB's credit is the first leaf.
 		let leaves = vec![credit_leaf(&alice, &bob), credit_leaf(&bob, &alice)];
 		assert_eq!(
-			NftClaimCreditAwards::<Test>::get(award_block)
+			awards_of(tree_block)
 				.iter()
 				.map(|award| NftCredits::compute_nft_claim_credit_leaf(
 					&award.claimant,
@@ -489,8 +495,8 @@ fn awarded_credits_are_committed_to_the_awarding_block_root() {
 			leaves,
 		);
 		assert_eq!(
-			PendingNftClaimCreditRootInfo::<Test>::get(),
-			Some(NftClaimCreditRootInfo { game_index: 1, timestamp: report_open })
+			CreditBuffers::<Test>::get(tree_block),
+			Some(CreditBuffer { game_index: 1, timestamp: report_open, awards: 2 })
 		);
 		// Nothing is committed until the block is over.
 		assert_eq!(NftClaimCreditRoots::<Test>::iter().count(), 0);
@@ -503,13 +509,13 @@ fn awarded_credits_are_committed_to_the_awarding_block_root() {
 			leaf_count: 2,
 			timestamp: report_open,
 		};
-		assert_eq!(NftClaimCreditRoots::<Test>::get(award_block), Some(expected));
-		assert_eq!(PendingNftClaimCreditRootInfo::<Test>::get(), None);
+		assert_eq!(NftClaimCreditRoots::<Test>::get(tree_block), Some(expected));
+		assert_eq!(CreditBuffers::<Test>::get(tree_block), None);
 		// The awards stay behind the root, so the block's claims are provable from state.
-		assert_eq!(NftClaimCreditAwards::<Test>::decode_len(award_block), Some(2));
+		assert_eq!(awards_of(tree_block).len(), 2);
 		assert!(System::events().iter().any(|record| record.event ==
 			RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditRootRecorded {
-				block: award_block,
+				block: tree_block,
 				credit_root: expected,
 			})));
 	});
@@ -533,7 +539,7 @@ fn a_built_credit_tree_is_queued_for_delivery() {
 		let report: FullReport<Test> =
 			vec![vec![Report::Person].try_into().unwrap()].try_into().unwrap();
 
-		let award_block = System::block_number();
+		let tree_block = System::block_number();
 		assert_ok!(Game::report(RuntimeOrigin::signed(ALICE), report));
 		assert!(
 			CreditTreeDeliveryQueue::<Test>::get().is_empty(),
@@ -541,27 +547,30 @@ fn a_built_credit_tree_is_queued_for_delivery() {
 		);
 
 		advance_process();
-		assert_eq!(CreditTreeDeliveryQueue::<Test>::get().to_vec(), vec![(0, award_block)]);
+		assert_eq!(CreditTreeDeliveryQueue::<Test>::get().to_vec(), vec![(0, tree_block)]);
 		assert_eq!(NextCreditTreeSequence::<Test>::get(), 1);
 
 		// The next block awards no credit, so it builds no tree and queues nothing.
 		advance_process();
-		assert_eq!(CreditTreeDeliveryQueue::<Test>::get().to_vec(), vec![(0, award_block)]);
+		assert_eq!(CreditTreeDeliveryQueue::<Test>::get().to_vec(), vec![(0, tree_block)]);
 		assert_eq!(NextCreditTreeSequence::<Test>::get(), 1);
 	});
 }
 
-/// The block's leaf set, rebuilt the way an off-chain client has to: from the
-/// `NftClaimCreditAwarded` events alone, ordered by the leaf index they carry.
-fn leaves_from_events() -> Vec<NftClaimCreditLeaf> {
+/// The leaf set of `block`'s tree, rebuilt the way an off-chain client has to: from the
+/// `NftClaimCreditAwarded` events alone, ordered by the leaf index they carry. Each event names the
+/// block whose tree commits it, which groups the events into one leaf set.
+fn leaves_from_events(block: BlockNumberFor<Test>) -> Vec<NftClaimCreditLeaf> {
 	let mut leaves = System::events()
 		.iter()
 		.filter_map(|record| match &record.event {
 			RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditAwarded {
 				claimant,
 				credit,
+				block: awarded_in,
 				leaf_index,
-			}) => Some((*leaf_index, NftCredits::compute_nft_claim_credit_leaf(claimant, credit))),
+			}) if *awarded_in == block =>
+				Some((*leaf_index, NftCredits::compute_nft_claim_credit_leaf(claimant, credit))),
 			_ => None,
 		})
 		.collect::<Vec<_>>();
@@ -591,7 +600,7 @@ fn awarded_credit_events_yield_verifiable_inclusion_proofs() {
 		MOCK_UNIX_TIME
 			.with(|t| *t.borrow_mut() = Duration::from_secs(schedule.game_play_time as u64));
 
-		let award_block = System::block_number();
+		let tree_block = System::block_number();
 		for acc in [ALICE, BOB, CHARLIE] {
 			let who = AccountOrPerson::Account(acc.clone());
 			assert_ok!(Game::report(
@@ -600,10 +609,10 @@ fn awarded_credit_events_yield_verifiable_inclusion_proofs() {
 			));
 		}
 
-		let leaves = leaves_from_events();
+		let leaves = leaves_from_events(tree_block);
 		assert_eq!(
 			leaves,
-			NftClaimCreditAwards::<Test>::get(award_block)
+			awards_of(tree_block)
 				.iter()
 				.map(|award| NftCredits::compute_nft_claim_credit_leaf(
 					&award.claimant,
@@ -614,7 +623,7 @@ fn awarded_credit_events_yield_verifiable_inclusion_proofs() {
 
 		advance_process();
 		let credit_root =
-			NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded credits");
+			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
 		assert_eq!(credit_root.leaf_count, leaves.len() as u32);
 
 		for leaf_index in 0..credit_root.leaf_count {
@@ -635,15 +644,16 @@ fn awarded_credit_events_yield_verifiable_inclusion_proofs() {
 /// The block's awards, rebuilt the way an off-chain client has to once a block's awards have been
 /// pruned: from the `NftClaimCreditAwarded` events alone, ordered by the leaf index they carry.
 /// This is what `NftCredits::nft_claim_credit_proof_from_awards` takes.
-fn awards_from_events() -> Vec<NftClaimCreditAward<AccountId32>> {
+fn awards_from_events(block: BlockNumberFor<Test>) -> Vec<NftClaimCreditAward<AccountId32>> {
 	let mut awards = System::events()
 		.iter()
 		.filter_map(|record| match &record.event {
 			RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditAwarded {
 				claimant,
 				credit,
+				block: awarded_in,
 				leaf_index,
-			}) => Some((
+			}) if *awarded_in == block => Some((
 				*leaf_index,
 				NftClaimCreditAward { claimant: claimant.clone(), credit: *credit },
 			)),
@@ -654,7 +664,7 @@ fn awards_from_events() -> Vec<NftClaimCreditAward<AccountId32>> {
 	awards.into_iter().map(|(_, award)| award).collect::<Vec<_>>()
 }
 
-/// Play one block of reporting in a group of four and return the award block with the awards it
+/// Play one block of reporting in a group of four and return the tree block with the awards it
 /// recorded, in leaf order, once the block's root is recorded.
 fn award_credits_in_one_block() -> (BlockNumberFor<Test>, Vec<NftClaimCreditAward<AccountId32>>) {
 	let schedule = GameSchedule::<u32, u128> {
@@ -666,7 +676,7 @@ fn award_credits_in_one_block() -> (BlockNumberFor<Test>, Vec<NftClaimCreditAwar
 	start_game_in_reporting_phase(&schedule, &[ALICE, BOB, CHARLIE, DAVE]);
 	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(schedule.game_play_time as u64));
 
-	let award_block = System::block_number();
+	let tree_block = System::block_number();
 	for acc in [ALICE, BOB, CHARLIE] {
 		let who = AccountOrPerson::Account(acc.clone());
 		assert_ok!(Game::report(
@@ -674,10 +684,10 @@ fn award_credits_in_one_block() -> (BlockNumberFor<Test>, Vec<NftClaimCreditAwar
 			build_report_with_opinion(&who, |_| Report::Person),
 		));
 	}
-	let awards = awards_from_events();
+	let awards = awards_from_events(tree_block);
 	advance_process();
-	assert_eq!(NftClaimCreditAwards::<Test>::get(award_block).to_vec(), awards);
-	(award_block, awards)
+	assert_eq!(awards_of(tree_block), awards);
+	(tree_block, awards)
 }
 
 /// Assert that `proof` is the inclusion proof of `award` at `leaf_index` against `credit_root`,
@@ -707,12 +717,12 @@ fn assert_credit_proof(
 
 #[test]
 fn credit_proofs_api_serves_a_claimant_from_state_alone() {
-	// The intended off-chain path: a claimant asks for one award block and gets back a verifiable
+	// The intended off-chain path: a claimant asks for one tree block and gets back a verifiable
 	// proof per credit they hold there, without reading a single event.
 	new_test_ext().execute_with(|| {
-		let (award_block, awards) = award_credits_in_one_block();
+		let (tree_block, awards) = award_credits_in_one_block();
 		let credit_root =
-			NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded credits");
+			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
 
 		for claimant in [ALICE, BOB, CHARLIE, DAVE].map(AccountOrPerson::Account) {
 			let expected = awards
@@ -720,7 +730,7 @@ fn credit_proofs_api_serves_a_claimant_from_state_alone() {
 				.enumerate()
 				.filter(|(_, award)| award.claimant == claimant)
 				.collect::<Vec<_>>();
-			let proofs = NftCredits::nft_claim_credit_proofs(award_block, &claimant)
+			let proofs = NftCredits::nft_claim_credit_proofs(tree_block, &claimant)
 				.expect("the block's awards are retained");
 			assert_eq!(proofs.len(), expected.len(), "one proof per credit of {claimant:?}");
 			for (proof, (leaf_index, award)) in proofs.iter().zip(expected) {
@@ -733,9 +743,9 @@ fn credit_proofs_api_serves_a_claimant_from_state_alone() {
 #[test]
 fn credit_proofs_api_returns_nothing_for_a_claimant_the_block_awarded_nothing() {
 	new_test_ext().execute_with(|| {
-		let (award_block, _) = award_credits_in_one_block();
+		let (tree_block, _) = award_credits_in_one_block();
 		assert_eq!(
-			NftCredits::nft_claim_credit_proofs(award_block, &AccountOrPerson::Account(EVE)),
+			NftCredits::nft_claim_credit_proofs(tree_block, &AccountOrPerson::Account(EVE)),
 			Ok(vec![])
 		);
 	});
@@ -744,46 +754,419 @@ fn credit_proofs_api_returns_nothing_for_a_claimant_the_block_awarded_nothing() 
 #[test]
 fn credit_proofs_api_rejects_a_block_that_awarded_nothing() {
 	new_test_ext().execute_with(|| {
-		let (award_block, _) = award_credits_in_one_block();
+		let (tree_block, _) = award_credits_in_one_block();
 		assert_eq!(
-			NftCredits::nft_claim_credit_proofs(award_block + 1, &AccountOrPerson::Account(ALICE)),
-			Err(NftClaimCreditProofError::UnknownAwardBlock)
+			NftCredits::nft_claim_credit_proofs(tree_block + 1, &AccountOrPerson::Account(ALICE)),
+			Err(NftClaimCreditProofError::UnknownCreditTree)
+		);
+	});
+}
+
+/// Award `count` credits of `game` to `count` distinct claimants, and return them in award order.
+/// Awards directly rather than through a game, since a group is too small to fill more than one
+/// chunk. A tree holds the credits of one game, so a second tree passes a second `game`.
+fn award_credits(game: GameIdx, count: u32) -> Vec<AccountOrPerson<AccountId32>> {
+	let claimants = (0..count)
+		.map(|i| AccountOrPerson::Person(sp_io::hashing::blake2_256(&i.encode())))
+		.collect::<Vec<_>>();
+	for (i, claimant) in claimants.iter().enumerate() {
+		let credit = sp_io::hashing::blake2_256(&(i as u32, b"credit").encode());
+		assert_eq!(
+			NftCredits::award_nft_claim_credit(game, claimant, credit, 0, 5_000),
+			1,
+			"award {i} must be recorded"
+		);
+	}
+	claimants
+}
+
+#[test]
+fn awards_past_the_first_chunk_keep_leaf_order() {
+	// The leaf index the claims chain proves against is a position in the block's award sequence,
+	// which chunking splits up. A block whose awards span three chunks must read back exactly as it
+	// awarded.
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		let block = System::block_number();
+		let count = AWARDS_PER_CHUNK * 2 + 5;
+
+		let claimants = award_credits(1, count);
+
+		assert_eq!(
+			awards_of(block).into_iter().map(|award| award.claimant).collect::<Vec<_>>(),
+			claimants
+		);
+		assert_eq!(
+			NftClaimCreditAwards::<Test>::iter_prefix(block).count() as u32,
+			count.div_ceil(AWARDS_PER_CHUNK),
+			"one chunk per AWARDS_PER_CHUNK awards, the last one partly filled"
+		);
+		assert_eq!(CreditBuffers::<Test>::get(block).map(|info| info.awards), Some(count));
+	});
+}
+
+#[test]
+fn the_tree_commits_to_every_chunk_of_a_block() {
+	// The root is built over the awards read back from the chunks, so a claimant whose leaf sits
+	// in the last chunk must get a proof that verifies against it.
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		let block = System::block_number();
+		let count = AWARDS_PER_CHUNK * 2 + 5;
+		let claimants = award_credits(1, count);
+
+		advance_process();
+
+		let credit_root = NftClaimCreditRoots::<Test>::get(block).expect("the block awarded");
+		assert_eq!(credit_root.leaf_count, count);
+
+		let last = claimants.last().expect("the block awarded");
+		let proofs = NftCredits::nft_claim_credit_proofs(block, last)
+			.expect("the block's awards are retained");
+		let proof = proofs.first().expect("the claimant holds one credit");
+		assert_eq!(proof.leaf_index, count - 1);
+		assert!(binary_merkle_tree::verify_proof::<BlakeTwo256, _, _>(
+			&credit_root.root.into(),
+			proof.proof.iter().copied().map(H256::from).collect::<Vec<_>>(),
+			credit_root.leaf_count,
+			proof.leaf_index,
+			&NftCredits::compute_nft_claim_credit_leaf(last, &proof.credit)
+		));
+	});
+}
+
+#[test]
+fn a_full_tree_spills_into_the_next_block() {
+	// A full tree holds `AWARDS_PER_TREE` leaves, and awarding past that fills the next
+	// block's buffer rather than losing the credit. The spilled awards start a leaf set of their
+	// own, and their event names the block whose tree commits them.
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		let block = System::block_number();
+		let spilled = 5;
+		let claimants = award_credits(1, AWARDS_PER_TREE + spilled);
+
+		assert_eq!(awards_of(block).len() as usize, AWARDS_PER_TREE as usize);
+		assert_eq!(
+			awards_of(block + 1).into_iter().map(|award| award.claimant).collect::<Vec<_>>(),
+			claimants[AWARDS_PER_TREE as usize..]
+		);
+		assert_eq!(CreditBufferCursor::<Test>::get(), block + 1);
+		assert_eq!(
+			CreditBuffers::<Test>::get(block).map(|info| info.awards),
+			Some(AWARDS_PER_TREE)
+		);
+		assert_eq!(CreditBuffers::<Test>::get(block + 1).map(|info| info.awards), Some(spilled));
+		// The spilled leaves are indexed within the tree that commits them, not within the block
+		// that earned them.
+		let last = claimants.last().expect("the block awarded").clone();
+		assert!(System::events().iter().any(|record| record.event ==
+			RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditAwarded {
+				claimant: last.clone(),
+				credit: sp_io::hashing::blake2_256(
+					&(AWARDS_PER_TREE + spilled - 1, b"credit").encode()
+				),
+				block: block + 1,
+				leaf_index: spilled - 1,
+			})));
+		assert_eq!(NftClaimCreditBlocks::<Test>::get(&last).to_vec(), vec![block + 1]);
+	});
+}
+
+#[test]
+fn a_spilled_credit_is_committed_by_the_tree_that_holds_it() {
+	// Two blocks, two roots, and a claimant whose leaf sits in the second. The proof must verify
+	// against the root of the block the award landed in, which is the block the index names.
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		let block = System::block_number();
+		let claimants = award_credits(1, AWARDS_PER_TREE + 5);
+
+		advance_process(); // commits the full tree of `block`
+		advance_process(); // commits the spill of `block + 1`
+
+		let full = NftClaimCreditRoots::<Test>::get(block).expect("the first tree is full");
+		let spill = NftClaimCreditRoots::<Test>::get(block + 1).expect("the spill has a tree");
+		assert_eq!(full.leaf_count, AWARDS_PER_TREE);
+		assert_eq!(spill.leaf_count, 5);
+		assert_eq!(committed_leaf_count(), AWARDS_PER_TREE + 5);
+
+		let last = claimants.last().expect("the block awarded");
+		assert_eq!(
+			NftCredits::nft_claim_credit_proofs(block, last),
+			Ok(vec![]),
+			"the full tree commits to none of the spilled credits"
+		);
+		let proofs =
+			NftCredits::nft_claim_credit_proofs(block + 1, last).expect("the awards are retained");
+		let proof = proofs.first().expect("the claimant holds one credit");
+		assert_eq!(proof.leaf_index, 4);
+		assert!(binary_merkle_tree::verify_proof::<BlakeTwo256, _, _>(
+			&spill.root.into(),
+			proof.proof.iter().copied().map(H256::from).collect::<Vec<_>>(),
+			spill.leaf_count,
+			proof.leaf_index,
+			&NftCredits::compute_nft_claim_credit_leaf(last, &proof.credit)
+		));
+	});
+}
+
+#[test]
+fn a_new_game_starts_a_tree_of_its_own() {
+	// A tree carries one game index, and it must hold for every leaf under it, so awards of a
+	// second game move on to the next buffer instead of joining a spill of the first.
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		let block = System::block_number();
+		award_credits(1, 1);
+		award_credits(2, 1);
+
+		assert_eq!(awards_of(block).len(), 1);
+		assert_eq!(awards_of(block + 1).len(), 1);
+		assert_eq!(CreditBuffers::<Test>::get(block).map(|info| info.game_index), Some(1));
+		assert_eq!(CreditBuffers::<Test>::get(block + 1).map(|info| info.game_index), Some(2));
+	});
+}
+
+#[test]
+fn a_dropped_block_loses_every_chunk_it_held() {
+	// Retention removes a block's awards by clearing its chunks, so a block that filled several
+	// must leave none behind. A chunk that outlived its block would sit in state for good, since
+	// the ring no longer names the block to remove it under.
+	new_test_ext().execute_with(|| {
+		MaxRetainedCreditTrees::set(&1);
+		System::set_block_number(1);
+		let block = System::block_number();
+		award_credits(1, AWARDS_PER_CHUNK * 2 + 5);
+		advance_process();
+		assert_eq!(RetainedCreditTreeBlocks::<Test>::get().to_vec(), vec![block]);
+
+		// A second tree block pushes the first out of the one-entry window.
+		let second_block = System::block_number();
+		award_credits(2, 1);
+		advance_process();
+
+		assert_eq!(NftClaimCreditAwards::<Test>::iter_prefix(block).count(), 0);
+		assert_eq!(RetainedCreditTreeBlocks::<Test>::get().to_vec(), vec![second_block]);
+		assert!(!awards_of(second_block).is_empty());
+	});
+}
+
+/// Leave room for exactly `remaining` further credits of `game` in block `at`, by opening every
+/// buffer the pallet allows and filling the last one to within `remaining` of a tree. Returns how
+/// many credits the filler is.
+///
+/// The filler is written chunk by chunk rather than awarded one credit at a time. The result is a
+/// real buffer, so the block it belongs to builds a tree over it like any other.
+fn fill_credit_buffer(game: GameIdx, at: BlockNumberFor<Test>, remaining: u32) -> u32 {
+	let filler = AWARDS_PER_TREE - remaining;
+	let buffer = at + u64::from(MAX_PENDING_CREDIT_TREES - 1);
+	for i in 0..filler {
+		NftClaimCreditAwards::<Test>::try_append(
+			buffer,
+			i / AWARDS_PER_CHUNK,
+			NftClaimCreditAward {
+				claimant: AccountOrPerson::Person(sp_io::hashing::blake2_256(&i.encode())),
+				credit: sp_io::hashing::blake2_256(&(i, b"filler").encode()),
+			},
+		)
+		.expect("a chunk holds AWARDS_PER_CHUNK awards");
+	}
+	CreditBufferCursor::<Test>::put(buffer);
+	CreditBuffers::<Test>::insert(
+		buffer,
+		CreditBuffer { game_index: game, timestamp: 5_000, awards: filler },
+	);
+	filler
+}
+
+/// Run blocks until every buffer has had its tree built, so that a test counting trees sees all of
+/// them.
+fn commit_every_pending_tree() {
+	for _ in 0..=MAX_PENDING_CREDIT_TREES {
+		if CreditBuffers::<Test>::iter().count() == 0 {
+			return;
+		}
+		advance_process();
+	}
+	panic!("a buffer is still waiting for its tree");
+}
+
+/// A game of one round and groups of four, so a report carries three co-player entries and may
+/// award three credits. Returns the game index.
+fn start_game_for_a_three_credit_report() -> GameIdx {
+	let schedule = GameSchedule::<u32, u128> {
+		game_play_time: 100,
+		rounds: 1,
+		max_group_size: 4,
+		..Default::default()
+	};
+	start_game_in_reporting_phase(&schedule, &[ALICE, BOB, CHARLIE, DAVE]);
+	GameStore::<Test>::get().expect("the game is reporting").index
+}
+
+#[test]
+fn a_report_that_does_not_fit_the_buffers_is_refused() {
+	// A report awards all of its `Person` votes or none, so it is refused whole while fewer credits
+	// than that can be recorded. Refusing keeps a credit from being earned and then dropped, and it
+	// leaves the reporter's own state untouched to submit again.
+	new_test_ext().execute_with(|| {
+		let game = start_game_for_a_three_credit_report();
+		let who = AccountOrPerson::Account(ALICE);
+		let full_report = build_report_with_opinion(&who, |_| Report::Person);
+
+		// One short of the three co-player entries the report may award.
+		fill_credit_buffer(game, System::block_number(), 2);
+		assert_eq!(NftCredits::remaining_credit_capacity(game), 2);
+
+		assert_noop!(
+			Game::report(RuntimeOrigin::signed(ALICE), full_report.clone()),
+			indiv_pallet_game::Error::<Test>::CreditCapacityExhausted
+		);
+		assert_eq!(awarded_credit_count(), 0);
+		assert!(!Players::<Test>::get(&who).expect("ALICE is registered").sent_report);
+
+		// A refused report pays its fee, unlike the `Pays::No` of one that goes through, so it
+		// cannot be replayed to spend the block for free.
+		let refused = Game::report(RuntimeOrigin::signed(ALICE), full_report);
+		assert_eq!(refused.expect_err("the report is refused").post_info.pays_fee, Pays::Yes);
+	});
+}
+
+#[test]
+fn a_report_that_exactly_fits_the_buffers_is_accepted() {
+	// The refusal rests on what the report may award, not on what is left over afterwards. Capacity
+	// for every entry is enough, even when the report then leaves the buffers full.
+	new_test_ext().execute_with(|| {
+		let game = start_game_for_a_three_credit_report();
+		let who = AccountOrPerson::Account(ALICE);
+
+		fill_credit_buffer(game, System::block_number(), 3);
+		assert_eq!(NftCredits::remaining_credit_capacity(game), 3);
+
+		assert_ok!(Game::report(
+			RuntimeOrigin::signed(ALICE),
+			build_report_with_opinion(&who, |_| Report::Person)
+		));
+		assert_eq!(awarded_credit_count(), 3);
+		assert_eq!(NftCredits::remaining_credit_capacity(game), 0);
+	});
+}
+
+#[test]
+fn a_refused_report_is_accepted_once_a_block_commits_a_tree() {
+	// Capacity comes back a tree at a time, so a reporter refused in one block submits again in a
+	// later one. The refusal defers the report; it does not end the reporter's game.
+	new_test_ext().execute_with(|| {
+		let game = start_game_for_a_three_credit_report();
+		let who = AccountOrPerson::Account(ALICE);
+
+		fill_credit_buffer(game, System::block_number(), 0);
+		assert_noop!(
+			Game::report(
+				RuntimeOrigin::signed(ALICE),
+				build_report_with_opinion(&who, |_| Report::Person)
+			),
+			indiv_pallet_game::Error::<Test>::CreditCapacityExhausted
+		);
+
+		// One block, one tree built and one buffer's worth of capacity back.
+		advance_process();
+		assert_eq!(NftCredits::remaining_credit_capacity(game), AWARDS_PER_TREE);
+		assert_ok!(Game::report(
+			RuntimeOrigin::signed(ALICE),
+			build_report_with_opinion(&who, |_| Report::Person)
+		));
+		assert_eq!(awarded_credit_count(), 3);
+	});
+}
+
+#[test]
+#[should_panic(expected = "a credit must have a buffer to go into")]
+fn a_credit_with_no_buffer_left_is_a_defensive_failure() {
+	// Every caller checks `remaining_credit_capacity` first, so awarding past the buffers is a bug.
+	// A release runtime reports it as `NftClaimCreditDropped` and leaves the slot clear.
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		fill_credit_buffer(1, System::block_number(), 0);
+		assert_eq!(NftCredits::remaining_credit_capacity(1), 0);
+
+		NftCredits::award_nft_claim_credit(
+			1,
+			&AccountOrPerson::Account(ALICE),
+			sp_io::hashing::blake2_256(b"credit"),
+			0,
+			5_000,
 		);
 	});
 }
 
 #[test]
-fn pruned_award_block_keeps_its_root_and_falls_back_to_the_events() {
+fn a_block_commits_a_tree_and_frees_capacity_for_another() {
+	// A block builds one tree, so the window of buffers waiting for one slides with it and capacity
+	// comes back a tree at a time. The limit is on the trees waiting, not on the credits a chain
+	// awards over time.
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		fill_credit_buffer(1, System::block_number(), 0);
+		assert_eq!(NftCredits::remaining_credit_capacity(1), 0);
+
+		advance_process();
+
+		assert_eq!(NftCredits::remaining_credit_capacity(1), AWARDS_PER_TREE);
+	});
+}
+
+#[test]
+fn the_room_left_in_a_buffer_is_capacity_for_its_own_game_only() {
+	// A tree carries one game index, so a credit of another game starts a buffer of its own and
+	// what is left of this one is out of reach. Counting it would let the first award of a new game
+	// pass the guard and then find no buffer to go into.
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		fill_credit_buffer(1, System::block_number(), 2);
+
+		assert_eq!(NftCredits::remaining_credit_capacity(1), 2, "game 1 fills its own buffer");
+		assert_eq!(
+			NftCredits::remaining_credit_capacity(2),
+			0,
+			"game 2 needs a buffer of its own, and every one the pallet allows is open",
+		);
+	});
+}
+
+#[test]
+fn pruned_tree_block_keeps_its_root_and_falls_back_to_the_events() {
 	// A block dropping out of the retained window must cost no claimant their mint: the root
 	// stays, and the awards rebuilt from the block's events still yield the same proof.
 	new_test_ext().execute_with(|| {
-		MaxRetainedAwardBlocks::set(&1);
-		let (award_block, awards) = award_credits_in_one_block();
+		MaxRetainedCreditTrees::set(&1);
+		let (tree_block, awards) = award_credits_in_one_block();
 		let credit_root =
-			NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded credits");
+			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
 		let claimant = awards[0].claimant.clone();
 
-		// A second award block pushes the first out of the one-entry window.
+		// A second tree block pushes the first out of the one-entry window.
 		let report = build_report_with_opinion(&AccountOrPerson::Account(DAVE), |_| Report::Person);
 		assert_ok!(Game::report(RuntimeOrigin::signed(DAVE), report));
 		let second_block = System::block_number();
 		advance_process();
 
-		assert!(!NftClaimCreditAwards::<Test>::contains_key(award_block));
-		assert!(NftClaimCreditAwards::<Test>::contains_key(second_block));
+		assert!(awards_of(tree_block).is_empty());
+		assert!(!awards_of(second_block).is_empty());
 		assert_eq!(
-			NftClaimCreditAwardBlocks::<Test>::get().to_vec(),
+			RetainedCreditTreeBlocks::<Test>::get().to_vec(),
 			vec![second_block],
-			"the ring holds only the newest award block",
+			"the ring holds only the newest tree block",
 		);
 		// The root outlives the awards, so the credits are still mintable.
-		assert_eq!(NftClaimCreditRoots::<Test>::get(award_block), Some(credit_root));
+		assert_eq!(NftClaimCreditRoots::<Test>::get(tree_block), Some(credit_root));
 		assert_eq!(
-			NftCredits::nft_claim_credit_proofs(award_block, &claimant),
+			NftCredits::nft_claim_credit_proofs(tree_block, &claimant),
 			Err(NftClaimCreditProofError::AwardsPruned)
 		);
 
-		let proof = NftCredits::nft_claim_credit_proof_from_awards(award_block, awards.clone(), 0)
+		let proof = NftCredits::nft_claim_credit_proof_from_awards(tree_block, awards.clone(), 0)
 			.expect("the block's awards rehash to its root");
 		assert_credit_proof(&proof, &credit_root, &awards[0], 0);
 	});
@@ -795,45 +1178,45 @@ fn credit_proof_from_awards_api_rejects_awards_that_do_not_match_the_recorded_ro
 	// block that awarded nothing, an incomplete list, a leaf outside the tree, and a list in the
 	// wrong order, which is the one an events reader can hit while holding every award.
 	new_test_ext().execute_with(|| {
-		let (award_block, awards) = award_credits_in_one_block();
+		let (tree_block, awards) = award_credits_in_one_block();
 		let leaf_count = awards.len() as u32;
 		assert!(leaf_count > 1, "the reordering case needs at least two awards");
 
 		assert_eq!(
-			NftCredits::nft_claim_credit_proof_from_awards(award_block + 1, awards.clone(), 0),
-			Err(NftClaimCreditProofError::UnknownAwardBlock)
+			NftCredits::nft_claim_credit_proof_from_awards(tree_block + 1, awards.clone(), 0),
+			Err(NftClaimCreditProofError::UnknownCreditTree)
 		);
 		assert_eq!(
-			NftCredits::nft_claim_credit_proof_from_awards(award_block, awards[..1].to_vec(), 0),
+			NftCredits::nft_claim_credit_proof_from_awards(tree_block, awards[..1].to_vec(), 0),
 			Err(NftClaimCreditProofError::LeafCountMismatch { expected: leaf_count })
 		);
 		assert_eq!(
-			NftCredits::nft_claim_credit_proof_from_awards(award_block, awards.clone(), leaf_count),
+			NftCredits::nft_claim_credit_proof_from_awards(tree_block, awards.clone(), leaf_count),
 			Err(NftClaimCreditProofError::LeafIndexOutOfBounds)
 		);
 
 		let mut reordered = awards.clone();
 		reordered.swap(0, 1);
 		assert_eq!(
-			NftCredits::nft_claim_credit_proof_from_awards(award_block, reordered, 0),
+			NftCredits::nft_claim_credit_proof_from_awards(tree_block, reordered, 0),
 			Err(NftClaimCreditProofError::RootMismatch)
 		);
 	});
 }
 
 #[test]
-fn credit_roots_api_lists_each_award_block_with_its_root() {
-	// A wallet's first query: the claimant's award blocks resolved against the roots recorded
+fn credit_roots_api_lists_each_tree_block_with_its_root() {
+	// A wallet's first query: the claimant's tree blocks resolved against the roots recorded
 	// for them, so it knows which blocks to ask for proofs of and what each commits to.
 	new_test_ext().execute_with(|| {
-		let (award_block, awards) = award_credits_in_one_block();
+		let (tree_block, awards) = award_credits_in_one_block();
 		let credit_root =
-			NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded credits");
+			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
 
 		assert_eq!(
 			NftCredits::nft_claim_credit_roots(&awards[0].claimant),
-			vec![(award_block, credit_root)],
-			"the claimant's only award block, with the root committing to their leaf",
+			vec![(tree_block, credit_root)],
+			"the claimant's only tree block, with the root committing to their leaf",
 		);
 		assert_eq!(
 			NftCredits::nft_claim_credit_roots(&AccountOrPerson::Account(EVE)),
@@ -844,8 +1227,8 @@ fn credit_roots_api_lists_each_award_block_with_its_root() {
 }
 
 #[test]
-fn credit_roots_api_omits_an_award_block_before_its_root_is_recorded() {
-	// The root of an award block is only recorded in the next block, so a wallet must not be
+fn credit_roots_api_omits_a_tree_block_before_its_root_is_recorded() {
+	// A block's root is only recorded in the next block, so a wallet must not be
 	// pointed at a block it cannot yet prove anything against.
 	new_test_ext().execute_with(|| {
 		let schedule = GameSchedule::<u32, u128> {
@@ -855,34 +1238,34 @@ fn credit_roots_api_omits_an_award_block_before_its_root_is_recorded() {
 			..Default::default()
 		};
 		start_game_in_reporting_phase(&schedule, &[ALICE, BOB]);
-		let award_block = System::block_number();
+		let tree_block = System::block_number();
 		let report: FullReport<Test> =
 			vec![vec![Report::Person].try_into().unwrap()].try_into().unwrap();
 		assert_ok!(Game::report(RuntimeOrigin::signed(ALICE), report));
 
 		let bob = AccountOrPerson::Account(BOB);
-		assert_eq!(NftClaimCreditBlocks::<Test>::get(&bob).to_vec(), vec![award_block]);
+		assert_eq!(NftClaimCreditBlocks::<Test>::get(&bob).to_vec(), vec![tree_block]);
 		assert_eq!(NftCredits::nft_claim_credit_roots(&bob), vec![]);
 
 		advance_process();
 		let credit_root =
-			NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded credits");
-		assert_eq!(NftCredits::nft_claim_credit_roots(&bob), vec![(award_block, credit_root)]);
+			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
+		assert_eq!(NftCredits::nft_claim_credit_roots(&bob), vec![(tree_block, credit_root)]);
 	});
 }
 
 #[test]
 fn credit_apis_walk_a_wallet_from_claimant_to_verified_proof() {
-	// The whole off-chain path in two queries: the roots API names the award blocks, the proofs
+	// The whole off-chain path in two queries: the roots API names the tree blocks, the proofs
 	// API turns one of them into proofs that verify against the root it named.
 	new_test_ext().execute_with(|| {
 		let (_, awards) = award_credits_in_one_block();
 		let claimant = awards[0].claimant.clone();
 
 		let roots = NftCredits::nft_claim_credit_roots(&claimant);
-		let (award_block, credit_root) = roots.first().expect("the claimant holds a credit");
+		let (tree_block, credit_root) = roots.first().expect("the claimant holds a credit");
 
-		let proofs = NftCredits::nft_claim_credit_proofs(*award_block, &claimant)
+		let proofs = NftCredits::nft_claim_credit_proofs(*tree_block, &claimant)
 			.expect("the block's awards are retained");
 		let expected = awards
 			.iter()
@@ -893,28 +1276,6 @@ fn credit_apis_walk_a_wallet_from_claimant_to_verified_proof() {
 		for (proof, (leaf_index, award)) in proofs.iter().zip(expected) {
 			assert_credit_proof(proof, credit_root, award, leaf_index as u32);
 		}
-	});
-}
-
-#[test]
-#[should_panic(expected = "block must have room for the awarded credit")]
-fn a_full_block_reports_the_lost_credit_defensively() {
-	// The `integrity_test` holds `MaxCreditsPerBlock` to what a block of `report`s awards, so a
-	// full block means the bound is too small and the credit is lost: committed to no root and
-	// unmintable. The mock shrinks the bound to nothing to reach it.
-	new_test_ext().execute_with(|| {
-		let schedule = GameSchedule::<u32, u128> {
-			game_play_time: 100,
-			rounds: 1,
-			max_group_size: 2,
-			..Default::default()
-		};
-		start_game_in_reporting_phase(&schedule, &[ALICE, BOB]);
-		MaxCreditsPerBlock::set(&0);
-
-		let report: FullReport<Test> =
-			vec![vec![Report::Person].try_into().unwrap()].try_into().unwrap();
-		assert_ok!(Game::report(RuntimeOrigin::signed(ALICE), report));
 	});
 }
 
@@ -1080,7 +1441,7 @@ fn awarded_credits_records_slots_within_capacity_only() {
 }
 
 #[test]
-fn credit_blocks_index_records_each_award_block_once() {
+fn credit_blocks_index_records_each_tree_block_once() {
 	// The index maps a claimant to the blocks whose tree holds a credit of theirs. A block is
 	// recorded once however many credits it awards the claimant, and blocks accumulate in
 	// ascending order across the game.
@@ -1134,7 +1495,7 @@ fn credit_blocks_index_records_each_award_block_once() {
 
 #[test]
 fn credit_blocks_index_drops_its_oldest_block_when_full() {
-	// The index is a bounded ring: a claimant with more award blocks than it holds loses the
+	// The index is a bounded ring: a claimant with more tree blocks than it holds loses the
 	// oldest, while the credit itself is still awarded and committed.
 	new_test_ext().execute_with(|| {
 		let schedule = GameSchedule::<u32, u128> {
@@ -1174,10 +1535,10 @@ fn credit_blocks_index_drops_its_oldest_block_when_full() {
 }
 
 #[test]
-fn credit_is_committed_once_and_keeps_its_first_award_block() {
+fn credit_is_committed_once_and_keeps_its_first_tree_block() {
 	// Both players report `Person`, so every credit of the game is awarded during
 	// reporting. The attendance backfill walks the very same credits again: it must leave
-	// their award block alone and contribute no second leaf, otherwise the claimant could
+	// their tree block alone and contribute no second leaf, otherwise the claimant could
 	// mint twice from one credit, or look for their leaf in the wrong block's tree.
 	new_test_ext().execute_with(|| {
 		let schedule = GameSchedule::<u32, u128> {
@@ -1217,9 +1578,9 @@ fn credit_is_committed_once_and_keeps_its_first_award_block() {
 		assert_eq!(NftClaimCreditBlocks::<Test>::get(&alice).to_vec(), vec![report_block]);
 
 		// The root info is written after the award, so the backfill blocks, whose awards were all
-		// refused, leave none behind. Were the order reversed, the info would be set over a block
-		// with no awards and that block would record a root over no leaves.
-		assert_eq!(PendingNftClaimCreditRootInfo::<Test>::get(), None);
+		// refused, leave none behind. In the reverse order the info would be set over a buffer with
+		// no awards, and that block would record a root over no leaves.
+		assert_eq!(CreditBuffers::<Test>::iter().count(), 0);
 		assert_eq!(NftClaimCreditRoots::<Test>::iter().count(), 1);
 		assert!(NftClaimCreditRoots::<Test>::get(report_block).is_some());
 	});
@@ -1228,10 +1589,10 @@ fn credit_is_committed_once_and_keeps_its_first_award_block() {
 /// A delivery queue wider than the retained-awards ring is rejected: the tail of such a queue
 /// holds trees whose awards the ring has already pruned.
 #[test]
-#[should_panic(expected = "MaxRetainedAwardBlocks (8) must be >= MaxQueuedCreditTrees (9)")]
+#[should_panic(expected = "MaxRetainedCreditTrees (8) must be >= MaxQueuedCreditTrees (9)")]
 fn integrity_test_rejects_queue_wider_than_retained_awards() {
 	new_test_ext().execute_with(|| {
-		MaxRetainedAwardBlocks::set(&8);
+		MaxRetainedCreditTrees::set(&8);
 		MaxQueuedCreditTrees::set(&9);
 		<Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
@@ -1947,7 +2308,7 @@ mod testnet_granted_credits {
 
 			let alice = AccountOrPerson::Account(ALICE);
 			let bob = AccountOrPerson::Account(BOB);
-			let award_block = System::block_number();
+			let tree_block = System::block_number();
 
 			// No game is ongoing, and neither identity has ever signed up for one.
 			assert!(indiv_pallet_game::Game::<Test>::get().is_none());
@@ -1956,14 +2317,15 @@ mod testnet_granted_credits {
 			let credit = NftCredits::compute_nft_claim_credit(GAME, 0, &bob, &alice);
 			let leaf = NftCredits::compute_nft_claim_credit_leaf(&alice, &credit);
 			assert_eq!(
-				NftClaimCreditAwards::<Test>::get(award_block).to_vec(),
+				awards_of(tree_block),
 				vec![NftClaimCreditAward { claimant: alice.clone(), credit }]
 			);
-			assert_eq!(NftClaimCreditBlocks::<Test>::get(&alice).to_vec(), vec![award_block]);
+			assert_eq!(NftClaimCreditBlocks::<Test>::get(&alice).to_vec(), vec![tree_block]);
 			assert!(System::events().iter().any(|record| record.event ==
 				RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditAwarded {
 					claimant: alice.clone(),
 					credit,
+					block: tree_block,
 					leaf_index: 0,
 				})));
 
@@ -1972,7 +2334,7 @@ mod testnet_granted_credits {
 			// The tree the claim chain verifies a proof against is built over the grant like
 			// over any other award.
 			assert_eq!(
-				NftClaimCreditRoots::<Test>::get(award_block),
+				NftClaimCreditRoots::<Test>::get(tree_block),
 				Some(NftClaimCreditTree {
 					game_index: GAME,
 					root: binary_merkle_tree::merkle_root::<BlakeTwo256, _>(vec![leaf]).into(),
@@ -1994,7 +2356,7 @@ mod testnet_granted_credits {
 			assert_ok!(grant(&alice, &bob, 0, 0));
 			assert_ok!(grant(&alice, &bob, 0, 1));
 
-			assert_eq!(NftClaimCreditAwards::<Test>::decode_len(System::block_number()), Some(2));
+			assert_eq!(awards_of(System::block_number()).len(), 2);
 		});
 	}
 
@@ -2011,7 +2373,7 @@ mod testnet_granted_credits {
 			// The slot is what a game spends, so a different attester on the same slot is the
 			// same credit as far as the mask is concerned and mints nothing further.
 			assert_noop!(grant(&alice, &charlie, 0, 0), Error::<Test>::CreditNotAwarded);
-			assert_eq!(NftClaimCreditAwards::<Test>::decode_len(System::block_number()), Some(1));
+			assert_eq!(awards_of(System::block_number()).len(), 1);
 		});
 	}
 
@@ -2048,7 +2410,7 @@ mod testnet_granted_credits {
 				),
 				DispatchError::BadOrigin
 			);
-			assert!(NftClaimCreditAwards::<Test>::decode_len(System::block_number()).is_none());
+			assert!(awards_of(System::block_number()).is_empty());
 		});
 	}
 }
@@ -2147,35 +2509,51 @@ fn player_process_step1_defers_players_that_do_not_fit_the_block_awards() {
 		assert_eq!(awarded_credit_count(), 9);
 		advance_process(); // commit the reporting block's leaves
 
-		// One attendee's worst case is `rounds * (max_group_size - 1)` credits. Only that
-		// many fit per block from here on, which is the bound `integrity_test` guarantees.
-		MaxCreditsPerBlock::set(&3);
-
 		MOCK_UNIX_TIME.with(|t| {
 			*t.borrow_mut() =
 				Duration::from_secs(GameTimes::<Test>::reporting_end(&schedule) as u64 + 1)
 		});
-		advance_process(); // reporting -> player process step1
-		advance_process(); // step1: one player fits, the rest are deferred
 
-		assert!(
+		// One attendee's worst case is `rounds * (max_group_size - 1)` credits, so a buffer with
+		// room for exactly that fits one player and defers the rest. The buffer window slides with
+		// the block number, so the filler is topped up per block until step1 runs against it.
+		let game = GameStore::<Test>::get().expect("the game is reporting").index;
+		let mut filler = 0;
+		let deferred = |state| {
 			matches!(
-				GameStore::<Test>::get().unwrap().state,
+				state,
 				GameState::PlayerProcess {
 					step: PlayerProcessStep::Step1ProcessPlayers { last_iteration: Some(_), .. },
 				}
-			),
+			)
+		};
+		for _ in 0..4 {
+			filler += fill_credit_buffer(game, System::block_number() + 1, 3);
+			advance_process();
+			if GameStore::<Test>::get().is_some_and(|game| deferred(game.state)) {
+				break;
+			}
+		}
+		assert!(
+			GameStore::<Test>::get().is_some_and(|game| deferred(game.state)),
 			"step1 must stop at the awards bound and resume in a later block",
 		);
+		// One player was processed against the tight buffer, the rest carried over. No credit was
+		// dropped for want of room.
+		assert_eq!(awarded_credit_count(), 10);
+		assert!(!System::events().iter().any(|record| matches!(
+			record.event,
+			RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditDropped { .. })
+		)));
 
 		while GameStore::<Test>::get().is_some() {
 			advance_process();
 		}
-		advance_process(); // commit the last block's leaves
+		commit_every_pending_tree();
 
 		// Each of the three attendees earned DAVE's credit on top of the nine awarded while
 		// reporting, and every credit was committed to exactly one tree.
 		assert_eq!(awarded_credit_count(), 12);
-		assert_eq!(committed_leaf_count(), 12);
+		assert_eq!(committed_leaf_count(), 12 + filler);
 	});
 }

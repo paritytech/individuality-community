@@ -27,7 +27,7 @@ use frame_support::{
 };
 use indiv_support::{
 	credit_trees::{
-		credit_leaf, AwardBlock, CreditProofNode, CreditTreeDelivery, NftClaimCredit,
+		credit_leaf, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, NftClaimCredit,
 		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
 	},
 	identity::AccountOrPerson,
@@ -230,7 +230,7 @@ pub const SELECTOR_FAILED_WEIGHT: Weight = Weight::from_parts(250_000, 700);
 pub struct ReentrantClaim {
 	pub claimant: u64,
 	pub kind: ClaimantKind,
-	pub block: AwardBlock,
+	pub block: CreditTreeBlock,
 	pub credit: NftClaimCredit,
 	pub leaf_index: u32,
 	pub proof: Vec<CreditProofNode>,
@@ -333,7 +333,7 @@ pub fn game_chain_origin() -> RuntimeOrigin {
 }
 
 /// A credit tree whose fields are derived from `block`, so trees of different blocks differ.
-pub fn tree(block: AwardBlock) -> NftClaimCreditTree {
+pub fn tree(block: CreditTreeBlock) -> NftClaimCreditTree {
 	NftClaimCreditTree {
 		game_index: 7,
 		root: CreditProofNode([block as u8; 32]),
@@ -343,12 +343,12 @@ pub fn tree(block: AwardBlock) -> NftClaimCreditTree {
 }
 
 /// One update of the live stream: a tree with the sequence number it was delivered under.
-pub fn update(sequence: TreeSequence, block: AwardBlock) -> CreditTreeDelivery {
+pub fn update(sequence: TreeSequence, block: CreditTreeBlock) -> CreditTreeDelivery {
 	CreditTreeDelivery { sequence: Some(sequence), block, tree: tree(block) }
 }
 
 /// One resent update, which carries no sequence number.
-pub fn replay(block: AwardBlock) -> CreditTreeDelivery {
+pub fn replay(block: CreditTreeBlock) -> CreditTreeDelivery {
 	CreditTreeDelivery { sequence: None, block, tree: tree(block) }
 }
 
@@ -369,7 +369,7 @@ pub fn leaves(awards: &[Award]) -> Vec<NftClaimCreditLeaf> {
 }
 
 /// The tree `awards` commit to, with the root the game chain would have recorded for `block`.
-pub fn tree_of(block: AwardBlock, awards: &[Award]) -> NftClaimCreditTree {
+pub fn tree_of(block: CreditTreeBlock, awards: &[Award]) -> NftClaimCreditTree {
 	NftClaimCreditTree {
 		game_index: 7,
 		root: binary_merkle_tree::merkle_root::<BlakeTwo256, _>(leaves(awards)).into(),
