@@ -3,6 +3,8 @@
 Bash scripts that initialize blockchain state across the Paseo stack (People, AssetHub, Bulletin, Relay). Each script is **self-contained** (works standalone) and **guarded against re-runs** (it skips extrinsics that already took effect, since resubmitting them would fail). They follow a defined execution order, with some steps depending on earlier ones (noted in their headers).
 
 They only configure chains that are **already running**, so make sure the configured endpoints are reachable.
+For a reproducible local Relay + People + Asset Hub network, follow the
+[Zombienet harness runbook](../../e2e/zombienet/README.md).
 
 ## Quick Start
 
