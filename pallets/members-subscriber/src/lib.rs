@@ -881,13 +881,10 @@ pub mod pallet {
 		}
 
 		/// Background-progress priority raised by the block height. The bump makes a retry outbid
-		/// the stranded predecessor it replaces, which carries the same `provides` tag. The sum
-		/// is capped below [`tx_priority::USER_HIGH`], so the bump never leaves its band.
+		/// the stranded predecessor it replaces, which carries the same `provides` tag.
 		fn local_priority() -> u64 {
-			let bump = frame_system::Pallet::<T>::block_number().saturated_into::<u64>();
 			tx_priority::BACKGROUND_PROGRESS
-				.saturating_add(bump)
-				.min(tx_priority::USER_HIGH.saturating_sub(1))
+				.saturating_add(frame_system::Pallet::<T>::block_number().saturated_into::<u64>())
 		}
 	}
 
@@ -1250,23 +1247,14 @@ pub mod pallet {
 					continue;
 				}
 
-				if state.missing_indices.len() as u32 >= T::MaxMissingRootsPerCollection::get() {
+				if state.missing_indices.len() as u32 >= T::MaxMissingRootsPerCollection::get() ||
+					state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get()
+				{
 					Self::warn_periodically(
 						block_number,
 						format_args!(
-							"gap scan skipped: missing_indices at capacity for collection \
-							 {identifier:?}"
-						),
-					);
-					continue;
-				}
-
-				if state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get() {
-					Self::warn_periodically(
-						block_number,
-						format_args!(
-							"gap scan skipped: deleted_indices at capacity for collection \
-							 {identifier:?}"
+							"gap scan skipped: missing_indices or deleted_indices at capacity \
+							 for collection {identifier:?}"
 						),
 					);
 					continue;

@@ -28,7 +28,7 @@ use crate::{
 	},
 	Pallet,
 };
-use indiv_support::{traits::RingExponent, tx_priority};
+use indiv_support::traits::RingExponent;
 
 const TEST_RING_EXPONENT: RingExponent = RingExponent::R2e9;
 use alloc::collections::BTreeSet;
@@ -2202,9 +2202,6 @@ mod recent_ring_roots {
 mod offchain_worker {
 	use super::*;
 	use crate::pallet::TX_RETRY_WINDOW;
-	use codec::Encode;
-	use frame_support::traits::Authorize;
-	use sp_runtime::transaction_validity::TransactionSource;
 
 	fn setup_active_with_missing(missing: &[(u32, u32)]) {
 		setup_active_ocw_ready();
@@ -2357,65 +2354,6 @@ mod offchain_worker {
 	}
 
 	#[test]
-	fn replay_retry_changes_the_encoded_call_only_across_windows() {
-		new_test_ext().execute_with(|| {
-			let encoded_at = |block: u64| {
-				crate::pallet::Call::<Test>::replay_missing_roots {
-					identifier: PEOPLE,
-					indices: bounded_vec![1, 3],
-					discriminator: block / u64::from(TX_RETRY_WINDOW),
-				}
-				.encode()
-			};
-
-			// Retries inside one window are identical
-			assert_eq!(encoded_at(0), encoded_at(u64::from(TX_RETRY_WINDOW) - 1));
-
-			// A window switch produces a fresh transaction hash
-			assert_ne!(encoded_at(0), encoded_at(u64::from(TX_RETRY_WINDOW)));
-		});
-	}
-
-	#[test]
-	fn replay_retry_changes_prio_based_on_block_number() {
-		new_test_ext().execute_with(|| {
-			setup_active_with_missing(&[(1, 0)]);
-			let call = crate::pallet::Call::<Test>::replay_missing_roots {
-				identifier: PEOPLE,
-				indices: bounded_vec![1],
-				discriminator: 0,
-			};
-
-			System::set_block_number(1);
-			let first = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
-
-			System::set_block_number(2);
-			let retry = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
-
-			assert_eq!(first.provides, retry.provides);
-			assert!(retry.priority > first.priority);
-		});
-	}
-
-	#[test]
-	fn priority_stays_within_the_background_band() {
-		new_test_ext().execute_with(|| {
-			setup_active_with_missing(&[(1, 0)]);
-			let call = crate::pallet::Call::<Test>::replay_missing_roots {
-				identifier: PEOPLE,
-				indices: bounded_vec![1],
-				discriminator: 0,
-			};
-
-			System::set_block_number(tx_priority::USER_HIGH);
-			let validity = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
-
-			assert!(validity.priority >= tx_priority::BACKGROUND_PROGRESS);
-			assert!(validity.priority < tx_priority::USER_HIGH);
-		});
-	}
-
-	#[test]
 	fn submits_gap_scan_when_cursor_lags() {
 		new_test_ext().execute_with(|| {
 			setup_active_with_scan_lag(5);
@@ -2426,6 +2364,46 @@ mod offchain_worker {
 				pending_ocw_calls(),
 				vec![RuntimeCall::MembersSubscriber(gap_scan_call(PEOPLE))]
 			);
+		});
+	}
+
+	#[test]
+	fn a_retry_in_a_later_window_carries_a_fresh_discriminator() {
+		new_test_ext().execute_with(|| {
+			setup_active_with_missing(&[(1, 0)]);
+
+			Pallet::<Test>::offchain_worker(TX_RETRY_WINDOW.into());
+
+			// The window the block falls in is the discriminator, so a retry in a later window
+			// gets a fresh transaction hash.
+			assert_eq!(
+				pending_ocw_calls(),
+				vec![RuntimeCall::MembersSubscriber(crate::pallet::Call::replay_missing_roots {
+					identifier: PEOPLE,
+					indices: bounded_vec![1],
+					discriminator: 1,
+				})]
+			);
+		});
+	}
+
+	#[test]
+	fn a_later_gap_scan_carries_the_advanced_cursor() {
+		new_test_ext().execute_with(|| {
+			setup_active_with_scan_lag(MaxGapScanPerCall::get() + 3);
+
+			// The first page runs and moves the cursor by a full page.
+			Pallet::<Test>::offchain_worker(1);
+			drain_ocw_transactions();
+
+			Pallet::<Test>::offchain_worker(1);
+
+			// The cursor rides in the call, so the next page differs from the included one even
+			// inside one retry window. The first page also found gaps, so a replay is queued
+			// alongside it.
+			assert_eq!(next_scan_index(PEOPLE), MaxGapScanPerCall::get());
+			assert!(pending_ocw_calls()
+				.contains(&RuntimeCall::MembersSubscriber(gap_scan_call(PEOPLE))));
 		});
 	}
 
@@ -2971,11 +2949,7 @@ mod proof_verification {
 
 mod gap_scan {
 	use super::*;
-	use crate::{
-		pallet::{Call, TX_RETRY_WINDOW},
-		weights::WeightInfo,
-	};
-	use codec::Encode;
+	use crate::{pallet::Call, weights::WeightInfo};
 	use frame_support::{dispatch::GetDispatchInfo, traits::Authorize};
 	use sp_runtime::transaction_validity::{
 		InvalidTransaction, TransactionSource, TransactionValidityError,
@@ -3358,46 +3332,6 @@ mod gap_scan {
 			// Sharing a tag, the retry is only accepted by the pool if it strictly outbids.
 			assert_eq!(first.provides, retry.provides);
 			assert!(retry.priority > first.priority);
-		});
-	}
-
-	#[test]
-	fn a_retry_changes_the_encoded_call_only_across_windows() {
-		new_test_ext().execute_with(|| {
-			// The offchain worker derives the discriminator from the block number.
-			let encoded_at = |block: u64| {
-				let discriminator = block / u64::from(TX_RETRY_WINDOW);
-				Call::<Test>::detect_missing_rings {
-					identifier: PEOPLE,
-					scan_from: 0,
-					discriminator,
-				}
-				.encode()
-			};
-
-			// Retries inside one window are byte-identical, so the pool deduplicates them.
-			assert_eq!(encoded_at(0), encoded_at(u64::from(TX_RETRY_WINDOW) - 1));
-
-			// A window switch produces a fresh transaction hash, escaping the inclusion ban.
-			assert_ne!(encoded_at(0), encoded_at(u64::from(TX_RETRY_WINDOW)));
-		});
-	}
-
-	#[test]
-	fn a_later_page_changes_the_encoded_call_within_a_window() {
-		new_test_ext().execute_with(|| {
-			let page = |scan_from: u32| {
-				Call::<Test>::detect_missing_rings {
-					identifier: PEOPLE,
-					scan_from,
-					discriminator: 0,
-				}
-				.encode()
-			};
-
-			// Progress alone varies the hash, so the scan advances a page per block rather than
-			// waiting for the next retry window.
-			assert_ne!(page(0), page(MaxGapScanPerCall::get()));
 		});
 	}
 
