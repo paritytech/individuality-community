@@ -478,54 +478,40 @@ fn operate_payout_round_fails_if_no_round() {
 }
 
 #[test]
-fn recycled_round_releases_its_payout_hold() {
+fn operate_payout_round_recycles_hold_after_unexpected_error() {
 	new_test_ext().execute_with(|| {
+		let participant = 1;
+		let participant_key = AccountOrPerson::Account(participant);
+		let round_index = 0;
+		let amount_per_round = 100;
 		let pot = PalletScore::score_pot_id();
 		fund_score_pot(1_000);
-		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
+		PalletScore::onboard_for_recognition(&participant).unwrap();
+		RoundsPointsForParticipant::<Test>::insert(round_index, &participant_key, 1);
+		CurrentRoundPoints::<Test>::put(1);
+		assert_ok!(PalletScore::schedule_payout_rounds(
+			RuntimeOrigin::root(),
+			amount_per_round,
+			2,
+			1
+		));
+		assert_ok!(exec_authorized_tx(Call::transition_round { round_index }));
+		advance_to(1);
+		assert_ok!(exec_authorized_tx(Call::transition_round { round_index }));
 		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), 200);
 
-		let round_index = 0;
-		RoundPayouts::<Test>::insert(
-			round_index,
-			RoundPayout { remaining_balance: 100, point_price: 1, remainder: 0, total_points: 100 },
-		);
+		// Make the exact payout release fail after the storage layer has started.
+		RoundPayouts::<Test>::mutate(round_index, |round| {
+			round.as_mut().unwrap().point_price = 201;
+		});
 
-		PalletScore::recycle_round_payout(round_index);
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index, limit: 1 }));
 
 		assert!(RoundPayouts::<Test>::get(round_index).is_none());
-		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), 100);
-	});
-}
-
-#[test]
-fn recycling_unknown_round_leaves_payout_hold_untouched() {
-	new_test_ext().execute_with(|| {
-		let pot = PalletScore::score_pot_id();
-		fund_score_pot(1_000);
-		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
-
-		PalletScore::recycle_round_payout(7);
-
-		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), 200);
-	});
-}
-
-#[test]
-fn recycling_empty_round_leaves_payout_hold_untouched() {
-	new_test_ext().execute_with(|| {
-		let pot = PalletScore::score_pot_id();
-		fund_score_pot(1_000);
-		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 100, 2, 10));
-		RoundPayouts::<Test>::insert(
-			0,
-			RoundPayout { remaining_balance: 0, point_price: 1, remainder: 0, total_points: 100 },
-		);
-
-		PalletScore::recycle_round_payout(0);
-
-		assert!(RoundPayouts::<Test>::get(0).is_none());
-		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), 200);
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), amount_per_round);
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), 0);
+		assert_eq!(Participants::<Test>::get(&participant_key).unwrap().credit, 0);
+		assert_eq!(RoundsPointsForParticipant::<Test>::get(round_index, &participant_key), 1);
 	});
 }
 

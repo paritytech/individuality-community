@@ -842,7 +842,6 @@ pub mod pallet {
 					Ok(())
 				},
 				Err(e) => {
-					defensive!("Unexpected error in this round, set the round finished.");
 					log::error!(
 						target: LOG_TARGET,
 						"Unexpected error in operate_payout_round: round: {round_index:?}, error: {e:?}."
