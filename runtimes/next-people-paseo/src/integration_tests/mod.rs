@@ -79,6 +79,7 @@ mod members_notifier_whitelist;
 mod migrations;
 mod network_suffix;
 mod parameters;
+mod people_airdrops_flow;
 mod score_game_deposit_flow;
 mod score_game_invitation_flow;
 mod score_game_person_flow;
