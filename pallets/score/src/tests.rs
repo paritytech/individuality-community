@@ -505,7 +505,13 @@ fn operate_payout_round_recycles_hold_after_unexpected_error() {
 			round.as_mut().unwrap().point_price = 201;
 		});
 
-		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index, limit: 1 }));
+		let result = std::panic::catch_unwind(|| {
+			exec_authorized_tx(Call::operate_payout_round { round_index, limit: 1 })
+		});
+		#[cfg(debug_assertions)]
+		assert!(result.is_err());
+		#[cfg(not(debug_assertions))]
+		assert_ok!(result.unwrap());
 
 		assert!(RoundPayouts::<Test>::get(round_index).is_none());
 		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), amount_per_round);

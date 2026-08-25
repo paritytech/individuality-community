@@ -847,6 +847,7 @@ pub mod pallet {
 						"Unexpected error in operate_payout_round: round: {round_index:?}, error: {e:?}."
 					);
 					Self::recycle_round_payout(round_index);
+					defensive!("Unexpected error in this round, set the round finished.");
 					Ok(())
 				},
 			}
