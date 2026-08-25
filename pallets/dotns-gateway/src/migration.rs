@@ -51,10 +51,15 @@ pub mod v1 {
 	///
 	/// Translates any record stored in the two-field shape, then fills [`AccountNames`] from
 	/// [`LiteLabelOwner`] for lite labels registered before the map existed. Only the label is
-	/// recoverable from pallet storage: the chat key stays `None` for these accounts. When an
-	/// account owns several lite labels, the first one in storage iteration order wins. Full
+	/// recoverable from pallet storage: the chat key stays `None` for these accounts. Full
 	/// labels need no backfill: no full registration happened on any deployment before the map
 	/// existed.
+	///
+	/// A backfilled entry carries no ordering guarantee. [`Pallet::reserve_name`] overwrites
+	/// `lite` on every reservation, so a live record holds the most recent label, while the
+	/// backfill takes whichever label storage iteration yields first. Two accounts with the same
+	/// history can therefore show different labels, depending on whether the entry was
+	/// backfilled or written after the upgrade.
 	pub struct BackfillAccountNames<T>(PhantomData<T>);
 
 	impl<T: Config> UncheckedOnRuntimeUpgrade for BackfillAccountNames<T> {
@@ -92,19 +97,29 @@ pub mod v1 {
 
 		#[cfg(feature = "try-runtime")]
 		fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
-			// Keys, not entries: two-field records do not decode under the current type.
-			let records = AccountNames::<T>::iter_keys().count() as u32;
+			// Every account that holds a record now, plus every account the backfill adds one
+			// for. Keys, not entries: a two-field record does not decode under the current type,
+			// so `iter` would skip it and report it as missing.
+			let mut accounts = alloc::collections::BTreeSet::new();
+			for account in AccountNames::<T>::iter_keys() {
+				accounts.insert(account);
+			}
+			for (_, owner) in LiteLabelOwner::<T>::iter() {
+				accounts.insert(owner);
+			}
 			let owners = LiteLabelOwner::<T>::iter().count() as u32;
-			Ok((records, owners).encode())
+			Ok((accounts.len() as u32, owners).encode())
 		}
 
 		#[cfg(feature = "try-runtime")]
 		fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
-			let (records, owners) = <(u32, u32)>::decode(&mut &state[..]).map_err(|_| {
+			let (accounts, owners) = <(u32, u32)>::decode(&mut &state[..]).map_err(|_| {
 				sp_runtime::TryRuntimeError::Other("pre_upgrade state is not (u32, u32)")
 			})?;
+			// `iter` now, so a record that failed to translate counts as missing rather than
+			// being skipped.
 			ensure!(
-				AccountNames::<T>::iter().count() as u32 >= records,
+				AccountNames::<T>::iter().count() as u32 == accounts,
 				"a record did not survive the migration"
 			);
 			ensure!(

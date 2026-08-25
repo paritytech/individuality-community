@@ -70,8 +70,8 @@ fn lite_chat_key() -> ChatKey {
 	ChatKey::from([0xCD; 65])
 }
 
-fn entry(label: &[u8], chat: Option<ChatKey>) -> NameEntry {
-	NameEntry { label: base_name(label), chat }
+fn entry(label: &[u8], chat: Option<ChatKey>) -> Option<NameEntry> {
+	Some(NameEntry { label: base_name(label), chat })
 }
 
 mod attestation_allowance {
@@ -295,7 +295,7 @@ mod reservation {
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
 				Some(AccountNameRecord {
-					lite: Some(entry(ALICE_LITE, Some(default_chat_key()))),
+					lite: entry(ALICE_LITE, Some(default_chat_key())),
 					full: None
 				})
 			);
@@ -345,7 +345,7 @@ mod reservation {
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
 				Some(AccountNameRecord {
-					lite: Some(entry(BOB_LITE, Some(default_chat_key()))),
+					lite: entry(BOB_LITE, Some(default_chat_key())),
 					full: None
 				})
 			);
@@ -359,10 +359,7 @@ mod reservation {
 			set_attestation_allowance(ATTESTER, 5);
 			AccountNames::<Test>::insert(
 				ALICE,
-				AccountNameRecord {
-					lite: None,
-					full: Some(entry(ALICE_BASE, Some(lite_chat_key()))),
-				},
+				AccountNameRecord { lite: None, full: entry(ALICE_BASE, Some(lite_chat_key())) },
 			);
 
 			assert_ok!(DotnsGateway::reserve_name(
@@ -378,8 +375,8 @@ mod reservation {
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
 				Some(AccountNameRecord {
-					lite: Some(entry(ALICE_LITE, Some(default_chat_key()))),
-					full: Some(entry(ALICE_BASE, Some(lite_chat_key())))
+					lite: entry(ALICE_LITE, Some(default_chat_key())),
+					full: entry(ALICE_BASE, Some(lite_chat_key()))
 				})
 			);
 		});
@@ -774,10 +771,7 @@ mod registration {
 			seed_lite_owner(ALICE_LITE, ALICE);
 			AccountNames::<Test>::insert(
 				ALICE,
-				AccountNameRecord {
-					lite: Some(entry(ALICE_LITE, Some(lite_chat_key()))),
-					full: None,
-				},
+				AccountNameRecord { lite: entry(ALICE_LITE, Some(lite_chat_key())), full: None },
 			);
 			let link = Link::LiteUsername(base_name(ALICE_LITE));
 			let bn = base_name(ALICE_BASE);
@@ -800,8 +794,8 @@ mod registration {
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
 				Some(AccountNameRecord {
-					lite: Some(entry(ALICE_LITE, Some(lite_chat_key()))),
-					full: Some(entry(ALICE_BASE, Some(lite_chat_key())))
+					lite: entry(ALICE_LITE, Some(lite_chat_key())),
+					full: entry(ALICE_BASE, Some(lite_chat_key()))
 				})
 			);
 
@@ -849,7 +843,7 @@ mod registration {
 				AccountNames::<Test>::get(ALICE),
 				Some(AccountNameRecord {
 					lite: None,
-					full: Some(entry(ALICE_BASE, Some(default_chat_key())))
+					full: entry(ALICE_BASE, Some(default_chat_key()))
 				})
 			);
 
@@ -869,18 +863,16 @@ mod registration {
 	}
 
 	#[test]
-	fn lite_link_to_another_label_leaves_chat_key_unknown() {
+	fn full_label_linked_to_an_unrecorded_lite_label_has_no_chat_key() {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			seed_lite_owner(ALICE_LITE, ALICE);
-			// The recorded lite label is a different one, so the pallet does not hold the
-			// key the contracts copy to the full label.
+			// The account owns two lite labels and the record holds the most recent one. The
+			// registration links the other label, whose key the pallet never recorded, so the
+			// key the contracts copy to the full label is not known here.
 			AccountNames::<Test>::insert(
 				ALICE,
-				AccountNameRecord {
-					lite: Some(entry(BOB_LITE, Some(lite_chat_key()))),
-					full: None,
-				},
+				AccountNameRecord { lite: entry(BOB_LITE, Some(lite_chat_key())), full: None },
 			);
 
 			assert_ok!(DotnsGateway::register_name(
@@ -893,23 +885,22 @@ mod registration {
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
 				Some(AccountNameRecord {
-					lite: Some(entry(BOB_LITE, Some(lite_chat_key()))),
-					full: Some(entry(ALICE_BASE, None))
+					lite: entry(BOB_LITE, Some(lite_chat_key())),
+					full: entry(ALICE_BASE, None)
 				})
 			);
 		});
 	}
 
 	#[test]
-	fn standalone_registration_keeps_lite_chat_key() {
+	fn standalone_registration_does_not_take_the_lite_chat_key() {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
+			// `Link::None` registers a fresh key instead of linking, so the full entry gets that
+			// key and the lite entry keeps its own.
 			AccountNames::<Test>::insert(
 				ALICE,
-				AccountNameRecord {
-					lite: Some(entry(ALICE_LITE, Some(lite_chat_key()))),
-					full: None,
-				},
+				AccountNameRecord { lite: entry(ALICE_LITE, Some(lite_chat_key())), full: None },
 			);
 
 			assert_ok!(DotnsGateway::register_name(
@@ -922,8 +913,8 @@ mod registration {
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
 				Some(AccountNameRecord {
-					lite: Some(entry(ALICE_LITE, Some(lite_chat_key()))),
-					full: Some(entry(ALICE_BASE, Some(default_chat_key())))
+					lite: entry(ALICE_LITE, Some(lite_chat_key())),
+					full: entry(ALICE_BASE, Some(default_chat_key()))
 				})
 			);
 		});
@@ -1597,13 +1588,13 @@ mod migration {
 
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
-				Some(AccountNameRecord { lite: Some(entry(ALICE_LITE, None)), full: None })
+				Some(AccountNameRecord { lite: entry(ALICE_LITE, None), full: None })
 			);
 			assert_eq!(
 				AccountNames::<Test>::get(BOB),
 				Some(AccountNameRecord {
-					lite: Some(entry(BOB_LITE, None)),
-					full: Some(entry(BOB_BASE, None))
+					lite: entry(BOB_LITE, None),
+					full: entry(BOB_BASE, None)
 				})
 			);
 			assert_eq!(DotnsGateway::on_chain_storage_version(), StorageVersion::new(1));
@@ -1622,7 +1613,7 @@ mod migration {
 
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
-				Some(AccountNameRecord { lite: Some(entry(BOB_LITE, None)), full: None })
+				Some(AccountNameRecord { lite: entry(BOB_LITE, None), full: None })
 			);
 		});
 	}
