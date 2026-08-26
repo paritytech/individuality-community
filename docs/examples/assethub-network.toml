@@ -35,7 +35,8 @@ default_args = ["--network-backend=libp2p", "--rpc-max-response-size=50"]
 # and the parachain stops being included a few blocks in. Applied as a genesis overlay
 # rather than a prebuilt relay spec so zombienet still generates the spec itself, which
 # is what puts the validator keys in the right keystores. Same setting as
-# `e2e/zombienet/network.toml`.
+# `e2e/zombienet/network.toml`. A runtime built with the `ec-crypto-no-hostcalls`
+# feature does not need this setting.
 [relaychain.genesis.runtimeGenesis.patch.configuration.config]
 executor_params = [{ EnabledHostFunction = "EccRfc163" }]
 

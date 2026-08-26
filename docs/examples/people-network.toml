@@ -13,7 +13,8 @@ default_args = ["--network-backend=libp2p", "--rpc-max-response-size=50"]
 # validator only registers them when its executor params ask for it. Without this the
 # People candidates are rejected with a missing `ext_host_calls_bls12_381_*` function
 # and the parachain stops being included a few blocks in. Same setting as
-# `e2e/zombienet/network.toml`.
+# `e2e/zombienet/network.toml`. A runtime built with the `ec-crypto-no-hostcalls`
+# feature does not need this setting.
 [relaychain.genesis.runtimeGenesis.patch.configuration.config]
 executor_params = [{ EnabledHostFunction = "EccRfc163" }]
 
