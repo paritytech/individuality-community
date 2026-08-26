@@ -34,10 +34,6 @@ use crate::{
 use sp_core::H160;
 use sp_runtime::{transaction_validity::TransactionSource, DispatchError};
 
-fn seed_lite_owner(label: &[u8], owner: u64) {
-	LiteLabelOwner::<Test>::insert(base_name(label), owner);
-}
-
 const ALICE: u64 = 1;
 const BOB: u64 = 2;
 const ATTESTER: u64 = 10;
@@ -768,7 +764,7 @@ mod registration {
 	fn username_registration_with_lite_link_succeeds() {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
-			seed_lite_owner(ALICE_LITE, ALICE);
+			LiteLabelOwner::<Test>::insert(base_name(ALICE_LITE), ALICE);
 			AccountNames::<Test>::insert(
 				ALICE,
 				AccountNameRecord { lite: entry(ALICE_LITE, Some(lite_chat_key())), full: None },
@@ -866,7 +862,7 @@ mod registration {
 	fn full_label_linked_to_an_unrecorded_lite_label_has_no_chat_key() {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
-			seed_lite_owner(ALICE_LITE, ALICE);
+			LiteLabelOwner::<Test>::insert(base_name(ALICE_LITE), ALICE);
 			// The account owns two lite labels and the record holds the most recent one. The
 			// registration links the other label, whose key the pallet never recorded, so the
 			// key the contracts copy to the full label is not known here.
@@ -1147,7 +1143,7 @@ mod registration {
 	#[test]
 	fn proof_message_binding_rejects_mismatched_link() {
 		new_test_ext().execute_with(|| {
-			seed_lite_owner(ALICE_LITE, ALICE);
+			LiteLabelOwner::<Test>::insert(base_name(ALICE_LITE), ALICE);
 
 			// Proof bound to Link::None but the call uses Link::LiteUsername.
 			let bn = base_name(ALICE_BASE);
@@ -1174,7 +1170,7 @@ mod registration {
 	#[test]
 	fn fails_when_user_not_owns_specified_lite_name() {
 		new_test_ext().execute_with(|| {
-			seed_lite_owner(ALICE_LITE, ALICE);
+			LiteLabelOwner::<Test>::insert(base_name(ALICE_LITE), ALICE);
 
 			let link = Link::LiteUsername(base_name(ALICE_LITE));
 			let bn = base_name(BOB_BASE);
@@ -1577,8 +1573,8 @@ mod migration {
 	fn v1_backfills_lite_labels_from_lite_label_owner() {
 		new_test_ext().execute_with(|| {
 			StorageVersion::new(0).put::<DotnsGateway>();
-			seed_lite_owner(ALICE_LITE, ALICE);
-			seed_lite_owner(BOB_LITE, BOB);
+			LiteLabelOwner::<Test>::insert(base_name(ALICE_LITE), ALICE);
+			LiteLabelOwner::<Test>::insert(base_name(BOB_LITE), BOB);
 			// An existing two-field record keeps its fields and gains the label.
 			seed_old_record(BOB, None, Some(BOB_BASE));
 			// A two-field record does not decode under the current type until migrated.
@@ -1605,8 +1601,8 @@ mod migration {
 	fn v1_keeps_an_existing_lite_label() {
 		new_test_ext().execute_with(|| {
 			StorageVersion::new(0).put::<DotnsGateway>();
-			seed_lite_owner(ALICE_LITE, ALICE);
-			seed_lite_owner(BOB_LITE, ALICE);
+			LiteLabelOwner::<Test>::insert(base_name(ALICE_LITE), ALICE);
+			LiteLabelOwner::<Test>::insert(base_name(BOB_LITE), ALICE);
 			seed_old_record(ALICE, Some(BOB_LITE), None);
 
 			MigrateV0ToV1::<Test>::on_runtime_upgrade();
@@ -1622,7 +1618,7 @@ mod migration {
 	fn v1_runs_only_from_version_zero() {
 		new_test_ext().execute_with(|| {
 			StorageVersion::new(1).put::<DotnsGateway>();
-			seed_lite_owner(ALICE_LITE, ALICE);
+			LiteLabelOwner::<Test>::insert(base_name(ALICE_LITE), ALICE);
 
 			MigrateV0ToV1::<Test>::on_runtime_upgrade();
 
