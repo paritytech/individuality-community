@@ -127,13 +127,12 @@ pub struct NftClaimCreditRootInfo {
 /// The inclusion proof of one NFT claim credit against the `NftClaimCreditTree` of the block it
 /// was awarded in, as returned by [`crate::Pallet::nft_claim_credit_proofs`].
 ///
-/// Carries only what the claims chain accepts from the claimant. The root, the leaf count and the
-/// leaf itself are not here: the verifier reads the first two from its own copy of the tree and
-/// recomputes the leaf from the origin it authenticated, so a claimant cannot choose any of them.
+/// Carries only what the claims chain accepts from the claimant.
 #[derive(Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug, Clone, PartialEq, Eq)]
 pub struct NftClaimCreditProof {
 	/// The credit being claimed. The verifier hashes it with the claimant it authenticated to get
-	/// the leaf, so a credit of somebody else's rehashes to a leaf that is in no tree.
+	/// the leaf, so somebody else's credit builds a different leaf and does not rehash to the
+	/// stored root.
 	pub credit: NftClaimCredit,
 	/// The position of the credit's leaf in the block's leaves, in award order.
 	pub leaf_index: u32,

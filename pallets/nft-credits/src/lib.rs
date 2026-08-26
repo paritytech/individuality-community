@@ -77,9 +77,9 @@
 //! Claiming happens on the claims chain, which never sees the credits themselves, only one root per
 //! block. A claimant proves their entitlement by presenting their credit with an inclusion proof:
 //! the sibling hashes that rehash the credit's leaf up to the root held for the block the credit
-//! was awarded in. The claims chain recomputes the leaf from the origin it authenticated and the
-//! credit presented, and takes the root and the leaf count from its own copy of the tree, so a
-//! credit awarded to somebody else rehashes to a leaf that is in no tree.
+//! was awarded in. The claims chain builds the leaf itself, from the credit presented and the
+//! claimant its origin authenticated. Presenting somebody else's credit builds a different leaf,
+//! which does not rehash to the stored root.
 //!
 //! A claimant does not have to rebuild the tree themselves. The runtime API in [`runtime_api`]
 //! serves the proof material:
