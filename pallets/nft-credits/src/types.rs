@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use indiv_pallet_game::GameIdx;
 use indiv_support::{
-	credit_trees::{CreditProofNode, NftClaimCredit, NftClaimCreditLeaf},
+	credit_trees::{CreditProofNode, NftClaimCredit},
 	identity::AccountOrPerson,
 };
 use scale_info::TypeInfo;
@@ -93,7 +93,7 @@ impl AwardedCredits {
 }
 
 /// One NFT claim credit as its block awarded it, which is the preimage of one
-/// [`NftClaimCreditLeaf`].
+/// [`indiv_support::credit_trees::NftClaimCreditLeaf`].
 ///
 /// Kept per award block in [`crate::NftClaimCreditAwards`] for as long as the block's awards are
 /// retained, so a claim can be proven from state alone. Distinct from
@@ -127,22 +127,16 @@ pub struct NftClaimCreditRootInfo {
 /// The inclusion proof of one NFT claim credit against the `NftClaimCreditTree` of the block it
 /// was awarded in, as returned by [`crate::Pallet::nft_claim_credit_proofs`].
 ///
-/// Everything Asset Hub needs to verify one claim, so a wallet forwards it as it is.
+/// Carries only what the claims chain accepts from the claimant.
 #[derive(Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug, Clone, PartialEq, Eq)]
 pub struct NftClaimCreditProof {
-	/// The root the proof verifies against, as recorded for the award block.
-	pub root: CreditProofNode,
-	/// The credit being claimed, which the claimant sends along so that Asset Hub can recompute
-	/// [`Self::leaf`] and see who may mint.
+	/// The credit being claimed. The verifier hashes it with the claimant it authenticated to get
+	/// the leaf, so somebody else's credit builds a different leaf and does not rehash to the
+	/// stored root.
 	pub credit: NftClaimCredit,
-	/// The leaf being proven, `blake2_256(claimant ++ credit)`.
-	pub leaf: NftClaimCreditLeaf,
-	/// The position of `leaf` in the block's leaves, in award order.
+	/// The position of the credit's leaf in the block's leaves, in award order.
 	pub leaf_index: u32,
-	/// The number of leaves the tree was built over, which the verifier needs to rehash an odd
-	/// layer the same way the root was computed over.
-	pub leaf_count: u32,
-	/// The sibling hashes that rehash `leaf` up to `root`, bottom layer first.
+	/// The sibling hashes that rehash the leaf up to the block's root, bottom layer first.
 	pub proof: Vec<CreditProofNode>,
 }
 
