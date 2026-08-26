@@ -26,11 +26,11 @@ chain = "rococo-local"
 default_command = "polkadot"
 default_args = ["--network-backend=libp2p", "--rpc-max-response-size=50"]
 
-# The People runtime uses RFC-163 ECC host calls during PVF validation when the ZK
-# chunk payloads are decoded. Enable them in relay genesis so validators don't reject
-# those candidates with missing `ext_host_calls_*` functions. Applied as a genesis
-# overlay (not a prebuilt chain_spec_path) so zombienet still generates the relay spec
-# itself (prevent node-derived validator keys being injects into the keystores).
+# The default People runtime computes the ring VRF elliptic curve operations in-runtime
+# and does not need any extra host functions. Keep the RFC-163 executor param enabled so
+# a runtime built with `ec-crypto-hostcalls` also runs on this network. Applied as a
+# genesis overlay (not a prebuilt chain_spec_path) so zombienet still generates the relay
+# spec itself (prevent node-derived validator keys being injected into the keystores).
 [relaychain.genesis.runtimeGenesis.patch.configuration.config]
 executor_params = [{ EnabledHostFunction = "EccRfc163" }]
 

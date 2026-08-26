@@ -42,8 +42,8 @@
 //! A wire mismatch would surface as a decode panic in wasm at run time, not
 //! at compile time. The tests in this module (compiled with the
 //! `ec-crypto-hostcalls` feature) run the real host functions natively and
-//! compare every hook against pure arkworks 0.6; together with the e2e
-//! runtime tests they are the check that closes this risk.
+//! compare every hook against pure arkworks 0.6; they are the check that
+//! closes this risk.
 //!
 //! # Removal
 //!
