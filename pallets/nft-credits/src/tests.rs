@@ -818,6 +818,112 @@ fn credit_proof_from_awards_api_rejects_awards_that_do_not_match_the_recorded_ro
 	});
 }
 
+/// `count` distinct leaves, standing in for a block's leaf set.
+fn leaves(count: u32) -> Vec<NftClaimCreditLeaf> {
+	(0..count)
+		.map(|index| NftClaimCreditLeaf(sp_io::hashing::blake2_256(&index.encode())))
+		.collect::<Vec<_>>()
+}
+
+#[test]
+fn credit_tree_proofs_match_the_merkle_crate_at_every_index() {
+	// The pallet holds its own copy of the tree layout Asset Hub's `verify_proof` rehashes along,
+	// so it must give the root and siblings the crate gives, for leaf counts that promote an odd
+	// node and those that do not.
+	for count in (1..=17).chain([31, 32, 33, 64, 100]) {
+		let leaves = leaves(count);
+		let indices = (0..count).collect::<Vec<_>>();
+		let (root, proofs) = NftCredits::credit_tree_proofs(&leaves, indices.iter().copied());
+
+		assert_eq!(
+			root,
+			CreditProofNode::from(binary_merkle_tree::merkle_root::<BlakeTwo256, _>(
+				leaves.clone()
+			)),
+			"root over {count} leaves"
+		);
+		for leaf_index in indices.iter().copied() {
+			let expected =
+				binary_merkle_tree::merkle_proof::<BlakeTwo256, _, _>(leaves.clone(), leaf_index);
+			assert_eq!(
+				proofs[leaf_index as usize],
+				expected.proof.into_iter().map(CreditProofNode::from).collect::<Vec<_>>(),
+				"siblings of leaf {leaf_index} of {count}"
+			);
+			assert!(
+				binary_merkle_tree::verify_proof::<BlakeTwo256, _, _>(
+					&root.into(),
+					proofs[leaf_index as usize].iter().copied().map(H256::from),
+					count,
+					leaf_index,
+					&leaves[leaf_index as usize]
+				),
+				"leaf {leaf_index} of {count} verifies"
+			);
+		}
+	}
+}
+
+#[test]
+fn credit_tree_proofs_serve_a_subset_of_indices_unchanged() {
+	// A claimant asks about their own leaves only, so the proofs must not depend on which other
+	// indices were asked for in the same call.
+	let leaves = leaves(13);
+	let (all_root, all_proofs) = NftCredits::credit_tree_proofs(&leaves, 0..13);
+
+	let subset = [0, 5, 12];
+	let (subset_root, subset_proofs) =
+		NftCredits::credit_tree_proofs(&leaves, subset.iter().copied());
+	assert_eq!(subset_root, all_root);
+	for (proof, leaf_index) in subset_proofs.iter().zip(subset) {
+		assert_eq!(proof, &all_proofs[leaf_index as usize]);
+	}
+
+	let (empty_root, empty_proofs) = NftCredits::credit_tree_proofs(&leaves, core::iter::empty());
+	assert_eq!(empty_root, all_root);
+	assert!(empty_proofs.is_empty());
+}
+
+#[test]
+fn credit_proofs_api_serves_every_credit_of_a_claimant_that_holds_several() {
+	// Each proof for the claimant with the most credits must be the one a single-index query
+	// returns.
+	new_test_ext().execute_with(|| {
+		let (award_block, awards) = award_credits_in_one_block();
+		let credit_root =
+			NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded credits");
+		let claimant = awards
+			.iter()
+			.max_by_key(|award| {
+				awards.iter().filter(|other| other.claimant == award.claimant).count()
+			})
+			.expect("the block awarded credits")
+			.claimant
+			.clone();
+		let expected = awards
+			.iter()
+			.enumerate()
+			.filter(|(_, award)| award.claimant == claimant)
+			.collect::<Vec<_>>();
+		assert!(expected.len() > 1, "the claimant must hold several credits in the block");
+
+		let proofs = NftCredits::nft_claim_credit_proofs(award_block, &claimant)
+			.expect("the block's awards are retained");
+		assert_eq!(proofs.len(), expected.len());
+		for (proof, (leaf_index, award)) in proofs.iter().zip(expected) {
+			assert_credit_proof(proof, &credit_root, award, leaf_index as u32);
+			// The same proof the per-index path builds, which rebuilds the tree for the one leaf.
+			let single = NftCredits::nft_claim_credit_proof_from_awards(
+				award_block,
+				awards.clone(),
+				leaf_index as u32,
+			)
+			.expect("the block's awards rehash to its root");
+			assert_eq!(proof, &single);
+		}
+	});
+}
+
 #[test]
 fn credit_roots_api_lists_each_award_block_with_its_root() {
 	// A wallet's first query: the claimant's award blocks resolved against the roots recorded
