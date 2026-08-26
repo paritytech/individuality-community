@@ -46,8 +46,8 @@ sp_api::decl_runtime_apis! {
 		/// which is what Asset Hub verifies a mint against.
 		///
 		/// Everything comes from chain state, so a caller needs no event history: the proofs carry
-		/// the credit, the leaf, its index, the leaf count, the root and the sibling hashes.
-		/// Empty if the block awarded `claimant` nothing.
+		/// the credit, its leaf index and the sibling hashes. Empty if the block awarded
+		/// `claimant` nothing.
 		///
 		/// Only blocks whose awards are still retained can be served. An older one gives
 		/// `NftClaimCreditProofError::AwardsPruned`, and has to go through
