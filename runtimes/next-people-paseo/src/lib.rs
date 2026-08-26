@@ -51,7 +51,7 @@ use frame_support::{
 	traits::{
 		fungible, fungibles::Balanced as _, tokens::imbalance::ResolveAssetTo,
 		AsEnsureOriginWithArg, ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, ContainsPair,
-		EitherOfDiverse, InstanceFilter, TransformOrigin,
+		EitherOfDiverse, Equals, InstanceFilter, TransformOrigin,
 	},
 	weights::{ConstantMultiplier, Weight, WeightToFee as _},
 	PalletId,
@@ -975,6 +975,19 @@ impl pallet_assets::BenchmarkHelper<xcm::latest::Location, ForeignAssetReserveDa
 	}
 }
 
+parameter_types! {
+	/// The assets forwarder pallet on Asset Hub, which may force-create and force-update assets
+	/// here. The pallet index matches `AssetsForwarder` in next-asset-hub-paseo
+	/// `construct_runtime!`.
+	pub AssetsForwarderLocation: Location = Location::new(
+		1,
+		[
+			xcm::latest::Junction::Parachain(paseo_runtime_constants::system_parachain::ASSET_HUB_ID),
+			xcm::latest::Junction::PalletInstance(37),
+		],
+	);
+}
+
 /// Assets managed by some foreign location.
 impl pallet_assets::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
@@ -987,7 +1000,9 @@ impl pallet_assets::Config for Runtime {
 	type CreateOrigin = AsEnsureOriginWithArg<NeverEnsureOrigin<AccountId>>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type CreateOrigin = AsEnsureOriginWithArg<frame_system::EnsureSigned<AccountId>>;
-	type ForceOrigin = EnsureRoot<AccountId>;
+	// Root, or the assets forwarder on Asset Hub reaching this chain over XCM.
+	type ForceOrigin =
+		EitherOfDiverse<EnsureRoot<AccountId>, EnsureXcm<Equals<AssetsForwarderLocation>>>;
 	type AssetDeposit = AssetDeposit;
 	type MetadataDepositBase = MetadataDepositBase;
 	type MetadataDepositPerByte = MetadataDepositPerByte;

@@ -28,6 +28,7 @@ system-parachains-common = { workspace = true }
 
 # Individuality
 indiv-pallet-alias-accounts = { workspace = true }
+indiv-pallet-assets-forwarder = { workspace = true }
 indiv-pallet-dotns-gateway = { workspace = true }
 indiv-pallet-members-subscriber = { workspace = true }
 indiv-pallet-network-suffix = { workspace = true }
@@ -169,6 +170,7 @@ snowbridge-runtime-common = { workspace = true }
 approx = { workspace = true }
 asset-test-utils = { workspace = true }
 binary-merkle-tree = { workspace = true, features = ["std"] }
+next-people-paseo-runtime = { workspace = true, default-features = true }
 pallet-revive-fixtures = { workspace = true }
 parachains-runtimes-test-utils = { workspace = true }
 sp-keyring = { workspace = true }
@@ -198,6 +200,7 @@ runtime-benchmarks = [
 	"frame-system-benchmarking/runtime-benchmarks",
 	"frame-system/runtime-benchmarks",
 	"indiv-pallet-alias-accounts/runtime-benchmarks",
+	"indiv-pallet-assets-forwarder/runtime-benchmarks",
 	"indiv-pallet-dotns-gateway/runtime-benchmarks",
 	"indiv-pallet-members-subscriber/runtime-benchmarks",
 	"indiv-pallet-network-suffix/runtime-benchmarks",
@@ -275,6 +278,7 @@ runtime-benchmarks = [
 	"xcm-executor/runtime-benchmarks",
 	"xcm-runtime-apis/runtime-benchmarks",
 	"xcm/runtime-benchmarks",
+	"next-people-paseo-runtime/runtime-benchmarks"
 ]
 try-runtime = [
 	"asset-test-utils/try-runtime",
@@ -291,6 +295,7 @@ try-runtime = [
 	"frame-system/try-runtime",
 	"frame-try-runtime/try-runtime",
 	"indiv-pallet-alias-accounts/try-runtime",
+	"indiv-pallet-assets-forwarder/try-runtime",
 	"indiv-pallet-dotns-gateway/try-runtime",
 	"indiv-pallet-members-subscriber/try-runtime",
 	"indiv-pallet-network-suffix/try-runtime",
@@ -358,6 +363,7 @@ try-runtime = [
 	"sp-runtime/try-runtime",
 	"system-parachains-common/try-runtime",
 	"system-parachains-constants/try-runtime",
+	"next-people-paseo-runtime/try-runtime"
 ]
 std = [
 	"approx/std",
@@ -387,6 +393,7 @@ std = [
 	"frame-system/std",
 	"frame-try-runtime?/std",
 	"indiv-pallet-alias-accounts/std",
+	"indiv-pallet-assets-forwarder/std",
 	"indiv-pallet-dotns-gateway/std",
 	"indiv-pallet-members-subscriber/std",
 	"indiv-pallet-network-suffix/std",
