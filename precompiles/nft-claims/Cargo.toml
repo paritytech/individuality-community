@@ -15,11 +15,15 @@ workspace = true
 frame-support = { workspace = true }
 frame-system = { workspace = true }
 indiv-pallet-nft-claims = { workspace = true }
+indiv-precompile-support = { workspace = true }
 pallet-revive = { workspace = true }
 pallet-scarcity = { workspace = true }
 
 [dev-dependencies]
 codec = { workspace = true, features = ["derive"] }
+indiv-precompile-fixtures = { workspace = true }
+indiv-precompile-scarcity = { workspace = true }
+indiv-precompile-support = { workspace = true, features = ["test-helpers"] }
 indiv-support = { workspace = true }
 pallet-balances = { workspace = true }
 scale-info = { workspace = true, features = ["derive"] }
@@ -33,6 +37,8 @@ std = [
 	"frame-support/std",
 	"frame-system/std",
 	"indiv-pallet-nft-claims/std",
+	"indiv-precompile-scarcity/std",
+	"indiv-precompile-support/std",
 	"indiv-support/std",
 	"pallet-balances/std",
 	"pallet-revive/std",
@@ -45,6 +51,8 @@ runtime-benchmarks = [
 	"frame-support/runtime-benchmarks",
 	"frame-system/runtime-benchmarks",
 	"indiv-pallet-nft-claims/runtime-benchmarks",
+	"indiv-precompile-scarcity/runtime-benchmarks",
+	"indiv-precompile-support/runtime-benchmarks",
 	"indiv-support/runtime-benchmarks",
 	"pallet-balances/runtime-benchmarks",
 	"pallet-revive/runtime-benchmarks",
@@ -55,6 +63,8 @@ try-runtime = [
 	"frame-support/try-runtime",
 	"frame-system/try-runtime",
 	"indiv-pallet-nft-claims/try-runtime",
+	"indiv-precompile-scarcity/try-runtime",
+	"indiv-precompile-support/try-runtime",
 	"pallet-balances/try-runtime",
 	"pallet-revive/try-runtime",
 	"pallet-scarcity/try-runtime",

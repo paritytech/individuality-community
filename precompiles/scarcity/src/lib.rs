@@ -66,10 +66,9 @@
 //! `name()`, `symbol()`, `tokenURI()`, ERC-7572 `contractURI()` and ERC-2981 `royaltyInfo()`
 //! read reserved metadata keys rather than dedicated pallet fields, so a collection opts into
 //! each by writing the key. A key that is unset, or set to something the method cannot use,
-//! answers with an empty value rather than reverting. Collections write these keys by hand and
-//! a reverting read is a heavier failure than a missing one: a marketplace that settles a sale
-//! through `royaltyInfo` would abort the sale over a mistyped royalty, which costs the seller
-//! far more than the royalty was worth.
+//! answers with an empty value rather than reverting. A reverting read is a heavier failure than
+//! a missing one: a marketplace that settles a sale through `royaltyInfo` would abort the sale
+//! over a mistyped royalty.
 //!
 //! ERC-165 claims the full ERC-721 interface, following the soulbound-token convention of
 //! compliant-but-reverting methods for the parts that revert. ERC-7572 defines no interface id,
@@ -83,9 +82,14 @@
 //! for them. Only this precompile announces: the pallet's metadata extrinsics change the same
 //! state without a log, as native moves do for `Transfer`, so a consumer that follows logs alone
 //! misses both.
-//! `tokenOfOwnerByIndex` is served for wallets that call it, but ERC-721 Enumerable is not claimed:
-//! that id also covers `totalSupply` and `tokenByIndex`, which need an instance counter the pallet
-//! does not keep.
+//!
+//! Two interfaces are served but not claimed, because an id covers every function of its
+//! interface. `tokenOfOwnerByIndex` answers for wallets that call it, while ERC-721 Enumerable's
+//! id also covers `totalSupply` and `tokenByIndex`, which need an instance counter the pallet does
+//! not keep. `owner()` answers under ERC-173's name, while that id also covers
+//! `transferOwnership`, which cannot exist here: a handover carries the collection's storage
+//! deposit, so the successor has to accept and fund it, which is why the handover is a nomination
+//! the successor claims.
 //!
 //! No function of either interface is payable, and both reject a call that attaches value
 //! before doing anything else. Accepting it would strand it: a precompile address has no code,
@@ -132,7 +136,7 @@ use pallet_revive::{
 		alloy::{
 			self,
 			primitives::{Address, IntoLogData, U256},
-			sol_types::{Revert, SolCall},
+			sol_types::SolCall,
 		},
 		AddressMapper, AddressMatcher, Error, Ext, RuntimeCosts, H160, H256,
 	},
@@ -142,6 +146,11 @@ use pallet_scarcity::{
 	CollectionId, CollectionMetadata, Collections, Error as ScarcityError, InstanceId,
 	InstanceMetadata, Instances, ItemMetadata, MetadataKeyOf, MetadataValueOf, Nft, NftsByOwner,
 	Transferability,
+};
+
+pub(crate) use indiv_precompile_support::{
+	address_of, caller_account, charge_reads, ensure_no_value, ensure_not_delegate, revert,
+	PROOF_SIZE_PER_READ,
 };
 
 mod collection;
@@ -155,7 +164,9 @@ mod tests;
 pub use collection::ScarcityCollection;
 pub use factory::ScarcityFactory;
 
-alloy::sol!("sol/IScarcity.sol");
+alloy::sol!("sol/IScarcityCollection.sol");
+alloy::sol!("sol/IERC721Receiver.sol");
+alloy::sol!("sol/IScarcityFactory.sol");
 
 /// Reserved collection metadata key backing ERC-721 `name()`.
 pub const NAME_KEY: &[u8] = b"name";
@@ -178,9 +189,11 @@ pub const BASIS_POINTS_DENOMINATOR: u128 = 10_000;
 
 /// ERC-165 interface identifier of ERC-165 itself.
 pub const ERC165_INTERFACE_ID: [u8; 4] = [0x01, 0xff, 0xc9, 0xa7];
-/// ERC-165 interface identifier of the ERC-721 core interface.
+/// ERC-721 core interface id (`0x80ac58cd`), per EIP-721. The `interface_ids_match_openzeppelin`
+/// test checks it against the compiler's own `type(IERC721).interfaceId`.
 pub const ERC721_INTERFACE_ID: [u8; 4] = [0x80, 0xac, 0x58, 0xcd];
-/// ERC-165 interface identifier of the ERC-721 metadata extension.
+/// ERC-721 metadata extension interface id (`0x5b5e139f`), per EIP-721. The
+/// `interface_ids_match_openzeppelin` test checks it against `type(IERC721Metadata).interfaceId`.
 pub const ERC721_METADATA_INTERFACE_ID: [u8; 4] = [0x5b, 0x5e, 0x13, 0x9f];
 /// ERC-165 interface identifier of ERC-5192, the soulbound extension.
 pub const ERC5192_INTERFACE_ID: [u8; 4] = [0xb4, 0x5a, 0x3c, 0x0e];
@@ -192,28 +205,43 @@ pub const ERC2981_INTERFACE_ID: [u8; 4] = [0x2a, 0x55, 0x20, 0x5a];
 /// selector XOR the other identifiers here are.
 pub const ERC4906_INTERFACE_ID: [u8; 4] = [0x49, 0x06, 0x49, 0x06];
 
-const ERR_UNKNOWN_TOKEN: &str = "unknown token";
-const ERR_ZERO_DESTINATION: &str = "destination is the zero address";
-const ERR_ZERO_OWNER: &str = "balance query for the zero address";
-const ERR_INDEX_OUT_OF_RANGE: &str = "token index out of range for this owner";
-const ERR_ZERO_SUCCESSOR: &str = "successor is the zero address";
-const ERR_WRONG_HOLDER: &str = "transfer from the wrong holder";
-const ERR_NOT_HOLDER: &str =
+/// Revert reason when a token id names no live instance.
+pub const ERR_UNKNOWN_TOKEN: &str = "unknown token";
+/// Revert reason when a call targets the zero address as its destination.
+pub const ERR_ZERO_DESTINATION: &str = "destination is the zero address";
+/// Revert reason when a balance query targets the zero address.
+pub const ERR_ZERO_OWNER: &str = "balance query for the zero address";
+/// Revert reason when an owner-index query exceeds the holder's balance.
+pub const ERR_INDEX_OUT_OF_RANGE: &str = "token index out of range for this owner";
+/// Revert reason when an ownership nomination targets the zero address.
+pub const ERR_ZERO_SUCCESSOR: &str = "successor is the zero address";
+/// Revert reason when a transfer names a holder that does not hold the token.
+pub const ERR_WRONG_HOLDER: &str = "transfer from the wrong holder";
+/// Revert reason when the caller is not the token's holder.
+pub const ERR_NOT_HOLDER: &str =
 	"caller does not hold this token: transfers on another holder's authority need approvals, \
 	 which are not supported yet";
-const ERR_CONTRACT_RECEIVER: &str =
+/// Revert reason when a safe transfer targets a code-carrying destination that cannot
+/// acknowledge receipt.
+pub const ERR_CONTRACT_RECEIVER: &str =
 	"safe transfer to a contract is not supported yet: the receiver callback is unavailable";
-const ERR_APPROVALS_UNSUPPORTED: &str =
+/// Revert reason when an approval call is attempted.
+pub const ERR_APPROVALS_UNSUPPORTED: &str =
 	"approvals are not supported yet: the purse model has no approval mechanism";
-const ERR_INVALID_CALLER: &str = "invalid caller";
-const ERR_KEY_TOO_LONG: &str = "metadata key too long";
-const ERR_VALUE_TOO_LONG: &str = "metadata value too long";
-const ERR_KEY_VALUE_MISMATCH: &str = "metadata keys and values differ in length";
-const ERR_UNKNOWN_COLLECTION: &str = "unknown collection";
-const ERR_UNKNOWN_ITEM: &str = "unknown item";
-const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range";
-const ERR_VALUE_NOT_ACCEPTED: &str = "this precompile does not accept value";
-const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8";
+/// Revert reason when a metadata key exceeds the allowed length.
+pub const ERR_KEY_TOO_LONG: &str = "metadata key too long";
+/// Revert reason when a metadata value exceeds the allowed length.
+pub const ERR_VALUE_TOO_LONG: &str = "metadata value too long";
+/// Revert reason when a metadata call passes a different number of keys and values.
+pub const ERR_KEY_VALUE_MISMATCH: &str = "metadata keys and values differ in length";
+/// Revert reason when no collection exists at the queried address.
+pub const ERR_UNKNOWN_COLLECTION: &str = "unknown collection";
+/// Revert reason when an item index names no definition.
+pub const ERR_UNKNOWN_ITEM: &str = "unknown item";
+/// Revert reason when a royalty amount exceeds the representable range.
+pub const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range";
+/// Revert reason when a reserved metadata value is not valid UTF-8.
+pub const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8";
 
 /// Registers a purse key's address when a mint occupies it, for `pallet-scarcity`'s
 /// [`OnPurseOccupied`](pallet_scarcity::OnPurseOccupied) hook.
@@ -266,10 +294,6 @@ fn collection_id_of(address: &[u8; 20]) -> CollectionId {
 	CollectionId::from_be_bytes(bytes)
 }
 
-fn revert(reason: &str) -> Error {
-	Error::Revert(Revert { reason: reason.into() })
-}
-
 /// Map the `pallet-scarcity` errors a caller can trigger to catchable reverts.
 ///
 /// Every error variant the pallet entries called from this crate can return is listed, so a
@@ -318,55 +342,15 @@ fn revert_scarcity<T: pallet_scarcity::Config>(e: DispatchError) -> Error {
 	}
 }
 
-/// Reject a call carrying native value.
-///
-/// Every function of both interfaces is ABI-`nonpayable`, so a caller attaching value has made
-/// a mistake, and the precompile has no way to make good on it: the address it would land on has
-/// no owner, no code and no withdrawal path.
-fn ensure_no_value<T: pallet_revive::Config>(env: &impl Ext<T = T>) -> Result<(), Error> {
-	if env.value_transferred().is_zero() {
-		return Ok(());
-	}
-	Err(revert(ERR_VALUE_NOT_ACCEPTED))
-}
-
-/// The signing account behind the EVM caller.
-fn caller_account<T: pallet_revive::Config>(
-	env: &mut impl Ext<T = T>,
-) -> Result<T::AccountId, Error> {
-	env.caller().account_id().cloned().map_err(|_| revert(ERR_INVALID_CALLER))
-}
-
 fn account_of<T: pallet_revive::Config>(address: &Address) -> T::AccountId {
 	<T as pallet_revive::Config>::AddressMapper::to_account_id(&H160(address.into_array()))
 }
-
-fn address_of<T: pallet_revive::Config>(account: &T::AccountId) -> Address {
-	Address::from(<T as pallet_revive::Config>::AddressMapper::to_address(account).0)
-}
-
-/// Proof size charged per storage read.
-///
-/// `DbWeight` carries only `ref_time`, but on a parachain every read also pulls trie nodes
-/// into the proof. Every value this crate reads is bounded far below this headroom; a crate
-/// benchmark can replace the estimate.
-const PROOF_SIZE_PER_READ: u64 = 4 * 1024;
 
 /// Ref time charged per metadata byte a policy validation scans.
 ///
 /// One nanosecond per byte, which a UTF-8 scan comfortably beats. Like [`PROOF_SIZE_PER_READ`]
 /// this is an estimate, replaceable by a crate benchmark.
 const REF_TIME_PER_METADATA_BYTE: u64 = 1_000;
-
-/// Charge `n` worst-case database reads before performing them.
-fn charge_reads<T: frame_system::Config + pallet_revive::Config>(
-	env: &mut impl Ext<T = T>,
-	n: u64,
-) -> Result<(), Error> {
-	let ref_time = <T as frame_system::Config>::DbWeight::get().reads(n).ref_time();
-	env.charge(Weight::from_parts(ref_time, n.saturating_mul(PROOF_SIZE_PER_READ)))?;
-	Ok(())
-}
 
 /// Look up a live instance and check it belongs to `collection`.
 ///

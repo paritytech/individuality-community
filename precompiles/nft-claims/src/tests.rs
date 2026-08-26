@@ -416,6 +416,9 @@ mod guards {
 		}
 	}
 
+	/// The revert message `Error::try_to_revert` produces for a delegate call.
+	const DELEGATE_DENIED_REVERT: &str = "illegal to call this pre-compile via delegate call";
+
 	#[test]
 	fn delegate_call_is_denied() {
 		new_test_ext().execute_with(|| {
@@ -423,13 +426,18 @@ mod guards {
 			setup.set_delegate_call(true);
 			let (mut ext, _) = setup.ext();
 
+			// The guard reverts with a reason rather than trapping, so a delegatecaller keeps
+			// its gas and can catch the failure.
 			for input in [read_call(), mutating_call()] {
 				let result = run_precompile::<NftClaimsMinter<Test, MINTER_INDEX>, _>(
 					&mut ext,
 					&minter_address().0,
 					&input,
 				);
-				assert_denied_with(result, pallet_revive::Error::<Test>::PrecompileDelegateDenied);
+				assert!(
+					matches!(&result, Err(Error::Revert(r)) if r.reason == DELEGATE_DENIED_REVERT),
+					"expected a delegate-call revert, got {result:?}"
+				);
 			}
 		});
 	}
@@ -457,6 +465,127 @@ mod guards {
 			.expect("reads must succeed in a read-only frame");
 			let minter = INftClaimsMinter::collectionMinterCall::abi_decode_returns(&read).unwrap();
 			assert_eq!(minter.kind, KIND_NONE);
+		});
+	}
+}
+
+/// End-to-end tests driving the minter precompile from real compiled EVM contracts: a contract
+/// that owns a collection and registers itself as the minter, and a standalone minter contract a
+/// collection owner registers. Compiled on demand by `indiv-precompile-fixtures`, which panics if
+/// `solc` or `resolc` is missing, so a passing run always exercised real bytecode.
+mod evm_fixture {
+	use super::*;
+	use frame_support::traits::Currency;
+	use indiv_precompile_fixtures::fixture_code;
+	use indiv_precompile_support::test_helpers::alloy_address;
+	use pallet_revive::{precompiles::AddressMapper, Code};
+
+	alloy::sol! {
+		interface ISelfMinter {
+			struct BootstrapConfig {
+				address factory;
+				uint16 prefix;
+				address claims;
+			}
+			function bootstrap(BootstrapConfig config) external returns (uint32 collection);
+		}
+	}
+
+	fn contract_account(address: H160) -> AccountId32 {
+		<Test as pallet_revive::Config>::AddressMapper::to_account_id(&address)
+	}
+
+	fn deploy(owner: &AccountId32, code: Vec<u8>) -> H160 {
+		pallet_revive::Pallet::<Test>::bare_instantiate(
+			RuntimeOrigin::signed(owner.clone()),
+			0u32.into(),
+			TransactionLimits::WeightAndDeposit {
+				weight_limit: Weight::MAX,
+				deposit_limit: 1u64 << 50,
+			},
+			Code::Upload(code),
+			Vec::new(),
+			None,
+			&ExecConfig::new_substrate_tx(),
+		)
+		.result
+		.expect("contract instantiates")
+		.addr
+	}
+
+	/// Panics if the call reverts.
+	fn call_contract(caller: &AccountId32, contract: H160, input: Vec<u8>) -> Vec<u8> {
+		let output = pallet_revive::Pallet::<Test>::bare_call(
+			RuntimeOrigin::signed(caller.clone()),
+			contract,
+			0u32.into(),
+			TransactionLimits::WeightAndDeposit {
+				weight_limit: Weight::MAX,
+				deposit_limit: u64::MAX,
+			},
+			input,
+			&ExecConfig::new_substrate_tx(),
+		)
+		.result
+		.expect("contract call executes");
+		assert!(!output.did_revert(), "expected success, got revert: {output:?}");
+		output.data
+	}
+
+	#[test]
+	fn contract_owns_collection_and_self_registers() {
+		let code = fixture_code("SelfMinter");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			map_account(&alice);
+			let self_minter = deploy(&alice, code);
+			// The contract, not the caller, pays the collection and item deposits it incurs.
+			Balances::make_free_balance_be(&contract_account(self_minter), u64::MAX / 2);
+
+			let bootstrapped = call_contract(
+				&alice,
+				self_minter,
+				ISelfMinter::bootstrapCall {
+					config: ISelfMinter::BootstrapConfig {
+						factory: alloy_address(factory_address()),
+						prefix: COLLECTION_PREFIX,
+						claims: alloy_address(minter_address()),
+					},
+				}
+				.abi_encode(),
+			);
+			let collection = ISelfMinter::bootstrapCall::abi_decode_returns(&bootstrapped).unwrap();
+
+			// The registration names the contract as both the collection owner and the minter.
+			let registration = read_minter(collection);
+			assert_eq!(registration.kind, crate::KIND_CONTRACT);
+			assert_eq!(registration.minter, alloy_address(self_minter));
+			assert_eq!(registration.owner, alloy_address(self_minter));
+		});
+	}
+
+	#[test]
+	fn deployed_contract_is_registered_as_minter() {
+		let code = fixture_code("ClaimsMinter");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let minter_contract = deploy(&alice, code);
+
+			// The collection owner registers the deployed contract as its claims minter.
+			call_ok(
+				&alice,
+				INftClaimsMinter::setContractMinterCall {
+					collection,
+					minter: alloy_address(minter_contract),
+				}
+				.abi_encode(),
+			);
+
+			let registration = read_minter(collection);
+			assert_eq!(registration.kind, crate::KIND_CONTRACT);
+			assert_eq!(registration.minter, alloy_address(minter_contract));
+			assert_eq!(registration.owner, address_of::<Test>(&alice));
 		});
 	}
 }

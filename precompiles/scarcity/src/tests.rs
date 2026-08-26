@@ -116,12 +116,6 @@ fn assert_contract_event(contract: H160, event: impl IntoLogData) {
 	}));
 }
 
-/// Assert no EVM log was produced at all, whatever its shape.
-fn assert_no_contract_event() {
-	let emitted = contract_event_count();
-	assert_eq!(emitted, 0, "expected no EVM log, found {emitted}");
-}
-
 /// How many EVM logs were produced, whatever their shape.
 fn contract_event_count() -> usize {
 	System::events()
@@ -133,6 +127,12 @@ fn contract_event_count() -> usize {
 			)
 		})
 		.count()
+}
+
+/// Assert no EVM log was produced at all, whatever its shape.
+fn assert_no_contract_event() {
+	let emitted = contract_event_count();
+	assert_eq!(emitted, 0, "expected no EVM log, found {emitted}");
 }
 
 /// Assert exactly one EVM log was produced, and that it is `event` from `contract`.
@@ -1438,6 +1438,37 @@ fn holder_transfer_does_not_cross_collections() {
 	});
 }
 
+/// `owner()` answers as `collectionOwner()`, without claiming ERC-173.
+///
+/// The id covers `transferOwnership`, which cannot exist while a handover carries a deposit the
+/// successor has to fund, so serving the read alone is the honest half.
+#[test]
+fn owner_answers_without_claiming_erc173() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let target = collection_address(collection);
+
+		let owner = call_ok(&alice, target, IScarcityCollection::ownerCall {}.abi_encode());
+		let collection_owner =
+			call_ok(&alice, target, IScarcityCollection::collectionOwnerCall {}.abi_encode());
+		assert_eq!(owner, collection_owner, "the two names must not drift apart");
+
+		let data = call_ok(
+			&alice,
+			target,
+			IScarcityCollection::supportsInterfaceCall {
+				interfaceId: [0x7f, 0x58, 0x28, 0xd0].into(),
+			}
+			.abi_encode(),
+		);
+		assert!(
+			!IScarcityCollection::supportsInterfaceCall::abi_decode_returns(&data).unwrap(),
+			"ERC-173 must not be claimed while `transferOwnership` is absent"
+		);
+	});
+}
+
 /// The ABI flag reaches the pallet, in both positions.
 ///
 /// The rest of the soulbound coverage defines its items through the pallet, so nothing else
@@ -1651,6 +1682,26 @@ fn oversized_token_id_answers_unknown() {
 			&alice,
 			collection_address(collection),
 			IScarcityCollection::ownerOfCall { tokenId: U256::MAX }.abi_encode(),
+			"unknown token",
+		);
+	});
+}
+
+/// `tokenURI` rejects a token that names no live instance, rather than resolving the metadata
+/// scopes and answering the empty string an instance with no URI set receives.
+///
+/// The id is in range and unallocated, so this reaches the liveness check rather than the
+/// conversion `oversized_token_id_answers_unknown` stops at.
+#[test]
+fn token_uri_rejects_an_unknown_token() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+
+		call_reverted_with(
+			&alice,
+			collection_address(collection),
+			IScarcityCollection::tokenURICall { tokenId: U256::from(1u64) }.abi_encode(),
 			"unknown token",
 		);
 	});
@@ -2045,9 +2096,9 @@ fn assert_rejects_value(caller: &AccountId32, address: H160, input: Vec<u8>, met
 /// Every generated selector of the collection interface, once each.
 ///
 /// Asserts its own exhaustiveness against the generated selector set, so a method added to
-/// `IScarcity.sol` fails every caller of this until it is listed here. Callers that need a call to
-/// reach its real path pass arguments that would otherwise succeed; callers testing a guard that
-/// short-circuits before argument handling can pass anything.
+/// `IScarcityCollection.sol` fails every caller of this until it is listed here. Callers that need
+/// a call to reach its real path pass arguments that would otherwise succeed; callers testing a
+/// guard that short-circuits before argument handling can pass anything.
 fn all_collection_calls(
 	token: U256,
 	item: pallet_scarcity::ItemIndex,
@@ -2120,6 +2171,7 @@ fn all_collection_calls(
 		}),
 		IScarcityCollectionCalls::forceBurn(IScarcityCollection::forceBurnCall { tokenId: token }),
 		IScarcityCollectionCalls::collectionOwner(IScarcityCollection::collectionOwnerCall {}),
+		IScarcityCollectionCalls::owner(IScarcityCollection::ownerCall {}),
 		IScarcityCollectionCalls::itemSupply(IScarcityCollection::itemSupplyCall { item }),
 		IScarcityCollectionCalls::instanceInfo(IScarcityCollection::instanceInfoCall {
 			tokenId: token,
@@ -3011,7 +3063,7 @@ fn mapped_scarcity_errors_are_exhaustive() {
 ///
 /// The two failures compete only on `safeTransferFrom` to a destination carrying code. EIP-721
 /// orders "not a valid NFT" first, and the acknowledgement belongs after a completed transfer, so
-/// the token lookup has to win. Pins the ordering the receiver stub was moved to establish.
+/// the token lookup has to win.
 #[test]
 fn safe_transfer_reports_an_unknown_token_before_the_receiver_limit() {
 	new_test_ext().execute_with(|| {
@@ -3073,10 +3125,6 @@ fn holder_transfer_reports_the_wrong_holder_before_the_wrong_caller() {
 	});
 }
 
-/// A purse that has never held anything reads as holding nothing.
-///
-/// The other `balanceOf` answers are a holder, a holder of another collection and the zero
-/// address; this names the plain empty case so the branch is covered by intent.
 #[test]
 fn balance_of_a_purse_that_never_held_anything_is_zero() {
 	new_test_ext().execute_with(|| {
@@ -3095,7 +3143,6 @@ fn balance_of_a_purse_that_never_held_anything_is_zero() {
 	});
 }
 
-/// `tokenOfOwnerByIndex` answers index 0 for a holder and refuses everything else.
 #[test]
 fn token_of_owner_by_index_serves_index_zero_only() {
 	new_test_ext().execute_with(|| {
@@ -3215,7 +3262,6 @@ fn native_operations_emit_no_evm_log() {
 	});
 }
 
-/// Metadata writes announce a change only where a standard read would see one.
 #[test]
 fn metadata_writes_announce_only_standard_reads() {
 	new_test_ext().execute_with(|| {
@@ -3317,7 +3363,6 @@ fn metadata_writes_announce_only_standard_reads() {
 	});
 }
 
-/// Handover and deletion are visible to a log-driven indexer.
 #[test]
 fn handover_and_deletion_emit_events() {
 	new_test_ext().execute_with(|| {
@@ -3448,6 +3493,14 @@ mod guards {
 		matches!(result, Err(Error::Error(e)) if e.error == expected)
 	}
 
+	/// The revert message `Error::try_to_revert` produces for a delegate call.
+	const DELEGATE_DENIED_REVERT: &str = "illegal to call this pre-compile via delegate call";
+
+	/// Whether a result is the delegate-call revert rather than any other outcome.
+	fn is_delegate_denied(result: &Result<Vec<u8>, Error>) -> bool {
+		matches!(result, Err(Error::Revert(r)) if r.reason == DELEGATE_DENIED_REVERT)
+	}
+
 	#[test]
 	fn delegate_call_is_denied() {
 		new_test_ext().execute_with(|| {
@@ -3460,7 +3513,8 @@ mod guards {
 
 			// Reads and mutations alike, over the whole interface: a delegate call executes with
 			// the delegator's address, so the collection id in the address is not the callee's and
-			// no selector may be served.
+			// no selector may be served. The rejection reverts rather than traps, so a mistaken
+			// caller keeps its forwarded gas.
 			for call in every_call() {
 				let result = run_precompile::<ScarcityCollection<Test, COLLECTION_PREFIX>, _>(
 					&mut ext,
@@ -3468,7 +3522,7 @@ mod guards {
 					&call,
 				);
 				assert!(
-					is_denied_with(&result, pallet_revive::Error::<Test>::PrecompileDelegateDenied),
+					is_delegate_denied(&result),
 					"selector {:02x?} was served in a delegate call: {result:?}",
 					call.selector()
 				);
@@ -3479,7 +3533,7 @@ mod guards {
 				&factory_address().0,
 				&IScarcityFactoryCalls::createCollection(IScarcityFactory::createCollectionCall {}),
 			);
-			assert_denied_with(factory, pallet_revive::Error::<Test>::PrecompileDelegateDenied);
+			assert!(is_delegate_denied(&factory), "factory served a delegate call: {factory:?}");
 		});
 	}
 
@@ -3544,6 +3598,511 @@ mod guards {
 			let owner =
 				IScarcityCollection::collectionOwnerCall::abi_decode_returns(&read).unwrap();
 			assert_eq!(owner, address_of::<Test>(&alice));
+		});
+	}
+}
+
+/// End-to-end tests that drive the precompile from a real compiled EVM contract, checking that the
+/// call, delegate-call and value paths behave as a Solidity caller observes them, not only as the
+/// precompile's `call` returns. Unlike the `guards` module these run in the default test suite;
+/// each contract is compiled on demand by the `indiv-precompile-fixtures` crate, which panics if
+/// `solc` or `resolc` is missing, so a passing run always exercised real bytecode.
+mod evm_fixture {
+	use super::*;
+	use indiv_precompile_fixtures::{fixture_code, resolc_code};
+	use indiv_precompile_support::test_helpers::alloy_address;
+	use pallet_revive::{precompiles::alloy::primitives::U256, Code};
+
+	alloy::sol! {
+		interface IScarcityCaller {
+			function readOwner(address collection) external view returns (address owner);
+			function delegateReadOwner(address collection)
+				external
+				returns (bool ok, bytes returnData);
+			function valueReadOwner(address collection)
+				external
+				payable
+				returns (bool ok, bytes returnData);
+		}
+
+		interface ICollectionManager {
+			function bootstrap(address factory, uint16 prefix) external returns (uint32 collection);
+			function mintTo(address to) external returns (uint256 tokenId);
+		}
+
+		interface IERC721Reader {
+			function ownerIfErc721(address collection, uint256 tokenId)
+				external
+				view
+				returns (address owner);
+			function ownerAndBalance(address collection, uint256 tokenId)
+				external
+				view
+				returns (address owner, uint256 ownerBalance);
+			function collectionName(address collection) external view returns (string memory name);
+		}
+
+		interface ICollectionOwnerLogic {
+			function bootstrap(address factory, uint16 prefix) external returns (uint32 collection);
+		}
+
+		interface IInterfaceIds {
+			function erc165InterfaceId() external pure returns (bytes4);
+			function erc721InterfaceId() external pure returns (bytes4);
+			function erc721MetadataInterfaceId() external pure returns (bytes4);
+		}
+	}
+
+	/// Assert a low-level sub-call captured a revert rather than a trap: it failed, and its
+	/// returndata decodes as `Error(string)` whose reason contains `expected`. A trap returns
+	/// empty returndata, so decoding the reason distinguishes a revert from a trap.
+	fn assert_captured_revert(ok: bool, return_data: &[u8], expected: &str) {
+		assert!(!ok, "sub-call must fail");
+		let revert = Revert::abi_decode(return_data).expect("revert decodes as Error(string)");
+		assert!(revert.reason.contains(expected), "unexpected revert reason: {:?}", revert.reason);
+	}
+
+	fn deploy(owner: &AccountId32, code: Vec<u8>) -> H160 {
+		deploy_with_args(owner, code, Vec::new())
+	}
+
+	fn deploy_with_args(owner: &AccountId32, mut code: Vec<u8>, args: Vec<u8>) -> H160 {
+		// An EVM constructor reads its arguments appended to the init code, not from the call data.
+		code.extend_from_slice(&args);
+		pallet_revive::Pallet::<Test>::bare_instantiate(
+			RuntimeOrigin::signed(owner.clone()),
+			0u32.into(),
+			TransactionLimits::WeightAndDeposit {
+				weight_limit: Weight::MAX,
+				deposit_limit: 1u64 << 50,
+			},
+			Code::Upload(code),
+			Vec::new(),
+			// A fixed salt derives the address from the code, so deploying two different contracts
+			// in one test yields two different addresses.
+			Some([0u8; 32]),
+			&ExecConfig::new_substrate_tx(),
+		)
+		.result
+		.expect("contract instantiates")
+		.addr
+	}
+
+	fn assert_reads_collection_owner(code: Vec<u8>) {
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let contract = deploy(&alice, code);
+
+			let data = call_ok(
+				&alice,
+				contract,
+				IScarcityCaller::readOwnerCall {
+					collection: alloy_address(collection_address(collection)),
+				}
+				.abi_encode(),
+			);
+			let owner = IScarcityCaller::readOwnerCall::abi_decode_returns(&data).unwrap();
+			assert_eq!(owner, address_of::<Test>(&alice));
+		});
+	}
+
+	#[test]
+	fn evm_contract_call_reads_collection_owner() {
+		assert_reads_collection_owner(fixture_code("ScarcityCaller"));
+	}
+
+	#[test]
+	fn polkavm_contract_call_reads_collection_owner() {
+		assert_reads_collection_owner(resolc_code("ScarcityCaller"));
+	}
+
+	#[test]
+	fn contract_delegate_call_is_reverted_not_trapped() {
+		let code = fixture_code("ScarcityCaller");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let contract = deploy(&alice, code);
+
+			// The outer call to the contract succeeds; the contract captures the delegate-call
+			// failure and returns it, so we can inspect what the precompile handed back.
+			let data = call_ok(
+				&alice,
+				contract,
+				IScarcityCaller::delegateReadOwnerCall {
+					collection: alloy_address(collection_address(collection)),
+				}
+				.abi_encode(),
+			);
+			let returned =
+				IScarcityCaller::delegateReadOwnerCall::abi_decode_returns(&data).unwrap();
+
+			assert_captured_revert(returned.ok, &returned.returnData, "delegate call");
+		});
+	}
+
+	#[test]
+	fn contract_value_call_is_reverted() {
+		let code = fixture_code("ScarcityCaller");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let contract = deploy(&alice, code);
+
+			// Send native value to the payable wrapper, which forwards it to the precompile; the
+			// precompile is non-payable, so the forwarded sub-call reverts and is captured here.
+			let result = pallet_revive::Pallet::<Test>::bare_call(
+				RuntimeOrigin::signed(alice.clone()),
+				contract,
+				1u32.into(),
+				TransactionLimits::WeightAndDeposit {
+					weight_limit: Weight::MAX,
+					deposit_limit: u64::MAX,
+				},
+				IScarcityCaller::valueReadOwnerCall {
+					collection: alloy_address(collection_address(collection)),
+				}
+				.abi_encode(),
+				&ExecConfig::new_substrate_tx(),
+			)
+			.result
+			.expect("value call executes");
+			assert!(!result.did_revert(), "outer call captures the sub-call failure");
+			let returned =
+				IScarcityCaller::valueReadOwnerCall::abi_decode_returns(&result.data).unwrap();
+
+			assert_captured_revert(returned.ok, &returned.returnData, "does not accept value");
+		});
+	}
+
+	#[test]
+	fn contract_owns_and_gates_its_collection() {
+		let code = fixture_code("CollectionManager");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			map_account(&alice);
+			let manager = deploy(&alice, code);
+			// The contract, not the caller, pays the collection and instance deposits it incurs.
+			Balances::make_free_balance_be(
+				&account_of::<Test>(&alloy_address(manager)),
+				u64::MAX / 2,
+			);
+
+			// The contract creates a collection through the factory and defines an item.
+			let bootstrapped = call_ok(
+				&alice,
+				manager,
+				ICollectionManager::bootstrapCall {
+					factory: alloy_address(factory_address()),
+					prefix: COLLECTION_PREFIX,
+				}
+				.abi_encode(),
+			);
+			let collection =
+				ICollectionManager::bootstrapCall::abi_decode_returns(&bootstrapped).unwrap();
+
+			// The collection owner is the contract, not the account that drove it.
+			let owner_data = call_ok(
+				&alice,
+				collection_address(collection),
+				IScarcityCollection::collectionOwnerCall {}.abi_encode(),
+			);
+			let owner =
+				IScarcityCollection::collectionOwnerCall::abi_decode_returns(&owner_data).unwrap();
+			assert_eq!(owner, alloy_address(manager));
+
+			// The contract mints, gated by its own access control, and the holder key owns it.
+			let holder = H160::repeat_byte(0x42);
+			let minted = call_ok(
+				&alice,
+				manager,
+				ICollectionManager::mintToCall { to: alloy_address(holder) }.abi_encode(),
+			);
+			let token = ICollectionManager::mintToCall::abi_decode_returns(&minted).unwrap();
+			let owner_of = call_ok(
+				&alice,
+				collection_address(collection),
+				IScarcityCollection::ownerOfCall { tokenId: token }.abi_encode(),
+			);
+			let token_owner =
+				IScarcityCollection::ownerOfCall::abi_decode_returns(&owner_of).unwrap();
+			assert_eq!(token_owner, alloy_address(holder));
+		});
+	}
+
+	#[test]
+	fn contract_reads_erc721_after_interface_detection() {
+		let code = fixture_code("ERC721Reader");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			assert_ok!(Scarcity::set_collection_metadata(
+				RuntimeOrigin::signed(alice.clone()),
+				collection,
+				key(NAME_KEY),
+				Some(value(b"Ducks"))
+			));
+			let item = setup_item(&alice, collection);
+			let (holder_address, holder) = purse(0xCC);
+			let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+				alice.clone(),
+				collection,
+				item,
+				holder,
+				alloc::vec![],
+			)
+			.unwrap();
+			let reader = deploy(&alice, code);
+			let target = alloy_address(collection_address(collection));
+
+			// The reader confirms ERC-721 through ERC-165, then returns the token's owner.
+			let owner_data = call_ok(
+				&alice,
+				reader,
+				IERC721Reader::ownerIfErc721Call {
+					collection: target,
+					tokenId: U256::from(instance),
+				}
+				.abi_encode(),
+			);
+			let owner = IERC721Reader::ownerIfErc721Call::abi_decode_returns(&owner_data).unwrap();
+			assert_eq!(owner, alloy_address(holder_address));
+
+			// The reader decodes the collection's `string` name.
+			let name_data = call_ok(
+				&alice,
+				reader,
+				IERC721Reader::collectionNameCall { collection: target }.abi_encode(),
+			);
+			let name = IERC721Reader::collectionNameCall::abi_decode_returns(&name_data).unwrap();
+			assert_eq!(name, "Ducks");
+		});
+	}
+
+	#[test]
+	fn native_transfer_breaks_owner_balance_invariant() {
+		let code = fixture_code("ERC721Reader");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			// Minting registers the destination key with the address mapper, so ownerOf and
+			// balanceOf agree about it.
+			let holder = id_to_account(9);
+			let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+				alice.clone(),
+				collection,
+				item,
+				holder.clone(),
+				alloc::vec![],
+			)
+			.unwrap();
+			let token = U256::from(instance);
+			let reader = deploy(&alice, code);
+			let target = alloy_address(collection_address(collection));
+
+			let data = call_ok(
+				&alice,
+				reader,
+				IERC721Reader::ownerAndBalanceCall { collection: target, tokenId: token }
+					.abi_encode(),
+			);
+			let consistent = IERC721Reader::ownerAndBalanceCall::abi_decode_returns(&data).unwrap();
+			assert_eq!(consistent.owner, address_of::<Test>(&holder));
+			assert_eq!(consistent.ownerBalance, U256::ONE);
+
+			// A native force transfer to a fresh key never registers it with the address mapper.
+			let stranger = id_to_account(2);
+			assert_ok!(Scarcity::force_transfer(
+				RuntimeOrigin::signed(alice.clone()),
+				instance,
+				stranger.clone()
+			));
+
+			let data = call_ok(
+				&alice,
+				reader,
+				IERC721Reader::ownerAndBalanceCall { collection: target, tokenId: token }
+					.abi_encode(),
+			);
+			let divergent = IERC721Reader::ownerAndBalanceCall::abi_decode_returns(&data).unwrap();
+			assert_eq!(divergent.owner, address_of::<Test>(&stranger));
+			assert_ne!(divergent.owner, Address::ZERO);
+			assert_eq!(divergent.ownerBalance, U256::ZERO);
+		});
+	}
+
+	#[test]
+	fn native_transfer_emits_no_erc721_transfer_log() {
+		let code = fixture_code("ERC721Reader");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let holder = id_to_account(9);
+			let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+				alice.clone(),
+				collection,
+				item,
+				holder.clone(),
+				alloc::vec![],
+			)
+			.unwrap();
+			let reader = deploy(&alice, code);
+			let target = alloy_address(collection_address(collection));
+			let stranger = id_to_account(2);
+
+			System::reset_events();
+			assert_ok!(Scarcity::force_transfer(
+				RuntimeOrigin::signed(alice.clone()),
+				instance,
+				stranger.clone()
+			));
+
+			System::assert_has_event(RuntimeEvent::Scarcity(
+				pallet_scarcity::Event::ForceTransferred {
+					instance,
+					collection,
+					from: holder,
+					to: stranger.clone(),
+				},
+			));
+			let emitted_evm_log = System::events().iter().any(|record| {
+				matches!(
+					record.event,
+					RuntimeEvent::Revive(pallet_revive::Event::ContractEmitted { .. })
+				)
+			});
+			assert!(
+				!emitted_evm_log,
+				"native force transfer must not emit an ERC-721 Transfer log"
+			);
+
+			// The EVM still sees the new owner even though no log was emitted.
+			let data = call_ok(
+				&alice,
+				reader,
+				IERC721Reader::ownerAndBalanceCall {
+					collection: target,
+					tokenId: U256::from(instance),
+				}
+				.abi_encode(),
+			);
+			let observed = IERC721Reader::ownerAndBalanceCall::abi_decode_returns(&data).unwrap();
+			assert_eq!(observed.owner, address_of::<Test>(&stranger));
+		});
+	}
+
+	#[test]
+	fn native_burn_emits_no_erc721_transfer_log() {
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let holder = id_to_account(9);
+			let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+				alice.clone(),
+				collection,
+				item,
+				holder,
+				alloc::vec![],
+			)
+			.unwrap();
+
+			System::reset_events();
+			assert_ok!(Scarcity::force_burn(RuntimeOrigin::signed(alice.clone()), instance));
+
+			assert!(Instances::<Test>::get(instance).is_none());
+			let emitted_evm_log = System::events().iter().any(|record| {
+				matches!(
+					record.event,
+					RuntimeEvent::Revive(pallet_revive::Event::ContractEmitted { .. })
+				)
+			});
+			assert!(!emitted_evm_log, "native force burn must not emit an ERC-721 Transfer log");
+		});
+	}
+
+	#[test]
+	fn proxied_contract_owns_its_collection() {
+		let logic_code = fixture_code("CollectionOwnerLogic");
+		let proxy_code = fixture_code("OwnerProxy");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			map_account(&alice);
+			// Deploy the implementation, then an OpenZeppelin-based proxy that delegate-calls it.
+			let logic = deploy(&alice, logic_code);
+			let proxy =
+				deploy_with_args(&alice, proxy_code, alloy_address(logic).into_word().0.to_vec());
+			// The proxy, not the caller, pays the collection and item deposits it incurs.
+			Balances::make_free_balance_be(
+				&account_of::<Test>(&alloy_address(proxy)),
+				u64::MAX / 2,
+			);
+
+			// Bootstrap runs the logic under the proxy's address, so the factory sees the proxy as
+			// caller and the owner-only defineItem the logic makes is allowed.
+			let data = call_ok(
+				&alice,
+				proxy,
+				ICollectionOwnerLogic::bootstrapCall {
+					factory: alloy_address(factory_address()),
+					prefix: COLLECTION_PREFIX,
+				}
+				.abi_encode(),
+			);
+			let collection =
+				ICollectionOwnerLogic::bootstrapCall::abi_decode_returns(&data).unwrap();
+
+			// The precompile reports the proxy address, not the account that drove it, as the
+			// owner.
+			let owner_data = call_ok(
+				&alice,
+				collection_address(collection),
+				IScarcityCollection::collectionOwnerCall {}.abi_encode(),
+			);
+			let owner =
+				IScarcityCollection::collectionOwnerCall::abi_decode_returns(&owner_data).unwrap();
+			assert_eq!(owner, alloy_address(proxy));
+		});
+	}
+
+	#[test]
+	fn interface_ids_match_openzeppelin() {
+		let code = fixture_code("InterfaceIds");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			map_account(&alice);
+			let probe = deploy(&alice, code);
+
+			// Each id is what the compiler derives from the OpenZeppelin standard interface, so the
+			// crate's constants must match it.
+			let erc165 =
+				call_ok(&alice, probe, IInterfaceIds::erc165InterfaceIdCall {}.abi_encode());
+			assert_eq!(
+				IInterfaceIds::erc165InterfaceIdCall::abi_decode_returns(&erc165).unwrap().0,
+				ERC165_INTERFACE_ID
+			);
+
+			let erc721 =
+				call_ok(&alice, probe, IInterfaceIds::erc721InterfaceIdCall {}.abi_encode());
+			assert_eq!(
+				IInterfaceIds::erc721InterfaceIdCall::abi_decode_returns(&erc721).unwrap().0,
+				ERC721_INTERFACE_ID
+			);
+
+			let metadata = call_ok(
+				&alice,
+				probe,
+				IInterfaceIds::erc721MetadataInterfaceIdCall {}.abi_encode(),
+			);
+			assert_eq!(
+				IInterfaceIds::erc721MetadataInterfaceIdCall::abi_decode_returns(&metadata)
+					.unwrap()
+					.0,
+				ERC721_METADATA_INTERFACE_ID
+			);
 		});
 	}
 }
