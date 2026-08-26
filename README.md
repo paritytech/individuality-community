@@ -42,6 +42,12 @@ Tagged releases ship the runtime WASM as release assets, built reproducibly with
 
 > Releases are not guaranteed to be present on every clone of this repository.
 
+### Nightly pre-releases
+
+Daily `nightly-*` pre-releases build the runtimes from the latest `main` so downstream CI can test new features early. Each nightly stamps its own `spec_version` (committed base × 100 + nightly sequence, e.g. `2_000_039` → `200_003_904`) so a chain accepts it over any earlier nightly.
+
+**Nightlies are not on the stable upgrade path.** A chain applies a runtime upgrade only when the new `spec_version` is strictly higher, and the stamped band is far above the stable one. A chain that installs a nightly then rejects the next stable release (`2_000_040` < `200_003_904`) until a stable ships above the band. Install nightlies on forks, testnets, and fresh chains only, never on a network that must later upgrade to stable releases.
+
 ## 🛠️ Operating a chain
 
 Running a deployed People chain? See the [Operations guide](./docs/operations.md) for the privileged tasks an operator performs — scheduling games, running airdrops, enabling coinage, and managing attestations and invites.
