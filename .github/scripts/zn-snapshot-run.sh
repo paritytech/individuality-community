@@ -71,7 +71,7 @@ done
 echo "::endgroup::"
 [ -n "$ok" ] || { echo "network did not come up"; tail -200 "$LOG" || true; exit 1; }
 
-echo "::group::bootstrap (initial-setup, 29 scripts)"
+echo "::group::bootstrap (initial-setup)"
 just bootstrap 2>&1 | tee "$TMP/zn-bootstrap.log"
 echo "::endgroup::"
 
