@@ -95,6 +95,15 @@ jobs:
 
           tee RELEASE_NOTES.md <<-EOF
           # Runtime info
+
+          ⚠️ **Nightlies are not on the stable upgrade path.** Each build stamps a
+          spec_version in the base * 100 + sequence band (\`2_000_039\` →
+          \`200_003_9NN\`), and a chain accepts an upgrade only when the new
+          spec_version is strictly higher. A chain that installs a nightly
+          therefore rejects the next stable release (\`2_000_040\` < the nightly
+          band) until a stable ships above the band. Use nightlies on forks,
+          testnets and fresh chains only.
+
           *These runtimes were built with **$(SRTOOL rustc)** using **[$(SRTOOL gen)](https://github.com/paritytech/srtool)***
           EOF
 
