@@ -48,6 +48,7 @@ jobs:
           tee -a RELEASE_NOTES.md <<-EOF
 
           ## ${RUNTIME_NAME}
+          spec_version: **$(WASM 'core_version | .specVersion')**
           ~~~
           🏋️ Runtime Size:           $(numfmt --to iec-i --format "%.2f" $(WASM size)) ($(WASM size) bytes)
           🗜 Compressed:             $(WASM 'compression | if .compressed then "Yes: \(1 - .size_compressed / .size_decompressed | . * 10000 | round / 100)%" else "No" end')

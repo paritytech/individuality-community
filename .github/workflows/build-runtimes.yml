@@ -1,9 +1,16 @@
 name: Build runtimes
 
 # Shared srtool build for the two paseo runtimes. Called by the manual Release
-# and the nightly pre-release workflows so both ship identical artifacts.
+# and the nightly pre-release workflows; the nightly passes nightly: true so its
+# builds get a timestamped spec_version.
 on:
   workflow_call:
+    inputs:
+      nightly:
+        description: Stamp spec_version with base * 100 + nightly sequence so each nightly upgrades
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-runtimes:
@@ -20,6 +27,38 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # A runtime upgrade only executes when spec_version strictly increases,
+      # and the committed value changes only on manual releases, so a nightly
+      # built from the raw source can never upgrade a chain already running a
+      # previous nightly. Stamp spec_version as base * 100 + N, where base is
+      # the committed value and N the count of earlier nightly tags: the
+      # stamped number starts with the committed digits (2_000_039 becomes
+      # 200_003_9NN) and strictly increases per nightly. spec_version is a
+      # u32, and base digits + N cap at 9 digits, which fits; N saturates at
+      # 99, so a base must not see 100 nightlies — every manual release bumps
+      # the base, which resets N. Manual releases must keep the committed
+      # value below the stamped band of any nightly already applied on-chain
+      # (bumping 2_000_039 to 2_000_040 stays under 200_003_900, so a chain
+      # that took a nightly rejects that release; bump past the band when
+      # that matters).
+      - name: Stamp nightly spec_version
+        if: inputs.nightly
+        run: |
+          set -euo pipefail
+          LIB="${{ matrix.path }}/src/lib.rs"
+          git fetch --tags --quiet
+          N=$(git tag -l 'nightly-*' | wc -l | tr -d ' ')
+          if [ "$N" -ge 100 ]; then
+            echo "::error::nightly sequence $N does not fit two digits; bump the committed spec_version"
+            exit 1
+          fi
+          BASE=$(grep -oP 'spec_version:\s*\K[0-9_]+' "$LIB" | tr -d '_')
+          printf -v STAMP '%d%02d' "$BASE" "$N"
+          # Group the 9 digits as nnn_nnn_nnn to match the Rust literal style.
+          GROUPED=$(sed -E 's/(.{3})(.{3})(.{3})/\1_\2_\3/' <<< "$STAMP")
+          sed -i -E "s/spec_version:[[:space:]]*[0-9_]+/spec_version: ${GROUPED}/" "$LIB"
+          grep "spec_version:" "$LIB"
 
       - name: Build ${{ matrix.name }} runtime
         id: srtool_build

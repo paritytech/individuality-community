@@ -4,9 +4,13 @@ name: Nightly Release
 # main, so downstream CI can test against the newest runtime features without
 # waiting for a versioned v* release. Pre-releases are marked prerelease and
 # never become the latest release. Each one carries a short diff of the PRs it
-# includes since the previous nightly. A scheduled run is skipped when main has
-# no new commits since the previous nightly; a workflow_dispatch run always
-# releases.
+# includes since the previous nightly, and each build stamps a unique
+# spec_version (committed base * 100 + count of nightly tags) so a chain accepts
+# it over any earlier nightly. The tag is nightly-YYYY-MM-DD, with a -HHMM
+# suffix when that tag already exists, so a manual rerun in the same day
+# releases alongside the earlier one instead of overwriting it. A scheduled run
+# is skipped when main has no new commits since the previous nightly; a
+# workflow_dispatch run always releases.
 on:
   schedule:
     - cron: "3 2 * * *" # nightly, 02:03 UTC
@@ -57,6 +61,10 @@ jobs:
     needs: [check-changes]
     if: github.event_name == 'workflow_dispatch' || needs.check-changes.outputs.new-commits == 'true'
     uses: ./.github/workflows/build-runtimes.yml
+    with:
+      # Stamp spec_version with the run timestamp so each nightly can upgrade
+      # a chain already running a previous nightly.
+      nightly: true
 
   publish-nightly:
     runs-on: parity-ubuntu
@@ -93,9 +101,13 @@ jobs:
           for JSON in $(<<<$CONTEXT sort -sr)
           do
           RUNTIME_NAME=$(basename ${JSON} _srtool_output.json)
+          # The build stamps spec_version as committed base * 100 + nightly
+          # sequence, so a chain accepts this nightly over any earlier one.
+          # Surface it: the committed value is not what this wasm carries.
           tee -a RELEASE_NOTES.md <<-EOF
 
           ## ${RUNTIME_NAME}
+          spec_version: **$(WASM 'core_version | .specVersion')** (stamped: committed base * 100 + nightly sequence)
           ~~~
           🏋️ Runtime Size:           $(numfmt --to iec-i --format "%.2f" $(WASM size)) ($(WASM size) bytes)
           🗜 Compressed:             $(WASM 'compression | if .compressed then "Yes: \(1 - .size_compressed / .size_decompressed | . * 10000 | round / 100)%" else "No" end')
@@ -151,7 +163,19 @@ jobs:
 
       - name: Compute nightly tag
         id: tag
-        run: echo "tag=nightly-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          git fetch --tags --quiet
+          TAG=nightly-$(date -u +%F)
+          # A rerun in the same UTC day would otherwise reuse the earlier
+          # release under the same tag, overwriting its assets, so suffix the
+          # tag with the run time. The stamp counts all nightly-* tags, and a
+          # suffixed tag matches the glob, so the rerun also gets the next
+          # spec_version sequence.
+          if git tag -l "$TAG" | grep -q .; then
+            TAG="$TAG-$(date -u +%H%M)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create nightly pre-release
         uses: softprops/action-gh-release@v3
