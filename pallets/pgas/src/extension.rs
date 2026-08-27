@@ -23,8 +23,11 @@
 //! Asset Hub).
 
 use crate::{
-	pallet::Day, weights::WeightInfo as _, ClaimedGasAliases, Config, Origin, Pallet, ProofOf,
+	pallet::{BatchAliases, Day},
+	weights::WeightInfo as _,
+	ClaimedGasAliases, Config, Origin, Pallet, ProofOf,
 };
+use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode};
 use core::fmt;
 use frame_support::{
@@ -36,7 +39,8 @@ use frame_support::{
 };
 use indiv_support::{
 	traits::{
-		MembershipProver, RevisionIndex, RingIndex, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER,
+		MembershipMultiProver, MembershipProver, RevisionIndex, RingIndex, PEOPLE_IDENTIFIER,
+		PEOPLE_LITE_IDENTIFIER,
 	},
 	tx_priority,
 };
@@ -65,6 +69,10 @@ pub enum CustomValidity {
 	/// currently stored under the given `day_index` prefix — the prefix state has moved on
 	/// since the caller constructed the call.
 	FirstAliasMismatch = 234,
+	/// `batch_claim_pgas` was submitted with an empty `slot_indices` list.
+	EmptyBatchClaim = 235,
+	/// The batch names the same claim slot more than once.
+	DuplicateClaimSlot = 236,
 }
 
 impl From<CustomValidity> for TransactionValidityError {
@@ -127,6 +135,17 @@ impl PgasCollection {
 pub enum AsPgasInfo<T: Config> {
 	/// Claim PGAS for the specified ring collection.
 	Claim {
+		proof: ProofOf<T>,
+		ring_index: RingIndex,
+		revision: RevisionIndex,
+		collection: PgasCollection,
+		day: u32,
+	},
+	/// Claim PGAS for several slots of one ring collection in a single transaction.
+	///
+	/// `proof` is a single multi-context proof built over one context per entry of the
+	/// call's `slot_indices`, in call order, so all claims in a batch come from one member.
+	BatchClaim {
 		proof: ProofOf<T>,
 		ring_index: RingIndex,
 		revision: RevisionIndex,
@@ -232,6 +251,94 @@ impl<T: Config> AsPgas<T> {
 
 		Ok((validity.into(), (), origin))
 	}
+
+	fn validate_batch_claim(
+		origin: <T as frame_system::Config>::RuntimeOrigin,
+		call: &<T as frame_system::Config>::RuntimeCall,
+		inherited_implication: &impl Encode,
+		proof: &ProofOf<T>,
+		ring_index: RingIndex,
+		revision: RevisionIndex,
+		collection: PgasCollection,
+		day: u32,
+	) -> ValidateResult<(), <T as frame_system::Config>::RuntimeCall> {
+		ensure!(
+			matches!(origin.as_system_ref(), Some(frame_system::RawOrigin::None)),
+			InvalidTransaction::BadSigner
+		);
+
+		let slot_indices = match call.is_sub_type() {
+			Some(crate::Call::<T>::batch_claim_pgas { slot_indices, .. }) => slot_indices,
+			_ => return Err(InvalidTransaction::Call.into()),
+		};
+		ensure!(!slot_indices.is_empty(), CustomValidity::EmptyBatchClaim);
+
+		let max_slot = Pallet::<T>::max_claims_for(collection);
+		for (i, slot_index) in slot_indices.iter().enumerate() {
+			ensure!(*slot_index < max_slot, CustomValidity::InvalidClaimSlot);
+			// A duplicate slot derives the same context, so the same alias twice; the second
+			// claim can never settle.
+			ensure!(!slot_indices[..i].contains(slot_index), CustomValidity::DuplicateClaimSlot);
+		}
+
+		// Reject early if the PGAS asset has not been created yet — minting in dispatch would
+		// fail anyway, and we'd rather not run proof verification for a claim that can't settle.
+		ensure!(
+			T::Fungibles::asset_exists(T::PgasAssetId::get()),
+			CustomValidity::PgasAssetNotCreated
+		);
+
+		// Accept only the current day, or the previous day while still within the grace window.
+		// When outside the grace window, `grace_day() == current_day()`.
+		let current_day = Pallet::<T>::current_day();
+		let grace_day = Pallet::<T>::grace_day();
+		ensure!(day == current_day || day == grace_day, CustomValidity::InvalidClaimDay);
+
+		let identifier = collection.identifier();
+		let msg = inherited_implication.using_encoded(sp_io::hashing::blake2_256);
+		let contexts = slot_indices
+			.iter()
+			.map(|slot_index| Pallet::<T>::build_gas_context(day, *slot_index))
+			.collect::<Vec<_>>();
+
+		let cas = T::MembershipProver::verify_membership_multi_context(
+			&identifier,
+			proof,
+			ring_index,
+			revision,
+			&contexts,
+			&msg[..],
+		)
+		.map_err(|_| InvalidTransaction::BadProof)?;
+		let day_be = Day::from(day);
+
+		let mut aliases = BatchAliases::new();
+		let mut validity =
+			ValidTransaction::with_tag_prefix("Pgas:Claim").priority(tx_priority::USER_DEFAULT);
+		for (ca, slot_index) in cas.iter().zip(slot_indices.iter()) {
+			let alias = ca.alias;
+			// Pool-hygiene pre-check; dispatch re-checks authoritatively.
+			ensure!(
+				!ClaimedGasAliases::<T>::contains_key(day_be, alias),
+				CustomValidity::AlreadyClaimed
+			);
+			// Same tag domain as single claims, so a batch and a single claim for the same
+			// slot conflict in the pool.
+			validity = validity
+				.and_provides(twox_64(&("pgas-slot", identifier, alias, day, *slot_index).encode()));
+			// `slot_indices` is bounded by `MaxPgasClaimsPerBatch`, which `integrity_test`
+			// asserts fits `BatchAliases`.
+			aliases
+				.try_push(alias)
+				.map_err(|_| InvalidTransaction::ExhaustsResources)?;
+		}
+
+		let local_origin = Origin::BatchClaimAliases { aliases, day: day_be, collection };
+		let mut origin = origin;
+		origin.set_caller_from(local_origin);
+
+		Ok((validity.into(), (), origin))
+	}
 }
 
 impl<T: Config> TransactionExtension<<T as frame_system::Config>::RuntimeCall> for AsPgas<T> {
@@ -243,6 +350,9 @@ impl<T: Config> TransactionExtension<<T as frame_system::Config>::RuntimeCall> f
 	fn weight(&self, _call: &<T as frame_system::Config>::RuntimeCall) -> Weight {
 		match self.0 {
 			Some(AsPgasInfo::Claim { .. }) => <T as Config>::WeightInfo::as_pgas_claim_tx_ext(),
+			// Constant worst case sized for `MaxPgasClaimsPerBatch` contexts; not refunded.
+			Some(AsPgasInfo::BatchClaim { .. }) =>
+				<T as Config>::WeightInfo::as_pgas_batch_claim_tx_ext(),
 			None => Weight::zero(),
 		}
 	}
@@ -260,6 +370,17 @@ impl<T: Config> TransactionExtension<<T as frame_system::Config>::RuntimeCall> f
 		match &self.0 {
 			Some(AsPgasInfo::Claim { proof, ring_index, revision, collection, day }) =>
 				Self::validate_claim(
+					origin,
+					call,
+					inherited_implication,
+					proof,
+					*ring_index,
+					*revision,
+					*collection,
+					*day,
+				),
+			Some(AsPgasInfo::BatchClaim { proof, ring_index, revision, collection, day }) =>
+				Self::validate_batch_claim(
 					origin,
 					call,
 					inherited_implication,

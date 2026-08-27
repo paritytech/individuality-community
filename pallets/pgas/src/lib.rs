@@ -35,6 +35,11 @@
 //! 4. Mutates the origin to [`Origin::ClaimAlias`]; the dispatch then records the alias and mints
 //!    [`Config::PgasClaimAmount`] into the `target` account.
 //!
+//! [`Call::batch_claim_pgas`] claims up to [`Config::MaxPgasClaimsPerBatch`] slots of one
+//! collection and day in a single transaction. The extension verifies a single multi-context
+//! proof, one context per slot, via [`MembershipMultiProver::verify_membership_multi_context`],
+//! yielding one alias per slot.
+//!
 //! Per (day, alias) uniqueness is enforced authoritatively in dispatch and pre-checked in
 //! validate for transaction pool hygiene. Records for elapsed days are pruned by a permissionless
 //! authorized cleanup call submitted by an offchain worker.
@@ -64,7 +69,7 @@ use frame_support::{
 };
 use indiv_support::{
 	context::{build_product_context, personhood},
-	traits::{Alias, Context, MembershipProver},
+	traits::{Alias, Context, MembershipMultiProver, MembershipProver},
 	tx_priority,
 	utils::BigEndianU32,
 	weight_budget::OcwWeightBudget,
@@ -93,6 +98,13 @@ pub mod pallet {
 
 	/// Number of seconds in a day — divisor used to map a UNIX timestamp to a day index.
 	pub const SECS_PER_DAY: u64 = 86400;
+
+	/// Upper bound on [`Config::MaxPgasClaimsPerBatch`], asserted in `integrity_test`.
+	/// Sizes the alias list in [`Origin::BatchClaimAliases`].
+	pub const MAX_PGAS_BATCH_CLAIMS: u32 = 8;
+
+	/// Alias list carried by [`Origin::BatchClaimAliases`].
+	pub type BatchAliases = BoundedVec<Alias, ConstU32<MAX_PGAS_BATCH_CLAIMS>>;
 
 	const LOG_TARGET: &str = "runtime::indiv-pallet-pgas";
 
@@ -125,8 +137,10 @@ pub mod pallet {
 		/// Source of ring-VRF proof verification against subscribed ring roots.
 		///
 		/// On Asset Hub this is typically `pallet-members-subscriber`, which tracks the
-		/// people and lite-people ring roots received from People chain via XCM.
-		type MembershipProver: MembershipProver<
+		/// people and lite-people ring roots received from People chain via XCM. Batch claims
+		/// verify a single multi-context proof, so the prover must also implement
+		/// [`MembershipMultiProver`].
+		type MembershipProver: MembershipMultiProver<
 			Crypto: GenerateVerifiable<
 				Proof: Parameter + Send + Sync + DecodeWithMemTracking,
 				Signature: Parameter + Send + Sync + DecodeWithMemTracking,
@@ -170,6 +184,12 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxPgasClaimRecordCleanupPerCall: Get<u32>;
 
+		/// Maximum number of claim slots a single [`Call::batch_claim_pgas`] may carry.
+		/// Must not exceed [`MAX_PGAS_BATCH_CLAIMS`] or the largest per-collection claim
+		/// count; both asserted in `integrity_test`.
+		#[pallet::constant]
+		type MaxPgasClaimsPerBatch: Get<u32>;
+
 		/// Admin account for the PGAS asset.
 		///
 		/// Should resolve to the sovereign account of this pallet's XCM location so the
@@ -196,6 +216,9 @@ pub mod pallet {
 		/// A verified claim-slot alias. `day` is the day the proof's context was built for
 		/// (either the current day or the grace day).
 		ClaimAlias { alias: Alias, day: Day, collection: PgasCollection },
+		/// Verified claim-slot aliases produced from one multi-context proof, one alias per
+		/// claimed slot. All slots in a batch share `day` and `collection`.
+		BatchClaimAliases { aliases: BatchAliases, day: Day, collection: PgasCollection },
 	}
 
 	/// Aliases that have been used to claim PGAS, keyed by (day, alias).
@@ -269,6 +292,21 @@ pub mod pallet {
 
 		fn integrity_test() {
 			assert!(
+				T::MaxPgasClaimsPerBatch::get() <= MAX_PGAS_BATCH_CLAIMS,
+				"`MaxPgasClaimsPerBatch` must not exceed `MAX_PGAS_BATCH_CLAIMS`; the alias list \
+				 in `Origin::BatchClaimAliases` holds at most that many entries",
+			);
+
+			// A batch names distinct slots of one collection, so a batch larger than the most
+			// permissive per-collection slot count can never be valid.
+			assert!(
+				T::MaxPgasClaimsPerBatch::get() <=
+					T::MaxClaimsPerPeriodPerPerson::get()
+						.max(T::MaxClaimsPerPeriodPerLitePerson::get()),
+				"`MaxPgasClaimsPerBatch` must not exceed the largest per-collection claim count",
+			);
+
+			assert!(
 				T::PgasClaimAmount::get() >= T::PgasMinBalance::get(),
 				"`PgasClaimAmount` must be >= `PgasMinBalance`, otherwise the first claim to a \
 				 fresh account would fail the asset's existential-deposit check",
@@ -306,24 +344,31 @@ pub mod pallet {
 			target: T::AccountId,
 		) -> DispatchResultWithPostInfo {
 			let (alias, day, collection) = Self::ensure_claim_alias(origin)?;
+			Self::do_claim_pgas(alias, day, collection, &target)?;
+			Ok(Pays::No.into())
+		}
 
-			// Already checked in extension, but we will do the write anyway so checking here as
-			// well.
-			ensure!(!ClaimedGasAliases::<T>::contains_key(day, alias), Error::<T>::AlreadyClaimed);
-
-			let amount = T::PgasClaimAmount::get();
-			T::Fungibles::mint_into(T::PgasAssetId::get(), &target, amount)
-				.map_err(|_| Error::<T>::PgasMintFailed)?;
-			ClaimedGasAliases::<T>::insert(day, alias, ());
-
-			Self::deposit_event(Event::PgasClaimed {
-				alias,
-				target,
-				amount,
-				collection,
-				day: day.into(),
-			});
-
+		/// Mint PGAS for a batch of verified claim slots.
+		///
+		/// Must be submitted with the [`AsPgas`] transaction extension carrying
+		/// [`AsPgasInfo::BatchClaim`](extension::AsPgasInfo::BatchClaim), which verifies a
+		/// single multi-context proof covering one context per entry in `slot_indices` and
+		/// produces an [`Origin::BatchClaimAliases`]. The outer origin must be `None`; any
+		/// other origin is rejected.
+		///
+		/// The weight is a constant worst case sized for [`Config::MaxPgasClaimsPerBatch`]
+		/// contexts; smaller batches are not refunded.
+		#[pallet::call_index(3)]
+		#[pallet::weight(<T as Config>::WeightInfo::batch_claim_pgas())]
+		pub fn batch_claim_pgas(
+			origin: OriginFor<T>,
+			_slot_indices: BoundedVec<u32, T::MaxPgasClaimsPerBatch>,
+			target: T::AccountId,
+		) -> DispatchResultWithPostInfo {
+			let (aliases, day, collection) = Self::ensure_batch_claim_aliases(origin)?;
+			for alias in &aliases {
+				Self::do_claim_pgas(*alias, day, collection, &target)?;
+			}
 			Ok(Pays::No.into())
 		}
 
@@ -384,6 +429,44 @@ pub mod pallet {
 				Ok(Origin::ClaimAlias { alias, day, collection }) => Ok((alias, day, collection)),
 				_ => Err(sp_runtime::DispatchError::BadOrigin),
 			}
+		}
+
+		/// Extract a verified [`Origin::BatchClaimAliases`] from a runtime origin.
+		pub fn ensure_batch_claim_aliases(
+			origin: OriginFor<T>,
+		) -> Result<(BatchAliases, Day, PgasCollection), sp_runtime::DispatchError> {
+			match origin.into_caller().try_into() {
+				Ok(Origin::BatchClaimAliases { aliases, day, collection }) =>
+					Ok((aliases, day, collection)),
+				_ => Err(sp_runtime::DispatchError::BadOrigin),
+			}
+		}
+
+		/// Record `alias` under `day` and mint [`Config::PgasClaimAmount`] into `target`.
+		///
+		/// The [`AsPgas`] extension pre-checks uniqueness for pool hygiene; this re-checks
+		/// authoritatively before the write.
+		fn do_claim_pgas(
+			alias: Alias,
+			day: Day,
+			collection: PgasCollection,
+			target: &T::AccountId,
+		) -> DispatchResult {
+			ensure!(!ClaimedGasAliases::<T>::contains_key(day, alias), Error::<T>::AlreadyClaimed);
+
+			let amount = T::PgasClaimAmount::get();
+			T::Fungibles::mint_into(T::PgasAssetId::get(), target, amount)
+				.map_err(|_| Error::<T>::PgasMintFailed)?;
+			ClaimedGasAliases::<T>::insert(day, alias, ());
+
+			Self::deposit_event(Event::PgasClaimed {
+				alias,
+				target: target.clone(),
+				amount,
+				collection,
+				day: day.into(),
+			});
+			Ok(())
 		}
 
 		/// Create the PGAS asset and emit [`Event::PgasAssetCreated`].

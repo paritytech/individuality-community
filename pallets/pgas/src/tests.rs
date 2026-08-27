@@ -270,6 +270,208 @@ fn claim_pgas_bad_proof_rejected() {
 	});
 }
 
+// ==================== Batch claims ====================
+
+/// Run a batch claim through the full `AsPgas` validate → dispatch pipeline.
+fn submit_batch_claim(
+	member_id: u64,
+	ring_index: u32,
+	collection: PgasCollection,
+	slots: &[u32],
+	target: AccountId32,
+	day: u32,
+) -> sp_runtime::DispatchResult {
+	let (call, tx_ext) =
+		build_batch_claim_tx(member_id, ring_index, collection, slots, target, day);
+	let info = call.get_dispatch_info();
+	let (_, _val, origin) = tx_ext
+		.validate_only(SystemOrigin::None.into(), &call, &info, 0, TransactionSource::External, 0)
+		.map_err(|_| sp_runtime::DispatchError::Other("validate_only failed"))?;
+	// Dispatch using the mutated origin produced by the extension.
+	call.dispatch(origin).map(|_| ()).map_err(|e| e.error)
+}
+
+/// Validate a batch claim and assert it fails with the given custom validity code.
+fn assert_batch_claim_invalid(
+	call: &RuntimeCall,
+	tx_ext: &crate::AsPgas<Test>,
+	code: CustomValidity,
+) {
+	let info = call.get_dispatch_info();
+	let result = tx_ext.validate_only(
+		SystemOrigin::None.into(),
+		call,
+		&info,
+		0,
+		TransactionSource::External,
+		0,
+	);
+	assert!(matches!(
+		result,
+		Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(c))) if c == code as u8
+	));
+}
+
+#[test]
+fn batch_claim_pgas_success() {
+	new_test_ext().execute_with(|| {
+		set_time_sec(DAY);
+		setup_pgas_asset();
+
+		let target = id_to_account(42);
+		let slots = [0u32, 1, 2];
+		assert_ok!(submit_batch_claim(100, 0, PgasCollection::People, &slots, target.clone(), 1));
+
+		assert_eq!(
+			<Assets as Inspect<AccountId32>>::balance(PgasAssetId::get(), &target),
+			PgasClaimAmount::get() * slots.len() as u64,
+		);
+		assert_eq!(
+			ClaimedGasAliases::<Test>::iter_prefix(Day::from(1u32)).count(),
+			slots.len()
+		);
+		let claim_events = System::events()
+			.iter()
+			.filter(|r| matches!(&r.event, RuntimeEvent::Pgas(Event::PgasClaimed { .. })))
+			.count();
+		assert_eq!(claim_events, slots.len());
+	});
+}
+
+#[test]
+fn batch_claim_pgas_slot_already_claimed_singly_rejected() {
+	new_test_ext().execute_with(|| {
+		set_time_sec(DAY);
+		setup_pgas_asset();
+
+		// Slot 0 claimed via the single-claim flow; the batch that includes it derives the
+		// same alias and is rejected as a whole.
+		let target = id_to_account(42);
+		assert_ok!(submit_claim(100, 0, PgasCollection::People, 0, target.clone(), 1));
+
+		let (call, tx_ext) =
+			build_batch_claim_tx(100, 0, PgasCollection::People, &[0, 1], target, 1);
+		assert_batch_claim_invalid(&call, &tx_ext, CustomValidity::AlreadyClaimed);
+	});
+}
+
+#[test]
+fn batch_claim_pgas_duplicate_slot_rejected() {
+	new_test_ext().execute_with(|| {
+		set_time_sec(DAY);
+		setup_pgas_asset();
+
+		let target = id_to_account(42);
+		let (call, tx_ext) =
+			build_batch_claim_tx(100, 0, PgasCollection::People, &[0, 0], target, 1);
+		assert_batch_claim_invalid(&call, &tx_ext, CustomValidity::DuplicateClaimSlot);
+	});
+}
+
+#[test]
+fn batch_claim_pgas_empty_rejected() {
+	new_test_ext().execute_with(|| {
+		set_time_sec(DAY);
+		setup_pgas_asset();
+
+		let target = id_to_account(42);
+		let (call, tx_ext) = build_batch_claim_tx(100, 0, PgasCollection::People, &[], target, 1);
+		assert_batch_claim_invalid(&call, &tx_ext, CustomValidity::EmptyBatchClaim);
+	});
+}
+
+#[test]
+fn batch_claim_pgas_invalid_slot_rejected() {
+	new_test_ext().execute_with(|| {
+		set_time_sec(DAY);
+		setup_pgas_asset();
+
+		// Second slot is out of the lite-collection range even though the batch size is fine.
+		let target = id_to_account(42);
+		let slots = [0u32, MaxClaimsPerPeriodPerLitePerson::get()];
+		let (call, tx_ext) =
+			build_batch_claim_tx(100, 0, PgasCollection::LitePeople, &slots, target, 1);
+		assert_batch_claim_invalid(&call, &tx_ext, CustomValidity::InvalidClaimSlot);
+	});
+}
+
+#[test]
+fn batch_claim_pgas_bad_proof_rejected() {
+	new_test_ext().execute_with(|| {
+		set_time_sec(DAY);
+		setup_pgas_asset();
+
+		// Proofs bound to a call minting to target A do not verify against a call minting to
+		// target B: the inherited implication (the message) differs.
+		let target_a = id_to_account(42);
+		let target_b = id_to_account(99);
+		let (_, tx_ext) =
+			build_batch_claim_tx(100, 0, PgasCollection::People, &[0, 1], target_a, 1);
+		let (call, _) = build_batch_claim_tx(100, 0, PgasCollection::People, &[0, 1], target_b, 1);
+		let info = call.get_dispatch_info();
+		let result = tx_ext.validate_only(
+			SystemOrigin::None.into(),
+			&call,
+			&info,
+			0,
+			TransactionSource::External,
+			0,
+		);
+		assert!(matches!(
+			result,
+			Err(TransactionValidityError::Invalid(InvalidTransaction::BadProof))
+		));
+	});
+}
+
+#[test]
+fn batch_claim_pgas_direct_dispatch_requires_batch_claim_origin() {
+	new_test_ext().execute_with(|| {
+		set_time_sec(DAY);
+		setup_pgas_asset();
+		let target = id_to_account(42);
+		let slots: sp_runtime::BoundedVec<u32, MaxPgasClaimsPerBatch> =
+			sp_runtime::BoundedVec::truncate_from(vec![0]);
+
+		// Calling `batch_claim_pgas` while skipping the `AsPgas` extension is rejected
+		// regardless of what the outer origin is, including the single-claim local origin.
+		assert_noop!(
+			Pallet::<Test>::batch_claim_pgas(
+				SystemOrigin::Signed(id_to_account(1)).into(),
+				slots.clone(),
+				target.clone(),
+			),
+			sp_runtime::DispatchError::BadOrigin,
+		);
+		assert_noop!(
+			Pallet::<Test>::batch_claim_pgas(SystemOrigin::None.into(), slots.clone(), target.clone()),
+			sp_runtime::DispatchError::BadOrigin,
+		);
+		let single_origin: RuntimeOrigin = crate::Origin::ClaimAlias {
+			alias: [0x11; 32],
+			day: Day::from(1u32),
+			collection: PgasCollection::People,
+		}
+		.into();
+		assert_noop!(
+			Pallet::<Test>::batch_claim_pgas(single_origin, slots, target.clone()),
+			sp_runtime::DispatchError::BadOrigin,
+		);
+
+		// The batch origin conversely does not authorize the single claim.
+		let batch_origin: RuntimeOrigin = crate::Origin::BatchClaimAliases {
+			aliases: sp_runtime::BoundedVec::truncate_from(vec![[0x11; 32]]),
+			day: Day::from(1u32),
+			collection: PgasCollection::People,
+		}
+		.into();
+		assert_noop!(
+			Pallet::<Test>::claim_pgas(batch_origin, 0, target),
+			sp_runtime::DispatchError::BadOrigin,
+		);
+	});
+}
+
 // ==================== Grace window ====================
 
 #[test]
