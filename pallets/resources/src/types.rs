@@ -58,7 +58,6 @@ pub struct NotificationRegistration<Account> {
 	/// Notification slot used in the registration context.
 	pub reference: NotificationReference,
 	/// Statement allowance granted to `account_id` at registration.
-	/// Cleanup revokes this value, not the current `NotificationAllowance`.
 	pub allowance: StatementAllowanceParameter,
 }
 
@@ -84,7 +83,6 @@ pub struct StmtStoreAllowanceEntry<T: Config> {
 	/// Used to enforce a cooldown before the same alias can replace it within the same period.
 	pub since: u64,
 	/// Statement allowance granted to `account_id` when this entry was set.
-	/// Replacement and cleanup revoke this value, not the current `AccountsApiAllowance`.
 	pub allowance: StatementAllowanceParameter,
 }
 
@@ -102,7 +100,6 @@ pub struct ConsumerInfo {
 	/// The credibility of a consumer.
 	pub credibility: Credibility,
 	/// Statement allowance this pallet has granted to the consumer account.
-	/// A credibility change revokes this value and grants the limit of the new credibility.
 	pub statement_allowance: StatementAllowanceParameter,
 }
 
