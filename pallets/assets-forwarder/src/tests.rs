@@ -55,6 +55,7 @@ fn create_asset(is_sufficient: bool) {
 		is_sufficient,
 		MIN_BALANCE
 	));
+	// Local metadata exists so the tests can pin that it is never forwarded.
 	assert_ok!(SourceAssets::force_set_metadata(
 		RuntimeOrigin::root(),
 		ASSET_ID.into(),
@@ -129,9 +130,9 @@ fn forwarded_message_has_expected_shape() {
 		assert_ok!(Forwarder::forward_asset(RuntimeOrigin::signed(BOB), ASSET_ID.into()));
 
 		let (_, message) = sent_xcm().pop().unwrap();
-		// Unpaid execution first, then the origin descends into the pallet, then the two
-		// transacts, each followed by a status check.
-		assert_eq!(message.0.len(), 6);
+		// Unpaid execution first, then the origin descends into the pallet, then the single
+		// transact followed by a status check.
+		assert_eq!(message.0.len(), 4);
 		assert!(matches!(
 			message.0[0],
 			UnpaidExecution { weight_limit: Unlimited, check_origin: None }
@@ -139,8 +140,6 @@ fn forwarded_message_has_expected_shape() {
 		assert_eq!(message.0[1], DescendOrigin([PalletInstance(37)].into()));
 		assert!(matches!(message.0[2], Transact { .. }));
 		assert_eq!(message.0[3], ExpectTransactStatus(MaybeErrorCode::Success));
-		assert!(matches!(message.0[4], Transact { .. }));
-		assert_eq!(message.0[5], ExpectTransactStatus(MaybeErrorCode::Success));
 	});
 }
 
@@ -150,8 +149,9 @@ fn forwarded_calls_decode_on_destination() {
 		create_asset(true);
 		assert_ok!(Forwarder::forward_asset(RuntimeOrigin::signed(BOB), ASSET_ID.into()));
 
+		// Metadata exists locally but only the creation call is sent.
 		let calls = sent_transacts();
-		assert_eq!(calls.len(), 2);
+		assert_eq!(calls.len(), 1);
 		assert_eq!(
 			calls[0],
 			RuntimeCall::DestAssets(pallet_assets::Call::force_create {
@@ -159,16 +159,6 @@ fn forwarded_calls_decode_on_destination() {
 				owner: expected_owner().into(),
 				is_sufficient: true,
 				min_balance: MIN_BALANCE,
-			})
-		);
-		assert_eq!(
-			calls[1],
-			RuntimeCall::DestAssets(pallet_assets::Call::force_set_metadata {
-				id: remote_asset_id(),
-				name: b"Token".to_vec(),
-				symbol: b"TOK".to_vec(),
-				decimals: 12,
-				is_frozen: false,
 			})
 		);
 	});

@@ -17,12 +17,13 @@
 //! Forwards trust-backed assets to a sibling chain over XCM.
 //!
 //! Any signed account can replicate an existing trust-backed asset onto the destination chain.
-//! The pallet reads the asset's minimum balance, sufficiency and metadata from local state, so a
-//! caller cannot misrepresent any of them, and sends the destination a program that force-creates
-//! the replica with this pallet's sovereign account as owner and team. The destination
-//! authenticates the program by this pallet's location, so its `pallet-assets` instance must set
-//! an origin filter (for example `EnsureXcm<Equals<location>>`) that matches
-//! `(1, [Parachain(<this chain>), PalletInstance(<this pallet>)])` as `ForceOrigin`.
+//! The pallet reads the asset's minimum balance and sufficiency from local state, so a caller
+//! cannot misrepresent them, and sends the destination a program that force-creates the replica
+//! with this pallet's sovereign account as owner and team. The metadata is not carried over but it
+//! can be queried on the original chain of the asset. The destination authenticates the program by
+//! this pallet's location, so its `pallet-assets` instance must set an origin filter (for example
+//! `EnsureXcm<Equals<location>>`) that matches `(1, [Parachain(<this chain>), PalletInstance(<this
+//! pallet>)])` as `ForceOrigin`.
 //!
 //! The replica's owner and team resolve to an account nobody controls on the destination, so its
 //! issuance there can only change through XCM transfers backed by this chain. The caller pays the
@@ -50,7 +51,7 @@ mod tests;
 pub use pallet::*;
 pub use weights::WeightInfo;
 
-use alloc::{vec, vec::Vec};
+use alloc::vec;
 use codec::{Encode, HasCompact};
 use frame_support::{
 	pallet_prelude::*,
@@ -99,8 +100,6 @@ pub enum RemoteAssetsCall<AccountId, Balance: HasCompact> {
 		#[codec(compact)]
 		min_balance: Balance,
 	},
-	#[codec(index = 19)]
-	ForceSetMetadata { id: Location, name: Vec<u8>, symbol: Vec<u8>, decimals: u8, is_frozen: bool },
 	#[codec(index = 21)]
 	ForceAssetStatus {
 		id: Location,
@@ -234,10 +233,9 @@ pub mod pallet {
 	impl<T: Config<I>, I: 'static> Pallet<T, I> {
 		/// Forward the asset `id` to the destination chain.
 		///
-		/// The asset must exist and be live. Its minimum balance, sufficiency and metadata are
-		/// read from local state and replicated on the destination in one program, so the replica
-		/// either carries the metadata or the whole program aborts. The caller pays the XCM
-		/// delivery fees and [`Config::ForwardDeposit`], which is held indefinitely.
+		/// The asset must exist and be live. Its minimum balance and sufficiency are read from
+		/// local state and replicated on the destination. The caller pays the XCM delivery fees and
+		/// [`Config::ForwardDeposit`], which is held indefinitely.
 		#[pallet::call_index(0)]
 		#[pallet::weight(<T as Config<I>>::WeightInfo::forward_asset())]
 		pub fn forward_asset(origin: OriginFor<T>, id: T::AssetIdParameter) -> DispatchResult {
@@ -254,8 +252,6 @@ pub mod pallet {
 				details.status == pallet_assets::AssetStatus::Live,
 				Error::<T, I>::AssetNotLive
 			);
-			let metadata = pallet_assets::Metadata::<T, I>::get(&asset_id);
-
 			let remote_asset_id = Self::remote_asset_id(asset_id.clone())?;
 			let owner = Self::remote_owner_account()?;
 
@@ -265,13 +261,6 @@ pub mod pallet {
 				is_sufficient: details.is_sufficient,
 				min_balance: details.min_balance,
 			};
-			let set_metadata = RemoteAssetsCall::ForceSetMetadata {
-				id: remote_asset_id.clone(),
-				name: metadata.name.into_inner(),
-				symbol: metadata.symbol.into_inner(),
-				decimals: metadata.decimals,
-				is_frozen: false,
-			};
 
 			let deposit = T::ForwardDeposit::get();
 			<T as Config<I>>::Currency::hold(
@@ -280,7 +269,7 @@ pub mod pallet {
 				deposit,
 			)?;
 
-			let message = Self::build_remote_xcm(&[create, set_metadata]);
+			let message = Self::build_remote_xcm(&create);
 			let message_id = Self::send_remote_xcm(origin, message)?;
 
 			ForwardedAssets::<T, I>::insert(
@@ -341,7 +330,7 @@ pub mod pallet {
 				is_frozen: false,
 			};
 
-			let message = Self::build_remote_xcm(&[status]);
+			let message = Self::build_remote_xcm(&status);
 			let message_id = Self::send_remote_xcm(origin, message)?;
 
 			record.min_balance = details.min_balance;
@@ -389,27 +378,23 @@ pub mod pallet {
 
 		/// Builds the program executed on the destination. Execution is unpaid because the
 		/// destination trusts this chain; the origin is descended into this pallet's location so
-		/// the destination can authenticate the `Transact`s. Each `Transact` is followed by a
-		/// status check, so a failed call aborts the rest of the program.
-		fn build_remote_xcm(calls: &[RemoteAssetsCall<T::AccountId, T::Balance>]) -> Xcm<()> {
-			let mut instructions = vec![
+		/// the destination can authenticate the `Transact`. The status check surfaces a failed
+		/// dispatch as a failed program.
+		fn build_remote_xcm(call: &RemoteAssetsCall<T::AccountId, T::Balance>) -> Xcm<()> {
+			let encoded = (T::RemoteAssetsPalletIndex::get(), call).encode();
+			Xcm(vec![
 				xcm::latest::Instruction::UnpaidExecution {
 					weight_limit: WeightLimit::Unlimited,
 					check_origin: None,
 				},
 				xcm::latest::Instruction::DescendOrigin(Self::pallet_location()),
-			];
-			for call in calls {
-				let encoded = (T::RemoteAssetsPalletIndex::get(), call).encode();
-				instructions.push(xcm::latest::Instruction::Transact {
+				xcm::latest::Instruction::Transact {
 					origin_kind: OriginKind::Xcm,
 					fallback_max_weight: None,
 					call: encoded.into(),
-				});
-				instructions
-					.push(xcm::latest::Instruction::ExpectTransactStatus(MaybeErrorCode::Success));
-			}
-			Xcm(instructions)
+				},
+				xcm::latest::Instruction::ExpectTransactStatus(MaybeErrorCode::Success),
+			])
 		}
 
 		/// Delivers `message` to the destination, charging the delivery fees to `origin` unless

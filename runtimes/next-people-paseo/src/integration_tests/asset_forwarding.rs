@@ -79,17 +79,6 @@ fn force_create_call(is_sufficient: bool) -> Vec<u8> {
 	(assets_pallet_index(), call).encode()
 }
 
-fn force_set_metadata_call() -> Vec<u8> {
-	let call = pallet_assets::Call::<Runtime>::force_set_metadata {
-		id: remote_asset_id(),
-		name: b"Token".to_vec(),
-		symbol: b"TOK".to_vec(),
-		decimals: 12,
-		is_frozen: false,
-	};
-	(assets_pallet_index(), call).encode()
-}
-
 fn force_asset_status_call(is_sufficient: bool, min_balance: u128) -> Vec<u8> {
 	let owner = MultiAddress::Id(owner_account());
 	let call = pallet_assets::Call::<Runtime>::force_asset_status {
@@ -111,8 +100,6 @@ fn forward_program(origin_kind: OriginKind, descend_to: u8) -> Xcm<RuntimeCall> 
 		UnpaidExecution { weight_limit: Unlimited, check_origin: None },
 		DescendOrigin([PalletInstance(descend_to)].into()),
 		Transact { origin_kind, fallback_max_weight: None, call: force_create_call(true).into() },
-		ExpectTransactStatus(MaybeErrorCode::Success),
-		Transact { origin_kind, fallback_max_weight: None, call: force_set_metadata_call().into() },
 		ExpectTransactStatus(MaybeErrorCode::Success),
 	])
 }
@@ -148,7 +135,7 @@ fn assets_pallet_index_matches_forwarder_contract() {
 }
 
 #[test]
-fn forwarder_program_creates_asset_with_metadata() {
+fn forwarder_program_creates_asset() {
 	new_test_ext().execute_with(|| {
 		let outcome = execute(AssetHubLocation::get(), forward_program(OriginKind::Xcm, 37));
 		assert!(outcome.ensure_complete().is_ok());
@@ -160,10 +147,11 @@ fn forwarder_program_creates_asset_with_metadata() {
 		assert_eq!(details.min_balance, MIN_BALANCE);
 		assert!(details.is_sufficient);
 
+		// Replicas carry no metadata; their identity is the asset id location.
 		let metadata = pallet_assets::Metadata::<Runtime>::get(remote_asset_id());
-		assert_eq!(metadata.name.to_vec(), b"Token".to_vec());
-		assert_eq!(metadata.symbol.to_vec(), b"TOK".to_vec());
-		assert_eq!(metadata.decimals, 12);
+		assert!(metadata.name.is_empty());
+		assert!(metadata.symbol.is_empty());
+		assert_eq!(metadata.decimals, 0);
 	});
 }
 

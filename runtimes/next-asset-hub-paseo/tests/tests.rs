@@ -1802,6 +1802,7 @@ mod assets_forwarder {
 			alice.clone().into(),
 			MIN_BALANCE
 		));
+		// Local metadata exists so the tests can pin that it is never forwarded.
 		assert_ok!(Assets::set_metadata(
 			RuntimeOrigin::signed(alice.clone()),
 			ASSET_ID.into(),
@@ -1991,10 +1992,11 @@ mod assets_forwarder {
 			// `Assets::create` on Asset Hub always yields a non-sufficient asset.
 			assert!(!details.is_sufficient);
 
+			// The asset has metadata on Asset Hub, but the replica carries none.
 			let metadata = pallet_assets::Metadata::<people::Runtime>::get(remote_id);
-			assert_eq!(metadata.name.to_vec(), b"Token".to_vec());
-			assert_eq!(metadata.symbol.to_vec(), b"TOK".to_vec());
-			assert_eq!(metadata.decimals, 12);
+			assert!(metadata.name.is_empty());
+			assert!(metadata.symbol.is_empty());
+			assert_eq!(metadata.decimals, 0);
 		});
 	}
 }
