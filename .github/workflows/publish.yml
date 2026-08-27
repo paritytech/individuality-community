@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # the initial commit is the PR-diff base of the first release
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -37,9 +39,15 @@ jobs:
           SRTOOL() { <$(<<<$CONTEXT head -n1) jq -r .$1; }
           WASM() { <${JSON} jq -r ".runtimes.compressed.subwasm.$1"; }
 
+          # The workspace is pinned to this Polkadot SDK release, enforced by
+          # the psvm check.
+          . .github/env
+
           tee RELEASE_NOTES.md <<-EOF
           # Runtime info
           *These runtimes were built with **$(SRTOOL rustc)** using **[$(SRTOOL gen)](https://github.com/paritytech/srtool)***
+
+          *Compatible with [Polkadot SDK](https://github.com/paritytech/polkadot-sdk) **${POLKADOT_RELEASE_VERSION}${POLKADOT_RELEASE_PATCH}***
           EOF
 
           for JSON in $(<<<$CONTEXT sort -sr)
@@ -61,9 +69,94 @@ jobs:
 
           cat RELEASE_NOTES.md
 
+      - name: Determine previous release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # The release for the pushed tag does not exist yet, so the newest
+          # final v* release is the previous one. Pre-releases (release
+          # candidates) are skipped, so a final and its candidates all compare
+          # against the previous final. Empty on the first versioned release.
+          PREV_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 200 --json tagName --jq '[.[].tagName | select(startswith("v"))] | first // empty')
+          echo "previous release: ${PREV_TAG:-none}"
+          echo "PREV_TAG=$PREV_TAG" >> "$GITHUB_ENV"
+
+      - name: Check and record spec versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$PREV_TAG" ]; then
+            mkdir -p previous-release
+            # Tolerate a previous release without srtool digests; the bump
+            # check is then skipped for the runtimes that lack one.
+            gh release download "$PREV_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern '*_srtool_output.json' --dir previous-release || true
+          fi
+
+          {
+            printf '\n# Spec versions\n\n'
+            printf '| Runtime | %s | %s |\n' "${PREV_TAG:-no previous release}" "$GITHUB_REF_NAME"
+            printf '|---|---|---|\n'
+          } >> RELEASE_NOTES.md
+
+          fail=0
+          for JSON in $(find artifacts -name '*_srtool_output.json' | sort); do
+            NAME=$(basename "$JSON" _srtool_output.json)
+            CURR=$(jq -r '.runtimes.compressed.subwasm.core_version.specVersion' "$JSON")
+            PREV_JSON="previous-release/${NAME}_srtool_output.json"
+            PREV_SPEC=""
+            if [ -f "$PREV_JSON" ]; then
+              PREV_SPEC=$(jq -r '.runtimes.compressed.subwasm.core_version.specVersion' "$PREV_JSON")
+            fi
+            printf '| %s | %s | %s |\n' "$NAME" "${PREV_SPEC:-n/a}" "$CURR" >> RELEASE_NOTES.md
+            if [ -n "$PREV_SPEC" ] && [ "$CURR" -le "$PREV_SPEC" ]; then
+              echo "::error::spec_version of ${NAME} is ${CURR}, not incremented over ${PREV_SPEC} in ${PREV_TAG}. Bump the runtime's spec_version on main, then delete and re-create the tag: git push --delete origin ${GITHUB_REF_NAME} && git tag -d ${GITHUB_REF_NAME} && git tag ${GITHUB_REF_NAME} <commit with the bump> && git push origin ${GITHUB_REF_NAME}"
+              fail=1
+            fi
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Append PR list to changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # The first versioned release lists every pull request since the
+          # initial commit.
+          if [ -n "$PREV_TAG" ]; then
+            PREV="$PREV_TAG"
+            PREV_LABEL="[$PREV](https://github.com/$GITHUB_REPOSITORY/releases/tag/$PREV)"
+          else
+            PREV=$(git rev-list --max-parents=0 HEAD | tail -n1)
+            PREV_LABEL="the initial commit (this is the first versioned release)"
+          fi
+
+          {
+            printf '\n# PRs included\n'
+            printf '\n_Compared to %s._\n\n' "$PREV_LABEL"
+            .github/scripts/release_pr_notes.sh "$PREV" "$GITHUB_REF_NAME"
+          } >> RELEASE_NOTES.md
+
+          cat RELEASE_NOTES.md
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
+          # A semver pre-release suffix (e.g. v1.0.0-rc1) publishes a
+          # pre-release, which GitHub never marks as the latest release.
+          # The srtool digests are attached so the next release can read this
+          # one's spec versions for its bump check.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             release-assets/*.wasm
+            release-assets/*_srtool_output.json
           body_path: RELEASE_NOTES.md

@@ -3,10 +3,10 @@ name: Nightly Release
 # Nightly (and on-demand) pre-release of the two paseo runtimes built from fresh
 # main, so downstream CI can test against the newest runtime features without
 # waiting for a versioned v* release. Pre-releases are marked prerelease and
-# never become the latest release. Each one carries a short diff of the PRs it
-# includes since the previous nightly. A scheduled run is skipped when main has
-# no new commits since the previous nightly; a workflow_dispatch run always
-# releases.
+# never become the latest release. Each one lists the PRs it includes since the
+# previous nightly, with their audit and compatibility labels. A scheduled run
+# is skipped when main has no new commits since the previous nightly; a
+# workflow_dispatch run always releases.
 on:
   schedule:
     - cron: "3 2 * * *" # nightly, 02:03 UTC
@@ -85,9 +85,15 @@ jobs:
           SRTOOL() { <$(<<<$CONTEXT head -n1) jq -r .$1; }
           WASM() { <${JSON} jq -r ".runtimes.compressed.subwasm.$1"; }
 
+          # The workspace is pinned to this Polkadot SDK release, enforced by
+          # the psvm check.
+          . .github/env
+
           tee RELEASE_NOTES.md <<-EOF
           # Runtime info
           *These runtimes were built with **$(SRTOOL rustc)** using **[$(SRTOOL gen)](https://github.com/paritytech/srtool)***
+
+          *Compatible with [Polkadot SDK](https://github.com/paritytech/polkadot-sdk) **${POLKADOT_RELEASE_VERSION}${POLKADOT_RELEASE_PATCH}***
           EOF
 
           for JSON in $(<<<$CONTEXT sort -sr)
@@ -115,31 +121,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Previous nightly tag; on the first nightly fall back to the latest v* release.
+          # Previous nightly tag; on the first nightly fall back to the latest
+          # release, then to the initial commit.
           PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
             --json tagName --jq '[.[].tagName | select(startswith("nightly-"))] | first // empty')
           if [ -z "$PREV" ]; then
             PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
-              --json tagName --jq '.[0].tagName')
+              --json tagName --jq '.[0].tagName // empty')
+          fi
+          if [ -z "$PREV" ]; then
+            PREV=$(git rev-list --max-parents=0 HEAD | tail -n1)
           fi
           echo "diffing against $PREV"
 
-          # grep returns non-zero when no commit message carries a PR number (e.g.
-          # the first nightly, or a diff with only squashed/non-PR commits), so
-          # tolerate it and fall back to the empty-diff message below.
-          if gh api "repos/$GITHUB_REPOSITORY/compare/$PREV...$GITHUB_SHA" \
-            --jq '.commits[] | .commit.message' \
-            | grep -oE '\(#[0-9]+\)' | tr -d '()' | sort -u \
-            | while read -r n; do
-                gh pr view "$n" --repo "$GITHUB_REPOSITORY" \
-                  --json number,title --jq '"#\(.number) - \(.title)"'
-              done > PR_DIFF.md; then
-            :
-          fi
-
-          if [ ! -s PR_DIFF.md ]; then
-            echo "No PRs merged since the previous nightly." > PR_DIFF.md
-          fi
+          .github/scripts/release_pr_notes.sh "$PREV" "$GITHUB_SHA" > PR_DIFF.md
           cat PR_DIFF.md
 
       - name: Append PR diff to changelog
