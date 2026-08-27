@@ -23,11 +23,6 @@
 //! period. A notification allowance authorizes a statement account to publish a notification
 //! without revealing the member's identity.
 //!
-//! Every statement allowance grant records the value it added next to the granted account. A
-//! revocation subtracts the recorded value, so the configured allowances (`AccountsApiAllowance`,
-//! `NotificationAllowance`, `PersonStatementLimit`, `LitePersonStatementLimit`) can change while
-//! grants are active.
-//!
 //! # Deprecated: username management
 //!
 //! Only the username-related state and extrinsics in this pallet
