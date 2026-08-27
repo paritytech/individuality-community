@@ -20,6 +20,7 @@ use super::*;
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use frame_support::{CloneNoBound, DebugNoBound, EqNoBound, PartialEqNoBound};
+use indiv_support::parameters::StatementAllowanceParameter;
 use scale_info::TypeInfo;
 
 pub type SignatureOf<T> =
@@ -56,6 +57,9 @@ pub struct NotificationRegistration<Account> {
 	pub account_id: Account,
 	/// Notification slot used in the registration context.
 	pub reference: NotificationReference,
+	/// Statement allowance granted to `account_id` at registration.
+	/// Cleanup revokes this value, not the current `NotificationAllowance`.
+	pub allowance: StatementAllowanceParameter,
 }
 
 /// Value stored per anonymous statement store allowance entry.
@@ -79,6 +83,9 @@ pub struct StmtStoreAllowanceEntry<T: Config> {
 	/// Timestamp (seconds since Unix epoch) when this entry was last set.
 	/// Used to enforce a cooldown before the same alias can replace it within the same period.
 	pub since: u64,
+	/// Statement allowance granted to `account_id` when this entry was set.
+	/// Replacement and cleanup revoke this value, not the current `AccountsApiAllowance`.
+	pub allowance: StatementAllowanceParameter,
 }
 
 /// The information related to a particular consumer.
@@ -94,6 +101,9 @@ pub struct ConsumerInfo {
 	pub lite_username: Username,
 	/// The credibility of a consumer.
 	pub credibility: Credibility,
+	/// Statement allowance this pallet has granted to the consumer account.
+	/// A credibility change revokes this value and grants the limit of the new credibility.
+	pub statement_allowance: StatementAllowanceParameter,
 }
 
 /// The credibility of a consumer.

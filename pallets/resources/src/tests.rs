@@ -1537,6 +1537,77 @@ fn touch_keeps_existing_allowance_for_non_demoted_person() {
 	});
 }
 
+#[test]
+fn allowance_follows_current_limits_when_limits_change() {
+	new_test_ext().execute_with(|| {
+		let lite_account = id_to_account(1);
+		let person_origin = person_origin_for(10, 0, 0);
+		let lite_limit_a = StatementAllowance { max_size: 1_000, max_count: 10 };
+		let lite_limit_b = StatementAllowance { max_size: 2_000, max_count: 5 };
+		let lite_limit_c = StatementAllowance { max_size: 3_000, max_count: 8 };
+		let person_limit_a = StatementAllowance { max_size: 10_000, max_count: 100 };
+		let person_limit_b = StatementAllowance { max_size: 8_000, max_count: 120 };
+		let person_limit_c = StatementAllowance { max_size: 5_000, max_count: 300 };
+
+		set_time_sec(100);
+		LitePersonStatementLimit::set(&lite_limit_a);
+		assert_ok!(Resources::register_lite_person(
+			lite_person_origin(1),
+			comm_id(b"key1"),
+			username::<Test>(b"liteuser.12"),
+			None
+		));
+		assert_eq!(get_allowance(&lite_account), lite_limit_a);
+		assert_eq!(
+			Consumers::<Test>::get(&lite_account).unwrap().statement_allowance,
+			lite_limit_a.clone().into()
+		);
+
+		// Promotion raises the account to the person limit in force at promotion time.
+		PersonStatementLimit::set(&person_limit_a);
+		let proof = mock_lite_proof(lite_account.clone());
+		assert_ok!(Resources::register_person(
+			person_origin.clone(),
+			lite_account.clone(),
+			proof,
+			PersonalUsernameChoice::Standalone(username::<Test>(b"personuser"))
+		));
+		assert_eq!(get_allowance(&lite_account), person_limit_a);
+		assert_eq!(
+			Consumers::<Test>::get(&lite_account).unwrap().statement_allowance,
+			person_limit_a.clone().into()
+		);
+
+		// Both limits change while the person is registered. Demotion lands on the new lite
+		// limit with no leftover from the old person limit.
+		PersonStatementLimit::set(&person_limit_b);
+		LitePersonStatementLimit::set(&lite_limit_b);
+		let auth_duration: u32 = <Test as Config>::PersonAuthDuration::get();
+		advance_time_sec(auth_duration as u64 + 1);
+		assert_ok!(Resources::demote_auth_expired(
+			SystemOrigin::Authorized.into(),
+			lite_account.clone()
+		));
+		assert_eq!(get_allowance(&lite_account), lite_limit_b);
+		assert_eq!(
+			Consumers::<Test>::get(&lite_account).unwrap().statement_allowance,
+			lite_limit_b.clone().into()
+		);
+
+		// Both limits change again. Re-promotion lands on the new person limit.
+		PersonStatementLimit::set(&person_limit_c);
+		LitePersonStatementLimit::set(&lite_limit_c);
+		let min_interval: u32 = <Test as Config>::MinPersonAuthUpdateInterval::get();
+		advance_time_sec(min_interval as u64 + 1);
+		assert_ok!(Resources::touch_person_authorization(person_origin));
+		assert_eq!(get_allowance(&lite_account), person_limit_c);
+		assert_eq!(
+			Consumers::<Test>::get(&lite_account).unwrap().statement_allowance,
+			person_limit_c.into()
+		);
+	});
+}
+
 mod notification {
 	use super::*;
 
@@ -1686,6 +1757,44 @@ mod notification {
 				)
 				.into()))
 			);
+		});
+	}
+
+	#[test]
+	fn notification_cleanup_revokes_recorded_allowance_after_limit_change() {
+		new_test_ext().execute_with(|| {
+			let reference = NotificationReference { period: 0, seq: 3 };
+			let alias = id_to_alias(56);
+			let stmt_account = id_to_account(103);
+			let granted = StatementAllowance { max_size: 4_096, max_count: 4 };
+			let lowered = StatementAllowance { max_size: 1_024, max_count: 1 };
+
+			set_time_sec(100);
+			NotificationAllowance::set(&granted);
+			assert_ok!(Resources::set_notification_statement_account_for_sequence(
+				notification_origin(56),
+				reference,
+				stmt_account.clone(),
+			));
+			assert_eq!(get_allowance(&stmt_account), granted);
+			assert_eq!(
+				NotificationRegistrationByAlias::<Test>::get(alias).unwrap().allowance,
+				granted.clone().into()
+			);
+
+			// The allowance is lowered while the registration is active. Cleanup revokes the
+			// recorded grant, not the current value.
+			NotificationAllowance::set(&lowered);
+			set_time_sec(
+				Resources::notification_expiration_time(reference.period).saturating_add(1),
+			);
+			assert_ok!(Resources::clear_expired_notification_sequence(
+				SystemOrigin::Authorized.into(),
+				stmt_account.clone(),
+				reference.seq,
+			));
+			assert_eq!(get_allowance(&stmt_account), StatementAllowance::default());
+			assert!(!NotificationRegistrationByAlias::<Test>::contains_key(alias));
 		});
 	}
 
@@ -3734,6 +3843,7 @@ mod stmt_store_allowance {
 					account_id: target.clone(),
 					seq: 0,
 					since: TestClock::now().as_secs(),
+					allowance: accounts_allowance.clone().into(),
 				}),
 			);
 			assert_eq!(get_allowance(&target), accounts_allowance);
@@ -3808,6 +3918,92 @@ mod stmt_store_allowance {
 					id_to_account(901),
 				),
 				Error::<Test>::StmtStoreReplacementTooEarly
+			);
+		});
+	}
+
+	#[test]
+	fn cleanup_revokes_recorded_allowance_after_limit_change() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let alias = id_to_alias(60);
+			let target = id_to_account(600);
+			let granted = StatementAllowance { max_size: 4_096, max_count: 4 };
+			let lowered = StatementAllowance { max_size: 1_024, max_count: 1 };
+
+			AccountsApiAllowance::set(&granted);
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(60),
+				period,
+				0,
+				target.clone(),
+			));
+			assert_eq!(get_allowance(&target), granted);
+			assert_eq!(
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), alias)
+					.unwrap()
+					.allowance,
+				granted.clone().into()
+			);
+
+			// The allowance is lowered while the entry is active. Cleanup revokes the recorded
+			// grant, not the current value.
+			AccountsApiAllowance::set(&lowered);
+			let grace_secs: u64 =
+				<<Test as Config>::StmtStoreGraceWindow as Get<u32>>::get() as u64;
+			let period_end = (period as u64 + 1) * SECONDS_PER_DAY;
+			set_time_sec(period_end + grace_secs + 1);
+			assert_ok!(Resources::clear_expired_stmt_store_allowances(
+				SystemOrigin::Authorized.into(),
+				period,
+				alias,
+			));
+			assert_eq!(get_allowance(&target), StatementAllowance::default());
+		});
+	}
+
+	#[test]
+	fn replacement_revokes_recorded_allowance_after_limit_change() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let alias = id_to_alias(91);
+			let target_a = id_to_account(910);
+			let target_b = id_to_account(911);
+			let granted = StatementAllowance { max_size: 4_096, max_count: 4 };
+			let lowered = StatementAllowance { max_size: 1_024, max_count: 1 };
+
+			AccountsApiAllowance::set(&granted);
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(91),
+				period,
+				0,
+				target_a.clone(),
+			));
+			assert_eq!(get_allowance(&target_a), granted);
+
+			// The allowance is lowered before the replacement. The old target loses the recorded
+			// grant and the new target receives the current value.
+			AccountsApiAllowance::set(&lowered);
+			let cooldown =
+				<<Test as Config>::StmtStoreReplacementCooldown as Get<u32>>::get() as u64;
+			advance_time_sec(cooldown + 1);
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(91),
+				period,
+				1,
+				target_b.clone(),
+			));
+			assert_eq!(get_allowance(&target_a), StatementAllowance::default());
+			assert_eq!(get_allowance(&target_b), lowered);
+			assert_eq!(
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), alias)
+					.unwrap()
+					.allowance,
+				lowered.into()
 			);
 		});
 	}

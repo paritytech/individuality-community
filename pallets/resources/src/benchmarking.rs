@@ -204,6 +204,7 @@ mod benches {
 			full_username: None,
 			lite_username: lite_uname,
 			credibility: Credibility::Lite,
+			statement_allowance: T::LitePersonStatementLimit::get().into(),
 		};
 		Consumers::<T>::insert(&lite_account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&lite_account);
@@ -257,6 +258,7 @@ mod benches {
 			full_username: None,
 			lite_username: lite_uname,
 			credibility: Credibility::Lite,
+			statement_allowance: T::LitePersonStatementLimit::get().into(),
 		};
 		Consumers::<T>::insert(&lite_account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&lite_account);
@@ -325,6 +327,7 @@ mod benches {
 			full_username: None,
 			lite_username: username,
 			credibility: Credibility::Lite,
+			statement_allowance: T::LitePersonStatementLimit::get().into(),
 		};
 		Consumers::<T>::insert(&account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&account);
@@ -441,6 +444,7 @@ mod benches {
 			full_username: Some(full_username),
 			lite_username,
 			credibility: Credibility::Person { alias, last_update: 0, demoted: false },
+			statement_allowance: T::PersonStatementLimit::get().into(),
 		};
 		Consumers::<T>::insert(&caller, consumer_info);
 
@@ -485,10 +489,12 @@ mod benches {
 			full_username: Some(full_username),
 			lite_username,
 			credibility: Credibility::Person { alias, last_update: 0, demoted: false },
+			statement_allowance: T::PersonStatementLimit::get().into(),
 		};
 		let mut post_consumer_info = consumer_info.clone();
 		post_consumer_info.credibility =
 			Credibility::Person { alias, last_update: 0, demoted: true };
+		post_consumer_info.statement_allowance = post_allowance.clone().into();
 		Consumers::<T>::insert(&account, consumer_info);
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(
 			T::PersonAuthDuration::get() as u64 + 1,
@@ -516,6 +522,7 @@ mod benches {
 				full_username: Some(full_username),
 				lite_username,
 				credibility: Credibility::Person { alias, last_update: 0, demoted: false },
+				statement_allowance: T::PersonStatementLimit::get().into(),
 			},
 		);
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(
@@ -754,6 +761,7 @@ mod benches {
 				account_id: old_target.clone(),
 				seq: old_seq,
 				since: initial_since,
+				allowance: T::AccountsApiAllowance::get().into(),
 			},
 		);
 		StmtStoreAllowanceByAccount::<T>::insert(&old_target, (period_key, old_seq, alias), ());
@@ -834,7 +842,12 @@ mod benches {
 		StatementStoreAllowances::<T>::insert(
 			past_period_key,
 			alias,
-			crate::types::StmtStoreAllowanceEntry { account_id: acc.clone(), seq: 0, since: 0 },
+			crate::types::StmtStoreAllowanceEntry {
+				account_id: acc.clone(),
+				seq: 0,
+				since: 0,
+				allowance: T::AccountsApiAllowance::get().into(),
+			},
 		);
 		StmtStoreAllowanceByAccount::<T>::insert(&acc, (past_period_key, 0u32, alias), ());
 
@@ -905,6 +918,7 @@ mod benches {
 				account_id: existing_target,
 				seq: 1,
 				since: initial_since,
+				allowance: T::AccountsApiAllowance::get().into(),
 			},
 		);
 		// Advance past the replacement cooldown so validation succeeds.

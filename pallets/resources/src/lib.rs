@@ -23,6 +23,11 @@
 //! period. A notification allowance authorizes a statement account to publish a notification
 //! without revealing the member's identity.
 //!
+//! Every statement allowance grant records the value it added next to the granted account. A
+//! revocation subtracts the recorded value, so the configured allowances (`AccountsApiAllowance`,
+//! `NotificationAllowance`, `PersonStatementLimit`, `LitePersonStatementLimit`) can change while
+//! grants are active.
+//!
 //! # Deprecated: username management
 //!
 //! Only the username-related state and extrinsics in this pallet
@@ -147,7 +152,8 @@ pub mod pallet {
 		type MaxReservationQueueLength: Get<u32>;
 
 		/// The Statement Store allowance for the accounts API.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type AccountsApiAllowance: Get<StatementAllowance>;
 
 		/// Maximum number of statement store slots a person can claim within one period.
@@ -178,7 +184,8 @@ pub mod pallet {
 		type StmtStoreGraceWindow: Get<u32>;
 
 		/// The Statement Store allowance for notification statement registration.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type NotificationAllowance: Get<StatementAllowance>;
 
 		/// Highest valid notification slot identifier for a person within one period.
@@ -233,10 +240,14 @@ pub mod pallet {
 			+ Parameter;
 
 		/// The limit for the statement store usage for lite people.
+		///
+		/// This parameter can be changed at any time.
 		type LitePersonStatementLimit: Get<StatementAllowance>;
 
 		/// The limit for the statement store usage for people. Must be equal to or greater than the
 		/// lite person limit.
+		///
+		/// This parameter can be changed at any time.
 		type PersonStatementLimit: Get<StatementAllowance>;
 
 		/// The duration of a long-term storage claiming period, in seconds.
@@ -731,22 +742,22 @@ pub mod pallet {
 				Error::<T>::TouchNotReady
 			);
 
-			// Set the consumer's updated record.
-			Consumers::<T>::insert(
-				&account,
-				ConsumerInfo {
-					credibility: Credibility::Person { alias, last_update: now, demoted: false },
-					..consumer_info
-				},
-			);
-
+			let mut consumer_info = ConsumerInfo {
+				credibility: Credibility::Person { alias, last_update: now, demoted: false },
+				..consumer_info
+			};
 			if was_demoted {
 				// A person's allowance should be given back.
 				let person_allowance = T::PersonStatementLimit::get();
-				let lite_person_allowance = T::LitePersonStatementLimit::get();
-				let remaining_allowance = person_allowance.saturating_sub(lite_person_allowance);
-				increase_allowance_by(account.clone().into(), remaining_allowance);
+				decrease_allowance_by(
+					account.clone().into(),
+					consumer_info.statement_allowance.clone().into(),
+				);
+				increase_allowance_by(account.clone().into(), person_allowance.clone());
+				consumer_info.statement_allowance = person_allowance.into();
 			}
+			// Set the consumer's updated record.
+			Consumers::<T>::insert(&account, consumer_info);
 
 			Self::deposit_event(Event::PersonAuthorizationTouched { account });
 			Ok(Pays::No.into())
@@ -834,13 +845,17 @@ pub mod pallet {
 			ensure_authorized(origin)?;
 			let consumer_info = Self::validate_demotion(&account)?;
 			if let Credibility::Person { alias, last_update, .. } = consumer_info.credibility {
-				let allowance = T::PersonStatementLimit::get()
-					.saturating_sub(T::LitePersonStatementLimit::get());
-				decrease_allowance_by(account.clone().into(), allowance);
+				let lite_allowance = T::LitePersonStatementLimit::get();
+				decrease_allowance_by(
+					account.clone().into(),
+					consumer_info.statement_allowance.clone().into(),
+				);
+				increase_allowance_by(account.clone().into(), lite_allowance.clone());
 				Consumers::<T>::insert(
 					&account,
 					ConsumerInfo {
 						credibility: Credibility::Person { alias, last_update, demoted: true },
+						statement_allowance: lite_allowance.into(),
 						..consumer_info
 					},
 				);
@@ -881,10 +896,15 @@ pub mod pallet {
 
 			Self::validate_notification_registration(alias, &account_id)?;
 
-			increase_allowance_by(account_id.clone().into(), T::NotificationAllowance::get());
+			let allowance = T::NotificationAllowance::get();
+			increase_allowance_by(account_id.clone().into(), allowance.clone());
 			NotificationRegistrationByAlias::<T>::insert(
 				alias,
-				types::NotificationRegistration { account_id: account_id.clone(), reference },
+				types::NotificationRegistration {
+					account_id: account_id.clone(),
+					reference,
+					allowance: allowance.into(),
+				},
 			);
 			NotificationAliasByAccount::<T>::insert(&account_id, alias);
 
@@ -920,9 +940,15 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
 			let alias = Self::notification_alias_for_account(&account)?;
-			NotificationRegistrationByAlias::<T>::remove(alias);
 			NotificationAliasByAccount::<T>::remove(&account);
-			decrease_allowance_by(account.clone().into(), T::NotificationAllowance::get());
+			match NotificationRegistrationByAlias::<T>::take(alias) {
+				Some(registration) =>
+					decrease_allowance_by(account.clone().into(), registration.allowance.into()),
+				None => log::error!(
+					target: LOG_TARGET,
+					"notification account mapping points to a missing registration",
+				),
+			}
 
 			Self::deposit_event(Event::NotificationStmtUsageRemoved { account });
 			Ok(Pays::No.into())
@@ -963,7 +989,7 @@ pub mod pallet {
 				// Revoke the old allowance and clear the reverse lookup.
 				decrease_allowance_by(
 					existing.account_id.clone().into(),
-					T::AccountsApiAllowance::get(),
+					existing.allowance.into(),
 				);
 				StmtStoreAllowanceByAccount::<T>::remove(
 					&existing.account_id,
@@ -972,11 +998,17 @@ pub mod pallet {
 			}
 
 			// Grant the statement store allowance to the target account.
-			increase_allowance_by(target_account.clone().into(), T::AccountsApiAllowance::get());
+			let allowance = T::AccountsApiAllowance::get();
+			increase_allowance_by(target_account.clone().into(), allowance.clone());
 			StatementStoreAllowances::<T>::insert(
 				period_key,
 				alias,
-				StmtStoreAllowanceEntry { account_id: target_account.clone(), seq, since: now },
+				StmtStoreAllowanceEntry {
+					account_id: target_account.clone(),
+					seq,
+					since: now,
+					allowance: allowance.into(),
+				},
 			);
 			StmtStoreAllowanceByAccount::<T>::insert(&target_account, (period_key, seq, alias), ());
 			Self::deposit_event(Event::StmtStoreAllowanceSet {
@@ -1013,10 +1045,7 @@ pub mod pallet {
 			for (alias, entry) in
 				StatementStoreAllowances::<T>::drain_prefix(period_key).take(limit as usize)
 			{
-				decrease_allowance_by(
-					entry.account_id.clone().into(),
-					T::AccountsApiAllowance::get(),
-				);
+				decrease_allowance_by(entry.account_id.clone().into(), entry.allowance.into());
 				StmtStoreAllowanceByAccount::<T>::remove(
 					entry.account_id,
 					(period_key, entry.seq, alias),
@@ -1129,6 +1158,26 @@ pub mod pallet {
 
 	#[pallet::view_functions]
 	impl<T: Config> Pallet<T> {
+		/// Returns the current value of [`Config::AccountsApiAllowance`].
+		pub fn get_accounts_api_allowance() -> StatementAllowance {
+			T::AccountsApiAllowance::get()
+		}
+
+		/// Returns the current value of [`Config::NotificationAllowance`].
+		pub fn get_notification_allowance() -> StatementAllowance {
+			T::NotificationAllowance::get()
+		}
+
+		/// Returns the current value of [`Config::LitePersonStatementLimit`].
+		pub fn get_lite_person_statement_limit() -> StatementAllowance {
+			T::LitePersonStatementLimit::get()
+		}
+
+		/// Returns the current value of [`Config::PersonStatementLimit`].
+		pub fn get_person_statement_limit() -> StatementAllowance {
+			T::PersonStatementLimit::get()
+		}
+
 		/// Returns the current statement store allowance period (day number since Unix epoch).
 		pub fn current_stmt_store_period() -> u32 {
 			Self::stmt_store_period_from_timestamp(T::Clock::now().as_secs())
@@ -1396,14 +1445,17 @@ pub mod pallet {
 			// Mark the alias as used.
 			AccountOfAlias::<T>::insert(alias, linked_lite_identity);
 
+			// Replace the lite person allowance with the full person allowance.
+			let person_allowance = T::PersonStatementLimit::get();
+			decrease_allowance_by(
+				linked_lite_identity.clone().into(),
+				linked_consumer_info.statement_allowance.clone().into(),
+			);
+			increase_allowance_by(linked_lite_identity.clone().into(), person_allowance.clone());
+			linked_consumer_info.statement_allowance = person_allowance.into();
+
 			// Set the consumer's record.
 			Consumers::<T>::insert(linked_lite_identity, linked_consumer_info);
-
-			// Increase the allowance by the difference between the lite person allowance the user
-			// already has and the full person allowance they now have.
-			let allowance =
-				T::PersonStatementLimit::get().saturating_sub(T::LitePersonStatementLimit::get());
-			increase_allowance_by(linked_lite_identity.clone().into(), allowance);
 
 			Self::deposit_event(Event::PersonRegistered {
 				alias,
@@ -1686,6 +1738,7 @@ pub mod pallet {
 			}
 			// Add the username to the list.
 			UsernameOwnerOf::<T>::insert(&username, &account);
+			let lite_allowance = T::LitePersonStatementLimit::get();
 			// Set the consumer's record.
 			Consumers::<T>::insert(
 				&account,
@@ -1694,12 +1747,13 @@ pub mod pallet {
 					full_username: None,
 					lite_username: username,
 					credibility: Credibility::Lite,
+					statement_allowance: lite_allowance.clone().into(),
 				},
 			);
 			frame_system::Pallet::<T>::inc_sufficients(&account);
 
 			// A new lite person has been registered, so the initial allowance should be given
-			increase_allowance_by(account.clone().into(), T::LitePersonStatementLimit::get());
+			increase_allowance_by(account.clone().into(), lite_allowance);
 
 			Self::deposit_event(Event::LitePersonRegistered { account });
 			Ok(())
