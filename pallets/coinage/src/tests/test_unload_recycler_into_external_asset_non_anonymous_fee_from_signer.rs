@@ -33,7 +33,7 @@ use frame_support::{
 	dispatch::{DispatchErrorWithPostInfo, Pays, PostDispatchInfo},
 	traits::Currency,
 };
-use sp_core::blake2_256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{bounded_vec, TokenError};
 use verifiable::GenerateVerifiable;
 

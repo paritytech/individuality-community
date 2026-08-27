@@ -75,7 +75,7 @@ use assets_common::{
 };
 use core::cmp::Ordering;
 use cumulus_pallet_parachain_system::{RelayNumberMonotonicallyIncreases, RelaychainDataProvider};
-use cumulus_primitives_core::{AggregateMessageOrigin, ParaId};
+use cumulus_primitives_core::{AggregateMessageOrigin, ParaId, VerifySchedulingSignature};
 use frame_support::traits::EnsureOrigin;
 use governance::{pallet_custom_origins, GeneralAdmin, StakingAdmin, Treasurer, TreasurySpender};
 use indiv_precompile_nft_claims::NftClaimsMinter;
@@ -851,6 +851,7 @@ impl cumulus_pallet_parachain_system::Config for Runtime {
 	type ConsensusHook = ConsensusHook;
 	type WeightInfo = weights::cumulus_pallet_parachain_system::WeightInfo<Runtime>;
 	type RelayParentOffset = ConstU32<RELAY_PARENT_OFFSET>;
+	type SchedulingSignatureVerifier = ();
 }
 
 type ConsensusHook = cumulus_pallet_aura_ext::FixedVelocityConsensusHook<
@@ -1575,9 +1576,9 @@ mod bandersnatch_bench {
 const DOTNS_PERSON_REGISTRATION_ALLOWANCE_MAX: Balance = MILLICENTS;
 /// Recover enough so that if a call to the name registration fails, another one can be retried in
 /// about 30 minutes. The 50 CENTS number is based on napkin math I did looking at the weight of the
-/// call.
+/// call. The rate is per relay chain block, the block number the pallet measures recovery with.
 const DOTNS_PERSON_REGISTRATION_ALLOWANCE_RECOVERY: Balance =
-	50 * CENTS / ((30 * MINUTES) as Balance);
+	50 * CENTS / ((30 * RC_MINUTES) as Balance);
 
 #[derive(
 	Clone,
@@ -1654,6 +1655,7 @@ impl indiv_pallet_origin_restriction::BenchmarkHelper<OriginCaller, RuntimeCall>
 
 impl indiv_pallet_origin_restriction::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_origin_restriction::WeightInfo<Runtime>;
+	type BlockNumberProvider = RelaychainDataProvider<Runtime>;
 	type RestrictedEntity = RestrictedEntity;
 	type OperationAllowedOneTimeExcess = OperationAllowedOneTimeExcess;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -2840,6 +2842,7 @@ pub mod migrations {
 			pallet_session::migrations::v1::InitOffenceSeverity<Runtime>,
 		>,
 		cumulus_pallet_aura_ext::migration::MigrateV0ToV1<Runtime>,
+		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
 		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
 		pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
@@ -3461,6 +3464,16 @@ pallet_revive::impl_runtime_apis_plus_revive_traits! {
 	impl cumulus_primitives_core::RelayParentOffsetApi<Block> for Runtime {
 		fn relay_parent_offset() -> u32 {
 			RELAY_PARENT_OFFSET
+		}
+
+		fn max_claim_queue_offset() -> u8 {
+			cumulus_pallet_parachain_system::Pallet::<Runtime>::max_claim_queue_offset()
+		}
+	}
+
+	impl cumulus_primitives_core::SchedulingV3EnabledApi<Block> for Runtime {
+		fn scheduling_v3_enabled() -> bool {
+			<Runtime as cumulus_pallet_parachain_system::Config>::SchedulingSignatureVerifier::V3_SCHEDULING_ENABLED
 		}
 	}
 
