@@ -4121,6 +4121,543 @@ mod stmt_store_allowance {
 	}
 }
 
+/// The pallet reads these parameters from the runtime on every use, so a runtime may change them
+/// without a migration. Each test changes one parameter while state created under the old value
+/// exists and checks that both a raise and a lowering apply to the next call.
+mod dynamic_parameters {
+	use super::*;
+	use crate::{
+		extension::{AsResources, AsResourcesInfo, CustomValidity},
+		types::{MembershipCollection, ProofOf},
+	};
+	use indiv_support::{traits::Identifier, utils::BigEndianU32};
+	use sp_runtime::{traits::TxBaseImplication, transaction_validity::TransactionValidityError};
+
+	const EXTENSION_VERSION: u8 = 0;
+
+	type Secret = <MockCrypto as GenerateVerifiable>::Secret;
+
+	fn identifier(collection: MembershipCollection) -> &'static Identifier {
+		match collection {
+			MembershipCollection::People => indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER,
+			MembershipCollection::LitePeople =>
+				indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER,
+		}
+	}
+
+	/// Build a one-member ring for `collection` and return the member's secret.
+	fn setup_ring(collection: MembershipCollection, seed: u8) -> Secret {
+		assert_ok!(Members::create_collection(
+			0,
+			identifier(collection),
+			1,
+			indiv_pallet_members::RingMode::Flexible,
+			indiv_support::traits::RingExponent::R2e9,
+			None,
+		));
+		let secret = MockCrypto::new_secret([seed; 32]);
+		let member = MockCrypto::member_from_secret(&secret);
+		match collection {
+			MembershipCollection::People => {
+				assert_ok!(People::force_recognize_personhood(RuntimeOrigin::root(), vec![member]));
+			},
+			MembershipCollection::LitePeople => {
+				assert_ok!(Members::add_members(identifier(collection), vec![member]));
+			},
+		}
+		advance_to_block(3);
+		secret
+	}
+
+	/// Validate `call` through `AsResources` with a proof built by the ring member in `context`.
+	fn validate_with_proof(
+		collection: MembershipCollection,
+		secret: &Secret,
+		context: Context,
+		call: RuntimeCall,
+		info: impl FnOnce(ProofOf<Test>) -> AsResourcesInfo<Test>,
+	) -> Result<(), TransactionValidityError> {
+		let member = MockCrypto::member_from_secret(secret);
+		let msg =
+			TxBaseImplication((EXTENSION_VERSION, &call)).using_encoded(sp_io::hashing::blake2_256);
+		let ring_members = Members::ring_members(identifier(collection), 0);
+		let commitment = MockCrypto::open((), &member, ring_members.into_iter())
+			.expect("commitment should open");
+		let (proof, _) =
+			MockCrypto::create(commitment, secret, &context, &msg).expect("proof should build");
+		AsResources::<Test>::new(Some(info(proof)))
+			.validate_only(
+				SystemOrigin::None.into(),
+				&call,
+				&call.get_dispatch_info(),
+				0,
+				TransactionSource::External,
+				EXTENSION_VERSION,
+			)
+			.map(|_| ())
+	}
+
+	fn validate_stmt_store_claim(
+		collection: MembershipCollection,
+		secret: &Secret,
+		period: u32,
+		seq: u32,
+	) -> Result<(), TransactionValidityError> {
+		let call = RuntimeCall::Resources(crate::Call::set_statement_store_account {
+			period,
+			seq,
+			target_account: id_to_account(500),
+		});
+		validate_with_proof(
+			collection,
+			secret,
+			Resources::stmt_store_slot_context(period, seq),
+			call,
+			|proof| AsResourcesInfo::RegisterStatementStoreAllowance(proof, 0, 0, collection),
+		)
+	}
+
+	fn validate_notification_claim(
+		collection: MembershipCollection,
+		secret: &Secret,
+		reference: NotificationReference,
+	) -> Result<(), TransactionValidityError> {
+		let call =
+			RuntimeCall::Resources(crate::Call::set_notification_statement_account_for_sequence {
+				reference,
+				account_id: id_to_account(500),
+			});
+		validate_with_proof(
+			collection,
+			secret,
+			Resources::notification_context(reference),
+			call,
+			|proof| AsResourcesInfo::RegisterNotificationForCollection(proof, 0, 0, collection),
+		)
+	}
+
+	fn validate_long_term_storage_claim(
+		collection: MembershipCollection,
+		secret: &Secret,
+		period: u32,
+		counter: u8,
+	) -> Result<(), TransactionValidityError> {
+		let call = RuntimeCall::Resources(crate::Call::claim_long_term_storage {
+			period,
+			counter,
+			account_id: id_to_account(500),
+		});
+		validate_with_proof(
+			collection,
+			secret,
+			Resources::long_term_storage_context(period, counter),
+			call,
+			|proof| AsResourcesInfo::ClaimLongTermStorage(proof, 0, 0, collection),
+		)
+	}
+
+	fn assert_stmt_store_slot_bound_follows(
+		collection: MembershipCollection,
+		limit: u32,
+		set_limit: impl Fn(u32),
+	) {
+		let secret = setup_ring(collection, 1);
+		set_time_sec(SECONDS_PER_DAY + 100);
+		let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+		let rejected = Err(CustomValidity::InvalidStmtStoreSequence.into());
+
+		assert_ok!(validate_stmt_store_claim(collection, &secret, period, limit - 1));
+		assert_eq!(validate_stmt_store_claim(collection, &secret, period, limit), rejected);
+
+		set_limit(limit + 1);
+		assert_ok!(validate_stmt_store_claim(collection, &secret, period, limit));
+
+		set_limit(limit - 1);
+		assert_eq!(validate_stmt_store_claim(collection, &secret, period, limit - 1), rejected);
+		assert_ok!(validate_stmt_store_claim(collection, &secret, period, limit - 2));
+	}
+
+	#[test]
+	fn stmt_store_slots_per_period_bound_follows_parameter() {
+		new_test_ext().execute_with(|| {
+			assert_stmt_store_slot_bound_follows(
+				MembershipCollection::People,
+				StmtStoreSlotsPerPeriod::get(),
+				|limit| StmtStoreSlotsPerPeriod::set(&limit),
+			);
+		});
+	}
+
+	#[test]
+	fn lite_stmt_store_slots_per_period_bound_follows_parameter() {
+		new_test_ext().execute_with(|| {
+			assert_stmt_store_slot_bound_follows(
+				MembershipCollection::LitePeople,
+				LiteStmtStoreSlotsPerPeriod::get(),
+				|limit| LiteStmtStoreSlotsPerPeriod::set(&limit),
+			);
+		});
+	}
+
+	#[test]
+	fn lowering_stmt_store_slots_per_period_keeps_existing_entries_clearable() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let period_key = BigEndianU32::from(period);
+			let alias = id_to_alias(60);
+			let target = id_to_account(600);
+			let seq = StmtStoreSlotsPerPeriod::get() - 1;
+
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(60),
+				period,
+				seq,
+				target.clone(),
+			));
+			assert_eq!(get_allowance(&target), AccountsApiAllowance::get());
+
+			// The stored `seq` is now above the bound.
+			StmtStoreSlotsPerPeriod::set(&1);
+
+			let period_end = (period as u64 + 1) * SECONDS_PER_DAY;
+			set_time_sec(period_end + StmtStoreGraceWindow::get() as u64 + 1);
+			assert_ok!(Resources::clear_expired_stmt_store_allowances(
+				SystemOrigin::Authorized.into(),
+				period,
+				alias,
+			));
+
+			assert_eq!(StatementStoreAllowances::<Test>::get(period_key, alias), None);
+			assert_eq!(
+				StmtStoreAllowanceByAccount::<Test>::get(&target, (period_key, seq, alias)),
+				None,
+			);
+			assert_eq!(get_allowance(&target), StatementAllowance::default());
+		});
+	}
+
+	#[test]
+	fn stmt_store_cleanup_limit_applies_to_each_cleanup_call() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let period_key = BigEndianU32::from(period);
+			let total = StmtStoreCleanupLimit::get() + 2;
+
+			for i in 0..total {
+				assert_ok!(Resources::set_statement_store_account(
+					stmt_store_slot_origin(100 + i as u64),
+					period,
+					0,
+					id_to_account(1000 + i as u64),
+				));
+			}
+			let period_end = (period as u64 + 1) * SECONDS_PER_DAY;
+			set_time_sec(period_end + StmtStoreGraceWindow::get() as u64 + 1);
+			let first_alias =
+				StatementStoreAllowances::<Test>::iter_keys().next().expect("entries exist").1;
+
+			// Lowering the limit removes fewer entries per call.
+			let lowered = 5;
+			StmtStoreCleanupLimit::set(&lowered);
+			assert_ok!(Resources::clear_expired_stmt_store_allowances(
+				SystemOrigin::Authorized.into(),
+				period,
+				first_alias,
+			));
+			assert_eq!(
+				StatementStoreAllowances::<Test>::iter_key_prefix(period_key).count(),
+				(total - lowered) as usize,
+			);
+
+			// Raising the limit above the remaining count drains the period in one call.
+			StmtStoreCleanupLimit::set(&(total * 2));
+			let first_alias =
+				StatementStoreAllowances::<Test>::iter_keys().next().expect("entries exist").1;
+			assert_ok!(Resources::clear_expired_stmt_store_allowances(
+				SystemOrigin::Authorized.into(),
+				period,
+				first_alias,
+			));
+			assert_eq!(StatementStoreAllowances::<Test>::iter_key_prefix(period_key).count(), 0);
+			System::assert_has_event(
+				Event::<Test>::StmtStoreAllowancesCleared {
+					period,
+					first_key: first_alias,
+					count: total - lowered,
+				}
+				.into(),
+			);
+		});
+	}
+
+	#[test]
+	fn stmt_store_replacement_cooldown_applies_to_existing_entries() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let claimed_at = TestClock::now().as_secs();
+			let period = Resources::stmt_store_period_from_timestamp(claimed_at);
+			let cooldown = StmtStoreReplacementCooldown::get();
+
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(60),
+				period,
+				0,
+				id_to_account(600),
+			));
+
+			// Past the cooldown the entry was created under, but within the raised one.
+			StmtStoreReplacementCooldown::set(&(cooldown * 2));
+			set_time_sec(claimed_at + cooldown as u64 + 1);
+			assert_noop!(
+				Resources::set_statement_store_account(
+					stmt_store_slot_origin(60),
+					period,
+					1,
+					id_to_account(601),
+				),
+				Error::<Test>::StmtStoreReplacementTooEarly
+			);
+
+			// Lowering the cooldown allows the replacement at the same time.
+			StmtStoreReplacementCooldown::set(&(cooldown / 2));
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(60),
+				period,
+				1,
+				id_to_account(601),
+			));
+			let entry =
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), id_to_alias(60))
+					.expect("entry exists");
+			assert_eq!(entry.account_id, id_to_account(601));
+			assert_eq!(get_allowance(id_to_account(600)), StatementAllowance::default());
+			assert_eq!(get_allowance(id_to_account(601)), AccountsApiAllowance::get());
+		});
+	}
+
+	#[test]
+	fn stmt_store_grace_window_moves_the_cleanup_threshold() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let grace = StmtStoreGraceWindow::get() as u64;
+			let period_end = (period as u64 + 1) * SECONDS_PER_DAY;
+
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(60),
+				period,
+				0,
+				id_to_account(600),
+			));
+			let call = crate::Call::<Test>::clear_expired_stmt_store_allowances {
+				period,
+				first_entry: id_to_alias(60),
+			};
+			let blocked = Some(Err(CustomValidity::InvalidExpiredStmtStoreCleanup.into()));
+
+			set_time_sec(period_end + grace + 1);
+			assert!(matches!(call.authorize(TransactionSource::InBlock), Some(Ok(_))));
+
+			// Raising the window keeps the period active past the old threshold.
+			StmtStoreGraceWindow::set(&(grace as u32 * 2));
+			assert_eq!(call.authorize(TransactionSource::InBlock), blocked);
+			set_time_sec(period_end + 2 * grace + 1);
+			assert!(matches!(call.authorize(TransactionSource::InBlock), Some(Ok(_))));
+
+			// Lowering the window makes the period clearable earlier.
+			set_time_sec(period_end + grace / 2);
+			assert_eq!(call.authorize(TransactionSource::InBlock), blocked);
+			StmtStoreGraceWindow::set(&(grace as u32 / 4));
+			assert!(matches!(call.authorize(TransactionSource::InBlock), Some(Ok(_))));
+		});
+	}
+
+	#[test]
+	fn notification_slots_per_period_bound_follows_parameter() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::notification_period_from_timestamp(TestClock::now().as_secs());
+			let limit = NotificationSlotsPerPeriod::get();
+			let register = |alias_id: u64, seq: u8| {
+				Resources::set_notification_statement_account_for_sequence(
+					notification_origin(alias_id),
+					NotificationReference { period, seq },
+					id_to_account(alias_id),
+				)
+			};
+
+			assert_noop!(register(1, limit + 1), Error::<Test>::InvalidNotificationSequence);
+
+			NotificationSlotsPerPeriod::set(&(limit + 1));
+			assert_ok!(register(1, limit + 1));
+
+			NotificationSlotsPerPeriod::set(&(limit - 1));
+			assert_noop!(register(2, limit), Error::<Test>::InvalidNotificationSequence);
+			assert_ok!(register(2, limit - 1));
+		});
+	}
+
+	#[test]
+	fn lowering_notification_slots_per_period_keeps_existing_registrations_clearable() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::notification_period_from_timestamp(TestClock::now().as_secs());
+			let seq = NotificationSlotsPerPeriod::get();
+			let account = id_to_account(600);
+
+			assert_ok!(Resources::set_notification_statement_account_for_sequence(
+				notification_origin(60),
+				NotificationReference { period, seq },
+				account.clone(),
+			));
+			assert_eq!(get_allowance(&account), NotificationAllowance::get());
+
+			// The stored `seq` is now above the bound.
+			NotificationSlotsPerPeriod::set(&0);
+
+			set_time_sec(Resources::notification_expiration_time(period) + 1);
+			let call = crate::Call::<Test>::clear_expired_notification_sequence {
+				account: account.clone(),
+				seq,
+			};
+			assert!(matches!(call.authorize(TransactionSource::InBlock), Some(Ok(_))));
+			assert_ok!(Resources::clear_expired_notification_sequence(
+				SystemOrigin::Authorized.into(),
+				account.clone(),
+				seq,
+			));
+			assert_eq!(NotificationAliasByAccount::<Test>::get(&account), None);
+			assert_eq!(get_allowance(&account), StatementAllowance::default());
+		});
+	}
+
+	#[test]
+	fn lite_notification_slots_per_period_bound_follows_parameter() {
+		new_test_ext().execute_with(|| {
+			let collection = MembershipCollection::LitePeople;
+			let secret = setup_ring(collection, 1);
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::notification_period_from_timestamp(TestClock::now().as_secs());
+			let limit = LiteNotificationSlotsPerPeriod::get();
+			assert!(limit < NotificationSlotsPerPeriod::get());
+			let validate = |seq: u8| {
+				validate_notification_claim(
+					collection,
+					&secret,
+					NotificationReference { period, seq },
+				)
+			};
+			let rejected = Err(CustomValidity::InvalidNotificationSequence.into());
+
+			assert_ok!(validate(limit));
+			assert_eq!(validate(limit + 1), rejected);
+
+			LiteNotificationSlotsPerPeriod::set(&(limit + 1));
+			assert_ok!(validate(limit + 1));
+
+			LiteNotificationSlotsPerPeriod::set(&(limit - 1));
+			assert_eq!(validate(limit), rejected);
+			assert_ok!(validate(limit - 1));
+		});
+	}
+
+	#[test]
+	fn long_term_storage_claims_per_period_bound_follows_parameter() {
+		new_test_ext().execute_with(|| {
+			let collection = MembershipCollection::People;
+			let secret = setup_ring(collection, 1);
+			set_time_sec(3 * SECONDS_PER_DAY + 100);
+			let period =
+				Resources::long_term_storage_period_from_timestamp(TestClock::now().as_secs());
+			let limit = LongTermStorageClaimsPerPeriod::get();
+			let validate = |counter: u8| {
+				validate_long_term_storage_claim(collection, &secret, period, counter)
+			};
+			let rejected = Err(CustomValidity::InvalidLongTermStorageCounter.into());
+
+			assert_ok!(validate(limit - 1));
+			assert_eq!(validate(limit), rejected);
+
+			LongTermStorageClaimsPerPeriod::set(&(limit + 1));
+			assert_ok!(validate(limit));
+
+			LongTermStorageClaimsPerPeriod::set(&(limit - 1));
+			assert_eq!(validate(limit - 1), rejected);
+			assert_ok!(validate(limit - 2));
+		});
+	}
+
+	#[test]
+	fn long_term_storage_cleanup_limit_bounds_the_limit_argument() {
+		new_test_ext().execute_with(|| {
+			let period = 3u32;
+			let period_key = BigEndianU32::from(period);
+			SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(1), ());
+			set_time_sec(
+				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
+					LongTermStorageGraceWindow::get() as u64 +
+					1,
+			);
+			let limit = LongTermStorageCleanupLimit::get();
+			let clear = |limit: u32| {
+				Resources::clear_expired_long_term_storage_aliases(
+					SystemOrigin::Authorized.into(),
+					period,
+					limit,
+				)
+			};
+
+			assert_noop!(clear(limit + 1), Error::<Test>::LongTermStorageCleanupLimitExceeded);
+
+			LongTermStorageCleanupLimit::set(&(limit + 1));
+			assert_ok!(clear(limit + 1));
+
+			LongTermStorageCleanupLimit::set(&(limit - 1));
+			assert_noop!(clear(limit), Error::<Test>::LongTermStorageCleanupLimitExceeded);
+			assert_ok!(clear(limit - 1));
+		});
+	}
+
+	#[test]
+	fn offchain_worker_submits_long_term_storage_cleanup_with_current_limit() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			let period = 3u32;
+			let period_key = BigEndianU32::from(period);
+			let total = 5u32;
+			for i in 0..total {
+				SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(i as u64), ());
+			}
+			set_time_sec(
+				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
+					LongTermStorageGraceWindow::get() as u64 +
+					1,
+			);
+
+			// A lowered limit removes fewer entries per offchain-worker run.
+			let lowered = 2;
+			LongTermStorageCleanupLimit::set(&lowered);
+			advance_to_block(2);
+			assert_eq!(
+				SpentLongTermStorageAliases::<Test>::iter_key_prefix(period_key).count(),
+				(total - lowered) as usize,
+			);
+
+			// A raised limit drains the rest in one run.
+			LongTermStorageCleanupLimit::set(&(total * 2));
+			advance_to_block(3);
+			assert_eq!(SpentLongTermStorageAliases::<Test>::iter_key_prefix(period_key).count(), 0);
+			System::assert_has_event(
+				Event::<Test>::LongTermStorageAliasesCleared { period, count: total - lowered }
+					.into(),
+			);
+		});
+	}
+}
+
 /// Verify that the default mock configuration passes all integrity checks,
 /// including the block-fit assertions for the OCW-submitted cleanup calls.
 #[test]
