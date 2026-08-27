@@ -149,6 +149,29 @@ pub mod personhood {
 	}
 }
 
+/// Context suffix allocations owned by the private NFT claim product.
+///
+/// The rings these contexts are used with hold the one-time keys claimants register for one game,
+/// not personhood keys, so the allocations are kept out of [`personhood`].
+pub mod private_nft_claims {
+	use super::ProductContextSuffix;
+
+	/// The private NFT claim product name shared by all networks.
+	pub const PRODUCT_NAME: &[u8] = b"nftcl";
+
+	/// The context a claimant proves under to spend slot `slot` of game `game_index`.
+	///
+	/// The suffix is `u32_le(game_index) ++ slot ++ zero padding`. A member yields one alias per
+	/// context, so a claimant gets one claim per slot and the aliases of two slots cannot be tied
+	/// to each other.
+	pub fn slot(game_index: u32, slot: u8) -> ProductContextSuffix {
+		let mut suffix = [0u8; 32];
+		suffix[..4].copy_from_slice(&game_index.to_le_bytes());
+		suffix[4] = slot;
+		ProductContextSuffix::Raw(suffix)
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

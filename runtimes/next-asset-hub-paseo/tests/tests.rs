@@ -1288,6 +1288,7 @@ mod pgas_fees {
 						),
 						leaf_count: 1,
 						timestamp: 0,
+						private_slots: 0,
 					},
 				);
 

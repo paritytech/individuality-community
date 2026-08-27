@@ -26,8 +26,9 @@ use frame_support::{
 	BoundedVec,
 };
 use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
-use indiv_support::traits::{
-	AddOnlyPeopleTrait, AppendOnlyMembers, RingExponent, RingMode, RingPosition,
+use indiv_support::{
+	credit_trees::PrivateClaimSetting,
+	traits::{AddOnlyPeopleTrait, AppendOnlyMembers, RingExponent, RingMode, RingPosition},
 };
 use sp_core::{crypto::VrfSecret, ed25519, sr25519, Pair};
 use sp_runtime::{testing::TestSignature, transaction_validity::InvalidTransaction, AccountId32};
@@ -1186,8 +1187,10 @@ mod games_scheduling {
 
 			// Two games are scheduled
 			let schedules = vec![
-				GameSchedule::<u32, u128> { game_play_time: 100, rounds: 1, max_group_size: 10, ..Default::default() },
-				GameSchedule::<u32, u128> { game_play_time: 200, rounds: 1, max_group_size: 10, ..Default::default() },
+				GameSchedule::<u32, u128> { game_play_time: 100, rounds: 1, max_group_size: 10, ..Default::default()
+				},
+				GameSchedule::<u32, u128> { game_play_time: 200, rounds: 1, max_group_size: 10, ..Default::default()
+				},
 			];
 			assert_ok!(Game::schedule_games(RuntimeOrigin::root(), schedules.clone()));
 			assert_eq!(GameSchedules::<Test>::get().len(), 2);
@@ -2977,6 +2980,7 @@ mod game_cancellation {
 				rounds: 2,
 				max_group_size: 4,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -4744,6 +4748,7 @@ fn player_process_step2_uses_marginal_weight_for_follow_up_chunks() {
 			rounds,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			private_claims: None,
 		});
 
 		let first_chunk_weight = <MockWeightInfo as WeightInfo>::player_process_step2();
@@ -5178,6 +5183,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_ok!(Game::sign_up_with_account(
@@ -5213,6 +5219,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = crate::GameIndex::<Test>::get();
@@ -5255,6 +5262,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&current));
 			assert_ok!(Game::sign_up_with_account(
@@ -5277,6 +5285,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
+				private_claims: None,
 			};
 			assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![next.clone()]));
 			assert_eq!(GameSchedules::<Test>::get().len(), 1);
@@ -5316,6 +5325,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -5349,6 +5359,7 @@ mod cancel_game {
 			rounds: 2,
 			max_group_size: 3,
 			airdrops: Default::default(),
+			private_claims: None,
 		};
 		assert_ok!(Game::new_game(&schedule));
 		assert_ok!(Game::sign_up_with_account(
@@ -5496,6 +5507,7 @@ mod set_game_phases {
 			rounds: 1,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			private_claims: None,
 		});
 	}
 
@@ -5825,6 +5837,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			let now = <Test as crate::Config>::UnixTime::now().as_secs();
 			assert_ok!(Game::new_game(&schedule));
@@ -5851,6 +5864,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			// `now` is set strictly before the game's registration phase starts, so the two
 			// timestamps are distinct and the test can tell them apart.
@@ -5886,6 +5900,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert!(crate::Game::<Test>::exists());
@@ -5909,6 +5924,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -5934,6 +5950,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_noop!(
@@ -5957,6 +5974,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6005,6 +6023,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6038,6 +6057,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_noop!(
@@ -6059,6 +6079,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			// Pre-recognized account player: in `Participants` as `Recognized(_)` and in
@@ -6091,6 +6112,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6122,6 +6144,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -6168,6 +6191,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -6215,6 +6239,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6331,6 +6356,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6385,6 +6411,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6561,6 +6588,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 2,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6683,6 +6711,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6713,6 +6742,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				private_claims: None,
 			};
 			let now = <Test as crate::Config>::UnixTime::now().as_secs();
 			assert_ok!(Game::new_game(&schedule));
@@ -6746,6 +6776,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game = GameStorage::<Test>::get().expect("game exists");
@@ -6797,6 +6828,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6843,6 +6875,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6867,6 +6900,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6899,6 +6933,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6950,6 +6985,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6985,6 +7021,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7015,6 +7052,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7040,6 +7078,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			// Game 1: ALICE prepares a VRF for its airdrop event but never signs up; the game
 			// is cancelled and cleaned up.
@@ -7155,6 +7194,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_eq!(GameStorage::<Test>::get().expect("game exists").airdrops_scheduled, 0);
@@ -7190,6 +7230,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_eq!(GameStorage::<Test>::get().expect("game exists").airdrops_scheduled, 0);
@@ -7227,6 +7268,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -7258,6 +7300,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7299,6 +7342,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7337,6 +7381,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				private_claims: None,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -8151,4 +8196,61 @@ mod sign_up_with_account_lite_invite {
 			assert!(Players::<Test>::iter().next().is_none());
 		});
 	}
+}
+
+#[test]
+fn private_claim_slots_are_bounded_at_scheduling() {
+	new_test_ext().execute_with(|| {
+		let schedule = |slots: Option<u8>| GameSchedule::<u32, u128> {
+			game_play_time: 100,
+			rounds: 2,
+			max_group_size: 3,
+			private_claims: slots.map(|slots| PrivateClaimSetting { slots }),
+			..Default::default()
+		};
+
+		// A game granting no slot is a public game, so `Some(0)` is a setup error rather than a
+		// silent opt-out.
+		assert_noop!(
+			Game::schedule_games(RuntimeOrigin::root(), vec![schedule(Some(0))]),
+			Error::<Test>::InvalidGameSetup
+		);
+
+		let max: u8 = <Test as crate::Config>::MaxPrivateClaimSlots::get();
+		let over = max + 1;
+		assert_noop!(
+			Game::schedule_games(RuntimeOrigin::root(), vec![schedule(Some(over))]),
+			Error::<Test>::InvalidGameSetup
+		);
+
+		assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule(Some(max))]));
+		assert_eq!(
+			GameSchedules::<Test>::get()[0].private_claims,
+			Some(PrivateClaimSetting { slots: max })
+		);
+	});
+}
+
+#[test]
+fn private_claim_setting_reaches_the_running_game() {
+	new_test_ext().execute_with(|| {
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 10,
+			rounds: 2,
+			max_group_size: 3,
+			private_claims: Some(PrivateClaimSetting { slots: 2 }),
+			..Default::default()
+		};
+
+		run_game_scenario_with_phase(
+			schedule,
+			|| {
+				assert_eq!(
+					crate::Game::<Test>::get().unwrap().private_claims,
+					Some(PrivateClaimSetting { slots: 2 })
+				);
+			},
+			|| {},
+		);
+	});
 }

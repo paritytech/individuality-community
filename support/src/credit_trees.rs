@@ -29,6 +29,12 @@ use sp_core::H256;
 
 use crate::identity::AccountOrPerson;
 
+/// The index a game runs under, as the game chain assigns it.
+///
+/// It is shared, so that a delivery encoded on the game chain decodes to the same type on the
+/// claim chain.
+pub type GameIdx = u32;
+
 /// An NFT claim credit earned by a player.
 /// Hashes one successful report of one player on another, in one round of one game.
 /// The claim chain mints an NFT from it.
@@ -140,6 +146,11 @@ pub struct NftClaimCreditTree {
 	/// Useful to display the age of the tree.
 	/// May be used by chain data consumers, not used in the runtime.
 	pub timestamp: u32,
+	/// How many private claim slots the tree's game grants every registrant, `0` for a public
+	/// game. The claim chain refuses a public claim against a tree that names a non-zero count.
+	/// The tree carries the count because the game's ring arrives later, and a public claim made
+	/// in between would mint a credit its owner can also spend privately.
+	pub private_slots: PrivateClaimSlot,
 }
 
 /// One credit tree's delivery to the claim chain, with its block and sequence.
@@ -188,6 +199,100 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 	pub source_time: u64,
 	/// The trees in the batch, in ascending block order.
 	pub trees: BoundedVec<CreditTreeDelivery, MaxTrees>,
+}
+
+/// One claim slot of a private game, which is one context a registered key proves under.
+///
+/// Every registrant of a game holds all of its slots. One key yields one alias per slot, so each
+/// slot is one mint that cannot be tied to the others.
+pub type PrivateClaimSlot = u8;
+
+/// A game's opt-in to the private claim path, as scheduled.
+///
+/// Registration costs one flat credit price and grants `slots` slots to every claimant, which is
+/// how many NFTs a registrant mints privately from the game.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+)]
+pub struct PrivateClaimSetting {
+	/// The slots every registrant of the game holds. Zero is not valid, a game that grants no
+	/// slot being a public game.
+	pub slots: PrivateClaimSlot,
+}
+
+/// How a private game ended: with a ring its claimants prove membership in, or without one.
+///
+/// A game reaches exactly one of the two, and the claim chain needs both: the ring opens the
+/// private path, and the abandonment reopens the public one. `Members` is the crypto's ring root
+/// type, which only the runtime knows.
+#[derive(
+	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Debug, Clone, PartialEq, Eq,
+)]
+pub enum PrivateGameOutcome<Members> {
+	/// The game's ring is built over the keys of every claimant that registered, so each of its
+	/// slots is proven against the same anonymity set.
+	Ring {
+		/// The ring root a private claim proves membership in.
+		root: Members,
+		/// The number of keys in the ring, which is the anonymity set a claim hides in. It is
+		/// reported only, the proof not needing it.
+		key_count: u32,
+	},
+	/// The game has no ring, so no claim can be made against it privately and its credits are
+	/// claimed over the public path instead. Too few claimants registered for a ring to hide
+	/// anyone, or the ring failed to build.
+	Abandoned {
+		/// The number of keys that were registered, which is what fell short.
+		key_count: u32,
+	},
+}
+
+/// One private game's outcome as it is delivered to the claim chain.
+#[derive(
+	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Debug, Clone, PartialEq, Eq,
+)]
+pub struct PrivateRingDelivery<Members> {
+	/// The game the outcome belongs to.
+	pub game_index: GameIdx,
+	/// The slots every member of the ring holds, which bounds the slot a claim may name. The
+	/// delivery carries the count because any of the game's trees may be missing.
+	pub slots: PrivateClaimSlot,
+	/// The ring the game built, or its abandonment.
+	pub outcome: PrivateGameOutcome<Members>,
+}
+
+/// A batch of private game outcomes sent from the game chain to the claim chain in one XCM
+/// message.
+///
+/// It is kept apart from [`CreditTreeBatch`]. A ring root is far larger than a Merkle root, so a
+/// ring cannot share a message with a block's trees.
+#[derive(
+	CloneNoBound,
+	PartialEqNoBound,
+	EqNoBound,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	DebugNoBound,
+	TypeInfo,
+	MaxEncodedLen,
+)]
+#[scale_info(skip_type_params(MaxRings))]
+pub struct PrivateRingBatch<Members: Clone + Eq + PartialEq + core::fmt::Debug, MaxRings: Get<u32>>
+{
+	/// Unix timestamp in seconds when the batch was assembled on the game chain.
+	pub source_time: u64,
+	/// The outcomes in the batch, in ascending game order.
+	pub rings: BoundedVec<PrivateRingDelivery<Members>, MaxRings>,
 }
 
 /// What the game needs from the pallet that owns the NFT claim credits.

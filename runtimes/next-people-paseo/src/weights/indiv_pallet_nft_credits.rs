@@ -160,4 +160,112 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 			.saturating_add(Weight::from_parts(0, 4559))
 			.saturating_add(T::DbWeight::get().reads(1))
 	}
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateCreditBalances` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateRegistrations` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:1)
+	fn register_private_claim_key() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `9000`
+		//  Estimated: `12480`
+		// Minimum execution time: 45_000_000 picoseconds.
+		Weight::from_parts(45_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 12480))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(4))
+	}
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:0)
+	/// Storage: `NftCredits::PrivateRingIntermediates` (r:1 w:1)
+	/// Storage: `ChunksManager::Chunks` (r:1 w:0)
+	/// The range of component `n` is `[1, 8]`.
+	fn build_private_ring(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `20000`
+		//  Estimated: `80000`
+		// Minimum execution time: 200_000_000 picoseconds.
+		Weight::from_parts(200_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 80000))
+			// Standard Error: 1_000_000
+			.saturating_add(Weight::from_parts(90_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:0)
+	/// Storage: `NftCredits::PrivateRingIntermediates` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateRings` (r:0 w:1)
+	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:1)
+	fn finish_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `20000`
+		//  Estimated: `80000`
+		// Minimum execution time: 150_000_000 picoseconds.
+		Weight::from_parts(150_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 80000))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(4))
+	}
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)
+	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:0)
+	fn authorize_build_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `20000`
+		//  Estimated: `80000`
+		// Minimum execution time: 15_000_000 picoseconds.
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 80000))
+			.saturating_add(T::DbWeight::get().reads(2))
+	}
+	/// Storage: `NftCredits::PrivateRings` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:1)
+	fn send_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `20000`
+		//  Estimated: `80000`
+		// Minimum execution time: 60_000_000 picoseconds.
+		Weight::from_parts(60_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 80000))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:0)
+	fn authorize_send_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1000`
+		//  Estimated: `4489`
+		// Minimum execution time: 10_000_000 picoseconds.
+		Weight::from_parts(10_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 4489))
+			.saturating_add(T::DbWeight::get().reads(1))
+	}
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateRingKeys` (r:0 w:1)
+	/// Storage: `NftCredits::PrivateRegistrations` (r:33 w:32)
+	/// Storage: `NftCredits::PrivateCreditBalances` (r:33 w:32)
+	/// The range of component `n` is `[0, 32]`.
+	fn clean_up_private_game(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `20000`
+		//  Estimated: `80000`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 80000))
+			// Standard Error: 100_000
+			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes(2))
+			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
+	}
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)
+	fn authorize_clean_up_private_game() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1000`
+		//  Estimated: `4489`
+		// Minimum execution time: 10_000_000 picoseconds.
+		Weight::from_parts(10_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 4489))
+			.saturating_add(T::DbWeight::get().reads(1))
+	}
 }

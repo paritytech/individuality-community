@@ -18,6 +18,7 @@
 
 use crate::Config;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use indiv_support::credit_trees::PrivateClaimSlot;
 use scale_info::TypeInfo;
 use sp_core::H160;
 
@@ -84,4 +85,30 @@ pub struct CollectionMinter<AccountId> {
 	pub owner: AccountId,
 	/// How claims choose the item to mint.
 	pub selection: ItemSelection,
+}
+
+/// One game's private claim ring, as the game chain delivered it, with the window its claims are
+/// made in.
+///
+/// A claim's proof is checked against the root. The root never changes, a ring being built once
+/// after registration closed, and it holds every key registered for the game. The window is fixed
+/// when the ring arrives and a redelivery does not move it.
+#[derive(
+	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Debug, Clone, PartialEq, Eq,
+)]
+pub struct PrivateRing<Members, BlockNumber> {
+	/// The ring root a claim proves membership in.
+	pub root: Members,
+	/// The slots every member of the ring holds, which bounds the slot a claim may name.
+	pub slots: PrivateClaimSlot,
+	/// The number of keys in the ring, which is the anonymity set of every claim against it.
+	pub key_count: u32,
+	/// The first block a claim of the game is taken in. Every member's claims open together, so
+	/// the wallets that watch the chain closest are not the ones that claim first. A claim before
+	/// it waits in the pool.
+	pub opens_at: BlockNumber,
+	/// The first block a claim of the game is refused in. Claims spread over one window cover
+	/// each other, whereas a claim in an open-ended tail stands alone in time. A member who lets
+	/// it pass mints nothing.
+	pub closes_at: BlockNumber,
 }

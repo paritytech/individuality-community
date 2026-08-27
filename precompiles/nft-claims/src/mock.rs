@@ -59,6 +59,10 @@ impl pallet_balances::Config for Test {
 
 parameter_types! {
 	pub static MockNow: u64 = 0;
+	pub const PrivateRingExponent: indiv_support::traits::RingExponent =
+		indiv_support::traits::RingExponent::R2e9;
+	pub PrivateClaimNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"test".to_vec().try_into().expect("the test network suffix fits");
 }
 
 /// Test-controlled Unix time source.
@@ -138,7 +142,36 @@ impl CollectionSelector<AccountId32> for MockSelector {
 #[cfg(feature = "runtime-benchmarks")]
 pub struct MockBenchmarkHelper;
 #[cfg(feature = "runtime-benchmarks")]
-impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId32> for MockBenchmarkHelper {
+impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId32, verifiable::mock::Mock>
+	for MockBenchmarkHelper
+{
+	fn private_ring_and_proof(
+		context: &[u8; 32],
+		message: &[u8],
+	) -> (
+		<verifiable::mock::Mock as verifiable::GenerateVerifiable>::Members,
+		<verifiable::mock::Mock as verifiable::GenerateVerifiable>::Proof,
+		indiv_support::traits::Alias,
+	) {
+		use verifiable::GenerateVerifiable;
+
+		let secret = verifiable::mock::Mock::new_secret([1u8; 32]);
+		let member = verifiable::mock::Mock::member_from_secret(&secret);
+		let mut intermediate = verifiable::mock::Mock::start_members(Default::default());
+		verifiable::mock::Mock::push_members(
+			&mut intermediate,
+			core::iter::once(member),
+			|range| Ok(alloc::vec![(); range.len()]),
+		)
+		.expect("the mock pushes the member");
+		let commitment =
+			verifiable::mock::Mock::open(Default::default(), &member, core::iter::once(member))
+				.expect("the member is in the ring");
+		let (proof, alias) = verifiable::mock::Mock::create(commitment, &secret, context, message)
+			.expect("the mock creates a proof");
+		(verifiable::mock::Mock::finish_members(intermediate), proof, alias)
+	}
+
 	fn prepare_collection(
 		owner: &AccountId32,
 		collection: CollectionId,
@@ -179,6 +212,13 @@ impl indiv_pallet_nft_claims::Config for Test {
 	type Nfts = Scarcity;
 	type CollectionSelector = MockSelector;
 	type MaxProofNodes = ConstU32<16>;
+	type RingVrf = verifiable::mock::Mock;
+	type PrivateRingExponent = PrivateRingExponent;
+	type PrivateClaimNetworkSuffix = PrivateClaimNetworkSuffix;
+	type MaxPrivateRingsPerMessage = ConstU32<4>;
+	type MaxPrivateClaimsPerBlock = ConstU32<8>;
+	type PrivateClaimDelay = ConstU64<1>;
+	type PrivateClaimWindow = ConstU64<100>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockBenchmarkHelper;
 }

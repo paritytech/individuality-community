@@ -28,9 +28,11 @@ sp-core = { workspace = true }
 sp-runtime = { workspace = true }
 
 indiv-support = { workspace = true }
+verifiable = { workspace = true }
 pallet-scarcity = { workspace = true }
 
 [dev-dependencies]
+verifiable = { workspace = true, features = ["mock", "prover"] }
 sp-io = { workspace = true }
 
 [features]
@@ -49,6 +51,7 @@ std = [
 	"sp-core/std",
 	"sp-io/std",
 	"sp-runtime/std",
+	"verifiable/std",
 ]
 runtime-benchmarks = [
 	"frame-benchmarking/runtime-benchmarks",

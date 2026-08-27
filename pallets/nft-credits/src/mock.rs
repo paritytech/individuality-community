@@ -33,7 +33,7 @@ use frame_support::parameter_types;
 // `mock_runtime.rs` names the game pallet's crate through its parent module, and here that is the
 // crate this pallet sits on top of.
 pub use indiv_pallet_game;
-use sp_runtime::Weight;
+use sp_runtime::{Percent, Weight};
 use std::cell::RefCell;
 
 /// The credits are this pallet's, so the runtime `mock_runtime.rs` builds awards them here: the
@@ -73,6 +73,17 @@ impl crate::Config for Test {
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
 	type MaxRetainedAwardBlocks = MaxRetainedAwardBlocks;
 	type MaxCreditBlocksPerClaimant = MaxCreditBlocksPerClaimant;
+	type RingVrf = FailableRingVrf;
+	type ChunksManager = ChunksManager;
+	type PrivateRingExponent = PrivateRingExponent;
+	type MaxPrivateRingKeys = MaxPrivateRingKeys;
+	type MinPrivateRingKeys = MinPrivateRingKeys;
+	type MinPrivateRingParticipation = MinPrivateRingParticipation;
+	type PrivateKeysPerBuild = PrivateKeysPerBuild;
+	type PrivateRegistrationSeconds = PrivateRegistrationSeconds;
+	type PrivateClaimEntryCredits = PrivateClaimEntryCredits;
+	type MaxQueuedPrivateRings = MaxQueuedPrivateRings;
+	type PrivateRingRemoteWeight = PrivateRingRemoteWeight;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockCreditsBenchmarkHelper;
 }
@@ -95,6 +106,35 @@ impl CreditsWeightInfo for MockWeightInfo {
 	fn authorize_send_credit_trees() -> Weight {
 		Weight::from_parts(50, 0)
 	}
+	fn register_private_claim_key() -> Weight {
+		Weight::from_parts(300, 30)
+	}
+	/// Scales with `n` in both dimensions, so a build step's charge shows the keys it pushed
+	/// rather than a flat cost.
+	fn build_private_ring(n: u32) -> Weight {
+		Weight::from_parts(400 + 10 * n as u64, 40 + n as u64)
+	}
+	/// Above the cost of any push step, so a test tells the two branches apart.
+	fn finish_private_ring() -> Weight {
+		Weight::from_parts(900, 90)
+	}
+	fn authorize_build_private_ring() -> Weight {
+		Weight::from_parts(50, 0)
+	}
+	fn send_private_ring() -> Weight {
+		Weight::from_parts(500, 50)
+	}
+	fn authorize_send_private_ring() -> Weight {
+		Weight::from_parts(50, 0)
+	}
+	/// Scales with `n` in both dimensions, so the refund a cleanup step reports shows the entries
+	/// it removed.
+	fn clean_up_private_game(n: u32) -> Weight {
+		Weight::from_parts(600 + 10 * n as u64, 60 + n as u64)
+	}
+	fn authorize_clean_up_private_game() -> Weight {
+		Weight::from_parts(50, 0)
+	}
 }
 
 parameter_types! {
@@ -108,6 +148,21 @@ parameter_types! {
 	pub const NftClaimsPalletIndex: u8 = 42;
 	/// Small, so that a test can fill the delivery queue in a few blocks.
 	pub storage MaxQueuedCreditTrees: u32 = 8;
+	pub const PrivateRingExponent: indiv_support::traits::RingExponent =
+		indiv_support::traits::RingExponent::R2e9;
+	pub storage MaxPrivateRingKeys: u32 = 64;
+	/// Two keys give no anonymity on a live chain, but they keep the tests short.
+	pub storage MinPrivateRingKeys: u32 = 2;
+	/// Off by default, so that a test of the absolute floor is not also a test of the share.
+	pub storage MinPrivateRingParticipation: Percent = Percent::zero();
+	pub storage PrivateKeysPerBuild: u32 = 2;
+	pub storage PrivateRegistrationSeconds: u32 = 3_600;
+	pub storage PrivateClaimEntryCredits: u32 = 2;
+	pub storage MaxQueuedPrivateRings: u32 = 4;
+	pub const PrivateRingRemoteWeight: Weight = Weight::from_parts(1_000, 1_000);
+	/// Whether [`FailableRingVrf`] refuses to push keys, which is what a chunk store the ring
+	/// cannot be built from does on a live chain.
+	pub storage RingPushFails: bool = false;
 	pub storage MaxCreditTreesPerMessage: u32 = 4;
 	pub const ReplayCooldownSeconds: u64 = 60;
 	pub const NftClaimsRemoteWeight: Weight = Weight::from_parts(1_000, 0);
@@ -198,6 +253,27 @@ pub fn last_sent_credit_tree_batch() -> crate::CreditTreeBatch<Test> {
 	crate::CreditTreeBatch::<Test>::decode(&mut &call[2..]).expect("the batch decodes")
 }
 
+/// The batch of private game outcomes carried by the last XCM message, with the pallet index and
+/// call index it was addressed to checked along the way.
+pub fn last_sent_private_ring_batch() -> crate::PrivateRingBatchOf<Test> {
+	use xcm::latest::{Instruction, Xcm};
+
+	let (_, encoded) = sent_credit_tree_xcms().pop().expect("an XCM was sent");
+	let message: Xcm<()> = Xcm::decode(&mut &encoded[..]).expect("XCM decodes");
+	let call = message
+		.0
+		.into_iter()
+		.find_map(|instruction| match instruction {
+			Instruction::Transact { call, .. } => Some(call.into_encoded()),
+			_ => None,
+		})
+		.expect("the XCM carries a Transact");
+
+	assert_eq!(call[0], NftClaimsPalletIndex::get(), "addressed to the nft-claims pallet");
+	assert_eq!(call[1], 3, "the call index of `receive_private_rings`");
+	crate::PrivateRingBatchOf::<Test>::decode(&mut &call[2..]).expect("the batch decodes")
+}
+
 /// Makes the next XCM send fail, as a closed or congested channel would.
 pub fn fail_credit_tree_xcms(fail: bool) {
 	XCM_SEND_SHOULD_FAIL.with_borrow_mut(|flag| *flag = fail);
@@ -245,5 +321,100 @@ impl crate::benchmarking::BenchmarkHelper for MockCreditsBenchmarkHelper {
 		// `MockChannelInfo` reports an open channel unless a test closes it; only its per-message
 		// room has to be set, which is what decides how many trees a delivery takes.
 		set_claims_max_message_size(max_message_size);
+	}
+}
+
+/// [`verifiable::mock::Mock`], with pushing keys made to fail while [`RingPushFails`] is set.
+///
+/// A live chain fails a push on trusted-setup chunks the ring cannot be built from, which no
+/// retry repairs. Every other operation is the mock's own.
+pub struct FailableRingVrf;
+
+impl verifiable::GenerateVerifiable for FailableRingVrf {
+	type Members = <verifiable::mock::Mock as verifiable::GenerateVerifiable>::Members;
+	type Intermediate = <verifiable::mock::Mock as verifiable::GenerateVerifiable>::Intermediate;
+	type Member = <verifiable::mock::Mock as verifiable::GenerateVerifiable>::Member;
+	type Secret = <verifiable::mock::Mock as verifiable::GenerateVerifiable>::Secret;
+	type Commitment = <verifiable::mock::Mock as verifiable::GenerateVerifiable>::Commitment;
+	type Proof = <verifiable::mock::Mock as verifiable::GenerateVerifiable>::Proof;
+	type Signature = <verifiable::mock::Mock as verifiable::GenerateVerifiable>::Signature;
+	type StaticChunk = <verifiable::mock::Mock as verifiable::GenerateVerifiable>::StaticChunk;
+	type Config = <verifiable::mock::Mock as verifiable::GenerateVerifiable>::Config;
+
+	fn start_members(config: Self::Config) -> Self::Intermediate {
+		verifiable::mock::Mock::start_members(config)
+	}
+
+	fn push_members(
+		intermediate: &mut Self::Intermediate,
+		members: impl Iterator<Item = Self::Member>,
+		lookup: impl Fn(core::ops::Range<usize>) -> Result<Vec<Self::StaticChunk>, ()>,
+	) -> Result<(), verifiable::Error> {
+		if RingPushFails::get() {
+			return Err(verifiable::Error::LookupFailed);
+		}
+		verifiable::mock::Mock::push_members(intermediate, members, lookup)
+	}
+
+	fn finish_members(inter: Self::Intermediate) -> Self::Members {
+		verifiable::mock::Mock::finish_members(inter)
+	}
+
+	fn new_secret(entropy: verifiable::Entropy) -> Self::Secret {
+		verifiable::mock::Mock::new_secret(entropy)
+	}
+
+	fn member_from_secret(secret: &Self::Secret) -> Self::Member {
+		verifiable::mock::Mock::member_from_secret(secret)
+	}
+
+	fn open(
+		config: Self::Config,
+		member: &Self::Member,
+		members_iter: impl Iterator<Item = Self::Member>,
+	) -> Result<Self::Commitment, verifiable::Error> {
+		verifiable::mock::Mock::open(config, member, members_iter)
+	}
+
+	fn create_multi_context(
+		commitment: Self::Commitment,
+		secret: &Self::Secret,
+		contexts: &[&[u8]],
+		message: &[u8],
+	) -> Result<(Self::Proof, verifiable::AliasVec), verifiable::Error> {
+		verifiable::mock::Mock::create_multi_context(commitment, secret, contexts, message)
+	}
+
+	fn alias_in_context(
+		secret: &Self::Secret,
+		context: &[u8],
+	) -> Result<indiv_support::traits::Alias, verifiable::Error> {
+		verifiable::mock::Mock::alias_in_context(secret, context)
+	}
+
+	fn validate_multi_context(
+		config: Self::Config,
+		proof: &Self::Proof,
+		members: &Self::Members,
+		contexts: &[&[u8]],
+		message: &[u8],
+	) -> Result<verifiable::AliasVec, verifiable::Error> {
+		verifiable::mock::Mock::validate_multi_context(config, proof, members, contexts, message)
+	}
+
+	fn is_member_valid(member: &Self::Member) -> bool {
+		verifiable::mock::Mock::is_member_valid(member)
+	}
+
+	fn sign(secret: &Self::Secret, message: &[u8]) -> Result<Self::Signature, verifiable::Error> {
+		verifiable::mock::Mock::sign(secret, message)
+	}
+
+	fn verify_signature(
+		signature: &Self::Signature,
+		message: &[u8],
+		member: &Self::Member,
+	) -> bool {
+		verifiable::mock::Mock::verify_signature(signature, message, member)
 	}
 }

@@ -28,7 +28,8 @@ use frame_support::{
 use indiv_support::{
 	credit_trees::{
 		credit_leaf, AwardBlock, CreditProofNode, CreditTreeDelivery, NftClaimCredit,
-		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
+		NftClaimCreditLeaf, NftClaimCreditTree, PrivateClaimSlot, PrivateGameOutcome,
+		PrivateRingDelivery, TreeSequence,
 	},
 	identity::AccountOrPerson,
 	traits::Alias,
@@ -36,6 +37,7 @@ use indiv_support::{
 use pallet_scarcity::{CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit};
 use sp_core::H160;
 use sp_runtime::{traits::BlakeTwo256, BuildStorage, DispatchError};
+use verifiable::GenerateVerifiable;
 
 pub type Block = frame_system::mocking::MockBlock<Test>;
 
@@ -107,6 +109,21 @@ impl EnsureOriginWithArg<RuntimeOrigin, ClaimantKind> for MockEnsureClaimant {
 /// declares fails if the call charges the wrong branch.
 pub struct MockWeightInfo;
 impl pallet_nft_claims::WeightInfo for MockWeightInfo {
+	fn receive_private_rings(n: u32) -> Weight {
+		Weight::from_parts(100 + 10 * n as u64, 10 + n as u64)
+	}
+	/// Non-zero in both dimensions, so the refund a private claim reports stays below its worst
+	/// case.
+	fn claim_private() -> Weight {
+		Weight::from_parts(700, 70)
+	}
+	fn authorize_claim_private() -> Weight {
+		Weight::from_parts(900, 90)
+	}
+	/// Scales with `n`, so the refund a partly spent budget reports differs from the worst case.
+	fn close_private_ring(n: u32) -> Weight {
+		Weight::from_parts(500 + 10 * n as u64, 50 + n as u64)
+	}
 	fn receive_credit_trees(n: u32) -> Weight {
 		Weight::from_parts(1_000 + 10 * n as u64, 0)
 	}
@@ -127,6 +144,16 @@ impl pallet_nft_claims::WeightInfo for MockWeightInfo {
 parameter_types! {
 	pub const MaxTreesPerMessage: u32 = 4;
 	pub const MaxProofNodes: u32 = 16;
+	pub const MaxPrivateRingsPerMessage: u32 = 4;
+	/// Two, so a test fills the block's allowance with one claim to spare.
+	pub storage MaxPrivateClaimsPerBlock: u32 = 2;
+	/// Short, so a test steps over the delay and through the window in a few blocks.
+	pub storage PrivateClaimDelay: u64 = 2;
+	pub storage PrivateClaimWindow: u64 = 10;
+	pub const PrivateRingExponent: indiv_support::traits::RingExponent =
+		indiv_support::traits::RingExponent::R2e9;
+	pub PrivateClaimNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"test".to_vec().try_into().expect("the test network suffix fits");
 	/// The instances the mock minter has handed out, as `(collection, item, owner)` in mint order.
 	pub storage MintedInstances: Vec<(CollectionId, ItemIndex, u64)> = Vec::new();
 	/// The collections the mock backend holds, as `(collection, owner, next_item_index)`.
@@ -299,13 +326,35 @@ impl CollectionSelector<u64> for MockSelector {
 #[cfg(feature = "runtime-benchmarks")]
 pub struct MockBenchmarkHelper;
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_nft_claims::BenchmarkHelper<u64> for MockBenchmarkHelper {
+impl pallet_nft_claims::BenchmarkHelper<u64, verifiable::mock::Mock> for MockBenchmarkHelper {
 	fn prepare_collection(owner: &u64, collection: CollectionId, item: ItemIndex) {
 		add_collection(collection, *owner, item.saturating_add(1));
 	}
 
 	fn prepare_contract(_owner: &u64) -> H160 {
 		H160::repeat_byte(1)
+	}
+
+	fn private_ring_and_proof(
+		context: &[u8; 32],
+		message: &[u8],
+	) -> (
+		<verifiable::mock::Mock as GenerateVerifiable>::Members,
+		<verifiable::mock::Mock as GenerateVerifiable>::Proof,
+		indiv_support::traits::Alias,
+	) {
+		let secret = verifiable::mock::Mock::new_secret([1u8; 32]);
+		let member = verifiable::mock::Mock::member_from_secret(&secret);
+		let delivery = private_ring_delivery(0, 1, core::slice::from_ref(&member));
+		let commitment =
+			verifiable::mock::Mock::open(Default::default(), &member, core::iter::once(member))
+				.expect("the member is in the ring");
+		let (proof, alias) = verifiable::mock::Mock::create(commitment, &secret, context, message)
+			.expect("the mock creates a proof");
+		let PrivateGameOutcome::Ring { root, .. } = delivery.outcome else {
+			unreachable!("the helper builds a ring")
+		};
+		(root, proof, alias)
 	}
 }
 
@@ -317,6 +366,13 @@ impl pallet_nft_claims::Config for Test {
 	type Nfts = MockNfts;
 	type CollectionSelector = MockSelector;
 	type MaxProofNodes = MaxProofNodes;
+	type RingVrf = verifiable::mock::Mock;
+	type PrivateRingExponent = PrivateRingExponent;
+	type PrivateClaimNetworkSuffix = PrivateClaimNetworkSuffix;
+	type MaxPrivateRingsPerMessage = MaxPrivateRingsPerMessage;
+	type MaxPrivateClaimsPerBlock = MaxPrivateClaimsPerBlock;
+	type PrivateClaimDelay = PrivateClaimDelay;
+	type PrivateClaimWindow = PrivateClaimWindow;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockBenchmarkHelper;
 }
@@ -339,6 +395,7 @@ pub fn tree(block: AwardBlock) -> NftClaimCreditTree {
 		root: CreditProofNode([block as u8; 32]),
 		leaf_count: 3,
 		timestamp: 1_000 + block,
+		private_slots: 0,
 	}
 }
 
@@ -375,6 +432,7 @@ pub fn tree_of(block: AwardBlock, awards: &[Award]) -> NftClaimCreditTree {
 		root: binary_merkle_tree::merkle_root::<BlakeTwo256, _>(leaves(awards)).into(),
 		leaf_count: awards.len() as u32,
 		timestamp: 1_000 + block,
+		private_slots: 0,
 	}
 }
 
@@ -399,4 +457,41 @@ pub fn nft_claims_events() -> Vec<Event<Test>> {
 			_ => None,
 		})
 		.collect()
+}
+
+/// The ring of `game_index` over `keys`, granting `slots` slots to each, as the game chain builds
+/// and delivers it.
+pub fn private_ring_delivery(
+	game_index: crate::GameIdx,
+	slots: PrivateClaimSlot,
+	keys: &[<verifiable::mock::Mock as GenerateVerifiable>::Member],
+) -> PrivateRingDelivery<<verifiable::mock::Mock as GenerateVerifiable>::Members> {
+	let mut intermediate = verifiable::mock::Mock::start_members(
+		PrivateRingExponent::get()
+			.try_into()
+			.expect("the mock accepts the test exponent"),
+	);
+	verifiable::mock::Mock::push_members(&mut intermediate, keys.iter().cloned(), |range| {
+		Ok(vec![(); range.len()])
+	})
+	.expect("the mock pushes every key");
+
+	PrivateRingDelivery {
+		game_index,
+		slots,
+		outcome: PrivateGameOutcome::Ring {
+			root: verifiable::mock::Mock::finish_members(intermediate),
+			key_count: keys.len() as u32,
+		},
+	}
+}
+
+/// A batch of `rings`, as the game pallet assembles it.
+pub fn private_ring_batch(
+	rings: Vec<PrivateRingDelivery<<verifiable::mock::Mock as GenerateVerifiable>::Members>>,
+) -> crate::PrivateRingBatchOf<Test> {
+	crate::PrivateRingBatchOf::<Test> {
+		source_time: 1_000,
+		rings: rings.try_into().expect("batch fits MaxPrivateRingsPerMessage"),
+	}
 }

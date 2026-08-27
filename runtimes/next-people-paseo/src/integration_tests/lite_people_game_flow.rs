@@ -87,6 +87,7 @@ fn lite_person_plays_the_game_for_free_with_a_product_key() {
 			rounds: 1,
 			max_group_size: 2,
 			airdrops: Default::default(),
+			private_claims: None,
 		};
 		assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]));
 		advance_until_time(GameTimes::<Runtime>::registration_start(&schedule));

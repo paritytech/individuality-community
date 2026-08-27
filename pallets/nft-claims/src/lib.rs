@@ -51,6 +51,54 @@
 //! destination consent, so the call names the key to mint to rather than minting to the
 //! claimant's own account.
 //!
+//! ## Claiming privately
+//!
+//! A game whose schedule opted into the private path mints through [`Pallet::claim_private`].
+//! [`Pallet::claim`] refuses that game's trees, which carry a non-zero `private_slots` and say so
+//! before the game's ring arrives.
+//!
+//! The game chain sends one ring per private game through [`Pallet::receive_private_rings`], built
+//! over the keys of every claimant that registered. A claim names a slot and proves membership in
+//! the game's ring under the context of the game and the slot, and [`Config::RingVrf`] returns the
+//! alias of that context. The alias is the nullifier: one key yields one alias per slot, and
+//! [`SpentPrivateClaims`] spends each once.
+//!
+//! The same call carries the other outcome: a game that built no ring is recorded in
+//! [`AbandonedPrivateGames`], which reopens [`Pallet::claim`] for its trees. A game reaches one
+//! outcome only, and the one that arrives first is kept, so a credit cannot be minted on both
+//! paths.
+//!
+//! Every registrant holds the same slots, so every claim of a game hides in the same set. With a
+//! ring per claimant, the set a claim proves against would be a fact about its maker, and the
+//! claims of one claimant could be intersected down to the narrowest of them.
+//!
+//! [`Pallet::claim_private`] is an authorized call. The proof authorizes it, so the transaction
+//! carries no signer and pays no fee; a fee payer would be an account that ties together the
+//! claims it funded. `authorize` runs the verification, and the dispatch spends the alias it
+//! matched.
+//!
+//! A ring proof costs far more to verify than a Merkle path, so
+//! [`Config::MaxPrivateClaimsPerBlock`] bounds how many one block runs. A claim past the cap stays
+//! in the pool for a block with room.
+//!
+//! ## The claim window
+//!
+//! A ring's claims run in one window: they open [`Config::PrivateClaimDelay`] after the ring
+//! arrives and close [`Config::PrivateClaimWindow`] later. The delay opens every member's claims
+//! at the same block, and the close keeps them inside one interval a wallet can pick a moment at
+//! random from. Without it, claims trail off indefinitely and a late one has the members who had
+//! not claimed yet as its anonymity set, however large the ring is.
+//!
+//! A member who does not claim inside the window mints nothing. The ring is the only path a
+//! private game's credits mint on, and the credits their registration spent are not returned.
+//! `PrivateRingReceived` names both bounds, so a wallet knows them as soon as the ring lands.
+//!
+//! Once the window is closed, [`Pallet::close_private_ring`] drops the ring and the aliases spent
+//! against it. No claim can be made by then, so nothing is kept to stop one. It is a signed,
+//! permissionless call: anyone may pay to reclaim the space, and until somebody does the state
+//! sits there unused. The game is recorded in [`ClosedPrivateGames`], which refuses a later
+//! outcome for it: without the aliases the dropped ring's slots would mint again.
+//!
 //! ## Collections and item selection
 //!
 //! The claimant names the collection a claim mints into, and a collection accepts claims only
@@ -114,18 +162,36 @@ use frame_support::{
 	weights::Weight,
 };
 use indiv_support::{
+	context::{build_product_context, private_nft_claims, ProductContextNetworkSuffix},
 	credit_trees::{
 		credit_leaf, AwardBlock, CreditProofNode, NftClaimCredit, NftClaimCreditLeaf,
-		NftClaimCreditTree, TreeSequence,
+		NftClaimCreditTree, PrivateClaimSlot, PrivateGameOutcome, PrivateRingBatch,
+		PrivateRingDelivery, TreeSequence,
 	},
 	identity::AccountOrPerson,
+	traits::{Alias, RingExponent},
 	weight_budget::OcwWeightBudget,
 };
 use pallet_scarcity::{CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit};
 use sp_core::{H160, H256};
-use sp_runtime::{traits::BlakeTwo256, DispatchError};
+use sp_runtime::{traits::BlakeTwo256, DispatchError, Saturating};
+use verifiable::GenerateVerifiable;
+
+pub use indiv_support::credit_trees::GameIdx;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-claims";
+
+/// How many spent aliases one [`Pallet::close_private_ring`] call removes.
+///
+/// A closed window's ring holds one alias per claim that was made, so the removal runs in bounded
+/// steps. It is a pallet constant because only the weight of one call depends on it.
+pub const PRIVATE_CLOSE_ITEMS: u32 = 32;
+
+/// How many blocks a `claim_private` submission stays valid in the pool.
+///
+/// Only a full block turns a claim away, so a claim has to outlive a burst. A claim that outlives
+/// this window is dropped, and its alias stays unspent.
+const PRIVATE_CLAIM_TX_LONGEVITY: u64 = 64;
 
 /// Successful output of a collection's minter contract.
 pub struct Selection {
@@ -176,13 +242,24 @@ pub trait CollectionSelector<AccountId> {
 /// What the benchmarks cannot set up themselves, because only the runtime knows how its NFT
 /// backend is administered.
 #[cfg(feature = "runtime-benchmarks")]
-pub trait BenchmarkHelper<AccountId> {
+pub trait BenchmarkHelper<AccountId, Crypto: GenerateVerifiable> {
 	/// Make `collection` exist owned by `owner`, with `item` defined in it, as the owner would
 	/// have done before the first claim.
 	fn prepare_collection(owner: &AccountId, collection: CollectionId, item: ItemIndex);
 
 	/// Deploy a contract that the collection registration benchmark can validate.
 	fn prepare_contract(owner: &AccountId) -> H160;
+
+	/// A private claim ring, a proof of membership in it made for `context` over `message`, and
+	/// the alias the proof yields.
+	///
+	/// The prover paths are off-chain, so only the runtime can build these. Without them a
+	/// benchmark of `authorize_claim_private` measures a verification that fails early. The call
+	/// carries the alias, so the benchmark needs it too.
+	fn private_ring_and_proof(
+		context: &[u8; 32],
+		message: &[u8],
+	) -> (Crypto::Members, Crypto::Proof, Alias);
 }
 
 #[frame_support::pallet]
@@ -246,9 +323,60 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxProofNodes: Get<u32>;
 
-		/// Setup the claim benchmark needs from the NFT backend.
+		/// The ring VRF a private claim is proven with. Set it to the suite the game chain builds
+		/// its private claim rings with.
+		type RingVrf: GenerateVerifiable<
+			Proof: Send + Sync + DecodeWithMemTracking,
+			Member: DecodeWithMemTracking,
+			Members: DecodeWithMemTracking + verifiable::DecodeUnchecked,
+			Config: Send + Sync + DecodeWithMemTracking + TryFrom<RingExponent>,
+		>;
+
+		/// The ring capacity exponent the game chain builds its private claim rings at.
+		///
+		/// A proof is verified against this configuration, so any other value rejects every
+		/// private claim.
+		#[pallet::constant]
+		type PrivateRingExponent: Get<RingExponent>;
+
+		/// The network suffix the private claim contexts are built with.
+		///
+		/// Both chains and every wallet derive the same contexts from it. A runtime that changes
+		/// it invalidates every proof made under the old one.
+		type PrivateClaimNetworkSuffix: Get<ProductContextNetworkSuffix>;
+
+		/// Maximum number of private claim rings accepted in one batch.
+		#[pallet::constant]
+		type MaxPrivateRingsPerMessage: Get<u32>;
+
+		/// The most private claims one block executes.
+		///
+		/// A ring VRF verification is far heavier than a Merkle path, so this keeps a burst of
+		/// them inside the block budget. A claim past the cap is rejected, not queued, and its
+		/// sender retries in a later block.
+		#[pallet::constant]
+		type MaxPrivateClaimsPerBlock: Get<u32>;
+
+		/// Blocks between a private game's ring arriving and its claims opening.
+		///
+		/// Every member's claims open in the same block, so claiming early says nothing about who
+		/// claimed. Set it to what a wallet needs to see the ring and pick a moment inside the
+		/// window; zero opens the claims in the block the ring arrives in.
+		#[pallet::constant]
+		type PrivateClaimDelay: Get<BlockNumberFor<Self>>;
+
+		/// Blocks a private game's claim window stays open, counted from the block its claims
+		/// open in.
+		///
+		/// It is the interval every claim of the game falls in, and therefore the span the claims
+		/// of one member can be spread over. A member who does not claim inside it mints nothing,
+		/// so weigh the anonymity a narrow window buys against the mints a wide one saves.
+		#[pallet::constant]
+		type PrivateClaimWindow: Get<BlockNumberFor<Self>>;
+
+		/// Setup the claim benchmarks need from the NFT backend and the ring VRF prover.
 		#[cfg(feature = "runtime-benchmarks")]
-		type BenchmarkHelper: BenchmarkHelper<Self::AccountId>;
+		type BenchmarkHelper: BenchmarkHelper<Self::AccountId, Self::RingVrf>;
 	}
 
 	/// The Merkle commitment to the NFT claim credits awarded in one People-chain block, keyed
@@ -281,6 +409,64 @@ pub mod pallet {
 	/// Against the tree's `leaf_count`, this tells whether anything is left to claim.
 	#[pallet::storage]
 	pub type ClaimedCounts<T: Config> = StorageMap<_, Twox64Concat, AwardBlock, u32, ValueQuery>;
+
+	/// The ring VRF proof a private claim carries.
+	pub type RingProofOf<T> = <<T as Config>::RingVrf as GenerateVerifiable>::Proof;
+
+	/// A game's private claim ring as this chain holds it.
+	pub type PrivateRingOf<T> =
+		PrivateRing<<<T as Config>::RingVrf as GenerateVerifiable>::Members, BlockNumberFor<T>>;
+
+	/// A batch of private claim rings as the game chain sends it.
+	pub type PrivateRingBatchOf<T> = PrivateRingBatch<
+		<<T as Config>::RingVrf as GenerateVerifiable>::Members,
+		<T as Config>::MaxPrivateRingsPerMessage,
+	>;
+
+	/// The private claim ring of each private game, keyed by game.
+	///
+	/// A ring arrives once and never changes, so a proof built against it stays valid. A game that
+	/// too few claimants registered for has no ring, because the game chain builds none below its
+	/// anonymity floor, and none of its claims can be made. The entry carries the window its
+	/// claims are taken in and is dropped by [`Pallet::close_private_ring`] once that window is
+	/// closed.
+	#[pallet::storage]
+	pub type PrivateRings<T: Config> =
+		StorageMap<_, Twox64Concat, GameIdx, PrivateRingOf<T>, OptionQuery>;
+
+	/// The private games that were abandoned, whose credits mint over the public path.
+	///
+	/// The game chain builds no ring for a game too few claimants registered for, and none for a
+	/// game whose ring failed to build. It says so, and this is what reopens [`Pallet::claim`]
+	/// for the game's trees. No private claim of such a game exists, there being no ring to prove
+	/// against, so no credit mints twice.
+	#[pallet::storage]
+	pub type AbandonedPrivateGames<T: Config> =
+		StorageMap<_, Twox64Concat, GameIdx, (), OptionQuery>;
+
+	/// The aliases already spent in a game's private claims.
+	///
+	/// One member yields one alias per slot context, which makes the alias the nullifier: it says
+	/// a claim was made without saying by whom. An entry is removed only with its game's ring,
+	/// once the claim window is closed: while a claim can still be made, dropping one would mint
+	/// a second NFT from the same slot.
+	#[pallet::storage]
+	pub type SpentPrivateClaims<T: Config> =
+		StorageDoubleMap<_, Twox64Concat, GameIdx, Identity, Alias, (), OptionQuery>;
+
+	/// The private games whose claim window is closed and whose ring is dropped.
+	///
+	/// It is what stops a redelivered ring reopening a game: the aliases spent against the
+	/// dropped ring are gone with it, so a second ring would mint every slot of the game again.
+	/// One marker per game replaces a whole ring and its aliases, so closing still reclaims the
+	/// space it costs.
+	#[pallet::storage]
+	pub type ClosedPrivateGames<T: Config> = StorageMap<_, Twox64Concat, GameIdx, (), OptionQuery>;
+
+	/// How many private claims the current block has executed, against
+	/// [`Config::MaxPrivateClaimsPerBlock`]. Reset at the start of every block.
+	#[pallet::storage]
+	pub type PrivateClaimsThisBlock<T: Config> = StorageValue<_, u32, ValueQuery>;
 
 	/// The collections whose owners accept claims, each bound to the registering owner and the
 	/// [`ItemSelection`] deciding the item. A collection with no entry cannot be claimed into.
@@ -318,6 +504,44 @@ pub mod pallet {
 		/// `collection`'s owner registered it for claims with `selection`, or withdrew it with
 		/// `None`.
 		CollectionMinterSet { collection: CollectionId, selection: Option<ItemSelection> },
+		/// A private claim ring arrived for `game_index`. `key_count` is the anonymity set each
+		/// of its claims hides in, and `slots` is how many claims each member of the ring may
+		/// make.
+		///
+		/// Claims are taken from `opens_at` until `closes_at`, and a member who misses that
+		/// window mints nothing. A wallet picks its moment inside it at random: claims spread
+		/// over the window cover each other.
+		PrivateRingReceived {
+			game_index: GameIdx,
+			slots: PrivateClaimSlot,
+			key_count: u32,
+			opens_at: BlockNumberFor<T>,
+			closes_at: BlockNumberFor<T>,
+		},
+		/// `game_index`'s ring and the aliases spent against it are dropped, its claim window
+		/// having closed. No claim of the game is taken from now on, and none was taken since
+		/// the window closed.
+		PrivateRingClosed { game_index: GameIdx },
+		/// `game_index` built no ring, so its credits mint over the public path from now on.
+		/// `key_count` is how many claimants had registered for the ring it did not build.
+		PrivateGameAbandoned { game_index: GameIdx, key_count: u32 },
+		/// A second, different outcome arrived for a game: another ring, or an abandonment of a
+		/// game that holds one. The stored outcome is kept, because claims may already rest on
+		/// it.
+		PrivateOutcomeConflict { game_index: GameIdx },
+		/// A private claim of `game_index` spent `slot`, minting `instance` of `collection`'s
+		/// `item` to the purse key `owner`.
+		///
+		/// The claimant is left out. The alias the claim spent is in storage, and says only that
+		/// some member of the ring claimed.
+		PrivateCreditClaimed {
+			game_index: GameIdx,
+			slot: PrivateClaimSlot,
+			collection: CollectionId,
+			item: ItemIndex,
+			owner: T::AccountId,
+			instance: InstanceId,
+		},
 	}
 
 	#[pallet::error]
@@ -345,6 +569,44 @@ pub mod pallet {
 		CollectionOwnerChanged,
 		/// The collection has no item definitions for [`ItemSelection::Random`] to draw from.
 		NoItems,
+		/// The block's game mints through its private claim ring, so it takes no public claim.
+		/// A game that built no ring is the exception: its abandonment reopens this path.
+		PrivateGame,
+		/// No ring is held for the game, so it has nothing to close. The ring may not have
+		/// arrived yet, or it may be closed and dropped already.
+		UnknownPrivateRing,
+		/// The game's claim window is still open, so its ring is what its claims are proven
+		/// against and its spent aliases are what stops a second mint.
+		PrivateClaimWindowOpen,
+	}
+
+	/// Why a `claim_private` submission is not valid.
+	///
+	/// Reported as [`InvalidTransaction::Custom`], so a claimant can tell the causes apart. The
+	/// block's allowance is the exception and reports [`InvalidTransaction::Future`]: the claim is
+	/// valid and only waits for a block with room, so the pool keeps it.
+	#[repr(u8)]
+	pub enum AuthorizeInvalidity {
+		/// No ring is held for the game the claim names.
+		UnknownPrivateRing = 200,
+		/// The slot is not one the game grants.
+		SlotOutOfRange = 201,
+		/// The runtime's ring exponent is not one the crypto accepts.
+		InvalidRingExponent = 202,
+		/// The proof does not verify against the game's ring, or yields another alias than the
+		/// one the call names.
+		InvalidRingProof = 203,
+		/// The alias is spent, so the slot behind it has already minted.
+		SlotAlreadyClaimed = 204,
+		/// The game's claim window is closed, so it takes no further claim. A claim before the
+		/// window opens is not this: it reports [`InvalidTransaction::Future`] and waits.
+		PrivateClaimWindowClosed = 205,
+	}
+
+	impl From<AuthorizeInvalidity> for TransactionValidityError {
+		fn from(e: AuthorizeInvalidity) -> Self {
+			InvalidTransaction::Custom(e as u8).into()
+		}
 	}
 
 	#[pallet::call(weight = <T as Config>::WeightInfo)]
@@ -466,6 +728,14 @@ pub mod pallet {
 
 			let tree = CreditTrees::<T>::get(block)
 				.ok_or(Error::<T>::UnknownAwardBlock.with_weight(base))?;
+			// A private game mints through its ring only. The tree carries the slot count, so a
+			// public claim is refused before the game's ring arrives. A game that built no ring
+			// mints here instead, its abandonment being what says so.
+			ensure!(
+				tree.private_slots == 0 ||
+					AbandonedPrivateGames::<T>::contains_key(tree.game_index),
+				Error::<T>::PrivateGame.with_weight(base)
+			);
 			ensure!(
 				leaf_index < tree.leaf_count,
 				Error::<T>::LeafIndexOutOfBounds.with_weight(base)
@@ -534,6 +804,116 @@ pub mod pallet {
 			.into())
 		}
 
+		/// Stores the private game outcomes of a batch sent by the game pallet.
+		///
+		/// An outcome is a ring, which opens the private path for the game, or an abandonment,
+		/// which reopens the public one. A game already holding one outcome keeps it.
+		///
+		/// ## Origin
+		/// Requires the game chain's XCM origin (`EnsureGameChainOrigin`).
+		///
+		/// ## Parameters
+		/// - `batch`: The outcomes to store, in ascending game order.
+		#[pallet::call_index(3)]
+		#[pallet::weight(T::WeightInfo::receive_private_rings(batch.rings.len() as u32))]
+		pub fn receive_private_rings(
+			origin: OriginFor<T>,
+			batch: PrivateRingBatchOf<T>,
+		) -> DispatchResult {
+			T::EnsureGameChainOrigin::ensure_origin(origin)?;
+
+			for update in batch.rings.iter() {
+				Self::store_private_outcome(update);
+			}
+
+			Ok(())
+		}
+
+		/// Mints an NFT against a private game's ring, without naming the claimant.
+		///
+		/// The proof shows that its maker holds a key of `game_index`'s ring and yields `alias`,
+		/// the alias of `slot`'s context. The claim spends that alias. One key yields one alias
+		/// per slot, so a claimant mints once per slot the game grants, and no two of those mints
+		/// can be tied to each other.
+		///
+		/// ## Origin
+		/// Authorized: the proof authorizes the call, so the transaction carries no signer and
+		/// pays no fee. A signed origin would name the account that funds the mint, and the claims
+		/// one account paid for could be intersected to narrow their maker down inside the ring.
+		///
+		/// ## Parameters
+		/// - `game_index`: The private game the credit was earned in.
+		/// - `slot`: Which of the game's slots is being spent, which picks the proof's context.
+		///   Every member may name any of them, so spend them in a random order: a claimant who
+		///   walks the slots in order leaves a pattern that ties their own claims together.
+		/// - `alias`: The alias the proof yields. `authorize` checks the proof against it and the
+		///   dispatch spends it, so the ring verification runs once per claim instead of once in
+		///   `authorize` and again here.
+		/// - `proof`: The ring VRF proof, made under the context of `game_index` and `slot`, over
+		///   the message this call builds from `collection` and `mint_to`.
+		/// - `collection`: The Scarcity collection the NFT is minted into. The proof commits to it.
+		/// - `mint_to`: The Scarcity purse key the NFT is minted to. The proof commits to it too,
+		///   so an observed proof cannot be replayed into another purse or another collection.
+		#[pallet::authorize(|source, game_index, slot, alias, proof, collection, mint_to| {
+			Self::authorize_claim_private(source, game_index, slot, alias, proof, collection,
+				mint_to)
+		})]
+		#[pallet::call_index(4)]
+		#[pallet::weight(
+			T::WeightInfo::claim_private()
+				.saturating_add(T::CollectionSelector::max_weight())
+				.saturating_add(T::Nfts::mint_hook_weight())
+		)]
+		#[pallet::weight_of_authorize(T::WeightInfo::authorize_claim_private())]
+		pub fn claim_private(
+			origin: OriginFor<T>,
+			game_index: GameIdx,
+			slot: PrivateClaimSlot,
+			alias: Alias,
+			proof: RingProofOf<T>,
+			collection: CollectionId,
+			mint_to: T::AccountId,
+		) -> DispatchResultWithPostInfo {
+			let base = T::WeightInfo::claim_private();
+			ensure_authorized(origin).map_err(|e| e.with_weight(base))?;
+
+			// `authorize` ran on this state in the same block. It verified the proof against the
+			// game's ring, matched `alias` to it, held the claim to the block's allowance and
+			// found the alias unspent. Only spending the alias is left.
+			let _ = proof;
+
+			// Spent before the selection, so that a minter contract that reenters with the same
+			// proof finds the alias gone. A failure below unwinds the whole dispatch.
+			SpentPrivateClaims::<T>::insert(game_index, alias, ());
+			PrivateClaimsThisBlock::<T>::mutate(|executed| *executed = executed.saturating_add(1));
+
+			// A private claim spends its credit on the game chain, at registration, so there is
+			// no credit here to draw the item from. The alias stands in for it.
+			let selection = Self::select_item(collection, alias).map_err(|error| {
+				let error = error.into_claim_error::<T>();
+				error.error.with_weight(base.saturating_add(error.weight_consumed))
+			})?;
+			let SelectedItem { item, weight_consumed: selection_weight, .. } = selection;
+			let instance =
+				T::Nfts::mint_without_deposit(collection, item, mint_to.clone(), Vec::new())
+					.map_err(|e| e.with_weight(base.saturating_add(selection_weight)))?;
+
+			Self::deposit_event(Event::PrivateCreditClaimed {
+				game_index,
+				slot,
+				collection,
+				item,
+				owner: mint_to,
+				instance,
+			});
+
+			Ok(Some(
+				base.saturating_add(selection_weight)
+					.saturating_add(T::Nfts::mint_hook_weight()),
+			)
+			.into())
+		}
+
 		/// Registers `collection` for claims with `selection` deciding the minted item, or
 		/// withdraws it with `None`.
 		///
@@ -576,10 +956,51 @@ pub mod pallet {
 			Self::deposit_event(Event::CollectionMinterSet { collection, selection });
 			Ok(())
 		}
+
+		/// Drops a private game's ring and the aliases spent against it, once its claim window is
+		/// closed.
+		///
+		/// One call removes at most [`PRIVATE_CLOSE_ITEMS`] aliases and refunds the rest, so a
+		/// game is dropped over as many calls as it takes. The ring goes last, because it holds
+		/// the window that says the removal is allowed. Nothing removed here can gate a claim: a
+		/// closed window takes none.
+		///
+		/// ## Origin
+		/// Any signed account. The state belongs to nobody, so anyone may pay to reclaim it.
+		///
+		/// ## Parameters
+		/// - `game_index`: The private game whose ring is dropped.
+		#[pallet::call_index(5)]
+		#[pallet::weight(T::WeightInfo::close_private_ring(PRIVATE_CLOSE_ITEMS))]
+		pub fn close_private_ring(
+			origin: OriginFor<T>,
+			game_index: GameIdx,
+		) -> DispatchResultWithPostInfo {
+			ensure_signed(origin)?;
+
+			let removed = Self::do_close_private_ring(game_index)?;
+
+			Ok(Some(T::WeightInfo::close_private_ring(removed)).into())
+		}
 	}
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		/// Reopens the block's private claim allowance.
+		///
+		/// The counter is per block and is cleared rather than carried. A carried counter would
+		/// close the path for good once one block filled the cap.
+		fn on_initialize(_now: BlockNumberFor<T>) -> Weight {
+			// Read first. Only a block that ran a private claim leaves a counter to clear, and
+			// every other block would pay for the write.
+			if PrivateClaimsThisBlock::<T>::exists() {
+				PrivateClaimsThisBlock::<T>::kill();
+				return T::DbWeight::get().reads_writes(1, 1);
+			}
+
+			T::DbWeight::get().reads(1)
+		}
+
 		#[cfg(feature = "std")]
 		fn integrity_test() {
 			assert!(
@@ -606,6 +1027,37 @@ pub mod pallet {
 					.max(T::WeightInfo::claim_person(T::MaxProofNodes::get()))
 					.saturating_add(T::CollectionSelector::max_weight())
 					.saturating_add(T::Nfts::mint_hook_weight()),
+			);
+
+			// A private claim carries no signer and pays no fee, so the block budget is the only
+			// bound on it. Both halves count, and the ring verification in `authorize` is the
+			// heavier one.
+			OcwWeightBudget::from_normal_max::<T>().assert_fits(
+				"claim_private",
+				T::WeightInfo::claim_private()
+					.saturating_add(T::WeightInfo::authorize_claim_private())
+					.saturating_add(T::CollectionSelector::max_weight())
+					.saturating_add(T::Nfts::mint_hook_weight()),
+			);
+
+			// A cap of zero takes no private claim at all.
+			assert!(
+				!T::MaxPrivateClaimsPerBlock::get().is_zero(),
+				"MaxPrivateClaimsPerBlock must be at least one",
+			);
+
+			// A window of no blocks closes before the block its claims open in, so every claim
+			// of every private game is refused and no credit of one mints on either path.
+			assert!(
+				!T::PrivateClaimWindow::get().is_zero(),
+				"PrivateClaimWindow must be at least one block",
+			);
+
+			// The call is signed and its worst case is charged before the refund, so a worst
+			// case above the limit leaves the ring undroppable.
+			OcwWeightBudget::from_normal_max::<T>().assert_fits(
+				"close_private_ring",
+				T::WeightInfo::close_private_ring(PRIVATE_CLOSE_ITEMS),
 			);
 		}
 
@@ -649,6 +1101,27 @@ pub mod pallet {
 					return Err(TryRuntimeError::Other(
 						"a block has more claims than its tree has leaves",
 					));
+				}
+			}
+
+			// An alias is spent against a ring and removed with it, so an orphan is a ring that
+			// was dropped while its claims could still be made, which mints a slot twice.
+			for (game_index, _alias, ()) in SpentPrivateClaims::<T>::iter() {
+				if !PrivateRings::<T>::contains_key(game_index) {
+					return Err(TryRuntimeError::Other("spent private claim has no ring"));
+				}
+			}
+
+			// A game reaches one outcome. An abandoned game never held a ring, so it has none to
+			// close, and a closed one is a game that did hold one.
+			for (game_index, ()) in ClosedPrivateGames::<T>::iter() {
+				if AbandonedPrivateGames::<T>::contains_key(game_index) {
+					return Err(TryRuntimeError::Other(
+						"a private game is both abandoned and closed",
+					));
+				}
+				if PrivateRings::<T>::contains_key(game_index) {
+					return Err(TryRuntimeError::Other("a closed private game still holds a ring"));
 				}
 			}
 
@@ -745,6 +1218,239 @@ pub mod pallet {
 				.into_iter()
 				.map(|query| Self::preview_mint(query.credit, query.collection))
 				.collect::<Vec<_>>())
+		}
+
+		/// Store one delivered private game outcome, keeping the one already held on a conflict.
+		fn store_private_outcome(
+			update: &PrivateRingDelivery<<T::RingVrf as GenerateVerifiable>::Members>,
+		) {
+			if update.slots == 0 {
+				// A game that grants no slot is a public game, which reaches no outcome.
+				log::error!(
+					target: LOG_TARGET,
+					"Invalid private outcome for game {}: no slots",
+					update.game_index,
+				);
+				return;
+			}
+
+			match &update.outcome {
+				PrivateGameOutcome::Ring { root, key_count } => {
+					if *key_count == 0 {
+						// The game chain builds no ring below its own key floor, so an empty
+						// ring cannot be genuine.
+						log::error!(
+							target: LOG_TARGET,
+							"Invalid private ring for game {}: no keys",
+							update.game_index,
+						);
+						return;
+					}
+
+					// A closed game's spent aliases went with its ring, so a fresh window over
+					// the same keys would mint every slot of the game a second time.
+					if AbandonedPrivateGames::<T>::contains_key(update.game_index) ||
+						ClosedPrivateGames::<T>::contains_key(update.game_index)
+					{
+						Self::note_private_outcome_conflict(update.game_index);
+						return;
+					}
+
+					// The window runs from this block, so every member of the ring gets the same
+					// one. A redelivery keeps the window the first one set: extending it would
+					// leave the last claims of a game standing alone in time.
+					let opens_at = frame_system::Pallet::<T>::block_number()
+						.saturating_add(T::PrivateClaimDelay::get());
+					let closes_at = opens_at.saturating_add(T::PrivateClaimWindow::get());
+					let ring = PrivateRing {
+						root: root.clone(),
+						slots: update.slots,
+						key_count: *key_count,
+						opens_at,
+						closes_at,
+					};
+
+					match PrivateRings::<T>::get(update.game_index) {
+						Some(existing)
+							if existing.root != ring.root ||
+								existing.slots != ring.slots ||
+								existing.key_count != ring.key_count =>
+						{
+							// A game's ring is built once and never changes, so two rings for one
+							// game mean the chains disagree about who registered.
+							Self::note_private_outcome_conflict(update.game_index);
+						},
+						Some(_) => {},
+						None => {
+							PrivateRings::<T>::insert(update.game_index, ring);
+							Self::deposit_event(Event::PrivateRingReceived {
+								game_index: update.game_index,
+								slots: update.slots,
+								key_count: *key_count,
+								opens_at,
+								closes_at,
+							});
+						},
+					}
+				},
+				PrivateGameOutcome::Abandoned { key_count } => {
+					if PrivateRings::<T>::contains_key(update.game_index) ||
+						ClosedPrivateGames::<T>::contains_key(update.game_index)
+					{
+						// Claims may already rest on the ring, and reopening the public path
+						// would mint a second NFT for every credit they spent. A closed game
+						// held a ring too, whatever was claimed against it.
+						Self::note_private_outcome_conflict(update.game_index);
+						return;
+					}
+					if AbandonedPrivateGames::<T>::contains_key(update.game_index) {
+						return;
+					}
+
+					AbandonedPrivateGames::<T>::insert(update.game_index, ());
+					Self::deposit_event(Event::PrivateGameAbandoned {
+						game_index: update.game_index,
+						key_count: *key_count,
+					});
+				},
+			}
+		}
+
+		/// The body of [`Pallet::close_private_ring`], returning the aliases it removed.
+		fn do_close_private_ring(game_index: GameIdx) -> Result<u32, DispatchError> {
+			let ring = PrivateRings::<T>::get(game_index).ok_or(Error::<T>::UnknownPrivateRing)?;
+			ensure!(
+				frame_system::Pallet::<T>::block_number() >= ring.closes_at,
+				Error::<T>::PrivateClaimWindowOpen
+			);
+
+			// The aliases are read before they are removed, rather than cleared by prefix, so
+			// that the count the refund is measured in is exact.
+			let aliases = SpentPrivateClaims::<T>::iter_key_prefix(game_index)
+				.take(PRIVATE_CLOSE_ITEMS as usize)
+				.collect::<Vec<_>>();
+			let removed = aliases.len() as u32;
+			for alias in &aliases {
+				SpentPrivateClaims::<T>::remove(game_index, alias);
+			}
+
+			// A step that spent its whole budget leaves the rest to the next one. The ring is
+			// what says the removal is still owed, so it goes with the last of them.
+			if removed < PRIVATE_CLOSE_ITEMS {
+				PrivateRings::<T>::remove(game_index);
+				ClosedPrivateGames::<T>::insert(game_index, ());
+				Self::deposit_event(Event::PrivateRingClosed { game_index });
+			}
+
+			Ok(removed)
+		}
+
+		/// Report a second, different outcome for a game. The stored one is kept.
+		fn note_private_outcome_conflict(game_index: GameIdx) {
+			log::error!(
+				target: LOG_TARGET,
+				"Conflicting private outcome for game {game_index}, keeping the stored one",
+			);
+			Self::deposit_event(Event::PrivateOutcomeConflict { game_index });
+		}
+
+		/// Validate a [`Pallet::claim_private`] submission.
+		///
+		/// The proof authorizes the call, so everything the dispatch relies on is checked here:
+		/// the ring exists, the slot is one the game grants, the proof verifies under that slot's
+		/// context and yields `alias`, and `alias` is unspent. The dispatch runs on the same state
+		/// straight after and only spends the alias.
+		///
+		/// Any transaction source is taken. A claimant need not hold an account, so a claim has to
+		/// be able to arrive over the network.
+		///
+		/// A claim whose dispatch fails, on a minter contract that reverts or a collection with
+		/// no items, spends neither its alias nor the block's allowance and can be submitted
+		/// again for nothing. The alias is the `provides` tag and a member holds one alias per
+		/// slot, so the claims retried this way number no more than the claims those members
+		/// would make anyway.
+		pub(crate) fn authorize_claim_private(
+			_source: TransactionSource,
+			game_index: &GameIdx,
+			slot: &PrivateClaimSlot,
+			alias: &Alias,
+			proof: &RingProofOf<T>,
+			collection: &CollectionId,
+			mint_to: &T::AccountId,
+		) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
+			// The allowance is read before the proof, because checking it costs a verification
+			// itself. `Future` keeps the claim in the pool, a later block being what makes it
+			// valid.
+			if PrivateClaimsThisBlock::<T>::get() >= T::MaxPrivateClaimsPerBlock::get() {
+				return Err(InvalidTransaction::Future.into());
+			}
+
+			let ring = PrivateRings::<T>::get(game_index)
+				.ok_or(AuthorizeInvalidity::UnknownPrivateRing)?;
+
+			// Checked before the proof, which is the dear part. `Future` keeps a claim made
+			// ahead of the window in the pool, the opening block being what makes it valid,
+			// whereas a closed window never takes one again.
+			let now = frame_system::Pallet::<T>::block_number();
+			if now < ring.opens_at {
+				return Err(InvalidTransaction::Future.into());
+			}
+			ensure!(now < ring.closes_at, AuthorizeInvalidity::PrivateClaimWindowClosed);
+
+			ensure!(*slot < ring.slots, AuthorizeInvalidity::SlotOutOfRange);
+			ensure!(
+				!SpentPrivateClaims::<T>::contains_key(game_index, alias),
+				AuthorizeInvalidity::SlotAlreadyClaimed
+			);
+
+			let config = T::PrivateRingExponent::get()
+				.try_into()
+				.map_err(|_| AuthorizeInvalidity::InvalidRingExponent)?;
+			let proven = T::RingVrf::validate(
+				config,
+				proof,
+				&ring.root,
+				&Self::private_claim_context(*game_index, *slot),
+				&Self::private_claim_message(*collection, mint_to),
+			)
+			.map_err(|_| AuthorizeInvalidity::InvalidRingProof)?;
+			ensure!(proven == *alias, AuthorizeInvalidity::InvalidRingProof);
+
+			Ok((
+				ValidTransaction {
+					priority: indiv_support::tx_priority::USER_DEFAULT,
+					requires: Vec::new(),
+					// The alias is the nullifier, so one alias is one claim in the pool as it is
+					// on chain, whatever collection or purse key a resubmission names.
+					provides: Vec::from(
+						[(b"nft-claims/claim-private", game_index, alias).encode()],
+					),
+					longevity: PRIVATE_CLAIM_TX_LONGEVITY,
+					propagate: true,
+				},
+				Weight::zero(),
+			))
+		}
+
+		/// The context a claim of `slot` in `game_index` is proven under.
+		///
+		/// There is one context per game and slot. A member's aliases in two slots are therefore
+		/// unlinkable, and a proof for one game does not verify in another.
+		pub fn private_claim_context(game_index: GameIdx, slot: PrivateClaimSlot) -> [u8; 32] {
+			build_product_context(
+				private_nft_claims::PRODUCT_NAME,
+				&T::PrivateClaimNetworkSuffix::get(),
+				private_nft_claims::slot(game_index, slot),
+			)
+		}
+
+		/// The message a private claim's proof commits to.
+		///
+		/// It binds the collection and the purse key. Without them, anyone who saw a pending
+		/// claim could resubmit its proof and spend the alias on an item and a purse of their own
+		/// choosing.
+		pub fn private_claim_message(collection: CollectionId, mint_to: &T::AccountId) -> Vec<u8> {
+			(b"nft-claims/private", collection, mint_to).encode()
 		}
 
 		/// The item of `collection` that claiming `credit` mints, per the collection's

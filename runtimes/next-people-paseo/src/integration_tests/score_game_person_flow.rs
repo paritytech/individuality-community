@@ -91,6 +91,7 @@ fn alias_player_flow() {
 				} else {
 					Default::default()
 				},
+				private_claims: None,
 			})
 			.collect::<Vec<_>>();
 		Game::schedule_games(RuntimeOrigin::root(), schedules.clone()).unwrap();

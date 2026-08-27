@@ -338,6 +338,13 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxGroupSize: Get<u32>;
 
+		/// The most private claim slots a game may grant one claimant.
+		///
+		/// A slot is one private mint, so this bounds what a claimant takes from one game. Zero
+		/// disables the private path and rejects every schedule that names it.
+		#[pallet::constant]
+		type MaxPrivateClaimSlots: Get<u8>;
+
 		/// The minimum number of players in a group.
 		///
 		/// When scheduling a game the value for `max_group_size` must be at least this minimum + 1.
@@ -1530,6 +1537,15 @@ pub mod pallet {
 					Error::<T>::InvalidGameSetup
 				);
 
+				// A game that grants no slot is a public game. `Some(0)` is rejected rather than
+				// read as `None`, because it schedules a private game nobody can claim from.
+				if let Some(private) = schedule.private_claims {
+					ensure!(
+						private.slots > 0 && private.slots <= T::MaxPrivateClaimSlots::get(),
+						Error::<T>::InvalidGameSetup
+					);
+				}
+
 				last_game_end_time =
 					Duration::from_secs(GameTimes::<T>::player_process_end(schedule) as u64);
 			}
@@ -1854,6 +1870,7 @@ pub mod pallet {
 				rounds: schedule.rounds,
 				pending_attendance: 0,
 				airdrops_scheduled,
+				private_claims: schedule.private_claims,
 			});
 			GameHistory::<T>::insert(index, game_play_time);
 

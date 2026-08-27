@@ -59,6 +59,14 @@ pub trait WeightInfo {
 	fn send_credit_trees(n: u32, ) -> Weight;
 	fn replay_credit_trees(n: u32, ) -> Weight;
 	fn authorize_send_credit_trees() -> Weight;
+	fn register_private_claim_key() -> Weight;
+	fn build_private_ring(n: u32, ) -> Weight;
+	fn finish_private_ring() -> Weight;
+	fn authorize_build_private_ring() -> Weight;
+	fn send_private_ring() -> Weight;
+	fn authorize_send_private_ring() -> Weight;
+	fn clean_up_private_game(n: u32, ) -> Weight;
+	fn authorize_clean_up_private_game() -> Weight;
 }
 
 /// Weights for `indiv_pallet_nft_credits` using the Substrate node and recommended hardware.
@@ -166,6 +174,82 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(10_995_000, 4559)
 			.saturating_add(T::DbWeight::get().reads(1_u64))
 	}
+	fn register_private_claim_key() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `3276`
+		//  Estimated: `6592`
+		// Minimum execution time: 45_000_000 picoseconds.
+		Weight::from_parts(45_000_000, 6592)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(4_u64))
+	}
+	/// The range of component `n` is `[1, 64]`.
+	fn build_private_ring(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 200_000_000 picoseconds.
+		Weight::from_parts(200_000_000, 70000)
+			// Standard Error: 1_000_000
+			.saturating_add(Weight::from_parts(90_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(3_u64))
+	}
+	fn finish_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 150_000_000 picoseconds.
+		Weight::from_parts(150_000_000, 70000)
+			.saturating_add(T::DbWeight::get().reads(3_u64))
+			.saturating_add(T::DbWeight::get().writes(4_u64))
+	}
+	fn authorize_build_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 15_000_000 picoseconds.
+		Weight::from_parts(15_000_000, 70000)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+	}
+	fn send_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 60_000_000 picoseconds.
+		Weight::from_parts(60_000_000, 70000)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+	}
+	fn authorize_send_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1024`
+		//  Estimated: `4489`
+		// Minimum execution time: 10_000_000 picoseconds.
+		Weight::from_parts(10_000_000, 4489)
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+	}
+	/// The range of component `n` is `[0, 32]`.
+	fn clean_up_private_game(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 70000)
+			// Standard Error: 100_000
+			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
+	}
+	fn authorize_clean_up_private_game() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1024`
+		//  Estimated: `4489`
+		// Minimum execution time: 10_000_000 picoseconds.
+		Weight::from_parts(10_000_000, 4489)
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -270,6 +354,82 @@ impl WeightInfo for () {
 		//  Estimated: `4559`
 		// Minimum execution time: 10_213_000 picoseconds.
 		Weight::from_parts(10_995_000, 4559)
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+	}
+	fn register_private_claim_key() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `3276`
+		//  Estimated: `6592`
+		// Minimum execution time: 45_000_000 picoseconds.
+		Weight::from_parts(45_000_000, 6592)
+			.saturating_add(RocksDbWeight::get().reads(4_u64))
+			.saturating_add(RocksDbWeight::get().writes(4_u64))
+	}
+	/// The range of component `n` is `[1, 64]`.
+	fn build_private_ring(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 200_000_000 picoseconds.
+		Weight::from_parts(200_000_000, 70000)
+			// Standard Error: 1_000_000
+			.saturating_add(Weight::from_parts(90_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(4_u64))
+			.saturating_add(RocksDbWeight::get().writes(3_u64))
+	}
+	fn finish_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 150_000_000 picoseconds.
+		Weight::from_parts(150_000_000, 70000)
+			.saturating_add(RocksDbWeight::get().reads(3_u64))
+			.saturating_add(RocksDbWeight::get().writes(4_u64))
+	}
+	fn authorize_build_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 15_000_000 picoseconds.
+		Weight::from_parts(15_000_000, 70000)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+	}
+	fn send_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 60_000_000 picoseconds.
+		Weight::from_parts(60_000_000, 70000)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+			.saturating_add(RocksDbWeight::get().writes(2_u64))
+	}
+	fn authorize_send_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1024`
+		//  Estimated: `4489`
+		// Minimum execution time: 10_000_000 picoseconds.
+		Weight::from_parts(10_000_000, 4489)
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+	}
+	/// The range of component `n` is `[0, 32]`.
+	fn clean_up_private_game(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `4096`
+		//  Estimated: `70000`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 70000)
+			// Standard Error: 100_000
+			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+			.saturating_add(RocksDbWeight::get().writes(2_u64))
+			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
+	}
+	fn authorize_clean_up_private_game() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1024`
+		//  Estimated: `4489`
+		// Minimum execution time: 10_000_000 picoseconds.
+		Weight::from_parts(10_000_000, 4489)
 			.saturating_add(RocksDbWeight::get().reads(1_u64))
 	}
 }

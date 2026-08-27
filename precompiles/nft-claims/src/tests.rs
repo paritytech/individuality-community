@@ -336,7 +336,7 @@ fn every_method_rejects_attached_value() {
 fn mapped_nft_claims_errors_are_exhaustive() {
 	// The ABI covers only `set_collection_minter`; the claim and tree-delivery errors cannot
 	// surface through it.
-	const UNREACHABLE: [&str; 7] = [
+	const UNREACHABLE: [&str; 10] = [
 		"UnknownAwardBlock",
 		"LeafIndexOutOfBounds",
 		"AlreadyClaimed",
@@ -344,6 +344,13 @@ fn mapped_nft_claims_errors_are_exhaustive() {
 		"CollectionNotRegistered",
 		"CollectionOwnerChanged",
 		"NoItems",
+		// The private claim path has no interface here at all: neither `claim_private` nor the
+		// public claim it closes is exposed. Its own failures are transaction invalidities
+		// rather than dispatch errors, so this is the one variant of it left to list.
+		"PrivateGame",
+		// `close_private_ring` is not exposed either, so neither of its failures can be reached.
+		"UnknownPrivateRing",
+		"PrivateClaimWindowOpen",
 	];
 
 	let pallet_index = match DispatchError::from(NftClaimsError::<Test>::NotCollectionOwner) {

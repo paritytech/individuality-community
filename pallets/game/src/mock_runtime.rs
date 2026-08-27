@@ -1592,6 +1592,7 @@ impl indiv_pallet_game::Config for Test {
 	type UnixTime = Test;
 	type MaxRounds = ConstUint<10>;
 	type MaxGroupSize = ConstUint<10>;
+	type MaxPrivateClaimSlots = frame_support::traits::ConstU8<3>;
 	type MinGroupSize = ConstUint<0>;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type InviteIssuer = EnsureRoot<Self::AccountId>;

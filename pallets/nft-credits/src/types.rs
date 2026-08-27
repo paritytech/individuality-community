@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use indiv_pallet_game::GameIdx;
 use indiv_support::{
-	credit_trees::{CreditProofNode, NftClaimCredit, NftClaimCreditLeaf},
+	credit_trees::{CreditProofNode, NftClaimCredit, NftClaimCreditLeaf, PrivateClaimSlot},
 	identity::AccountOrPerson,
 };
 use scale_info::TypeInfo;
@@ -122,6 +122,8 @@ pub struct NftClaimCreditRootInfo {
 	pub game_index: GameIdx,
 	/// The block's wall-clock time in seconds since the UNIX epoch.
 	pub timestamp: u32,
+	/// The private claim slots the game grants, `0` for a public game.
+	pub private_slots: PrivateClaimSlot,
 }
 
 /// The inclusion proof of one NFT claim credit against the `NftClaimCreditTree` of the block it
@@ -165,4 +167,78 @@ pub enum NftClaimCreditProofError {
 	/// The given awards rehash to a different root than the one recorded for the block, so they
 	/// are not the block's awards, or not in award order.
 	RootMismatch,
+}
+
+/// One game's private claim path, from its first awarded credit until its ring is delivered and
+/// its registration state is dropped.
+///
+/// It is copied from the game rather than read back from it, because a game is killed once its
+/// player process ends, which is before registration opens.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+)]
+pub struct PrivateGameInfo {
+	/// The slots every registrant holds, from the game's schedule. Each slot is one mint hidden
+	/// by the game's ring.
+	pub slots: PrivateClaimSlot,
+	/// When registration opens, in seconds since the UNIX epoch. It is the end of the game's
+	/// player process, when the credits are final. Before that, a claimant's balance need not
+	/// cover the entry price.
+	pub registration_starts: u32,
+	/// When registration closes, in seconds since the UNIX epoch. Building starts after it, so a
+	/// ring never grows under a claimant who already proved against it.
+	pub registration_ends: u32,
+	/// The number of keys registered, which is the anonymity set of every claim of the game.
+	pub key_count: u32,
+	/// How many claimants earned the credits one registration costs. It is the population the
+	/// game's registration is measured against, and it is final once the player process ends.
+	/// A claimant below the price cannot register, so counting every credited player instead
+	/// would put the floor out of reach.
+	pub eligible_players: u32,
+	/// What the game still owes: its ring to build, or its registration state to drop.
+	pub phase: PrivateGamePhase,
+}
+
+/// The work a private game has left.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+)]
+pub enum PrivateGamePhase {
+	/// The game's ring is being built. It is finished once every registered key is pushed.
+	Building {
+		/// How many of the registered keys are already pushed.
+		included: u32,
+		/// How many build steps failed in a row. A push fails on a chunk the ring cannot be
+		/// built from, which no retry repairs, so the game is abandoned once the count reaches
+		/// `PRIVATE_RING_BUILD_RETRIES`.
+		failures: u8,
+	},
+	/// The game reached its outcome, so the keys, the registrations and the unspent credits are
+	/// left to drop.
+	CleaningUp,
+}
+
+impl PrivateGameInfo {
+	/// Whether registration is still open at `now`.
+	pub fn accepts_keys(&self, now: u32) -> bool {
+		now >= self.registration_starts && now < self.registration_ends
+	}
 }

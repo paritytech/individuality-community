@@ -19,7 +19,10 @@ use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use frame_support::{pallet_prelude::Get, traits::ConstU32, BoundedVec};
 use indiv_pallet_airdrop::{types::AirdropPrize, RegistrationEntry};
 use indiv_pallet_score::AccountOrPerson;
-use indiv_support::traits::{Alias, RevisionIndex, RingIndex};
+use indiv_support::{
+	credit_trees::PrivateClaimSetting,
+	traits::{Alias, RevisionIndex, RingIndex},
+};
 use scale_info::TypeInfo;
 use sp_core::sr25519::vrf::VrfSignature;
 
@@ -42,8 +45,9 @@ pub type AttesterPosition = u32;
 /// identifier.
 ///
 /// Game indices are unique. The abbreviated name leaves the plain one to that storage value,
-/// which both this module and the pallet module export from the crate root.
-pub type GameIdx = u32;
+/// which both this module and the pallet module export from the crate root. It is defined in
+/// `indiv-support`, so both chains name a game with the same type.
+pub use indiv_support::credit_trees::GameIdx;
 
 /// 32-byte ordering key used as the second key of `ShuffleRecognized`/
 /// `ShuffleNotRecognized`.
@@ -313,6 +317,9 @@ pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 	/// airdrop indices `0..airdrops_scheduled`. Scheduling stops at the first failure, so this
 	/// can be less than the schedule's airdrop count. Bounded by `MAX_GAME_AIRDROPS`.
 	pub airdrops_scheduled: u8,
+	/// The private claim path this game opts into, copied from its schedule. `None` mints the
+	/// game's credits publicly.
+	pub private_claims: Option<PrivateClaimSetting>,
 }
 
 /// The state of a game.
@@ -514,6 +521,10 @@ pub struct GameSchedule<AssetId, Balance> {
 	/// The airdrop events to schedule for this game, each drawn at its own offset relative to
 	/// the game play time. Empty skips airdrop scheduling for this game.
 	pub airdrops: BoundedVec<GameAirdrop<AssetId, Balance>, ConstU32<{ MAX_GAME_AIRDROPS as u32 }>>,
+	/// The private claim path this game opts into. `None` mints the game's NFT claim credits
+	/// publicly. A game that opts in mints privately only, so every claimant takes the same
+	/// path.
+	pub private_claims: Option<PrivateClaimSetting>,
 }
 
 /// `GameSchedule` for the runtime.

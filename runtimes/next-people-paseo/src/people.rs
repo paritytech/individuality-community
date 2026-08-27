@@ -631,6 +631,9 @@ impl indiv_pallet_game::Config for Runtime {
 	type MaxGroupSize = ConstU32<6>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type MaxGroupSize = ConstU32<10>;
+	// Five slots, held by every claimant that pays `PrivateClaimEntryCredits`. One ring serves
+	// them all, so the count costs this chain nothing.
+	type MaxPrivateClaimSlots = ConstU8<5>;
 	type UnixTime = RuntimeClock;
 	#[cfg(not(feature = "runtime-benchmarks"))]
 	type MaxRounds = ConstU32<3>;
@@ -760,8 +763,55 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// drops out delays no mint, its root staying on chain, but its awards then have to come from
 	// the block's events.
 	type MaxRetainedAwardBlocks = ConstU32<256>;
+	// The suite the claims chain verifies private claims with, which is the personhood one.
+	type RingVrf = BandersnatchVrfVerifiable;
+	type ChunksManager = ChunksManager;
+	// 2^10 holds 767 keys after the ring's own overhead, and it fixes what one proof costs to
+	// verify. The chunks of this exponent are already on chain for the recycler rings. A larger
+	// one takes a chunk set of its own, which governance has to upload before any ring builds.
+	type PrivateRingExponent = PrivateClaimRingExponent;
+	// The exponent's whole capacity, which is the anonymity set a game can reach and the number
+	// of claimants it registers. Registration is first-come, first-served: past it a claimant is
+	// refused and mints nothing, so keep it at what the exponent holds.
+	type MaxPrivateRingKeys = ConstU32<767>;
+	// A claim proves membership in this set and nothing narrower, so a ring below it names its
+	// claimants. A game that registers fewer than sixteen keys gets no ring.
+	type MinPrivateRingKeys = ConstU32<16>;
+	// Sixteen keys is a fixed price for a group that registers only to fill one target's
+	// anonymity set, and it buys the whole set in a game of hundreds. A quarter of the
+	// claimants that earned the entry price ties that price to the size of the game. A game
+	// this share turns away is abandoned and mints publicly, so the cost of setting it too high
+	// is a lost registration price, not a lost credit.
+	type MinPrivateRingParticipation = MinPrivateRingParticipation;
+	// Pushing is the expensive half of the path, so a ring is built over several blocks. The
+	// `integrity_test` holds one call's worst case to the block budget.
+	type PrivateKeysPerBuild = ConstU32<8>;
+	// Two hours, counted from the end of the game's player process, when its credits are final.
+	// A claimant who misses the window mints nothing, unless the game turns out to build no ring
+	// at all, which puts its credits back on the public path.
+	type PrivateRegistrationSeconds = ConstU32<7200>;
+	// A third of the 15 credits one game awards (`MaxRounds * (MaxGroupSize - 1)`), so a partial
+	// attendance still reaches it. Everyone pays the same price: a price that varied with what a
+	// claimant earned would put them in a different ring, and the ring a claim proves against
+	// names its maker. The pallet's `integrity_test` rejects a price above what a game awards.
+	type PrivateClaimEntryCredits = ConstU32<5>;
+	// One outcome per private game, so this covers an outage spanning sixteen of them.
+	type MaxQueuedPrivateRings = ConstU32<16>;
+	type PrivateRingRemoteWeight = PrivateRingRemoteWeight;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
+}
+
+parameter_types! {
+	/// The share of a game's registration-eligible claimants that has to register before its
+	/// private claim ring is built.
+	pub const MinPrivateRingParticipation: Percent = Percent::from_percent(25);
+	/// The ring capacity every private claim ring is built at.
+	pub const PrivateClaimRingExponent: indiv_support::traits::RingExponent =
+		indiv_support::traits::RingExponent::R2e10;
+	/// What executing `receive_private_rings` costs on the claims chain. It is charged here, so a
+	/// delivery pays for the work it causes there.
+	pub const PrivateRingRemoteWeight: Weight = Weight::from_parts(500_000_000, 10_000);
 }
 
 parameter_types! {

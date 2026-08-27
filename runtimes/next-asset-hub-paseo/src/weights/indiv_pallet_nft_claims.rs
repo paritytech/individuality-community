@@ -161,4 +161,59 @@ impl<T: frame_system::Config> indiv_pallet_nft_claims::WeightInfo for WeightInfo
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
+	/// Storage: `NftClaims::PrivateRings` (r:1 w:1)
+	/// The range of component `n` is `[1, 4]`.
+	fn receive_private_rings(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `76`
+		//  Estimated: `70000`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 70000))
+			// Standard Error: 1_000_000
+			.saturating_add(Weight::from_parts(15_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
+	}
+	/// Storage: `NftClaims::PrivateClaimsThisBlock` (r:0 w:1)
+	/// Storage: `NftClaims::SpentPrivateClaims` (r:0 w:1)
+	/// Storage: `NftClaims::CollectionMinters` (r:1 w:0)
+	fn claim_private() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `100`
+		//  Estimated: `3600`
+		// Minimum execution time: 15_000_000 picoseconds.
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3600))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+	/// Storage: `NftClaims::PrivateClaimsThisBlock` (r:1 w:0)
+	/// Storage: `NftClaims::PrivateRings` (r:1 w:0)
+	/// Storage: `NftClaims::SpentPrivateClaims` (r:1 w:0)
+	fn authorize_claim_private() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `70000`
+		//  Estimated: `140000`
+		// Minimum execution time: 250_000_000 picoseconds.
+		Weight::from_parts(250_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 140000))
+			.saturating_add(T::DbWeight::get().reads(3))
+	}
+	/// Storage: `NftClaims::PrivateRings` (r:1 w:1)
+	/// Storage: `NftClaims::SpentPrivateClaims` (r:0 w:32)
+	/// The range of component `n` is `[0, 32]`.
+	fn close_private_ring(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `70000`
+		//  Estimated: `140000`
+		// Minimum execution time: 10_000_000 picoseconds.
+		Weight::from_parts(10_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 140000))
+			// Standard Error: 100_000
+			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
+	}
 }

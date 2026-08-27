@@ -19,6 +19,7 @@ pallet-revive = { workspace = true }
 pallet-scarcity = { workspace = true }
 
 [dev-dependencies]
+verifiable = { workspace = true, features = ["mock", "prover"] }
 codec = { workspace = true, features = ["derive"] }
 indiv-support = { workspace = true }
 pallet-balances = { workspace = true }
@@ -40,6 +41,7 @@ std = [
 	"scale-info/std",
 	"sp-io/std",
 	"sp-runtime/std",
+	"verifiable/std",
 ]
 runtime-benchmarks = [
 	"frame-support/runtime-benchmarks",
