@@ -170,7 +170,7 @@ snowbridge-runtime-common = { workspace = true }
 approx = { workspace = true }
 asset-test-utils = { workspace = true }
 binary-merkle-tree = { workspace = true, features = ["std"] }
-next-people-paseo-runtime = { workspace = true, default-features = true }
+next-people-paseo-runtime = { workspace = true, features = ["std"] }
 pallet-revive-fixtures = { workspace = true }
 parachains-runtimes-test-utils = { workspace = true }
 sp-keyring = { workspace = true }
@@ -212,6 +212,7 @@ runtime-benchmarks = [
 	"indiv-precompile-scarcity/runtime-benchmarks",
 	"indiv-support/genesis",
 	"indiv-support/runtime-benchmarks",
+	"next-people-paseo-runtime/runtime-benchmarks",
 	"pallet-asset-conversion-tx-payment/runtime-benchmarks",
 	"pallet-asset-conversion/runtime-benchmarks",
 	"pallet-asset-rate/runtime-benchmarks",
@@ -278,7 +279,6 @@ runtime-benchmarks = [
 	"xcm-executor/runtime-benchmarks",
 	"xcm-runtime-apis/runtime-benchmarks",
 	"xcm/runtime-benchmarks",
-	"next-people-paseo-runtime/runtime-benchmarks"
 ]
 try-runtime = [
 	"asset-test-utils/try-runtime",
@@ -305,6 +305,7 @@ try-runtime = [
 	"indiv-precompile-nft-claims/try-runtime",
 	"indiv-precompile-personhood/try-runtime",
 	"indiv-precompile-scarcity/try-runtime",
+	"next-people-paseo-runtime/try-runtime",
 	"pallet-asset-conversion-tx-payment/try-runtime",
 	"pallet-asset-conversion/try-runtime",
 	"pallet-asset-rate/try-runtime",
@@ -363,7 +364,6 @@ try-runtime = [
 	"sp-runtime/try-runtime",
 	"system-parachains-common/try-runtime",
 	"system-parachains-constants/try-runtime",
-	"next-people-paseo-runtime/try-runtime"
 ]
 std = [
 	"approx/std",
@@ -405,6 +405,7 @@ std = [
 	"indiv-precompile-scarcity/std",
 	"indiv-support/std",
 	"log/std",
+	"next-people-paseo-runtime/std",
 	"pallet-asset-conversion-tx-payment/std",
 	"pallet-asset-conversion/std",
 	"pallet-asset-rate/std",
