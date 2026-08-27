@@ -25,6 +25,7 @@ use crate::{
 	*,
 };
 use codec::Encode;
+use cumulus_primitives_core::relay_chain::BlockNumber as RelayBlockNumber;
 use frame_support::{
 	traits::{
 		fungible::{Inspect, InspectHold, Mutate},
@@ -55,7 +56,7 @@ use sp_runtime::{
 		testing::{PoolState, TestOffchainExt, TestTransactionPoolExt},
 		OffchainDbExt, OffchainWorkerExt, TransactionPoolExt,
 	},
-	traits::{TransactionExtension as _, Zero},
+	traits::{BlockNumberProvider as _, TransactionExtension as _, Zero},
 	AccountId32, BoundedVec, BuildStorage, MultiSignature,
 };
 use std::{
@@ -331,6 +332,7 @@ fn new_test_ext() -> TestExternalities {
 
 	ext.execute_with(|| {
 		frame_system::Pallet::<Runtime>::set_block_number(1);
+		RelaychainDataProvider::<Runtime>::set_block_number(relay_block_for(1));
 		pallet_timestamp::Now::<Runtime>::put(1_000u64);
 		create_lite_people_collection();
 		setup_external_asset();
@@ -1365,6 +1367,16 @@ fn exec_as_coin(who_pair: &sr25519::Pair, call: RuntimeCall) {
 		.expect("dispatch succeeds");
 }
 
+/// The relay chain block number the parachain sees at parachain block `para_block`.
+///
+/// The parachain produces `BLOCK_PROCESSING_VELOCITY` blocks per relay chain block. Both chains
+/// start at zero here: [`indiv_pallet_relay_randomness::RandomnessEntry::moment`] is written below
+/// with the parachain block number, so an offset between the two clocks shifts the randomness
+/// timing the game flows depend on.
+fn relay_block_for(para_block: BlockNumber) -> RelayBlockNumber {
+	para_block / BLOCK_PROCESSING_VELOCITY
+}
+
 /// Advance the chain to `target_block`
 fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<Runtime>) {
 	loop {
@@ -1388,6 +1400,9 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 			&Default::default(),
 			&Default::default(),
 		);
+
+		// Simulate the parachain-system inherent moving the relay chain forward.
+		RelaychainDataProvider::<Runtime>::set_block_number(relay_block_for(next));
 
 		// Simulate the parachain-system inherent refreshing the relay randomness, with a
 		// value that varies per block like the relay per-block VRF does.
