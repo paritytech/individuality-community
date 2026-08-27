@@ -1576,9 +1576,9 @@ mod bandersnatch_bench {
 const DOTNS_PERSON_REGISTRATION_ALLOWANCE_MAX: Balance = MILLICENTS;
 /// Recover enough so that if a call to the name registration fails, another one can be retried in
 /// about 30 minutes. The 50 CENTS number is based on napkin math I did looking at the weight of the
-/// call.
+/// call. The rate is per relay chain block, the block number the pallet measures recovery with.
 const DOTNS_PERSON_REGISTRATION_ALLOWANCE_RECOVERY: Balance =
-	50 * CENTS / ((30 * MINUTES) as Balance);
+	50 * CENTS / ((30 * RC_MINUTES) as Balance);
 
 #[derive(
 	Clone,
@@ -1655,6 +1655,7 @@ impl indiv_pallet_origin_restriction::BenchmarkHelper<OriginCaller, RuntimeCall>
 
 impl indiv_pallet_origin_restriction::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_origin_restriction::WeightInfo<Runtime>;
+	type BlockNumberProvider = RelaychainDataProvider<Runtime>;
 	type RestrictedEntity = RestrictedEntity;
 	type OperationAllowedOneTimeExcess = OperationAllowedOneTimeExcess;
 	#[cfg(feature = "runtime-benchmarks")]

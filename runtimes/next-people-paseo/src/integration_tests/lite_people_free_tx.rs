@@ -276,5 +276,10 @@ fn lite_people_free_transaction_updates_usage() {
 			usage.used > 0,
 			"usage must be accounted even when the transaction is otherwise free"
 		);
+		assert_eq!(
+			usage.at_block,
+			RelaychainDataProvider::<Runtime>::current_block_number(),
+			"usage must be stamped with the relay chain block number, not the parachain one"
+		);
 	});
 }

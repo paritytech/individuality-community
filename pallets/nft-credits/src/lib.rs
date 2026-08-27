@@ -77,8 +77,9 @@
 //! Claiming happens on the claims chain, which never sees the credits themselves, only one root per
 //! block. A claimant proves their entitlement by presenting their credit with an inclusion proof:
 //! the sibling hashes that rehash the credit's leaf up to the root held for the block the credit
-//! was awarded in. A proof verifies only against that one root, and only for the claimant its leaf
-//! binds in, so no one else's credit and no other block's root can be minted against it.
+//! was awarded in. The claims chain builds the leaf itself, from the credit presented and the
+//! claimant its origin authenticated. Presenting somebody else's credit builds a different leaf,
+//! which does not rehash to the stored root.
 //!
 //! A claimant does not have to rebuild the tree themselves. The runtime API in [`runtime_api`]
 //! serves the proof material:
@@ -87,9 +88,9 @@
 //!   blocks they were awarded a credit in, against [`NftClaimCreditRoots`], so a claimant finds
 //!   their roots by one lookup instead of a scan.
 //! - `nft_claim_credit_proofs` returns, for one award block and one claimant, the inclusion proof
-//!   of each credit the claimant holds there: credit, leaf, leaf index, leaf count, root and
-//!   sibling hashes, which is what the claims chain verifies. `nft_claim_credit_proof_from_awards`
-//!   does the same for a pruned block, from awards the caller supplies.
+//!   of each credit the claimant holds there: the credit, its leaf index and the sibling hashes,
+//!   which is what the claims chain verifies. `nft_claim_credit_proof_from_awards` does the same
+//!   for a pruned block, from awards the caller supplies.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -1216,15 +1217,16 @@ impl<T: Config> Pallet<T> {
 		let claimed = claimed
 			.iter()
 			.map(|(leaf_index, credit)| {
-				leaves
-					.get(*leaf_index as usize)
-					.map(|leaf| (*leaf_index, *credit, *leaf))
-					.ok_or(NftClaimCreditProofError::LeafIndexOutOfBounds)
+				if (*leaf_index as usize) < leaves.len() {
+					Ok((*leaf_index, *credit))
+				} else {
+					Err(NftClaimCreditProofError::LeafIndexOutOfBounds)
+				}
 			})
 			.collect::<Result<Vec<_>, _>>()?;
 
 		let (root, proofs) =
-			Self::credit_tree_proofs(leaves, claimed.iter().map(|(leaf_index, _, _)| *leaf_index));
+			Self::credit_tree_proofs(leaves, claimed.iter().map(|(leaf_index, _)| *leaf_index));
 		if root != recorded.root {
 			return Err(NftClaimCreditProofError::RootMismatch);
 		}
@@ -1232,14 +1234,7 @@ impl<T: Config> Pallet<T> {
 		Ok(claimed
 			.into_iter()
 			.zip(proofs)
-			.map(|((leaf_index, credit, leaf), proof)| NftClaimCreditProof {
-				root: recorded.root,
-				credit,
-				leaf,
-				leaf_index,
-				leaf_count: recorded.leaf_count,
-				proof,
-			})
+			.map(|((leaf_index, credit), proof)| NftClaimCreditProof { credit, leaf_index, proof })
 			.collect::<Vec<_>>())
 	}
 
