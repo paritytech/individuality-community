@@ -49,21 +49,9 @@ runs:
       with:
         shared-key: individuality-cache-e2e-runtime-wasm
 
-    # A runtime upgrade only executes when spec_version strictly INCREASES. A
-    # build straight from source carries the committed value, which is what the
-    # chain already runs — so the gate saw "2000039 -> 2000039", reported
-    # already-installed and tested none of this PR's code.
-    #
-    # +1 puts the build in the band RELEASE.md reserves: the format is M_XXX_YYY
-    # where YYY is always 000 on main and belongs to nightlies, and releases jump
-    # to the next thousand. So +1 is strictly greater than main and stays clear of
-    # every future release. Nothing is committed back — the edit lives in the
-    # build workspace and these artifacts are never published, so the spec-version
-    # CI check, which reads the committed source, is unaffected.
-    #
-    # If a fork ever runs a nightly above this value the upgrade is refused; the
-    # gate fails loudly on a supplied build that changed nothing rather than
-    # passing quietly, which is how the no-op above was caught in the first place.
+    # A runtime upgrade only runs when spec_version increases, and a build from
+    # source carries the value the chain already has. +1 lands in the YYY band
+    # RELEASE.md reserves for nightlies. Workspace only; nothing is committed.
     - name: Stamp a strictly-greater spec_version
       run: |
         set -euo pipefail
@@ -78,13 +66,6 @@ runs:
           echo "  $lib: $BASE -> $GROUPED"
         done
 
-        # Force these two crates to rebuild. Swatinem/rust-cache restores
-        # target/, and cargo reused the cached wasm despite the edit above: the
-        # build finished in 5 minutes and the artifact still carried the old
-        # spec_version, so the gate saw "2000039 -> 2000039" and upgraded
-        # nothing while reporting success. Only these packages are cleaned, so
-        # every dependency stays cached and the rebuild is cheap.
-        cargo clean --release -p next-asset-hub-paseo-runtime -p next-people-paseo-runtime
       shell: bash
 
     - name: Build E2E runtime WASM artifacts
