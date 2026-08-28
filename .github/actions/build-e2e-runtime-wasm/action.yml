@@ -49,6 +49,30 @@ runs:
       with:
         shared-key: individuality-cache-e2e-runtime-wasm
 
+    # A runtime upgrade only executes when spec_version strictly INCREASES. A
+    # build straight from source carries the committed value, which is what the
+    # chain already runs — so the gate saw "2000039 -> 2000039", reported
+    # already-installed and tested nothing about this PR's code.
+    #
+    # Multiplying by 100 keeps the committed digits visible in the result
+    # (2_000_039 -> 200_003_900), so it is obvious in a log which build a chain
+    # is running. Nothing is committed back: the edit lives in the build
+    # workspace, and these artifacts are never released.
+    - name: Stamp a strictly-greater spec_version
+      run: |
+        set -euo pipefail
+        for lib in runtimes/next-asset-hub-paseo/src/lib.rs runtimes/next-people-paseo/src/lib.rs; do
+          # sed captures only the number: a bare [0-9_]+ grep also matches the
+          # underscore inside "spec_version" itself.
+          BASE=$(sed -nE 's/.*spec_version:[[:space:]]*([0-9_]+).*/\1/p' "$lib" | head -1 | tr -d '_')
+          [ -n "$BASE" ] || { echo "::error::no spec_version found in $lib"; exit 1; }
+          STAMP=$((BASE * 100))
+          GROUPED=$(sed -E 's/(.{3})(.{3})(.{3})/\1_\2_\3/' <<< "$STAMP")
+          sed -i -E "s/spec_version:[[:space:]]*[0-9_]+/spec_version: ${GROUPED}/" "$lib"
+          echo "  $lib: $BASE -> $GROUPED"
+        done
+      shell: bash
+
     - name: Build E2E runtime WASM artifacts
       run: cargo build --release -p next-people-paseo-runtime -p next-asset-hub-paseo-runtime --locked
       shell: bash
