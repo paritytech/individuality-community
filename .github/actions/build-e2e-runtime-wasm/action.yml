@@ -77,6 +77,14 @@ runs:
           sed -i -E "s/spec_version:[[:space:]]*[0-9_]+/spec_version: ${GROUPED}/" "$lib"
           echo "  $lib: $BASE -> $GROUPED"
         done
+
+        # Force these two crates to rebuild. Swatinem/rust-cache restores
+        # target/, and cargo reused the cached wasm despite the edit above: the
+        # build finished in 5 minutes and the artifact still carried the old
+        # spec_version, so the gate saw "2000039 -> 2000039" and upgraded
+        # nothing while reporting success. Only these packages are cleaned, so
+        # every dependency stays cached and the rebuild is cheap.
+        cargo clean --release -p next-asset-hub-paseo-runtime -p next-people-paseo-runtime
       shell: bash
 
     - name: Build E2E runtime WASM artifacts
