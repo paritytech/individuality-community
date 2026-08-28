@@ -26,9 +26,10 @@ jobs:
     needs: [build-runtimes]
     uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
     with:
-      # Both networks this runtime is baked into. Each gets its own fork and is
-      # compared against its own deployed pin.
-      environment: previewnet,paseo-next-v2
+      # previewnet only for now. paseo-next-v2 runs the v0.11 line, so applying a
+      # runtime built from main there is a migration nobody intends to perform.
+      # Add it back as `previewnet,paseo-next-v2` once it is on the same line.
+      environment: previewnet
       # build-runtimes uploads one artifact per runtime; the glob collects both.
       runtime_artifact: "*-runtime"
       runs_on: parity-large
