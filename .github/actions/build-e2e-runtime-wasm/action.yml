@@ -52,12 +52,18 @@ runs:
     # A runtime upgrade only executes when spec_version strictly INCREASES. A
     # build straight from source carries the committed value, which is what the
     # chain already runs — so the gate saw "2000039 -> 2000039", reported
-    # already-installed and tested nothing about this PR's code.
+    # already-installed and tested none of this PR's code.
     #
-    # Multiplying by 100 keeps the committed digits visible in the result
-    # (2_000_039 -> 200_003_900), so it is obvious in a log which build a chain
-    # is running. Nothing is committed back: the edit lives in the build
-    # workspace, and these artifacts are never released.
+    # +1 puts the build in the band RELEASE.md reserves: the format is M_XXX_YYY
+    # where YYY is always 000 on main and belongs to nightlies, and releases jump
+    # to the next thousand. So +1 is strictly greater than main and stays clear of
+    # every future release. Nothing is committed back — the edit lives in the
+    # build workspace and these artifacts are never published, so the spec-version
+    # CI check, which reads the committed source, is unaffected.
+    #
+    # If a fork ever runs a nightly above this value the upgrade is refused; the
+    # gate fails loudly on a supplied build that changed nothing rather than
+    # passing quietly, which is how the no-op above was caught in the first place.
     - name: Stamp a strictly-greater spec_version
       run: |
         set -euo pipefail
@@ -66,8 +72,8 @@ runs:
           # underscore inside "spec_version" itself.
           BASE=$(sed -nE 's/.*spec_version:[[:space:]]*([0-9_]+).*/\1/p' "$lib" | head -1 | tr -d '_')
           [ -n "$BASE" ] || { echo "::error::no spec_version found in $lib"; exit 1; }
-          STAMP=$((BASE * 100))
-          GROUPED=$(sed -E 's/(.{3})(.{3})(.{3})/\1_\2_\3/' <<< "$STAMP")
+          STAMP=$((BASE + 1))
+          GROUPED=$(sed -E 's/(.{1,3})(.{3})(.{3})$/\1_\2_\3/' <<< "$STAMP")
           sed -i -E "s/spec_version:[[:space:]]*[0-9_]+/spec_version: ${GROUPED}/" "$lib"
           echo "  $lib: $BASE -> $GROUPED"
         done
