@@ -93,8 +93,11 @@ jobs:
   # called workflow's jobs run in this run, so the gate downloads that artifact
   # directly. Skipped on drafts, matching the jobs around it.
   chain-tests:
+    # No draft guard of its own: build-e2e-runtime-wasm already carries one, and a
+    # job whose dependency skipped skips too. Spelling it out here also broke on
+    # workflow_dispatch, where github.event.pull_request is absent and comparing
+    # its .draft to false does not evaluate true.
     needs: [build-e2e-runtime-wasm]
-    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
     uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
     with:
       environment: previewnet,paseo-next-v2
