@@ -33,9 +33,11 @@ jobs:
       runtime_artifact: "*-runtime"
       runs_on: parity-large
     secrets:
-      # Read access to paritytech/preview-net-v1, the engine that spawns the
-      # fork. See the PR description — this secret does not exist on this repo yet.
-      GH_PAT: ${{ secrets.GH_PAT }}
+      # The gate needs contents:read on paritytech/preview-net-v1 — the private
+      # engine that spawns the fork. That is the ONLY private repo involved: the
+      # runtimes come from the artifact above rather than being fetched from
+      # paritytech/individuality, and every other pin is a public repo.
+      GH_PAT: ${{ secrets.GH_PAT_PPNV1 }}
 
   publish-release:
     runs-on: parity-ubuntu
