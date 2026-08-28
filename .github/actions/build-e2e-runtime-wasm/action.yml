@@ -68,24 +68,29 @@ runs:
 
       shell: bash
 
+    # production (lto, codegen-units=1) is the profile srtool uses for releases.
+    # --release put people over the relay's 3 MiB max_code_size, so the chain
+    # refused the upgrade with parachain_system TooBig.
     - name: Build E2E runtime WASM artifacts
-      run: cargo build --release -p next-people-paseo-runtime -p next-asset-hub-paseo-runtime --locked
+      run: cargo build --profile production -p next-people-paseo-runtime -p next-asset-hub-paseo-runtime --locked
       shell: bash
 
     - name: Stage E2E runtime WASM artifacts
       run: |
         mkdir -p "${{ inputs.artifact-dir }}"
-        cp target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.wasm \
+        cp target/production/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.wasm \
           "${{ inputs.artifact-dir }}/next_people_paseo_runtime.wasm"
-        cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm \
+        cp target/production/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm \
           "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime.wasm"
-        # The compressed variants too. An on-chain upgrade takes the compressed
-        # blob — the plain one is roughly three times the size and can exceed the
-        # block limit on set_code. wbuild already produces both.
-        cp target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.compact.compressed.wasm \
+        # The compressed variants too — an on-chain upgrade takes those, and they
+        # must stay under the relay's max_code_size (3 MiB) or the chain refuses.
+        cp target/production/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.compact.compressed.wasm \
           "${{ inputs.artifact-dir }}/next_people_paseo_runtime.compact.compressed.wasm"
-        cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.compact.compressed.wasm \
+        cp target/production/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.compact.compressed.wasm \
           "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime.compact.compressed.wasm"
+
+        echo "staged (relay max_code_size is 3145728 bytes):"
+        ls -l "${{ inputs.artifact-dir }}"
       shell: bash
 
     - name: Upload E2E runtime WASM artifacts
