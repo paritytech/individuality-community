@@ -100,9 +100,7 @@ jobs:
     needs: [build-e2e-runtime-wasm]
     uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
     with:
-      # previewnet only: paseo-next-v2 runs the v0.11 line, and applying a
-      # runtime built from main there is a migration nobody intends to perform.
-      environment: previewnet
+      environment: previewnet,paseo-next-v2
       runtime_artifact: e2e-runtime-wasm
       runs_on: parity-large
     secrets:
