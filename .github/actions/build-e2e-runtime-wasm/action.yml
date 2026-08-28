@@ -60,6 +60,13 @@ runs:
           "${{ inputs.artifact-dir }}/next_people_paseo_runtime.wasm"
         cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm \
           "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime.wasm"
+        # The compressed variants too. An on-chain upgrade takes the compressed
+        # blob — the plain one is roughly three times the size and can exceed the
+        # block limit on set_code. wbuild already produces both.
+        cp target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.compact.compressed.wasm \
+          "${{ inputs.artifact-dir }}/next_people_paseo_runtime.compact.compressed.wasm"
+        cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.compact.compressed.wasm \
+          "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime.compact.compressed.wasm"
       shell: bash
 
     - name: Upload E2E runtime WASM artifacts

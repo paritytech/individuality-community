@@ -85,6 +85,27 @@ jobs:
       - name: Build e2e runtime WASM artifacts
         uses: ./.github/actions/build-e2e-runtime-wasm
 
+  # Fork previewnet and paseo-next-v2, upgrade each to the runtimes this PR
+  # builds, and run the Polkadot proof-of-personhood chain tests against them.
+  # Answers "would merging this break a live network" before it is merged.
+  #
+  # Reuses the wasm from build-e2e-runtime-wasm rather than building again — a
+  # called workflow's jobs run in this run, so the gate downloads that artifact
+  # directly. Skipped on drafts, matching the jobs around it.
+  chain-tests:
+    needs: [build-e2e-runtime-wasm]
+    if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
+    uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
+    with:
+      environment: previewnet,paseo-next-v2
+      runtime_artifact: e2e-runtime-wasm
+      runs_on: parity-large
+    secrets:
+      # contents:read on paritytech/preview-net-v1, the private engine that
+      # spawns the fork. The runtimes come from the artifact, so that engine is
+      # the only private repo involved.
+      GH_PAT: ${{ secrets.GH_PAT_PPNV1 }}
+
   e2e-ts-checks:
     name: ts-checks
     runs-on: parity-ubuntu
