@@ -103,6 +103,19 @@ jobs:
       environment: previewnet,paseo-next-v2
       runtime_artifact: e2e-runtime-wasm
       runs_on: parity-large
+      # Only the runtimes above are upgraded; every other chain stays at whatever
+      # the fork took from the live network. To change more, uncomment `advanced`
+      # — a sparse overlay on the gated network's manifest. It may only narrow what
+      # the manifest already pins, so an unknown slot or chain fails as a typo.
+      #
+      # advanced: >-
+      #   {"binaries":{"polkadot":"paritytech/release-automation@polkadot-weekly2026w34-rc1",
+      #                "polkadot-omni-node":"paritytech/release-automation@polkadot-weekly2026w34-rc1"},
+      #    "chains":{"bulletin":{"runtime":"paritytech/polkadot-bulletin-chain@v0.0.26-paseo"}},
+      #    "services":{"eth-rpc":"paritytech/release-automation@polkadot-weekly2026w34-rc1"},
+      #    "tests":["test:network-health"]}
+      #
+      # Binaries are pinned per slot as owner/repo@tag, never as a built file.
     secrets:
       # contents:read on paritytech/preview-net-v1, the private engine that
       # spawns the fork. The runtimes come from the artifact, so that engine is
