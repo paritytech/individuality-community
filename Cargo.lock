@@ -7151,6 +7151,7 @@ dependencies = [
  "frame-benchmarking",
  "frame-support 48.0.0",
  "frame-system 48.0.0",
+ "indiv-support",
  "log",
  "pallet-balances",
  "parity-scale-codec",
