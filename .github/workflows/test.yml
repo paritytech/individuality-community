@@ -98,15 +98,15 @@ jobs:
     # workflow_dispatch, where github.event.pull_request is absent and comparing
     # its .draft to false does not evaluate true.
     needs: [build-e2e-runtime-wasm]
-    uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
+    uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@mak/artifact-pins-and-suffix-proof
     with:
       environment: previewnet,paseo-next-v2
-      runtime_artifact: e2e-runtime-wasm
+      runtime_asset_hub: artifact:e2e-runtime-wasm
+      runtime_people: artifact:e2e-runtime-wasm
       runs_on: parity-large
-      # Only the runtimes above are upgraded. Every other chain stays at whatever
-      # the fork took from the live network, which is what this build would meet
-      # in a real deployment. To move more, set any of these — all owner/repo@tag,
-      # never a built file:
+      # Only the two chains named above are upgraded. Every other chain stays at
+      # whatever the fork took from the live network, which is what this build
+      # would meet in a real deployment. To move more, set any of these:
       #
       # binary_polkadot: paritytech/release-automation@polkadot-weekly2026w34-rc1
       # binary_polkadot_omni_node: paritytech/polkadot-sdk@polkadot-stable2606-1

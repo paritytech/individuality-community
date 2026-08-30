@@ -75,7 +75,8 @@ jobs:
       # Both networks this runtime is deployed to; each forks separately.
       environment: previewnet,paseo-next-v2
       # build-runtimes uploads one artifact per runtime; the glob collects both.
-      runtime_artifact: "*-runtime"
+      runtime_asset_hub: "artifact:*-runtime"
+      runtime_people: "artifact:*-runtime"
       runs_on: parity-large
     secrets:
       # The gate needs contents:read on paritytech/preview-net-v1 — the private
