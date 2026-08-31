@@ -186,8 +186,8 @@ impl MintWithoutDeposit<u64> for MockNfts {
 		Ok(instance)
 	}
 
-	fn mint_hook_weight() -> Weight {
-		MINT_HOOK_WEIGHT
+	fn mint_hook_weight(pairs: u32) -> Weight {
+		MINT_HOOK_WEIGHT.saturating_add(Weight::from_parts(pairs as u64, 0))
 	}
 }
 
