@@ -102,9 +102,9 @@ jobs:
   # suite. It reuses the artifacts from build-runtimes rather than rebuilding:
   # a called workflow's jobs run in this run, so it can download them directly.
   #
-  # Does not block the release: the publish job below does not depend on this
-  # one, so a gate failure reds the run and tells you what broke without holding
-  # up the artifacts. Make it blocking by adding it to publish's `needs`.
+  # Blocking: publish-nightly waits on this. A runtime that cannot be upgraded
+  # onto a fork of the networks it is headed for should not be published, and a
+  # gate failure that only reds the badge is easy to miss.
   chain-tests:
     needs: [build-runtimes]
     uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
@@ -124,7 +124,7 @@ jobs:
 
   publish-nightly:
     runs-on: parity-ubuntu
-    needs: [check-changes, build-runtimes]
+    needs: [check-changes, build-runtimes, chain-tests]
     steps:
       - name: Checkout
         uses: actions/checkout@v6

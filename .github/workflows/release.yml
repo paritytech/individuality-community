@@ -101,8 +101,9 @@ jobs:
       spec-version: ${{ inputs.spec-version }}
 
   # Gates this release against a fork of every network these runtimes are
-  # deployed to, reusing the wasm build-runtimes just produced. Does not block
-  # publishing: a failure reds the run and says what broke.
+  # deployed to, reusing the wasm build-runtimes just produced. Publishing waits
+  # on it: a runtime that cannot be upgraded onto a fork of the networks it is
+  # headed for should not be cut as a release.
   chain-tests:
     needs: [build-runtimes]
     uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
@@ -120,7 +121,7 @@ jobs:
 
   publish-release:
     runs-on: parity-ubuntu
-    needs: [build-runtimes]
+    needs: [build-runtimes, chain-tests]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
