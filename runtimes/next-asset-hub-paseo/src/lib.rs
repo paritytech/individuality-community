@@ -191,7 +191,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 2_000_039,
+	spec_version: 2_999_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 21,
@@ -1107,7 +1107,7 @@ pub type ScarcityStoragePrice =
 
 impl pallet_scarcity::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = pallet_scarcity::weights::SubstrateWeight<Runtime>;
+	type WeightInfo = weights::pallet_scarcity::WeightInfo<Runtime>;
 	type UnixTime = Timestamp;
 	type Balance = Balance;
 	// The pallet aggregates exact deposit sums per collection; the consideration ticket
@@ -1135,7 +1135,12 @@ impl pallet_scarcity::Config for Runtime {
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
 	// A purse key needs no account, so `AutoMapper` never sees one. Registering it at mint time
 	// is what lets the ERC-721 view resolve its address back to the key.
+	#[cfg(not(feature = "runtime-benchmarks"))]
 	type OnPurseOccupied = indiv_precompile_scarcity::MapPurseKey<Runtime>;
+	// Every entry that occupies a key adds `on_purse_occupied_weight()` on its own, so a
+	// benchmark that ran the real handler would charge it twice.
+	#[cfg(feature = "runtime-benchmarks")]
+	type OnPurseOccupied = ();
 	// The collections are exposed as ERC-721 contracts, whose `name`, `symbol` and `tokenURI`
 	// are `string`. Held here so the rule covers the extrinsics too, not only the precompile.
 	type MetadataPolicy = indiv_precompile_scarcity::Erc721MetadataPolicy<Runtime>;
@@ -1576,9 +1581,9 @@ mod bandersnatch_bench {
 const DOTNS_PERSON_REGISTRATION_ALLOWANCE_MAX: Balance = MILLICENTS;
 /// Recover enough so that if a call to the name registration fails, another one can be retried in
 /// about 30 minutes. The 50 CENTS number is based on napkin math I did looking at the weight of the
-/// call.
+/// call. The rate is per relay chain block, the block number the pallet measures recovery with.
 const DOTNS_PERSON_REGISTRATION_ALLOWANCE_RECOVERY: Balance =
-	50 * CENTS / ((30 * MINUTES) as Balance);
+	50 * CENTS / ((30 * RC_MINUTES) as Balance);
 
 #[derive(
 	Clone,
@@ -1655,6 +1660,7 @@ impl indiv_pallet_origin_restriction::BenchmarkHelper<OriginCaller, RuntimeCall>
 
 impl indiv_pallet_origin_restriction::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_origin_restriction::WeightInfo<Runtime>;
+	type BlockNumberProvider = RelaychainDataProvider<Runtime>;
 	type RestrictedEntity = RestrictedEntity;
 	type OperationAllowedOneTimeExcess = OperationAllowedOneTimeExcess;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -2887,6 +2893,7 @@ pub mod migrations {
 		staking::InitiateStakingAsync,
 		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
 		pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 	);
 
 	/// Migrations/checks that do not need to be versioned and can run on every update.
