@@ -61,6 +61,7 @@ pub trait WeightInfo {
 	fn put_game() -> Weight;
 	fn put_game_schedules() -> Weight;
 	fn shuffles_base() -> Weight;
+	fn shuffle_step_capture_randomness() -> Weight;
 	fn shuffle_step_insert(n: u32, ) -> Weight;
 	fn shuffle_step_retrieve(n: u32, ) -> Weight;
 	fn shuffle_step_compute_weights(p: u32, ) -> Weight;
@@ -228,6 +229,16 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(34_012_000, 4111)
 			.saturating_add(T::DbWeight::get().reads(11_u64))
 			.saturating_add(T::DbWeight::get().writes(3_u64))
+	}
+	/// Storage: `RelayRandomness::Randomness` (r:1 w:0)
+	/// Proof: `RelayRandomness::Randomness` (`max_values`: Some(1), `max_size`: Some(74), added: 569, mode: `MaxEncodedLen`)
+	fn shuffle_step_capture_randomness() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `173`
+		//  Estimated: `1559`
+		// Minimum execution time: 2_848_000 picoseconds.
+		Weight::from_parts(3_282_000, 1559)
+			.saturating_add(T::DbWeight::get().reads(1_u64))
 	}
 	/// Storage: `Game::Players` (r:2 w:1)
 	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
@@ -1131,6 +1142,16 @@ impl WeightInfo for () {
 		Weight::from_parts(34_012_000, 4111)
 			.saturating_add(RocksDbWeight::get().reads(11_u64))
 			.saturating_add(RocksDbWeight::get().writes(3_u64))
+	}
+	/// Storage: `RelayRandomness::Randomness` (r:1 w:0)
+	/// Proof: `RelayRandomness::Randomness` (`max_values`: Some(1), `max_size`: Some(74), added: 569, mode: `MaxEncodedLen`)
+	fn shuffle_step_capture_randomness() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `173`
+		//  Estimated: `1559`
+		// Minimum execution time: 2_848_000 picoseconds.
+		Weight::from_parts(3_282_000, 1559)
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
 	}
 	/// Storage: `Game::Players` (r:2 w:1)
 	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
