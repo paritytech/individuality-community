@@ -1973,6 +1973,7 @@ impl indiv_pallet_assets_forwarder::Config<TrustBackedAssetsInstance> for Runtim
 	type RuntimeHoldReason = RuntimeHoldReason;
 	type Currency = Balances;
 	type ForwardDeposit = AssetForwardDeposit;
+	type ManagerOrigin = EnsureRoot<AccountId>;
 	type Destination = xcm_config::PeopleLocation;
 	type RemoteAssetsPalletIndex = PeopleAssetsPalletIndex;
 	type AssetsPalletLocation = xcm_config::TrustBackedAssetsPalletLocation;

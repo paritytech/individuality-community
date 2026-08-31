@@ -42,4 +42,10 @@ impl<T: frame_system::Config> indiv_pallet_assets_forwarder::WeightInfo for Weig
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
+	fn remove_forwarded_asset() -> Weight {
+		Weight::from_parts(60_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 6000))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
 }

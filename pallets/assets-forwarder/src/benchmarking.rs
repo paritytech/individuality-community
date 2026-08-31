@@ -19,10 +19,10 @@
 use super::*;
 
 use frame_benchmarking::v2::{instance_benchmarks, *};
-use frame_support::traits::fungible::Mutate;
+use frame_support::traits::fungible::{InspectHold, Mutate};
 use frame_system::RawOrigin;
 use pallet_assets::BenchmarkHelper as AssetsBenchmarkHelper;
-use sp_runtime::traits::{Saturating, StaticLookup};
+use sp_runtime::traits::{Saturating, StaticLookup, Zero};
 
 /// What the benchmarks cannot set up themselves, because only the runtime knows how its XCM
 /// channels are made.
@@ -96,8 +96,34 @@ mod benches {
 		.map_err(|_| BenchmarkError::Stop("failed to change asset status"))?;
 
 		#[extrinsic_call]
-		_(RawOrigin::Signed(caller), id);
+		_(RawOrigin::Signed(caller), id.clone());
 
+		let asset_id: T::AssetId = id.into();
+		let record = ForwardedAssets::<T, I>::get(asset_id).expect("asset is forwarded");
+		assert_eq!(record.min_balance, 2u32.into());
+		assert!(record.is_sufficient);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn remove_forwarded_asset() -> Result<(), BenchmarkError> {
+		let caller: T::AccountId = whitelisted_caller();
+		let id = setup_asset::<T, I>(&caller)?;
+		Pallet::<T, I>::forward_asset(RawOrigin::Signed(caller.clone()).into(), id.clone())
+			.map_err(|_| BenchmarkError::Stop("failed to forward asset"))?;
+		let origin =
+			T::ManagerOrigin::try_successful_origin().map_err(|_| BenchmarkError::Weightless)?;
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, id.clone());
+
+		let asset_id: T::AssetId = id.into();
+		assert!(!ForwardedAssets::<T, I>::contains_key(asset_id));
+		assert!(<T as Config<I>>::Currency::balance_on_hold(
+			&HoldReason::<I>::ForwardDeposit.into(),
+			&caller
+		)
+		.is_zero());
 		Ok(())
 	}
 

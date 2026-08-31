@@ -32,6 +32,7 @@ use core::marker::PhantomData;
 pub trait WeightInfo {
 	fn forward_asset() -> Weight;
 	fn sync_asset_status() -> Weight;
+	fn remove_forwarded_asset() -> Weight;
 }
 
 /// Weights for `indiv_pallet_assets_forwarder` using the Substrate node and recommended hardware.
@@ -47,6 +48,11 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(5_u64))
 			.saturating_add(T::DbWeight::get().writes(2_u64))
 	}
+	fn remove_forwarded_asset() -> Weight {
+		Weight::from_parts(60_000_000, 6000)
+			.saturating_add(T::DbWeight::get().reads(3_u64))
+			.saturating_add(T::DbWeight::get().writes(3_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -60,5 +66,10 @@ impl WeightInfo for () {
 		Weight::from_parts(120_000_000, 6000)
 			.saturating_add(RocksDbWeight::get().reads(5_u64))
 			.saturating_add(RocksDbWeight::get().writes(2_u64))
+	}
+	fn remove_forwarded_asset() -> Weight {
+		Weight::from_parts(60_000_000, 6000)
+			.saturating_add(RocksDbWeight::get().reads(3_u64))
+			.saturating_add(RocksDbWeight::get().writes(3_u64))
 	}
 }

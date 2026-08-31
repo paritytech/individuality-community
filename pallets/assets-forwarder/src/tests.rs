@@ -359,6 +359,52 @@ fn sync_asset_status_fails_when_not_forwarded() {
 }
 
 #[test]
+fn remove_forwarded_asset_works() {
+	new_test_ext().execute_with(|| {
+		create_asset(true);
+		assert_ok!(Forwarder::forward_asset(RuntimeOrigin::signed(BOB), ASSET_ID.into()));
+		assert_ok!(Forwarder::remove_forwarded_asset(RuntimeOrigin::root(), ASSET_ID.into()));
+
+		// The record is gone and the deposit is released to the depositor, not burnt.
+		assert!(ForwardedAssets::<Test>::get(ASSET_ID).is_none());
+		assert_eq!(Balances::balance_on_hold(&crate::HoldReason::ForwardDeposit.into(), &BOB), 0);
+		assert_eq!(Balances::free_balance(&BOB), 1_000_000_000);
+		System::assert_last_event(Event::ForwardRemoved { asset_id: ASSET_ID }.into());
+
+		// The asset can be forwarded again, with a fresh deposit.
+		assert_ok!(Forwarder::forward_asset(RuntimeOrigin::signed(ALICE), ASSET_ID.into()));
+		assert_eq!(
+			Balances::balance_on_hold(&crate::HoldReason::ForwardDeposit.into(), &ALICE),
+			ForwardDeposit::get()
+		);
+	});
+}
+
+#[test]
+fn remove_forwarded_asset_fails_for_non_manager() {
+	new_test_ext().execute_with(|| {
+		create_asset(true);
+		assert_ok!(Forwarder::forward_asset(RuntimeOrigin::signed(BOB), ASSET_ID.into()));
+		assert_noop!(
+			Forwarder::remove_forwarded_asset(RuntimeOrigin::signed(ALICE), ASSET_ID.into()),
+			sp_runtime::DispatchError::BadOrigin
+		);
+		assert!(ForwardedAssets::<Test>::get(ASSET_ID).is_some());
+	});
+}
+
+#[test]
+fn remove_forwarded_asset_fails_when_not_forwarded() {
+	new_test_ext().execute_with(|| {
+		create_asset(true);
+		assert_noop!(
+			Forwarder::remove_forwarded_asset(RuntimeOrigin::root(), ASSET_ID.into()),
+			Error::<Test>::NotForwarded
+		);
+	});
+}
+
+#[test]
 fn remote_owner_account_matches_destination_derivation() {
 	new_test_ext().execute_with(|| {
 		// The owner embedded in the calls is the sovereign account the destination would derive

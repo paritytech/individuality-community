@@ -27,8 +27,10 @@
 //!
 //! The replica's owner and team resolve to an account nobody controls on the destination, so its
 //! issuance there can only change through XCM transfers backed by this chain. The caller pays the
-//! XCM delivery fees and a deposit which backs the [`ForwardedAssets`] entry; the deposit is held
-//! forever, which is what makes junk forwards costly.
+//! XCM delivery fees and a deposit which backs the [`ForwardedAssets`] entry; only
+//! [`Config::ManagerOrigin`] can release the deposit, by removing the entry with
+//! [`Pallet::remove_forwarded_asset`], which is what makes junk forwards costly. The removal is
+//! local and does not produce any effects on remote chains.
 //!
 //! Sufficiency and minimum balance can change after an asset was forwarded, so the permissionless
 //! [`Pallet::sync_asset_status`] call re-sends the current values for an already forwarded asset.
@@ -55,7 +57,10 @@ use alloc::vec;
 use codec::{Encode, HasCompact};
 use frame_support::{
 	pallet_prelude::*,
-	traits::fungible::{Inspect as FungibleInspect, Mutate as FungibleMutate, MutateHold},
+	traits::{
+		fungible::{Inspect as FungibleInspect, Mutate as FungibleMutate, MutateHold},
+		tokens::Precision,
+	},
 };
 use sp_runtime::{
 	traits::{Convert, TryConvert},
@@ -132,8 +137,12 @@ pub mod pallet {
 			+ MutateHold<Self::AccountId, Reason = Self::RuntimeHoldReason>;
 
 		/// Deposit held from the caller for each forwarded asset. It backs the
-		/// [`ForwardedAssets`] entry and is never released.
+		/// [`ForwardedAssets`] entry and is only released when [`Config::ManagerOrigin`] removes
+		/// the entry.
 		type ForwardDeposit: Get<NativeBalanceOf<Self, I>>;
+
+		/// Origin allowed to remove [`ForwardedAssets`] entries and release their deposits.
+		type ManagerOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
 		/// Location of the destination chain, as seen from this chain.
 		type Destination: Get<Location>;
@@ -204,6 +213,8 @@ pub mod pallet {
 		},
 		/// The status of a forwarded asset was re-sent to the destination chain.
 		AssetStatusSynced { asset_id: T::AssetId, is_sufficient: bool, message_id: XcmHash },
+		/// A forwarded asset's record was removed and its deposit released.
+		ForwardRemoved { asset_id: T::AssetId },
 	}
 
 	#[pallet::error]
@@ -342,6 +353,33 @@ pub mod pallet {
 				is_sufficient: details.is_sufficient,
 				message_id,
 			});
+			Ok(())
+		}
+
+		/// Remove the [`ForwardedAssets`] entry of asset `id` and release its deposit to the
+		/// depositor.
+		///
+		/// Only [`Config::ManagerOrigin`] can call this. The removal is local: the replica on the
+		/// destination is untouched, so a later re-forward fails there while the replica exists.
+		#[pallet::call_index(2)]
+		#[pallet::weight(<T as Config<I>>::WeightInfo::remove_forwarded_asset())]
+		pub fn remove_forwarded_asset(
+			origin: OriginFor<T>,
+			id: T::AssetIdParameter,
+		) -> DispatchResult {
+			T::ManagerOrigin::ensure_origin(origin)?;
+			let asset_id: T::AssetId = id.into();
+			let record =
+				ForwardedAssets::<T, I>::take(&asset_id).ok_or(Error::<T, I>::NotForwarded)?;
+
+			<T as Config<I>>::Currency::release(
+				&HoldReason::<I>::ForwardDeposit.into(),
+				&record.depositor,
+				record.deposit,
+				Precision::BestEffort,
+			)?;
+
+			Self::deposit_event(Event::ForwardRemoved { asset_id });
 			Ok(())
 		}
 	}

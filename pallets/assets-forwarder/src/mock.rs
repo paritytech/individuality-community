@@ -242,6 +242,7 @@ impl crate::Config for Test {
 	type RuntimeHoldReason = RuntimeHoldReason;
 	type Currency = Balances;
 	type ForwardDeposit = ForwardDeposit;
+	type ManagerOrigin = EnsureRoot<AccountId>;
 	type Destination = Destination;
 	type RemoteAssetsPalletIndex = ConstU8<14>;
 	type AssetsPalletLocation = AssetsPalletLocation;
