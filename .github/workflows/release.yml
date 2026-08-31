@@ -100,6 +100,24 @@ jobs:
     with:
       spec-version: ${{ inputs.spec-version }}
 
+  # Gates this release against a fork of every network these runtimes are
+  # deployed to, reusing the wasm build-runtimes just produced. Does not block
+  # publishing: a failure reds the run and says what broke.
+  chain-tests:
+    needs: [build-runtimes]
+    uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
+    with:
+      environment: previewnet,paseo-next-v2
+      # build-runtimes uploads one artifact per runtime; the glob collects both.
+      runtime_asset_hub: "artifact:*-runtime"
+      runtime_people: "artifact:*-runtime"
+      runs_on: parity-large
+    secrets:
+      # contents:read on paritytech/preview-net-v1, the private engine that spawns
+      # the fork. The runtimes come from the artifact above, so it is the only
+      # private repo involved.
+      GH_PAT: ${{ secrets.GH_PAT_PPNV1 }}
+
   publish-release:
     runs-on: parity-ubuntu
     needs: [build-runtimes]
