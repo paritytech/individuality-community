@@ -98,12 +98,9 @@ jobs:
     # workflow_dispatch, where github.event.pull_request is absent and comparing
     # its .draft to false does not evaluate true.
     needs: [build-e2e-runtime-wasm]
-    uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@mak/artifact-pins-and-suffix-proof
+    uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
     with:
       environment: previewnet,paseo-next-v2
-      # Temporary, with the @branch above: a caller gets the branch's workflow but
-      # main's code unless the ref is named here too.
-      gate_ref: mak/artifact-pins-and-suffix-proof
       runtime_asset_hub: artifact:e2e-runtime-wasm
       runtime_people: artifact:e2e-runtime-wasm
       runs_on: parity-large
