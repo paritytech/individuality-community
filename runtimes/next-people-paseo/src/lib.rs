@@ -248,6 +248,7 @@ pub type Migrations = (
 		Runtime,
 		people::AssetHubSubscriptionWhitelist,
 	>,
+	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)

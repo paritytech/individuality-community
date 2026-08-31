@@ -2920,6 +2920,7 @@ pub mod migrations {
 		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
 		pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
 	);
 
 	/// Migrations/checks that do not need to be versioned and can run on every update.

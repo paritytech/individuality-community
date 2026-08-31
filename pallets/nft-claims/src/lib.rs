@@ -130,6 +130,7 @@ extern crate alloc;
 
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
@@ -267,7 +268,11 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
+	/// The current storage version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]

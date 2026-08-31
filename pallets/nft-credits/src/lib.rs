@@ -98,6 +98,7 @@ extern crate alloc;
 
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
@@ -162,7 +163,11 @@ const LOG_TARGET: &str = "runtime::indiv-pallet-nft-credits";
 pub mod pallet {
 	use super::*;
 
+	/// The current storage version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(PhantomData<T>);
 
 	/// The credits are the game's own bookkeeping, so this pallet is configured on top of it and

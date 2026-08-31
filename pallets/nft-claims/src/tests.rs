@@ -2247,3 +2247,136 @@ mod deletions {
 		});
 	}
 }
+
+mod migration {
+	use super::*;
+	use crate::{
+		migration::{
+			v1::{ClaimedCounts, ClaimedCredits},
+			MigrateV0ToV1,
+		},
+		ClaimedLeaves, NextExpiryBucket,
+	};
+	use frame_support::traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion};
+	use indiv_support::credit_trees::NftClaimCreditLeaf;
+
+	/// The bucket the mock's `tree(block)` timestamps fall in.
+	const BUCKET: u32 = 0;
+
+	/// Stores the tree of `block` the way a chain running the old code left it: the tree alone,
+	/// under no expiry bucket, with `claimed` of its leaves recorded by hash.
+	fn store_old_tree(block: AwardBlock, claimed: u32) {
+		CreditTrees::<Test>::insert(block, tree(block));
+		for index in 0..claimed {
+			ClaimedCredits::<Test>::insert(block, NftClaimCreditLeaf([index as u8; 32]), ());
+		}
+		ClaimedCounts::<Test>::insert(block, claimed);
+	}
+
+	fn migrate() {
+		StorageVersion::new(0).put::<NftClaims>();
+		<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+	}
+
+	#[test]
+	fn the_migration_files_an_unclaimed_tree_under_its_bucket() {
+		new_test_ext().execute_with(|| {
+			store_old_tree(10, 0);
+
+			migrate();
+
+			assert_eq!(CreditTrees::<Test>::get(10), Some(tree(10)));
+			assert!(TreeExpiries::<Test>::contains_key(BUCKET, 10));
+			assert_eq!(NextExpiryBucket::<Test>::get(), Some(BUCKET));
+			assert!(!ClaimedLeaves::<Test>::contains_key(10), "no leaf of it was claimed");
+			assert_eq!(NftClaims::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn the_migration_settles_a_partly_claimed_tree() {
+		new_test_ext().execute_with(|| {
+			// One of the three leaves was claimed, under a hash that names no leaf index.
+			store_old_tree(10, 1);
+
+			migrate();
+
+			assert_eq!(CreditTrees::<Test>::get(10), None, "the tree is removed as claimed");
+			assert_eq!(
+				ClaimedLeaves::<Test>::get(10).into_inner(),
+				vec![0b111u8],
+				"every leaf of it counts as spent"
+			);
+			assert!(TreeExpiries::<Test>::contains_key(BUCKET, 10), "the sweep drops the bitmap");
+			assert_eq!(PendingTreeDeletions::<Test>::get().into_inner(), vec![10]);
+		});
+	}
+
+	#[test]
+	fn a_settled_tree_cannot_be_claimed_after_a_replay() {
+		new_test_ext().execute_with(|| {
+			store_old_tree(10, 1);
+			migrate();
+
+			assert_ok!(NftClaims::receive_credit_trees(
+				game_chain_origin(),
+				batch(vec![replay(10)])
+			));
+
+			assert_eq!(CreditTrees::<Test>::get(10), Some(tree(10)));
+			for leaf_index in 0..tree(10).leaf_count {
+				assert!(
+					NftClaims::leaf_is_claimed(&ClaimedLeaves::<Test>::get(10), leaf_index),
+					"a replayed tree must mint nothing"
+				);
+			}
+		});
+	}
+
+	#[test]
+	fn the_migration_removes_a_tree_that_outgrew_the_credit_bound() {
+		new_test_ext().execute_with(|| {
+			let mut oversized = tree(10);
+			oversized.leaf_count = MaxCreditsPerAwardBlock::get() + 1;
+			CreditTrees::<Test>::insert(10, oversized);
+
+			migrate();
+
+			assert_eq!(CreditTrees::<Test>::get(10), None);
+			assert!(!TreeExpiries::<Test>::contains_key(BUCKET, 10), "nothing is left to sweep");
+			assert!(!ClaimedLeaves::<Test>::contains_key(10), "no bitmap covers its leaves");
+			assert_eq!(PendingTreeDeletions::<Test>::get().into_inner(), vec![10]);
+		});
+	}
+
+	#[test]
+	fn the_migration_clears_the_records_the_bitmap_replaces() {
+		new_test_ext().execute_with(|| {
+			store_old_tree(10, 2);
+			store_old_tree(11, 0);
+
+			migrate();
+
+			assert_eq!(ClaimedCredits::<Test>::iter().count(), 0);
+			assert_eq!(ClaimedCounts::<Test>::iter().count(), 0);
+		});
+	}
+
+	#[test]
+	fn the_version_gate_keeps_the_migration_from_running_twice() {
+		new_test_ext().execute_with(|| {
+			store_old_tree(10, 0);
+			migrate();
+			// A sweep after the migration moved the watermark past the bucket the tree sat in.
+			NextExpiryBucket::<Test>::put(BUCKET + 1);
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				NextExpiryBucket::<Test>::get(),
+				Some(BUCKET + 1),
+				"the second run must not pull the sweep back to a swept bucket"
+			);
+		});
+	}
+}

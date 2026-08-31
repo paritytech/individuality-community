@@ -2568,3 +2568,85 @@ mod root_removal {
 		});
 	}
 }
+
+mod migration {
+	use super::*;
+	use crate::migration::MigrateV0ToV1;
+	use frame_support::traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion};
+	use indiv_support::credit_trees::{expiry_bucket, EXPIRY_BUCKET_SECONDS};
+
+	/// Records the root of `block` the way a chain running the old code left it: the root alone,
+	/// under no expiry bucket.
+	fn record_root_without_a_bucket(block: u64, timestamp: u32) {
+		NftClaimCreditRoots::<Test>::insert(
+			block,
+			NftClaimCreditTree {
+				game_index: 7,
+				root: CreditProofNode([block as u8; 32]),
+				leaf_count: 1,
+				timestamp,
+			},
+		);
+	}
+
+	#[test]
+	fn the_migration_files_every_root_under_its_bucket() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<NftCredits>();
+			let late = 3 * EXPIRY_BUCKET_SECONDS;
+			let early = EXPIRY_BUCKET_SECONDS;
+			record_root_without_a_bucket(10, late);
+			record_root_without_a_bucket(11, early);
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert!(RootExpiries::<Test>::contains_key(expiry_bucket(late), 10));
+			assert!(RootExpiries::<Test>::contains_key(expiry_bucket(early), 11));
+			// The sweep has to start at the oldest root, not at the one filed last.
+			assert_eq!(NextRootExpiryBucket::<Test>::get(), Some(expiry_bucket(early)));
+			assert_eq!(NftCredits::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn a_migrated_root_is_swept_like_a_recorded_one() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			StorageVersion::new(0).put::<NftCredits>();
+			let timestamp = EXPIRY_BUCKET_SECONDS;
+			record_root_without_a_bucket(10, timestamp);
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			// The dispatch sweeps the bucket it is given; `authorize` is what holds a sweep back
+			// until the bucket is due.
+			let bucket = expiry_bucket(timestamp);
+			assert_ok!(NftCredits::sweep_expired_roots(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				bucket,
+				1
+			));
+
+			assert_eq!(NftClaimCreditRoots::<Test>::get(10), None);
+			assert_eq!(RootExpiries::<Test>::iter_prefix(bucket).count(), 0);
+		});
+	}
+
+	#[test]
+	fn the_version_gate_keeps_the_migration_from_running_twice() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<NftCredits>();
+			record_root_without_a_bucket(10, EXPIRY_BUCKET_SECONDS);
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			// A sweep after the migration moved the watermark past the bucket the root sat in.
+			NextRootExpiryBucket::<Test>::put(expiry_bucket(EXPIRY_BUCKET_SECONDS) + 1);
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				NextRootExpiryBucket::<Test>::get(),
+				Some(expiry_bucket(EXPIRY_BUCKET_SECONDS) + 1),
+				"the second run must not pull the sweep back to a swept bucket"
+			);
+		});
+	}
+}
