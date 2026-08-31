@@ -168,6 +168,13 @@ jobs:
             exit 1
           fi
 
+          # The spec version was computed before the build; a release that
+          # published in the meantime would put this nightly below it.
+          if [ -n "$PREV_SPEC" ] && [ "$NEXT_SPEC" -le "$PREV_SPEC" ]; then
+            echo "::error::spec version $NEXT_SPEC is not above the newest released spec version $PREV_SPEC; a release published during this build. Re-run the nightly."
+            exit 1
+          fi
+
           # The `Spec version:` line is machine-read by later releases; keep
           # its format in sync with latest_release_spec_version.sh.
           {

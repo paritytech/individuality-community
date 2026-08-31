@@ -17,11 +17,19 @@ set -euo pipefail
 PREV="${1:?usage: release_pr_notes.sh <previous-ref> <current-ref>}"
 CURR="${2:?usage: release_pr_notes.sh <previous-ref> <current-ref>}"
 
-# The compare endpoint lists at most 250 commits, more than any release here
-# spans. grep exits non-zero when no subject carries a pull request number;
-# treat that as an empty list.
-numbers=$(gh api "repos/$GITHUB_REPOSITORY/compare/$PREV...$CURR" \
-	--jq '.commits[].commit.message | split("\n")[0]' \
+compare=$(gh api "repos/$GITHUB_REPOSITORY/compare/$PREV...$CURR")
+
+# The compare endpoint lists at most 250 commits; a longer range silently
+# drops the rest, so say so in the notes instead.
+total=$(jq -r '.total_commits' <<< "$compare")
+if [ "$total" -gt 250 ]; then
+	echo "::warning::the range $PREV...$CURR has $total commits; only the first 250 were scanned for pull requests" >&2
+	printf '_The range has %s commits; only the first 250 were scanned, so this list is incomplete._\n\n' "$total"
+fi
+
+# grep exits non-zero when no subject carries a pull request number; treat
+# that as an empty list.
+numbers=$(jq -r '.commits[].commit.message | split("\n")[0]' <<< "$compare" \
 	| { grep -oE '\(#[0-9]+\)$' || true; } | tr -d '(#)' | sort -un)
 
 if [ -z "$numbers" ]; then
