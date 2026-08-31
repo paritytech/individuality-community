@@ -24,9 +24,11 @@ interface IScarcityCollection {
 
     /// @dev Returns true for the ERC-165 (0x01ffc9a7), ERC-721 (0x80ac58cd),
     /// ERC-721 Metadata (0x5b5e139f), ERC-5192 (0xb45a3c0e), ERC-2981 (0x2a55205a) and
-    /// ERC-4906 (0x49064906) interface identifiers. ERC-721 Enumerable (0x780e9d63) is not
-    /// claimed: {tokenOfOwnerByIndex} is served but `totalSupply` and `tokenByIndex` are not,
-    /// and the identifier covers all three or none.
+    /// ERC-4906 (0x49064906) interface identifiers. Two more are deliberately not claimed,
+    /// because an identifier covers every function of its interface: ERC-721 Enumerable
+    /// (0x780e9d63) would need `totalSupply` and `tokenByIndex` beside {tokenOfOwnerByIndex},
+    /// and ERC-173 (0x7f5828d0) would need `transferOwnership` beside {owner}. Both of those
+    /// reads are served anyway, for tooling that calls them without asking first.
     function supportsInterface(bytes4 interfaceId) external view returns (bool);
 
     // ============================================================
@@ -45,16 +47,23 @@ interface IScarcityCollection {
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
 
     /// @dev Returns the number of tokens of this collection held by `owner`, always 0 or 1
-    /// because a purse key holds at most one instance. Reverts for the zero address. Minting
-    /// registers its destination, so a holder that was minted to answers correctly whatever
-    /// its balance. A key that received its instance by transfer instead, or whose account
-    /// has since been reaped, answers 0 unless it is registered for some other reason,
-    /// because its address cannot otherwise be resolved back. See {ownerOf}.
+    /// because a purse key holds at most one instance. Reverts for the zero address. Every path
+    /// that gives a key an instance registers that key, so a live holder answers correctly
+    /// whatever its balance. A holder whose account has since been reaped answers 0, because
+    /// reaping drops the registration and its address cannot otherwise be resolved back. See
+    /// {ownerOf}.
     function balanceOf(address owner) external view returns (uint256);
 
     /// @dev Returns the purse key holding `tokenId`. Reverts if `tokenId` is not a live
     /// instance of this collection. The address is stable and correct for every holder, unlike
     /// {balanceOf}, so prefer this to establish ownership.
+    ///
+    /// A purse key holds 32 bytes and an address holds 20, so an unregistered key is reported as
+    /// a truncated hash of itself, and that hash resolves back to a different account. Occupying
+    /// a key registers it, so the only holder this reaches is one whose account was reaped
+    /// afterwards. Passing such an address to {mint}, {forceTransfer} or
+    /// {nominateCollectionOwner} names an account no key can sign for; {forceTransfer} rejects
+    /// the one case it can detect, where the address given is the instance's current holder.
     function ownerOf(uint256 tokenId) external view returns (address);
 
     /// @dev As {safeTransferFrom}. `data` is only ever forwarded to a receiver callback, which
@@ -128,9 +137,10 @@ interface IScarcityCollection {
     /// `royaltyBasisPoints` (a SCALE-encoded uint128, at most 10000), each resolved item, then
     /// collection scope. Answers the zero address and zero amount whenever those keys do not
     /// describe a usable royalty: unset, a receiver that is not an address or is the zero
-    /// address, points that do not decode, or a share above 10000. A settling marketplace is
-    /// never blocked by this call. Reverts only if `tokenId` is not a live instance of this
-    /// collection.
+    /// address, points that do not decode, or a share above 10000, so a misconfigured collection
+    /// never blocks a settling marketplace. Reverts if `tokenId` is not a live instance of this
+    /// collection, and if `salePrice` scaled by the basis points leaves the `uint256` range,
+    /// because a wrapped amount would quote a royalty unrelated to the sale.
     function royaltyInfo(uint256 tokenId, uint256 salePrice) external view returns (address receiver, uint256 royaltyAmount);
 
     // ============================================================
@@ -195,6 +205,15 @@ interface IScarcityCollection {
     /// because it moves no authority.
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
+    /// @dev The collection owner, identical to {collectionOwner}.
+    ///
+    /// Served under ERC-173's name because tooling calls it, but ERC-173 is not claimed: its
+    /// identifier covers `transferOwnership` too, and that call cannot exist here. A handover
+    /// carries the collection's storage deposit, so the successor has to accept it and be able
+    /// to fund it, which is what {nominateCollectionOwner} and {claimCollectionOwnership} are
+    /// for. A one-call transfer would charge an account that never agreed to pay.
+    function owner() external view returns (address);
+
     // ============================================================
     // Scarcity events
     // ============================================================
@@ -220,10 +239,20 @@ interface IScarcityCollection {
     /// metadata overrides, reserved keys checked as in {setCollectionMetadata}. Returns the
     /// permanent token id, the same value carried by the {Transfer} this emits from the zero
     /// address.
+    ///
+    /// An address {ownerOf} reported for a holder whose account was reaped resolves to the
+    /// fallback account, and this call cannot tell that address from an ordinary one. The
+    /// instance lands on that fallback rather than on the purse key, so the address answers for
+    /// two holders while {balanceOf} counts only the fallback. No key signs for it, so only the
+    /// collection owner moves it again, through {forceTransfer} or {forceBurn}.
     function mint(uint32 item, address to, bytes[] calldata keys, bytes[] calldata values) external returns (uint256);
 
     /// @dev Move a live instance of this collection to the empty purse key `to`, on the
     /// collection owner's authority. Emits {Transfer}.
+    ///
+    /// Reverts if `to` is the address {ownerOf} reports for this token's own holder, which
+    /// would otherwise move the instance away from a holder that asked for nothing. Any other
+    /// address of a reaped holder strands the instance as described on {mint}.
     function forceTransfer(uint256 tokenId, address to) external;
 
     /// @dev Permanently remove a live instance of this collection, on the collection
@@ -274,6 +303,9 @@ interface IScarcityCollection {
     /// @dev Nominate `successor` to claim ownership of this collection. Nomination alone
     /// changes no authority; the successor must call {claimCollectionOwnership}. Reverts
     /// for the zero address; use {clearCollectionOwnerNomination} to withdraw a nomination.
+    ///
+    /// An address {ownerOf} reported for a holder whose account was reaped names an account
+    /// that can never claim. Nominating again replaces it, so nothing is lost.
     function nominateCollectionOwner(address successor) external;
 
     /// @dev Clear the pending ownership nomination.

@@ -122,9 +122,8 @@ pub mod pallet {
 		/// pallet.
 		type RegistrationFee: Get<BalanceOf<Self>>;
 
-		/// Network suffix appended to this pallet's product name.
-		#[pallet::constant]
-		type Suffix: Get<&'static [u8]>;
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
 
 		/// The origin that can issue quotas to verifiers.
 		type AttestationAllowanceManager: EnsureOrigin<Self::RuntimeOrigin>;
@@ -246,7 +245,7 @@ pub mod pallet {
 		pub fn auth_context() -> Context {
 			indiv_support::context::build_product_context(
 				indiv_support::context::personhood::PRODUCT_NAME,
-				T::Suffix::get(),
+				&T::Suffix::get(),
 				indiv_support::context::personhood::PEOPLE_LITE_AUTH,
 			)
 		}
@@ -377,6 +376,7 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			let verifier = ensure_signed(origin)?;
 			ensure!(!LitePeople::<T>::contains_key(&candidate), Error::<T>::AlreadyRegistered);
+			ensure!(!AccountToAlias::<T>::contains_key(&candidate), Error::<T>::AccountInUse);
 			ensure!(
 				T::MemberService::member_status(LITE_PEOPLE_MEMBER_IDENTIFIER, &ring_vrf_key)
 					.is_none(),
@@ -460,6 +460,7 @@ pub mod pallet {
 		) -> DispatchResult {
 			let candidate = ensure_signed(origin)?;
 			ensure!(!LitePeople::<T>::contains_key(&candidate), Error::<T>::AlreadyRegistered);
+			ensure!(!AccountToAlias::<T>::contains_key(&candidate), Error::<T>::AccountInUse);
 			ensure!(
 				T::MemberService::member_status(LITE_PEOPLE_MEMBER_IDENTIFIER, &ring_vrf_key)
 					.is_none(),
@@ -557,7 +558,7 @@ pub mod pallet {
 				T::AccountContexts::contains(&rev_ca.ca.context),
 				Error::<T>::InvalidAliasContext
 			);
-			ensure!(!LitePeople::<T>::contains_key(&account), Error::<T>::AccountInUse);
+			ensure!(!LitePeople::<T>::contains_key(&account), Error::<T>::AlreadyRegistered);
 
 			let old_account = AliasToAccount::<T>::get(&rev_ca.ca);
 			let old_rev_ca = old_account.as_ref().and_then(AccountToAlias::<T>::get);

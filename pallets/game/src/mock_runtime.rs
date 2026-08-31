@@ -769,6 +769,11 @@ impl indiv_support::traits::MembershipProver for MockAirdropMemberService {
 	) -> Option<u64> {
 		None
 	}
+
+	fn old_root_retention() -> u64 {
+		// This mock keeps no root history, so nothing is ever superseded.
+		0
+	}
 }
 
 /// Derive a deterministic 32-byte alias from the message bytes.
@@ -947,7 +952,8 @@ impl indiv_pallet_people::Config for Test {
 }
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 	pub const LiteCollectionOwner: u32 = 2;
 	pub const LiteRingExp: RingExponent = RingExponent::R2e9;
 	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");

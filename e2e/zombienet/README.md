@@ -162,7 +162,7 @@ above are the primary runbook.
 
 ## Fast boot: snapshot the initialised state
 
-`bootstrap` (29 scripts, dominated by the ZK chunk upload) takes minutes. Capture the post-init
+`bootstrap` (dominated by the ZK chunk upload) takes minutes. Capture the post-init
 state **once** and re-spawn from it in seconds — no bootstrap:
 
 ```bash

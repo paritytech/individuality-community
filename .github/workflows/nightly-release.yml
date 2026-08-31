@@ -1,0 +1,240 @@
+name: Nightly Release
+
+# Nightly (and on-demand) pre-release of the two paseo runtimes built from fresh
+# main, so downstream CI can test against the newest runtime features without
+# waiting for a versioned v* release. Pre-releases are marked prerelease and
+# never become the latest release. Each one lists the PRs it includes since the
+# previous nightly, with their audit and compatibility labels. A scheduled run
+# is skipped when main has no new commits since the previous nightly; a
+# workflow_dispatch run always releases.
+on:
+  schedule:
+    - cron: "3 2 * * *" # nightly, 02:03 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: true
+
+jobs:
+  check-changes:
+    runs-on: parity-ubuntu
+    outputs:
+      new-commits: ${{ steps.check.outputs.new-commits }}
+      next-spec: ${{ steps.spec.outputs.next-spec }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # the previous nightly tag is needed for the commit count
+
+      - name: Count commits since previous nightly
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
+            --json tagName --jq '[.[].tagName | select(startswith("nightly-"))] | first // empty')
+          if [ -z "$PREV" ] || ! git rev-parse -q --verify "$PREV^{commit}" > /dev/null; then
+            echo "no previous nightly tag, releasing"
+            echo "new-commits=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          COUNT=$(git rev-list --count "$PREV..$GITHUB_SHA")
+          echo "$COUNT commits since $PREV"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "new-commits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "new-commits=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next spec version
+        id: spec
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Nightlies own the last 3 digits of spec_version (see RELEASE.md):
+          # take the newest released spec version, or the committed one if it
+          # is higher (or the only one), and add 1. The stamp happens in the
+          # build workspace; main keeps the last 3 digits at zero.
+          SOURCE=$(grep -hE '^[[:space:]]*spec_version: [0-9][0-9_]*,$' \
+            runtimes/next-people-paseo/src/lib.rs runtimes/next-asset-hub-paseo/src/lib.rs \
+            | grep -oE '[0-9][0-9_]*' | tr -d '_' | sort -u)
+          if [ "$(wc -l <<< "$SOURCE")" -ne 1 ]; then
+            echo "::error::the runtimes disagree on spec_version: $(tr '\n' ' ' <<< "$SOURCE")"
+            exit 1
+          fi
+
+          LATEST=$(.github/scripts/latest_release_spec_version.sh)
+          if [ -n "$LATEST" ] && [ "$LATEST" -gt "$SOURCE" ]; then
+            BASE="$LATEST"
+          else
+            BASE="$SOURCE"
+          fi
+
+          NEXT=$((BASE + 1))
+          if [ $((NEXT % 1000)) -eq 0 ]; then
+            echo "::error::the nightly sequence after $BASE is exhausted; cut a release to move to the next thousand"
+            exit 1
+          fi
+          echo "next spec version: $NEXT (base $BASE, committed $SOURCE)"
+          echo "next-spec=$NEXT" >> "$GITHUB_OUTPUT"
+
+  build-runtimes:
+    needs: [check-changes]
+    if: github.event_name == 'workflow_dispatch' || needs.check-changes.outputs.new-commits == 'true'
+    uses: ./.github/workflows/build-runtimes.yml
+    with:
+      spec-version: ${{ needs.check-changes.outputs.next-spec }}
+
+  publish-nightly:
+    runs-on: parity-ubuntu
+    needs: [check-changes, build-runtimes]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # tag history is needed to compute the PR diff
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -name "*.wasm" -exec cp {} release-assets/ \;
+          find artifacts -name "*_srtool_output.json" -exec cp {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Add runtime info to changelog
+        run: |
+          CONTEXT=$(find artifacts -name '*_srtool_output.json')
+          SRTOOL() { <$(<<<$CONTEXT head -n1) jq -r .$1; }
+          WASM() { <${JSON} jq -r ".runtimes.compressed.subwasm.$1"; }
+
+          # The workspace is pinned to this Polkadot SDK release, enforced by
+          # the psvm check.
+          . .github/env
+
+          tee RELEASE_NOTES.md <<-EOF
+          # Runtime info
+          *These runtimes were built with **$(SRTOOL rustc)** using **[$(SRTOOL gen)](https://github.com/paritytech/srtool)***
+
+          *Compatible with [Polkadot SDK](https://github.com/paritytech/polkadot-sdk) **${POLKADOT_RELEASE_VERSION}${POLKADOT_RELEASE_PATCH}***
+          EOF
+
+          for JSON in $(<<<$CONTEXT sort -sr)
+          do
+          RUNTIME_NAME=$(basename ${JSON} _srtool_output.json)
+          tee -a RELEASE_NOTES.md <<-EOF
+
+          ## ${RUNTIME_NAME}
+          ~~~
+          🏋️ Runtime Size:           $(numfmt --to iec-i --format "%.2f" $(WASM size)) ($(WASM size) bytes)
+          🗜 Compressed:             $(WASM 'compression | if .compressed then "Yes: \(1 - .size_compressed / .size_decompressed | . * 10000 | round / 100)%" else "No" end')
+          🔥 Core Version:           $(WASM 'core_version | "\(.specName)-\(.specVersion) \(.implName)-\(.implVersion).tx\(.transactionVersion).au\(.authoringVersion)"')
+          🎁 Metadata version:       V$(WASM metadata_version)
+          🗳️ Blake2-256 hash:        $(WASM blake2_256)
+          📦 IPFS:                   $(WASM ipfs_hash)
+          ~~~
+          EOF
+          done
+
+          cat RELEASE_NOTES.md
+
+      - name: Record spec versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT_SPEC: ${{ needs.check-changes.outputs.next-spec }}
+        run: |
+          set -euo pipefail
+
+          PREV_SPEC=$(.github/scripts/latest_release_spec_version.sh)
+
+          BUILT=$(find artifacts -name '*_srtool_output.json' -exec \
+            jq -r '.runtimes.compressed.subwasm.core_version.specVersion' {} + | sort -u)
+          if [ "$BUILT" != "$NEXT_SPEC" ]; then
+            echo "::error::built spec version '$(tr '\n' ' ' <<< "$BUILT")' does not match the computed $NEXT_SPEC"
+            exit 1
+          fi
+
+          # The spec version was computed before the build; a release that
+          # published in the meantime would put this nightly below it.
+          if [ -n "$PREV_SPEC" ] && [ "$NEXT_SPEC" -le "$PREV_SPEC" ]; then
+            echo "::error::spec version $NEXT_SPEC is not above the newest released spec version $PREV_SPEC; a release published during this build. Re-run the nightly."
+            exit 1
+          fi
+
+          # The `Spec version:` line is machine-read by later releases; keep
+          # its format in sync with latest_release_spec_version.sh.
+          {
+            printf '\nSpec version: %s\n' "$NEXT_SPEC"
+            printf '\n# Spec versions\n\n'
+            printf '| Runtime | previous release | this release |\n'
+            printf '|---|---|---|\n'
+            for JSON in $(find artifacts -name '*_srtool_output.json' | sort); do
+              NAME=$(basename "$JSON" _srtool_output.json)
+              printf '| %s | %s | %s |\n' "$NAME" "${PREV_SPEC:-n/a}" \
+                "$(jq -r '.runtimes.compressed.subwasm.core_version.specVersion' "$JSON")"
+            done
+          } >> RELEASE_NOTES.md
+
+      - name: Compute PR diff since previous nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Previous nightly tag; on the first nightly fall back to the latest
+          # release, then to the initial commit.
+          PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
+            --json tagName --jq '[.[].tagName | select(startswith("nightly-"))] | first // empty')
+          if [ -z "$PREV" ]; then
+            PREV=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
+              --json tagName --jq '.[0].tagName // empty')
+          fi
+          if [ -z "$PREV" ]; then
+            PREV=$(git rev-list --max-parents=0 HEAD | tail -n1)
+          fi
+          echo "diffing against $PREV"
+
+          .github/scripts/release_pr_notes.sh "$PREV" "$GITHUB_SHA" > PR_DIFF.md
+          cat PR_DIFF.md
+
+      - name: Append PR diff to changelog
+        run: |
+          {
+            printf '\n## PRs included\n'
+            cat PR_DIFF.md
+          } >> RELEASE_NOTES.md
+
+      - name: Compute nightly tag
+        id: tag
+        env:
+          NEXT_SPEC: ${{ needs.check-changes.outputs.next-spec }}
+        # The spec version makes the tag unique, so any number of nightlies
+        # can be released on the same day.
+        run: echo "tag=nightly-$(date -u +%F)-${NEXT_SPEC}" >> "$GITHUB_OUTPUT"
+
+      - name: Create nightly pre-release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          prerelease: true
+          make_latest: false
+          # The srtool digests are attached so later releases can read this
+          # one's spec version.
+          files: |
+            release-assets/*.wasm
+            release-assets/*_srtool_output.json
+          body_path: RELEASE_NOTES.md

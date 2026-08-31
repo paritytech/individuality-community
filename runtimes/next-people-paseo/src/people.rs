@@ -18,6 +18,8 @@ use super::*;
 use assets_common::local_and_foreign_assets::TargetFromLeft;
 use codec::{Decode, Encode};
 use cumulus_primitives_core::Junction::{GeneralIndex, PalletInstance, Parachain};
+#[cfg(feature = "runtime-benchmarks")]
+use frame_support::BoundedVec;
 use frame_support::{
 	pallet_prelude::PhantomData,
 	parameter_types,
@@ -39,8 +41,6 @@ use indiv_support::{
 use paseo_runtime_constants::system_parachain::{
 	NextAssetHubParaId, ASSET_HUB_ID, NEXT_ASSET_HUB_ID,
 };
-#[cfg(feature = "runtime-benchmarks")]
-use sp_runtime::BoundedVec;
 use sp_runtime::{
 	traits::{AccountIdConversion, ConstI8, ConstU16},
 	DispatchResult, MultiSignature, MultiSigner, Percent, SaturatedConversion,
@@ -66,12 +66,27 @@ use crate::{
 pub const EXTERNAL_ASSET_ID: u32 = 50_000_413;
 
 parameter_types! {
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub DefaultNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("default network suffix fits");
 	pub const StaleAliasCleanupInterval: BlockNumber = 5 * MINUTES;
 	pub ExternalAssetLocation: Location = Location::new(
 		1,
 		[Parachain(ASSET_HUB_ID), PalletInstance(50), GeneralIndex(EXTERNAL_ASSET_ID as u128)],
 	);
+}
+
+impl indiv_pallet_network_suffix::Config for Runtime {
+	type UpdateOrigin = EnsureRoot<Self::AccountId>;
+	type DefaultSuffix = DefaultNetworkSuffix;
+	type WeightInfo = NetworkSuffixWeightInfo;
+}
+
+/// Conservatively reuse the heavier `pallet_parameters` setter weight.
+pub struct NetworkSuffixWeightInfo;
+impl indiv_pallet_network_suffix::WeightInfo for NetworkSuffixWeightInfo {
+	fn set_network_suffix(_s: u32) -> frame_support::weights::Weight {
+		<weights::pallet_parameters::WeightInfo<Runtime> as pallet_parameters::WeightInfo>::set_parameter()
+	}
 }
 
 /// The full featured fungibles implementation with both regular and hold functionality.
@@ -106,13 +121,16 @@ pub type RuntimeClock = Timestamp;
 pub type RuntimeClock = BenchmarkClock;
 
 // The `AccountContexts` type, which must implement `trait Contains` and return true only for the
-// contexts the runtime supports.
+// contexts the runtime supports. Every pallet configured with
+// `indiv_pallet_people::EnsurePersonalAliasInContext` needs its context here, otherwise no account
+// can be bound to an alias in that context and the pallet's person origin is unreachable.
 pub struct AccountContexts;
 impl frame_support::traits::Contains<Context> for AccountContexts {
 	fn contains(l: &Context) -> bool {
 		l == &indiv_pallet_mob_rule::MOB_CONTEXT ||
 			l == &indiv_pallet_score::Pallet::<Runtime>::score_context() ||
-			l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context()
+			l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context() ||
+			l == &indiv_pallet_people_airdrops::Pallet::<Runtime>::people_airdrops_context()
 	}
 }
 
@@ -840,8 +858,9 @@ impl indiv_pallet_honour::benchmarking::BenchmarkHelper<Runtime> for HonourBench
 		)
 		.expect("benchmark: people collection must be created");
 
-		let secret =
-			BandersnatchVrfVerifiable::new_secret(sp_core::twox_256(b"honour-bench-voter"));
+		let secret = BandersnatchVrfVerifiable::new_secret(sp_crypto_hashing::twox_256(
+			b"honour-bench-voter",
+		));
 		let member = BandersnatchVrfVerifiable::member_from_secret(&secret);
 
 		Members::add_members(indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER, vec![member])
@@ -1512,7 +1531,7 @@ impl indiv_pallet_coinage::BenchmarkHelper<Runtime> for CoinageBenchHelper {
 		let ring_exponent = <Runtime as indiv_pallet_people::Config>::RingExponent::get();
 		indiv_pallet_members::Pallet::<Runtime>::initialize_chunks(ring_exponent);
 
-		let entropy = sp_core::twox_256(b"people_for_coinage:42");
+		let entropy = sp_crypto_hashing::twox_256(b"people_for_coinage:42");
 		let secret = BandersnatchVrfVerifiable::new_secret(entropy);
 		let member = BandersnatchVrfVerifiable::member_from_secret(&secret);
 

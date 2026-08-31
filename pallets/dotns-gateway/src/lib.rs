@@ -43,6 +43,7 @@ extern crate alloc;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
+pub mod migration;
 pub mod types;
 pub mod weights;
 
@@ -79,7 +80,12 @@ pub mod pallet {
 
 	const LOG_TARGET: &str = "runtime::indiv-pallet-dotns-gateway";
 
+	/// The in-code storage version. Bump it and add a migration when the layout of a
+	/// storage item changes; see [`migration`].
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -100,9 +106,8 @@ pub mod pallet {
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 
-		/// Network suffix appended to this pallet's product name.
-		#[pallet::constant]
-		type Suffix: Get<&'static [u8]>;
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
 
 		/// Ring-membership prover used to verify proofs sent to [`Pallet::register_name`].
 		type MemberService: MembershipProver<
@@ -182,6 +187,24 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type LiteLabelOwner<T: Config> =
 		StorageMap<_, Blake2_128Concat, BaseLabel, T::AccountId, OptionQuery>;
+
+	/// The dotNS labels each account acquired through this gateway.
+	///
+	/// Keyed by account so clients can watch a set of accounts with one storage
+	/// subscription.
+	///
+	/// Warning: this map is not the source of truth; the dotNS contracts are. It
+	/// is written on [`Pallet::reserve_name`] and [`Pallet::register_name`] only,
+	/// so a label that changes purely contract-side (for example a transfer) is
+	/// not reflected here and clients must re-verify on read via contract views.
+	/// Names registered outside these paths never appear here at all, including
+	/// pre-launch whitelist allocations, which claimants register directly against
+	/// the dotNS registrar controller.
+	/// The map is temporary and goes away once apps can observe contract storage
+	/// directly: <https://github.com/paritytech/individuality-community/issues/52>.
+	#[pallet::storage]
+	pub type AccountNames<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, AccountNameRecord, OptionQuery>;
 
 	/// Address of the `RootGatewayDispatcher` contract. Must be set (via genesis or
 	/// [`Pallet::set_dispatcher_address`]) before [`Pallet::reserve_name`] or
@@ -385,6 +408,10 @@ pub mod pallet {
 			let contract_weight = Self::call_dispatcher(calldata)?;
 
 			LiteLabelOwner::<T>::insert(&lite_label, &candidate);
+			AccountNames::<T>::mutate(&candidate, |record| {
+				record.get_or_insert_with(AccountNameRecord::default).lite =
+					Some(NameEntry { label: lite_label.clone(), chat: Some(chat_key) });
+			});
 
 			Self::deposit_event(Event::NameReserved {
 				candidate,
@@ -441,6 +468,20 @@ pub mod pallet {
 				RegistrationRecord { collection: Collection::People, account: who.clone() },
 			);
 			AccountAlias::<T>::insert(&who, alias);
+			AccountNames::<T>::mutate(&who, |record| {
+				let record = record.get_or_insert_with(AccountNameRecord::default);
+				let chat = match &link {
+					Link::None(chat_key) => Some(*chat_key),
+					// The contracts copy the lite label's key to the full label. The pallet
+					// holds that key only when the linked label is the recorded one.
+					Link::LiteUsername(lite) => record
+						.lite
+						.as_ref()
+						.filter(|entry| entry.label == *lite)
+						.and_then(|entry| entry.chat),
+				};
+				record.full = Some(NameEntry { label: label.clone(), chat });
+			});
 
 			Self::deposit_event(Event::NameRegistered { alias, account: who, label, link });
 			Ok(PostDispatchInfo {
@@ -562,7 +603,7 @@ pub mod pallet {
 		pub fn proof_context() -> indiv_support::traits::Context {
 			build_product_context(
 				personhood::PRODUCT_NAME,
-				T::Suffix::get(),
+				&T::Suffix::get(),
 				personhood::DOTNS_GATEWAY,
 			)
 		}

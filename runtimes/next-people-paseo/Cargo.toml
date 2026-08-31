@@ -53,6 +53,7 @@ sp-api = { workspace = true }
 sp-block-builder = { workspace = true }
 sp-consensus-aura = { workspace = true }
 sp-core = { workspace = true }
+sp-crypto-hashing = { workspace = true }
 sp-genesis-builder = { workspace = true }
 sp-inherents = { workspace = true }
 sp-io = { workspace = true }
@@ -74,6 +75,7 @@ indiv-pallet-people-lite = { workspace = true }
 indiv-pallet-proof-of-ink = { workspace = true }
 indiv-pallet-relay-randomness = { workspace = true }
 indiv-pallet-mob-rule = { workspace = true }
+indiv-pallet-network-suffix = { workspace = true }
 indiv-pallet-nft-credits = { workspace = true, features = ["testnet"] }
 indiv-support = { workspace = true, features = ["genesis"] }
 indiv-pallet-origin-restriction = { workspace = true }
@@ -150,6 +152,7 @@ std = [
 	"indiv-pallet-members-notifier/std",
 	"indiv-pallet-members/std",
 	"indiv-pallet-mob-rule/std",
+	"indiv-pallet-network-suffix/std",
 	"indiv-pallet-nft-credits/std",
 	"indiv-pallet-origin-restriction/std",
 	"indiv-pallet-people-airdrops/std",
@@ -196,6 +199,7 @@ std = [
 	"sp-block-builder/std",
 	"sp-consensus-aura/std",
 	"sp-core/std",
+	"sp-crypto-hashing/std",
 	"sp-genesis-builder/std",
 	"sp-inherents/std",
 	"sp-io/std",
@@ -239,6 +243,7 @@ runtime-benchmarks = [
 	"indiv-pallet-members-notifier/runtime-benchmarks",
 	"indiv-pallet-members/runtime-benchmarks",
 	"indiv-pallet-mob-rule/runtime-benchmarks",
+	"indiv-pallet-network-suffix/runtime-benchmarks",
 	"indiv-pallet-nft-credits/runtime-benchmarks",
 	"indiv-pallet-origin-restriction/runtime-benchmarks",
 	"indiv-pallet-people-airdrops/runtime-benchmarks",
@@ -285,6 +290,12 @@ coinage-benchmark-proof-cache-regenerate = [
 	"indiv-pallet-coinage/benchmark-proof-cache-regenerate",
 ]
 
+# Build the ring VRF suite with the RFC-163 EC host functions instead of the default
+# in-runtime arkworks code. A runtime built with this only runs on validators that
+# expose those host functions (executor param `EccRfc163`). Weights in this repository
+# are measured against the default in-runtime backend.
+ec-crypto-hostcalls = ["indiv-support/ec-crypto-hostcalls"]
+
 try-runtime = [
 	"assets-common/try-runtime",
 	"cumulus-pallet-aura-ext/try-runtime",
@@ -305,6 +316,7 @@ try-runtime = [
 	"indiv-pallet-members-notifier/try-runtime",
 	"indiv-pallet-members/try-runtime",
 	"indiv-pallet-mob-rule/try-runtime",
+	"indiv-pallet-network-suffix/try-runtime",
 	"indiv-pallet-nft-credits/try-runtime",
 	"indiv-pallet-origin-restriction/try-runtime",
 	"indiv-pallet-people-airdrops/try-runtime",

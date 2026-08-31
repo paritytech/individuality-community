@@ -1294,6 +1294,10 @@ pub mod pallet {
 				.find(|r| r.revision == revision)
 				.map(|r| r.source_time)
 		}
+
+		fn old_root_retention() -> u64 {
+			T::OldRootRetentionDuration::get()
+		}
 	}
 
 	impl<T: Config> MembershipMultiProver for Pallet<T> {

@@ -202,14 +202,16 @@ impl<T: frame_system::Config> indiv_pallet_score::WeightInfo for WeightInfo<T> {
 	/// Proof: `AssetsHolder::BalancesOnHold` (`max_values`: None, `max_size`: Some(682), added: 3157, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
 	fn redeem_credit() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `929`
-		//  Estimated: `7404`
+		//  Estimated: `7916`
 		// Minimum execution time: 110_886_000 picoseconds.
 		Weight::from_parts(113_322_000, 0)
-			.saturating_add(Weight::from_parts(0, 7404))
-			.saturating_add(T::DbWeight::get().reads(7))
+			.saturating_add(Weight::from_parts(0, 7916))
+			.saturating_add(T::DbWeight::get().reads(8))
 			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	/// Storage: `Score::Participants` (r:1 w:1)

@@ -43,12 +43,12 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
 
           curl -sL --fail -o "$HOME/.local/bin/solc" \
-            "https://github.com/ethereum/solidity/releases/download/v${{ env.SOLC_VERSION }}/solc-static-linux"
+            "https://github.com/ethereum/solidity/releases/download/v$SOLC_VERSION/solc-static-linux"
           chmod +x "$HOME/.local/bin/solc"
           solc --version
 
           curl -L --fail -o "$HOME/.local/bin/resolc" \
-            "https://github.com/paritytech/revive/releases/download/v${{ env.RESOLC_VERSION }}/resolc-x86_64-unknown-linux-musl"
+            "https://github.com/paritytech/revive/releases/download/v$RESOLC_VERSION/resolc-x86_64-unknown-linux-musl"
           chmod +x "$HOME/.local/bin/resolc"
           resolc --version
 

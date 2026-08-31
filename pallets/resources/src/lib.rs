@@ -110,9 +110,8 @@ pub mod pallet {
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 
-		/// Network suffix appended to this pallet's product name.
-		#[pallet::constant]
-		type Suffix: Get<&'static [u8]>;
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
 
 		/// Trait allowing cryptographic proof of membership without exposing the underlying member.
 		/// Normally a Ring-VRF.
@@ -148,37 +147,46 @@ pub mod pallet {
 		type MaxReservationQueueLength: Get<u32>;
 
 		/// The Statement Store allowance for the accounts API.
+		///
+		/// Changing this value requires a migration that updates the existing state.
 		#[pallet::constant]
 		type AccountsApiAllowance: Get<StatementAllowance>;
 
 		/// Maximum number of statement store slots a person can claim within one period.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type StmtStoreSlotsPerPeriod: Get<u32>;
 
 		/// Maximum number of statement store slots a lite person can claim within one period.
 		///
 		/// Same semantics as `StmtStoreSlotsPerPeriod` but applied when the proof targets the
 		/// lite-people collection via `MembershipCollection::LitePeople`.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type LiteStmtStoreSlotsPerPeriod: Get<u32>;
 
 		/// Maximum number of stale statement store allowance entries to remove per cleanup call.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type StmtStoreCleanupLimit: Get<u32>;
 
 		/// Minimum time, in seconds, that must pass before an alias can replace its own
 		/// statement store allowance entry within the same period.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type StmtStoreReplacementCooldown: Get<u32>;
 
 		/// Extra time, in seconds, during which statement-store allowances from an ended period
 		/// remain active before cleanup may revoke them.
 		///
 		/// After this elapses, the allowances will eventually be cleaned by the OCW.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type StmtStoreGraceWindow: Get<u32>;
 
 		/// The Statement Store allowance for notification statement registration.
+		///
+		/// Changing this value requires a migration that updates the existing state.
 		#[pallet::constant]
 		type NotificationAllowance: Get<StatementAllowance>;
 
@@ -190,14 +198,16 @@ pub mod pallet {
 		/// For example, if this is `8`, the valid slot identifiers are `0..=8`, so each person
 		/// can claim up to 9 notification allowances during the period selected by
 		/// `NotificationPeriodDuration`. When the period advances, the slots reset.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type NotificationSlotsPerPeriod: Get<u8>;
 
 		/// Highest valid notification slot identifier for a lite person within one period.
 		///
 		/// Same semantics as `NotificationSlotsPerPeriod` but applied when the proof targets the
 		/// lite-people collection via `MembershipCollection::LitePeople`.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type LiteNotificationSlotsPerPeriod: Get<u8>;
 
 		/// Rolling time window for rate-limiting notifications, in seconds.
@@ -209,6 +219,8 @@ pub mod pallet {
 		/// Unix epoch, period `1` is the next 24 hours, and so on. Combined with
 		/// `NotificationSlotsPerPeriod`, this defines how many notifications can be sent in each
 		/// period.
+		///
+		/// Changing this value requires a migration that updates the existing state.
 		#[pallet::constant]
 		type NotificationPeriodDuration: Get<u32>;
 
@@ -245,6 +257,8 @@ pub mod pallet {
 		/// Time is divided into fixed-duration periods. The period index is computed as
 		/// `now_secs / LongTermStoragePeriodDuration`. Each person can submit up to
 		/// `LongTermStorageClaimsPerPeriod` claims per period.
+		///
+		/// Changing this value requires a migration that updates the existing state.
 		#[pallet::constant]
 		type LongTermStoragePeriodDuration: Get<u32>;
 
@@ -252,7 +266,8 @@ pub mod pallet {
 		///
 		/// Each claim uses a different counter value (0..claims_per_period) which produces a
 		/// distinct alias in the proof context, ensuring one claim per counter slot.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type LongTermStorageClaimsPerPeriod: Get<u8>;
 
 		/// Extra time, in seconds, during which the previous long-term storage period is still
@@ -260,6 +275,8 @@ pub mod pallet {
 		///
 		/// Extra time, in seconds, during which the previous long-term storage period is accepted
 		/// after a rollover.
+		///
+		/// Changing this value requires a migration that updates the existing state.
 		#[pallet::constant]
 		type LongTermStorageGraceWindow: Get<u32>;
 
@@ -277,7 +294,8 @@ pub mod pallet {
 		///
 		/// Bounds the worst-case weight of the cleanup extrinsic; callers must pass a `limit`
 		/// no greater than this value.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type LongTermStorageCleanupLimit: Get<u32>;
 
 		/// Benchmark helper trait.
@@ -1148,6 +1166,51 @@ pub mod pallet {
 		pub fn notification_context_for(period: u32, seq: u8) -> Context {
 			Self::notification_context(NotificationReference { period, seq })
 		}
+
+		/// Returns the current value of [`Config::StmtStoreSlotsPerPeriod`].
+		pub fn get_stmt_store_slots_per_period() -> u32 {
+			T::StmtStoreSlotsPerPeriod::get()
+		}
+
+		/// Returns the current value of [`Config::LiteStmtStoreSlotsPerPeriod`].
+		pub fn get_lite_stmt_store_slots_per_period() -> u32 {
+			T::LiteStmtStoreSlotsPerPeriod::get()
+		}
+
+		/// Returns the current value of [`Config::StmtStoreCleanupLimit`].
+		pub fn get_stmt_store_cleanup_limit() -> u32 {
+			T::StmtStoreCleanupLimit::get()
+		}
+
+		/// Returns the current value of [`Config::StmtStoreReplacementCooldown`].
+		pub fn get_stmt_store_replacement_cooldown() -> u32 {
+			T::StmtStoreReplacementCooldown::get()
+		}
+
+		/// Returns the current value of [`Config::StmtStoreGraceWindow`].
+		pub fn get_stmt_store_grace_window() -> u32 {
+			T::StmtStoreGraceWindow::get()
+		}
+
+		/// Returns the current value of [`Config::NotificationSlotsPerPeriod`].
+		pub fn get_notification_slots_per_period() -> u8 {
+			T::NotificationSlotsPerPeriod::get()
+		}
+
+		/// Returns the current value of [`Config::LiteNotificationSlotsPerPeriod`].
+		pub fn get_lite_notification_slots_per_period() -> u8 {
+			T::LiteNotificationSlotsPerPeriod::get()
+		}
+
+		/// Returns the current value of [`Config::LongTermStorageClaimsPerPeriod`].
+		pub fn get_long_term_storage_claims_per_period() -> u8 {
+			T::LongTermStorageClaimsPerPeriod::get()
+		}
+
+		/// Returns the current value of [`Config::LongTermStorageCleanupLimit`].
+		pub fn get_long_term_storage_cleanup_limit() -> u32 {
+			T::LongTermStorageCleanupLimit::get()
+		}
 	}
 
 	impl<T: Config> Pallet<T> {
@@ -1571,7 +1634,7 @@ pub mod pallet {
 		}
 
 		fn build_context(suffix: ProductContextSuffix) -> Context {
-			build_product_context(personhood::PRODUCT_NAME, T::Suffix::get(), suffix)
+			build_product_context(personhood::PRODUCT_NAME, &T::Suffix::get(), suffix)
 		}
 
 		pub fn long_term_storage_period_from_timestamp(now_secs: u64) -> u32 {

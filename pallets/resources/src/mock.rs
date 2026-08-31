@@ -457,7 +457,8 @@ impl indiv_pallet_people::Config for Test {
 parameter_types! {
 	pub storage LitePersonRegistrationFee: u64 = 10;
 	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
-	pub const NetworkSuffix: &'static [u8] = b"paseo";
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
 	pub LitePersonStatementLimit: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
 		max_size: 4 * 1024, // 4 KiB
 		max_count: 10,
@@ -474,18 +475,18 @@ parameter_types! {
 		max_size: 512,
 		max_count: 1,
 	};
-	pub const NotificationSlotsPerPeriod: u8 = 8;
-	pub const LiteNotificationSlotsPerPeriod: u8 = 4;
+	pub storage NotificationSlotsPerPeriod: u8 = 8;
+	pub storage LiteNotificationSlotsPerPeriod: u8 = 4;
 	pub const NotificationPeriodDuration: u32 = 24 * 60 * 60;
-	pub const StmtStoreSlotsPerPeriod: u32 = 8;
-	pub const LiteStmtStoreSlotsPerPeriod: u32 = 4;
-	pub const StmtStoreCleanupLimit: u32 = 10;
-	pub const StmtStoreReplacementCooldown: u32 = 60 * 60; // 1 hour
-	pub const StmtStoreGraceWindow: u32 = 2 * 24 * 60 * 60;
+	pub storage StmtStoreSlotsPerPeriod: u32 = 8;
+	pub storage LiteStmtStoreSlotsPerPeriod: u32 = 4;
+	pub storage StmtStoreCleanupLimit: u32 = 10;
+	pub storage StmtStoreReplacementCooldown: u32 = 60 * 60; // 1 hour
+	pub storage StmtStoreGraceWindow: u32 = 2 * 24 * 60 * 60;
 	pub const LongTermStoragePeriodDuration: u32 = 24 * 60 * 60;
 	pub const LongTermStorageGraceWindow: u32 = 60 * 60;
-	pub const LongTermStorageClaimsPerPeriod: u8 = 10;
-	pub const LongTermStorageCleanupLimit: u32 = 50;
+	pub storage LongTermStorageClaimsPerPeriod: u8 = 10;
+	pub storage LongTermStorageCleanupLimit: u32 = 50;
 	pub LongTermStorageAllowanceForPeople: LongTermStorageAllocation = LongTermStorageAllocation {
 		transactions: 32,
 		bytes: 64 * 1024 * 1024,

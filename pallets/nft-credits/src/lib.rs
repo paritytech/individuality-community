@@ -77,8 +77,9 @@
 //! Claiming happens on the claims chain, which never sees the credits themselves, only one root per
 //! block. A claimant proves their entitlement by presenting their credit with an inclusion proof:
 //! the sibling hashes that rehash the credit's leaf up to the root held for the block the credit
-//! was awarded in. A proof verifies only against that one root, and only for the claimant its leaf
-//! binds in, so no one else's credit and no other block's root can be minted against it.
+//! was awarded in. The claims chain builds the leaf itself, from the credit presented and the
+//! claimant its origin authenticated. Presenting somebody else's credit builds a different leaf,
+//! which does not rehash to the stored root.
 //!
 //! A claimant does not have to rebuild the tree themselves. The runtime API in [`runtime_api`]
 //! serves the proof material:
@@ -87,9 +88,9 @@
 //!   blocks they were awarded a credit in, against [`NftClaimCreditRoots`], so a claimant finds
 //!   their roots by one lookup instead of a scan.
 //! - `nft_claim_credit_proofs` returns, for one award block and one claimant, the inclusion proof
-//!   of each credit the claimant holds there: credit, leaf, leaf index, leaf count, root and
-//!   sibling hashes, which is what the claims chain verifies. `nft_claim_credit_proof_from_awards`
-//!   does the same for a pruned block, from awards the caller supplies.
+//!   of each credit the claimant holds there: the credit, its leaf index and the sibling hashes,
+//!   which is what the claims chain verifies. `nft_claim_credit_proof_from_awards` does the same
+//!   for a pruned block, from awards the caller supplies.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -117,7 +118,7 @@ use frame_support::{
 	defensive,
 	dispatch::PostDispatchInfo,
 	pallet_prelude::*,
-	traits::{Defensive, EnsureOrigin, UnixTime},
+	traits::{Defensive, DefensiveOption, EnsureOrigin, UnixTime},
 };
 use frame_system::{offchain::CreateAuthorizedTransaction, pallet_prelude::*};
 use indiv_pallet_game::{
@@ -1236,6 +1237,10 @@ impl<T: Config> Pallet<T> {
 	/// Exposed through the runtime API rather than as a call: nothing is written, and a whole
 	/// block's awards in an extrinsic's proof would be paid for by every other extrinsic in
 	/// the block.
+	///
+	/// A call with at least one proof derives the leaves and builds the block's tree once.
+	/// [`Config::MaxCreditsPerBlock`] bounds the tree hash count, regardless of the proof count.
+	/// Each proof adds only its own sibling hashes.
 	pub fn nft_claim_credit_proofs(
 		award_block: BlockNumberFor<T>,
 		claimant: &AccountOrPerson<T::AccountId>,
@@ -1249,15 +1254,18 @@ impl<T: Config> Pallet<T> {
 			return Err(NftClaimCreditProofError::AwardsPruned);
 		}
 
-		let leaves = Self::nft_claim_credit_leaves(&awards);
-		awards
+		let claimed = awards
 			.iter()
 			.enumerate()
 			.filter(|(_, award)| &award.claimant == claimant)
-			.map(|(leaf_index, award)| {
-				Self::credit_proof(&recorded, &leaves, award.credit, leaf_index as u32)
-			})
-			.collect::<Result<Vec<_>, _>>()
+			.map(|(leaf_index, award)| (leaf_index as u32, award.credit))
+			.collect::<Vec<_>>();
+		if claimed.is_empty() {
+			return Ok(Vec::new());
+		}
+
+		let leaves = Self::nft_claim_credit_leaves(&awards);
+		Self::credit_proofs(&recorded, &leaves, &claimed)
 	}
 
 	/// Build the inclusion proof of the credit at `leaf_index` against the
@@ -1289,37 +1297,90 @@ impl<T: Config> Pallet<T> {
 			.credit;
 
 		let leaves = Self::nft_claim_credit_leaves(&awards);
-		Self::credit_proof(&recorded, &leaves, credit, leaf_index)
+		Self::credit_proofs(&recorded, &leaves, &[(leaf_index, credit)])?
+			.into_iter()
+			.next()
+			.defensive_ok_or(NftClaimCreditProofError::LeafIndexOutOfBounds)
 	}
 
-	/// The inclusion proof of `leaf_index` in `leaves`, checked against `recorded`.
+	/// The inclusion proofs of `claimed` in `leaves`, checked against `recorded`.
 	///
-	/// `leaves` must be the block's complete leaf set in award order; the root check is what
-	/// establishes that it is.
-	fn credit_proof(
+	/// `claimed` pairs a leaf index with the credit that leaf commits to, and the proofs come
+	/// back in that order. `leaves` must be the block's complete leaf set in award order; the
+	/// root check is what establishes that it is. One tree serves every index.
+	fn credit_proofs(
 		recorded: &NftClaimCreditTree,
 		leaves: &[NftClaimCreditLeaf],
-		credit: NftClaimCredit,
-		leaf_index: u32,
-	) -> Result<NftClaimCreditProof, NftClaimCreditProofError> {
-		if leaf_index >= recorded.leaf_count {
-			return Err(NftClaimCreditProofError::LeafIndexOutOfBounds);
-		}
+		claimed: &[(u32, NftClaimCredit)],
+	) -> Result<Vec<NftClaimCreditProof>, NftClaimCreditProofError> {
+		let claimed = claimed
+			.iter()
+			.map(|(leaf_index, credit)| {
+				if (*leaf_index as usize) < leaves.len() {
+					Ok((*leaf_index, *credit))
+				} else {
+					Err(NftClaimCreditProofError::LeafIndexOutOfBounds)
+				}
+			})
+			.collect::<Result<Vec<_>, _>>()?;
 
-		let proof =
-			binary_merkle_tree::merkle_proof::<BlakeTwo256, _, _>(leaves.to_vec(), leaf_index);
-		if CreditProofNode::from(proof.root) != recorded.root {
+		let (root, proofs) =
+			Self::credit_tree_proofs(leaves, claimed.iter().map(|(leaf_index, _)| *leaf_index));
+		if root != recorded.root {
 			return Err(NftClaimCreditProofError::RootMismatch);
 		}
 
-		Ok(NftClaimCreditProof {
-			root: recorded.root,
-			credit,
-			leaf: proof.leaf,
-			leaf_index,
-			leaf_count: recorded.leaf_count,
-			proof: proof.proof.into_iter().map(CreditProofNode::from).collect::<Vec<_>>(),
-		})
+		Ok(claimed
+			.into_iter()
+			.zip(proofs)
+			.map(|((leaf_index, credit), proof)| NftClaimCreditProof { credit, leaf_index, proof })
+			.collect::<Vec<_>>())
+	}
+
+	/// The root of the tree over `leaves` and, for each index in `leaf_indices`, the sibling
+	/// hashes that rehash its leaf up to that root, bottom layer first.
+	///
+	/// One pass over the layers serves every index at once. The layout is the one
+	/// [`binary_merkle_tree`] builds and the claim chain's `verify_proof` rehashes along: a
+	/// layer is hashed in pairs, a trailing odd node moves up unchanged, and the last node left
+	/// is the root. An empty leaf set gives the zero root, as `merkle_root` does.
+	fn credit_tree_proofs(
+		leaves: &[NftClaimCreditLeaf],
+		leaf_indices: impl Iterator<Item = u32>,
+	) -> (CreditProofNode, Vec<Vec<CreditProofNode>>) {
+		let mut layer = leaves
+			.iter()
+			.map(|leaf| sp_io::hashing::blake2_256(leaf.as_ref()))
+			.collect::<Vec<_>>();
+		let mut positions = leaf_indices.collect::<Vec<_>>();
+		let mut proofs = vec![Vec::new(); positions.len()];
+
+		while layer.len() > 1 {
+			for (proof, position) in proofs.iter_mut().zip(&positions) {
+				// A trailing odd node is alone in its pair, so it contributes no sibling.
+				if let Some(sibling) = layer.get((position ^ 1) as usize) {
+					proof.push(CreditProofNode(*sibling));
+				}
+			}
+
+			layer = layer
+				.chunks(2)
+				.map(|pair| match pair {
+					[left, right] => {
+						let mut buf = [0u8; 64];
+						buf[..32].copy_from_slice(left);
+						buf[32..].copy_from_slice(right);
+						sp_io::hashing::blake2_256(&buf)
+					},
+					_ => pair.first().copied().unwrap_or_default(),
+				})
+				.collect::<Vec<_>>();
+			for position in &mut positions {
+				*position /= 2;
+			}
+		}
+
+		(CreditProofNode(layer.first().copied().unwrap_or_default()), proofs)
 	}
 
 	/// The NFT claim credit roots `claimant` has at least one credit under, in ascending

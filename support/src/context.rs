@@ -19,8 +19,15 @@
 use alloc::vec::Vec;
 
 use crate::traits::Context;
+use frame_support::{traits::ConstU32, BoundedVec};
 
 const PRODUCT_PREFIX: [u8; 8] = *b"product/";
+
+/// Maximum length of the network suffix appended to a product identifier.
+pub const MAX_NETWORK_SUFFIX_LENGTH: u32 = 16;
+
+/// Network suffix appended to product identifiers when constructing ring VRF contexts.
+pub type ProductContextNetworkSuffix = BoundedVec<u8, ConstU32<MAX_NETWORK_SUFFIX_LENGTH>>;
 
 /// The suffix appended to a product identifier when constructing a ring VRF context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,7 +84,7 @@ pub fn build_product_context(
 	input.extend_from_slice(network_suffix);
 	input.push(b'/');
 	input.extend_from_slice(&suffix);
-	sp_core::blake2_256(&input)
+	sp_crypto_hashing::blake2_256(&input)
 }
 
 /// Context suffix allocations owned by the personhood product.
@@ -160,7 +167,7 @@ mod tests {
 
 	#[test]
 	fn index_magic_matches_rfc_derivation() {
-		assert_eq!(INDEX_MAGIC, sp_core::blake2_256(b"product-account-index")[..28]);
+		assert_eq!(INDEX_MAGIC, sp_crypto_hashing::blake2_256(b"product-account-index")[..28]);
 	}
 
 	#[test]
@@ -185,7 +192,7 @@ mod tests {
 
 		assert_eq!(
 			build_product_context(b"voting", b"dot", ProductContextSuffix::Index(0)),
-			sp_core::blake2_256(&expected_preimage),
+			sp_crypto_hashing::blake2_256(&expected_preimage),
 		);
 	}
 
@@ -206,7 +213,7 @@ mod tests {
 
 		assert_eq!(
 			build_product_context(b"voting", b"dot", ProductContextSuffix::Raw(raw)),
-			sp_core::blake2_256(&expected_preimage),
+			sp_crypto_hashing::blake2_256(&expected_preimage),
 		);
 	}
 

@@ -440,6 +440,36 @@ fn attest_rejects_already_registered_candidate() {
 }
 
 #[test]
+fn attest_rejects_candidate_account_bound_to_alias() {
+	new_test_ext().execute_with(|| {
+		let lite_account = 72;
+		let alias_account = 73;
+		let alias_secret = register_lite_person(74, lite_account, 8);
+		let (_, alias) = establish_alias(&alias_secret, alias_account);
+		assert_eq!(AccountToAlias::<Test>::get(alias_account), Some(alias));
+
+		let verifier = 75;
+		AttestationAllowance::<Test>::insert(verifier, 1);
+		let candidate_secret = secret_from_seed(9);
+		let ring_vrf_key = member_from_secret(&candidate_secret);
+
+		assert_noop!(
+			PeopleLitePallet::<Test>::attest(
+				Some(verifier).into(),
+				alias_account,
+				sp_runtime::testing::UintAuthorityId(alias_account),
+				ring_vrf_key,
+				sign_attest_with_secret(&candidate_secret, alias_account),
+				None,
+			),
+			crate::Error::<Test>::AccountInUse
+		);
+		assert_eq!(AttestationAllowance::<Test>::get(verifier), 1);
+		assert!(!LitePeople::<Test>::contains_key(alias_account));
+	});
+}
+
+#[test]
 fn attest_rejects_duplicate_ring_vrf_key() {
 	new_test_ext().execute_with(|| {
 		let original_verifier = 80;
@@ -698,6 +728,37 @@ mod register_with_fee_tests {
 					None,
 				),
 				crate::Error::<Test>::AlreadyRegistered
+			);
+		});
+	}
+
+	#[test]
+	fn register_with_fee_rejects_candidate_account_bound_to_alias() {
+		new_test_ext().execute_with(|| {
+			let lite_account = 107;
+			let alias_account = 108;
+			let alias_secret = register_lite_person(109, lite_account, 30);
+			let (_, alias) = establish_alias(&alias_secret, alias_account);
+			fund_lite_person_fee(alias_account);
+			let candidate_secret = secret_from_seed(31);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(alias_account).into(),
+					member_from_secret(&candidate_secret),
+					sign_attest_with_secret(&candidate_secret, alias_account),
+					None,
+				),
+				crate::Error::<Test>::AccountInUse
+			);
+			assert_eq!(AccountToAlias::<Test>::get(alias_account), Some(alias));
+			assert!(!LitePeople::<Test>::contains_key(alias_account));
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(alias_account), 100);
+			assert_eq!(
+				pallet_balances::Pallet::<Test>::free_balance(
+					PeopleLitePallet::<Test>::lite_people_pot_id(),
+				),
+				0,
 			);
 		});
 	}
@@ -1254,7 +1315,7 @@ fn set_alias_account_rejects_canonical_lite_account_as_alias_account() {
 		let err = exec_as_lite_alias_with_proof_tx(call, proof, 0)
 			.expect_err("canonical lite account must not enter alias storage");
 
-		assert_eq!(err.unwrap_dispatch().error, crate::Error::<Test>::AccountInUse.into());
+		assert_eq!(err.unwrap_dispatch().error, crate::Error::<Test>::AlreadyRegistered.into());
 		assert!(AccountToAlias::<Test>::get(lite_account).is_none());
 		assert!(AliasToAccount::<Test>::iter().next().is_none());
 	});

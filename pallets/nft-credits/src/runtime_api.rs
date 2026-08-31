@@ -46,12 +46,16 @@ sp_api::decl_runtime_apis! {
 		/// which is what Asset Hub verifies a mint against.
 		///
 		/// Everything comes from chain state, so a caller needs no event history: the proofs carry
-		/// the credit, the leaf, its index, the leaf count, the root and the sibling hashes.
-		/// Empty if the block awarded `claimant` nothing.
+		/// the credit, its leaf index and the sibling hashes. Empty if the block awarded
+		/// `claimant` nothing.
 		///
 		/// Only blocks whose awards are still retained can be served. An older one gives
 		/// `NftClaimCreditProofError::AwardsPruned`, and has to go through
 		/// `nft_claim_credit_proof_from_awards`.
+		///
+		/// One call rebuilds the block's tree once, however many proofs it returns, so the cost is
+		/// bounded by the runtime's `MaxCreditsPerBlock`. A node serves this unmetered, so an
+		/// operator exposing it publicly must rate-limit RPC as for any runtime API.
 		fn nft_claim_credit_proofs(
 			award_block: BlockNumber,
 			claimant: AccountOrPerson<AccountId>,
