@@ -73,7 +73,8 @@ use indiv_support::{
 	weight_budget::OcwWeightBudget,
 };
 use pallet_asset_conversion::{QuotePrice, Swap};
-use sp_core::{blake2_256, H256};
+use sp_core::H256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{
 	traits::{AccountIdConversion, CheckedAdd, CheckedMul, Convert, Zero},
 	ArithmeticError, SaturatedConversion, Saturating,
@@ -2674,6 +2675,13 @@ pub mod pallet {
 			};
 			ensure!(!aliases.is_empty(), Error::<T>::EmptyInputs);
 			ensure!(aliases.len().is_power_of_two(), Error::<T>::InvalidConsolidation);
+			let increment = aliases
+				.len()
+				.trailing_zeros()
+				.try_into()
+				.map_err(|_| Error::<T>::ConsolidationTooBig)?;
+			let new_value = value.checked_add(increment).ok_or(Error::<T>::ConsolidationTooBig)?;
+			ensure!(new_value <= T::MaximumExponent::get(), Error::<T>::ConsolidationTooBig);
 			RecyclerManager::<T>::unload(
 				instance_id,
 				value,
@@ -2684,13 +2692,6 @@ pub mod pallet {
 				&proven_msg,
 			)?;
 			Self::settle_load_deposits(instance_id, aliases.len() as u32);
-			let increment = aliases
-				.len()
-				.trailing_zeros()
-				.try_into()
-				.map_err(|_| Error::<T>::ConsolidationTooBig)?;
-			let new_value = value.checked_add(increment).ok_or(Error::<T>::ConsolidationTooBig)?;
-			ensure!(new_value <= T::MaximumExponent::get(), Error::<T>::ConsolidationTooBig);
 			let input_count = aliases.len() as u32;
 
 			// The destination has no coin, as verified during validation.

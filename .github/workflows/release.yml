@@ -1,0 +1,291 @@
+name: Release
+
+# Manual release of the two paseo runtimes. See RELEASE.md for the process.
+# The given spec version is stamped into the build, the release is tagged
+# v<release-version> and, as the final step, the new spec version is committed
+# back to main (directly, or through a pull request when the branch ruleset
+# rejects the push).
+on:
+  workflow_dispatch:
+    inputs:
+      spec-version:
+        description: >-
+          Runtime spec version of this release, e.g. 3001000. The last 3
+          digits must be zero; they are reserved for nightlies.
+        type: string
+        required: true
+      release-version:
+        description: >-
+          Release version, e.g. 0.3.1. Becomes the tag v<release-version>.
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write # for the bump-main fallback pull request
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: parity-ubuntu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate release inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPEC_VERSION: ${{ inputs.spec-version }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$SPEC_VERSION" =~ ^[0-9]+$ ]] || [ $((SPEC_VERSION % 1000)) -ne 0 ]; then
+            echo "::error::spec-version must be a number whose last 3 digits are zero (they are reserved for nightlies), got '$SPEC_VERSION'"
+            exit 1
+          fi
+
+          if ! [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release-version must look like 0.3.1, got '$RELEASE_VERSION'"
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/v$RELEASE_VERSION" > /dev/null; then
+            echo "::error::tag v$RELEASE_VERSION already exists"
+            exit 1
+          fi
+
+          # Release versions only move forward. Any higher version is fine;
+          # +1 is not required. The first release has no baseline.
+          PREV_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 200 --json tagName --jq '[.[].tagName | select(startswith("v"))] | first // empty')
+          if [ -n "$PREV_TAG" ]; then
+            PREV_VERSION="${PREV_TAG#v}"
+            HIGHEST=$(printf '%s\n%s\n' "$PREV_VERSION" "$RELEASE_VERSION" | sort -V | tail -n1)
+            if [ "$RELEASE_VERSION" = "$PREV_VERSION" ] || [ "$HIGHEST" != "$RELEASE_VERSION" ]; then
+              echo "::error::release-version $RELEASE_VERSION is not above the previous release $PREV_TAG"
+              exit 1
+            fi
+          fi
+
+          # Spec versions only move forward, over nightlies as well. With no
+          # readable release yet (the first release), the committed spec
+          # version is the floor instead.
+          LATEST=$(.github/scripts/latest_release_spec_version.sh)
+          if [ -n "$LATEST" ]; then
+            if [ "$SPEC_VERSION" -le "$LATEST" ]; then
+              echo "::error::spec-version $SPEC_VERSION is not above the newest released spec version $LATEST"
+              exit 1
+            fi
+          else
+            SOURCE=$(grep -hE '^[[:space:]]*spec_version: [0-9][0-9_]*,$' \
+              runtimes/next-people-paseo/src/lib.rs runtimes/next-asset-hub-paseo/src/lib.rs \
+              | grep -oE '[0-9][0-9_]*' | tr -d '_' | sort -u)
+            if [ "$(wc -l <<< "$SOURCE")" -ne 1 ]; then
+              echo "::error::the runtimes disagree on spec_version: $(tr '\n' ' ' <<< "$SOURCE")"
+              exit 1
+            fi
+            if [ "$SPEC_VERSION" -lt "$SOURCE" ]; then
+              echo "::error::spec-version $SPEC_VERSION is below the committed spec version $SOURCE"
+              exit 1
+            fi
+          fi
+
+  build-runtimes:
+    needs: [validate]
+    uses: ./.github/workflows/build-runtimes.yml
+    with:
+      spec-version: ${{ inputs.spec-version }}
+
+  publish-release:
+    runs-on: parity-ubuntu
+    needs: [build-runtimes]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # the initial commit is the PR-diff base of the first release
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -name "*.wasm" -exec cp {} release-assets/ \;
+          find artifacts -name "*_srtool_output.json" -exec cp {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Add runtime info to changelog
+        run: |
+          CONTEXT=$(find artifacts -name '*_srtool_output.json')
+          SRTOOL() { <$(<<<$CONTEXT head -n1) jq -r .$1; }
+          WASM() { <${JSON} jq -r ".runtimes.compressed.subwasm.$1"; }
+
+          # The workspace is pinned to this Polkadot SDK release, enforced by
+          # the psvm check.
+          . .github/env
+
+          tee RELEASE_NOTES.md <<-EOF
+          # Runtime info
+          *These runtimes were built with **$(SRTOOL rustc)** using **[$(SRTOOL gen)](https://github.com/paritytech/srtool)***
+
+          *Compatible with [Polkadot SDK](https://github.com/paritytech/polkadot-sdk) **${POLKADOT_RELEASE_VERSION}${POLKADOT_RELEASE_PATCH}***
+          EOF
+
+          for JSON in $(<<<$CONTEXT sort -sr)
+          do
+          RUNTIME_NAME=$(basename ${JSON} _srtool_output.json)
+          tee -a RELEASE_NOTES.md <<-EOF
+
+          ## ${RUNTIME_NAME}
+          ~~~
+          🏋️ Runtime Size:           $(numfmt --to iec-i --format "%.2f" $(WASM size)) ($(WASM size) bytes)
+          🗜 Compressed:             $(WASM 'compression | if .compressed then "Yes: \(1 - .size_compressed / .size_decompressed | . * 10000 | round / 100)%" else "No" end')
+          🔥 Core Version:           $(WASM 'core_version | "\(.specName)-\(.specVersion) \(.implName)-\(.implVersion).tx\(.transactionVersion).au\(.authoringVersion)"')
+          🎁 Metadata version:       V$(WASM metadata_version)
+          🗳️ Blake2-256 hash:        $(WASM blake2_256)
+          📦 IPFS:                   $(WASM ipfs_hash)
+          ~~~
+          EOF
+          done
+
+          cat RELEASE_NOTES.md
+
+      - name: Check and record spec versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPEC_VERSION: ${{ inputs.spec-version }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          set -euo pipefail
+
+          PREV_SPEC=$(.github/scripts/latest_release_spec_version.sh)
+
+          BUILT=$(find artifacts -name '*_srtool_output.json' -exec \
+            jq -r '.runtimes.compressed.subwasm.core_version.specVersion' {} + | sort -u)
+          if [ "$BUILT" != "$SPEC_VERSION" ]; then
+            echo "::error::built spec version '$(tr '\n' ' ' <<< "$BUILT")' does not match the requested $SPEC_VERSION"
+            exit 1
+          fi
+          if [ -n "$PREV_SPEC" ] && [ "$SPEC_VERSION" -le "$PREV_SPEC" ]; then
+            echo "::error::spec version $SPEC_VERSION is not above the newest released spec version $PREV_SPEC"
+            exit 1
+          fi
+
+          # The `Spec version:` line is machine-read by later releases; keep
+          # its format in sync with latest_release_spec_version.sh.
+          {
+            printf '\nSpec version: %s\n' "$SPEC_VERSION"
+            printf '\n# Spec versions\n\n'
+            printf '| Runtime | previous release | v%s |\n' "$RELEASE_VERSION"
+            printf '|---|---|---|\n'
+            for JSON in $(find artifacts -name '*_srtool_output.json' | sort); do
+              NAME=$(basename "$JSON" _srtool_output.json)
+              printf '| %s | %s | %s |\n' "$NAME" "${PREV_SPEC:-n/a}" \
+                "$(jq -r '.runtimes.compressed.subwasm.core_version.specVersion' "$JSON")"
+            done
+          } >> RELEASE_NOTES.md
+
+      - name: Append PR list to changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # The newest final release is the baseline; nightlies are skipped.
+          # The first release lists every pull request since the initial
+          # commit.
+          PREV_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 200 --json tagName --jq '[.[].tagName | select(startswith("v"))] | first // empty')
+          if [ -n "$PREV_TAG" ]; then
+            PREV="$PREV_TAG"
+            PREV_LABEL="[$PREV](https://github.com/$GITHUB_REPOSITORY/releases/tag/$PREV)"
+          else
+            PREV=$(git rev-list --max-parents=0 HEAD | tail -n1)
+            PREV_LABEL="the initial commit (this is the first release)"
+          fi
+
+          {
+            printf '\n# PRs included\n'
+            printf '\n_Compared to %s._\n\n' "$PREV_LABEL"
+            .github/scripts/release_pr_notes.sh "$PREV" "$GITHUB_SHA"
+          } >> RELEASE_NOTES.md
+
+          cat RELEASE_NOTES.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ inputs.release-version }}
+          target_commitish: ${{ github.sha }}
+          make_latest: "true"
+          # The srtool digests are attached so later releases can read this
+          # one's spec version.
+          files: |
+            release-assets/*.wasm
+            release-assets/*_srtool_output.json
+          body_path: RELEASE_NOTES.md
+
+  bump-main:
+    runs-on: parity-ubuntu
+    needs: [publish-release]
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Commit released spec version to main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPEC_VERSION: ${{ inputs.spec-version }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          set -euo pipefail
+
+          # Underscore-group the digits to match the source style, e.g.
+          # 3001000 -> 3_001_000.
+          n="$SPEC_VERSION"
+          UNDERSCORED=""
+          while [ "${#n}" -gt 3 ]; do
+            UNDERSCORED="_${n: -3}${UNDERSCORED}"
+            n="${n:0:${#n}-3}"
+          done
+          UNDERSCORED="${n}${UNDERSCORED}"
+
+          for f in runtimes/next-people-paseo/src/lib.rs runtimes/next-asset-hub-paseo/src/lib.rs; do
+            sed -i -E "s/^([[:space:]]*spec_version: )[0-9][0-9_]*,$/\1${UNDERSCORED},/" "$f"
+          done
+
+          if git diff --quiet; then
+            echo "main already carries spec_version $UNDERSCORED"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Bump spec_version to $UNDERSCORED after release v$RELEASE_VERSION"
+
+          if git push origin HEAD:main; then
+            echo "pushed the spec_version bump to main"
+            exit 0
+          fi
+
+          # The main ruleset requires pull requests; fall back to one. A PR
+          # opened with the workflow token does not trigger CI, so a
+          # maintainer must close and reopen it (or push to it) before the
+          # required checks can pass.
+          echo "::warning::direct push to main was rejected by the branch ruleset; opening a pull request instead"
+          BRANCH="bump-spec-version-v$RELEASE_VERSION"
+          git push origin "HEAD:refs/heads/$BRANCH"
+          gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main \
+            --title "Bump spec_version to $UNDERSCORED after release v$RELEASE_VERSION" \
+            --label "D2-no audit" \
+            --body "$(printf '## Changes\n\n- Bump `spec_version` to `%s` in both runtimes, matching release v%s.\n\nOpened automatically by the release workflow; close and reopen to trigger CI.' "$UNDERSCORED" "$RELEASE_VERSION")"

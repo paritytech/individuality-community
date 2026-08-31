@@ -1,0 +1,54 @@
+# The last three digits of `spec_version` are reserved for nightly releases,
+# which stamp them at build time, so on every commit they must be zero and the
+# two runtimes must agree. See RELEASE.md.
+name: "Spec version"
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+permissions: {}
+
+# cancel previous runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check spec version
+    runs-on: parity-ubuntu
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check spec_version ends in 000 and matches across runtimes
+        run: |
+          set -euo pipefail
+
+          fail=0
+          specs=""
+          for f in runtimes/next-people-paseo/src/lib.rs runtimes/next-asset-hub-paseo/src/lib.rs; do
+            lines=$(grep -cE '^[[:space:]]*spec_version: [0-9][0-9_]*,$' "$f")
+            if [ "$lines" -ne 1 ]; then
+              echo "::error file=$f::expected exactly one spec_version line, found $lines"
+              fail=1
+              continue
+            fi
+            spec=$(grep -E '^[[:space:]]*spec_version: [0-9][0-9_]*,$' "$f" \
+              | grep -oE '[0-9][0-9_]*' | tr -d '_')
+            specs="$specs $spec"
+            if [ $((spec % 1000)) -ne 0 ]; then
+              echo "::error file=$f::spec_version is $spec; the last 3 digits are reserved for nightly releases and must be zero. See RELEASE.md."
+              fail=1
+            fi
+          done
+
+          if [ "$(tr ' ' '\n' <<< "$specs" | sort -u | grep -c .)" -gt 1 ]; then
+            echo "::error::the runtimes disagree on spec_version ($specs); they move in lockstep. See RELEASE.md."
+            fail=1
+          fi
+
+          exit "$fail"

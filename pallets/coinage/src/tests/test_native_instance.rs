@@ -29,7 +29,7 @@ use frame_support::{
 		Currency,
 	},
 };
-use sp_core::blake2_256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::bounded_vec;
 
 /// The load deposit price used across these tests.
