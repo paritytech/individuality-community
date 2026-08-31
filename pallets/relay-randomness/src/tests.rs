@@ -25,7 +25,9 @@ use cumulus_pallet_parachain_system::OnSystemEvent;
 use cumulus_primitives_core::relay_chain::well_known_keys::{
 	CURRENT_BLOCK_RANDOMNESS, ONE_EPOCH_AGO_RANDOMNESS,
 };
+use frame_support::traits::Randomness as RandomnessT;
 use indiv_support::traits::MomentRandomness;
+use sp_io::hashing::blake2_256;
 
 /// Run the hook on a proof carrying the given randomness values, with the mock relay
 /// parent number set to `relay_parent_number`.
@@ -163,6 +165,40 @@ fn moments_saturate_at_zero_near_genesis() {
 
 		assert_eq!(RelayBlockRandomness::<Test>::randomness(), Some(([1u8; 32], 0)));
 		assert_eq!(RelayOneEpochAgoRandomness::<Test>::randomness(), Some(([2u8; 32], 0)));
+	});
+}
+
+#[test]
+fn random_mixes_subject_and_returns_moment() {
+	new_test_ext().execute_with(|| {
+		process_proof(Some([1u8; 32]), [2u8; 32], 42);
+
+		let (output, moment) =
+			<RelayBlockRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"ctx");
+		assert_eq!(output, blake2_256(&[&b"ctx"[..], &[1u8; 32]].concat()));
+		assert_eq!(moment, 40);
+
+		let (output, moment) =
+			<RelayOneEpochAgoRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"ctx");
+		assert_eq!(output, blake2_256(&[&b"ctx"[..], &[2u8; 32]].concat()));
+		assert_eq!(moment, 39);
+	});
+}
+
+#[test]
+fn random_returns_moment_zero_before_first_observation() {
+	new_test_ext().execute_with(|| {
+		set_relay_parent_number(42);
+
+		let (output, moment) =
+			<RelayBlockRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"ctx");
+		assert_eq!(output, blake2_256(b"ctx"));
+		assert_eq!(moment, 0);
+
+		let (output, moment) =
+			<RelayOneEpochAgoRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"ctx");
+		assert_eq!(output, blake2_256(b"ctx"));
+		assert_eq!(moment, 0);
 	});
 }
 

@@ -45,7 +45,8 @@
 //! So consumers can require randomness produced after a commitment of theirs.
 //!
 //! [`RelayBlockRandomness`] and [`RelayOneEpochAgoRandomness`] expose the stored values
-//! through [`indiv_support::traits::MomentRandomness`].
+//! through [`indiv_support::traits::MomentRandomness`] and
+//! [`frame_support::traits::Randomness`].
 //!
 //! # Example
 //!
@@ -107,10 +108,10 @@ pub use weights::WeightInfo;
 use codec::{Decode, Encode, MaxEncodedLen};
 use cumulus_pallet_parachain_system::RelaychainDataProvider;
 use cumulus_primitives_core::relay_chain;
-use frame_support::traits::Get;
+use frame_support::traits::{Get, Randomness as RandomnessT};
 use indiv_support::traits::MomentRandomness;
 use scale_info::TypeInfo;
-use sp_runtime::traits::BlockNumberProvider;
+use sp_runtime::traits::{BlakeTwo256, BlockNumberProvider, Hash};
 
 /// A relay chain randomness value with the moment it became known to everybody.
 #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, Copy, PartialEq, Eq, Debug)]
@@ -250,6 +251,20 @@ impl<T: Config> MomentRandomness<relay_chain::BlockNumber> for RelayBlockRandomn
 	}
 }
 
+/// [`frame_support::traits::Randomness`] implementation over the relay chain block randomness.
+///
+/// The returned block number is the entry's moment, a relay chain block number.
+/// Before a value is first observed the output is the hash of the subject alone, with block
+/// number zero, so it validates no commitment.
+impl<T: Config, Output: From<[u8; 32]>> RandomnessT<Output, relay_chain::BlockNumber>
+	for RelayBlockRandomness<T>
+{
+	fn random(subject: &[u8]) -> (Output, relay_chain::BlockNumber) {
+		let (output, moment) = mix_subject(subject, Randomness::<T>::get().block);
+		(output.into(), moment)
+	}
+}
+
 /// [`MomentRandomness`] implementation over the relay chain one-epoch-ago randomness.
 ///
 /// It rotates every relay epoch. It is fully determined by the relay chain block preceding
@@ -283,4 +298,35 @@ impl<T: Config> MomentRandomness<relay_chain::BlockNumber> for RelayOneEpochAgoR
 	fn set_current_moment(moment: relay_chain::BlockNumber) {
 		RelaychainDataProvider::<T>::set_block_number(moment);
 	}
+}
+
+/// [`frame_support::traits::Randomness`] implementation over the relay chain one-epoch-ago
+/// randomness.
+///
+/// The returned block number is the entry's moment, a relay chain block number.
+/// Before a value is first observed the output is the hash of the subject alone, with block
+/// number zero, so it validates no commitment.
+impl<T: Config, Output: From<[u8; 32]>> RandomnessT<Output, relay_chain::BlockNumber>
+	for RelayOneEpochAgoRandomness<T>
+{
+	fn random(subject: &[u8]) -> (Output, relay_chain::BlockNumber) {
+		let (output, moment) = mix_subject(subject, Randomness::<T>::get().one_epoch_ago);
+		(output.into(), moment)
+	}
+}
+
+/// Derive a [`RandomnessT::random`] result from a stored entry: the Blake2-256 hash of the
+/// subject followed by the randomness, with the entry's moment.
+///
+/// Without an entry the result is the hash of the subject alone, with moment zero. The
+/// value is predictable, but no commitment can precede relay block zero, so per the
+/// [`RandomnessT`] contract it validates no commitment.
+fn mix_subject(
+	subject: &[u8],
+	entry: Option<RandomnessEntry>,
+) -> ([u8; 32], relay_chain::BlockNumber) {
+	let Some(entry) = entry else { return (BlakeTwo256::hash(subject).0, 0) };
+	let mut data = subject.to_vec();
+	data.extend_from_slice(&entry.randomness);
+	(BlakeTwo256::hash(&data).0, entry.moment)
 }
