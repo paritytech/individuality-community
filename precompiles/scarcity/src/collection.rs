@@ -527,7 +527,7 @@ where
 		)?;
 		env.charge(<<T as pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
 			T::AccountId,
-		>>::on_mint_weight())?;
+		>>::on_purse_occupied_weight())?;
 		// The zero address maps to a real fallback purse; minting there would strand the
 		// instance behind a burn-shaped `Transfer` log.
 		if call.to == Address::ZERO {
@@ -579,13 +579,13 @@ where
 		if caller_account::<T>(env)? != holder {
 			return Err(revert(ERR_NOT_HOLDER));
 		}
-		// `do_transfer_by_holder` has no benchmark of its own, so this charges `force_transfer`'s
-		// weight. `force_transfer` is benchmarked at seven reads and six writes against
-		// `do_transfer_by_holder`'s five and four, so it dominates on count. The two do not touch
-		// the same keys, though: `force_transfer` reads `Instances` and `Collections`, which this
-		// path does not need, and does not read `ItemDefs`, which the transferability check here
-		// does, so the substitution is only approximately conservative on proof size.
-		env.charge(<T as pallet_scarcity::Config>::WeightInfo::force_transfer())?;
+		env.charge(<T as pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
+		// The move registers its destination. `WeightInfo::transfer_by_holder` does not cover that:
+		// the extrinsic adds the same term to its own annotation, and the benchmark runtime wires
+		// no handler.
+		env.charge(<<T as pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+			T::AccountId,
+		>>::on_purse_occupied_weight())?;
 		let to = account_of::<T>(transfer.to);
 		Scarcity::<T>::do_transfer_by_holder(&holder, nft.instance, to)
 			.map_err(revert_scarcity::<T>)?;
@@ -643,12 +643,27 @@ where
 		let (from, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let who = caller_account::<T>(env)?;
 		let to = account_of::<T>(&call.to);
+		let from_address = address_of::<T>(&from);
+		// The pallet rejects a move to the current holder, but it compares accounts and this
+		// call carries an address. `ownerOf` reports an unregistered purse key as a truncated
+		// hash, and resolving that hash back yields the fallback account instead of the key, so
+		// the two accounts differ and the pallet's check passes. The instance would then leave a
+		// holder that asked for nothing under a log naming one address for both ends.
+		if call.to == from_address && to != from {
+			return Err(revert(ERR_SELF_TRANSFER));
+		}
+		// The move registers its destination, which the benchmark does not cover. See
+		// `transfer_from`. Charged past the rejections above so a revert does not pay for a
+		// registration that never happens.
+		env.charge(<<T as pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+			T::AccountId,
+		>>::on_purse_occupied_weight())?;
 		Scarcity::<T>::force_transfer(RawOrigin::Signed(who).into(), nft.instance, to)
 			.map_err(revert_scarcity::<T>)?;
 		deposit_event(
 			env,
 			IScarcityCollection::Transfer {
-				from: address_of::<T>(&from),
+				from: from_address,
 				to: call.to,
 				tokenId: call.tokenId,
 			},
