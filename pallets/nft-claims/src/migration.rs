@@ -61,7 +61,7 @@ pub mod v1 {
 	pub type ClaimedCounts<T: Config> =
 		StorageMap<Pallet<T>, Twox64Concat, AwardBlock, u32, ValueQuery>;
 
-	/// Use [`MigrateV0ToV1`](super::MigrateV0ToV1) rather than this directly.
+	/// Use [`MigrateV0ToV1`] rather than this directly.
 	///
 	/// A tree that had claims against it is marked fully claimed, because the old records key a
 	/// leaf by its hash and the bitmap keys it by its index. The tree holds the root only, so no
