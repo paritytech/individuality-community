@@ -30,8 +30,8 @@ use frame_support::{
 		fungible::{HoldConsideration, Mutate as _},
 		fungibles::{self, Inspect, InspectHold, MutateHold},
 		tokens::Preservation,
-		AsEnsureOriginWithArg, ConstU16, ConstU32, ConstU64, ConstantStoragePrice, Currency,
-		OffchainWorker, UnixTime,
+		AsEnsureOriginWithArg, ConstU32, ConstU64, ConstantStoragePrice, Currency, OffchainWorker,
+		UnixTime,
 	},
 	BoundedVec,
 };
@@ -278,6 +278,12 @@ parameter_types! {
 	/// Monotonic counter used to keep benchmark recycler setups distinct inside one externalities
 	/// context.
 	pub storage MockBatchVerifyCounter: u32 = 0;
+	pub storage MaximumAge: u16 = MAXIMUM_AGE;
+	pub storage UnloadTokenAllowancePerTimePeriodForPeople: u64 =
+		UNLOAD_TOKEN_ALLOWANCE_PER_TIME_PERIOD_FOR_PEOPLE;
+	pub storage UnloadTokenAllowancePerTimePeriodForLitePeople: u64 =
+		UNLOAD_TOKEN_ALLOWANCE_PER_TIME_PERIOD_FOR_LITE_PEOPLE;
+	pub storage MaxFreeUnloadTokensPerTimePeriod: u32 = MAX_FREE_UNLOAD_TOKENS_PER_TIME_PERIOD;
 }
 
 pub struct MockWeightToFee;
@@ -298,7 +304,7 @@ impl crate::Config for Test {
 	type UnixTime = MockTime;
 	type PalletId = CoinagePalletId;
 	type WeightInfo = ();
-	type MaximumAge = ConstU16<MAXIMUM_AGE>;
+	type MaximumAge = MaximumAge;
 	type Fungibles = NativeAndAssets;
 	type NativeFungible = Balances;
 	type AdminOrigin = frame_system::EnsureRoot<u64>;
@@ -312,13 +318,12 @@ impl crate::Config for Test {
 	type MembershipProof = MembershipProof;
 	type MaxSplitOutputs = ConstU32<MAX_SPLIT_OUTPUTS>;
 	type RecyclerExpirationTime = ConstU32<RECYCLER_EXPIRATION_TIME>;
-	type UnloadTokenAllowancePerTimePeriodForPeople =
-		ConstU64<UNLOAD_TOKEN_ALLOWANCE_PER_TIME_PERIOD_FOR_PEOPLE>;
+	type UnloadTokenAllowancePerTimePeriodForPeople = UnloadTokenAllowancePerTimePeriodForPeople;
 	type UnloadTokenTimePeriodPeopleLitePeople =
 		ConstU32<UNLOAD_TOKEN_TIME_PERIOD_PEOPLE_LITE_PEOPLE>;
 	type UnloadTokenAllowancePerTimePeriodForLitePeople =
-		ConstU64<UNLOAD_TOKEN_ALLOWANCE_PER_TIME_PERIOD_FOR_LITE_PEOPLE>;
-	type MaxFreeUnloadTokensPerTimePeriod = ConstU32<MAX_FREE_UNLOAD_TOKENS_PER_TIME_PERIOD>;
+		UnloadTokenAllowancePerTimePeriodForLitePeople;
+	type MaxFreeUnloadTokensPerTimePeriod = MaxFreeUnloadTokensPerTimePeriod;
 	type MaxConsolidation = ConstU32<MAX_CONSOLIDATION>;
 	type MaxBatchUnpaidLoad = ConstU32<MAX_BATCH_UNPAID_LOAD>;
 	type PaidUnloadTokenRingExpirationTime = ConstU32<PAID_UNLOAD_TOKEN_RING_EXPIRATION_TIME>;

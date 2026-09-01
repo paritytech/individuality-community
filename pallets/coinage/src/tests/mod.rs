@@ -29,6 +29,7 @@ mod test_coinage_paid_full_story;
 mod test_create_sufficient_instance;
 mod test_direct_offboard_coin_into_external_asset;
 mod test_dusting;
+mod test_dynamic_parameters;
 mod test_extension;
 mod test_free_unload_token_lifecycle;
 mod test_infallible_unpaid_ext;
