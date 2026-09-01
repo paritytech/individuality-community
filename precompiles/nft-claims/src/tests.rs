@@ -17,7 +17,8 @@
 use super::*;
 use crate::mock::*;
 
-use indiv_pallet_nft_claims::CollectionMinter;
+use indiv_pallet_nft_claims::{CollectionMinter, WeightInfo};
+use indiv_precompile_support::PROOF_SIZE_PER_READ;
 use pallet_revive::{
 	precompiles::{
 		alloy::sol_types::{Revert, SolCall, SolError, SolInterface},
@@ -28,18 +29,23 @@ use pallet_revive::{
 };
 use sp_runtime::AccountId32;
 
-/// Call the minter precompile with `input` and return the raw execution result.
-fn call_precompile(caller: &AccountId32, input: Vec<u8>) -> pallet_revive::ExecReturnValue {
-	pallet_revive::Pallet::<Test>::bare_call(
+/// Call the minter precompile with `input` and return the weight the call consumed alongside the
+/// raw execution result.
+fn call_weighed(caller: &AccountId32, input: Vec<u8>) -> (Weight, pallet_revive::ExecReturnValue) {
+	let outcome = pallet_revive::Pallet::<Test>::bare_call(
 		RuntimeOrigin::signed(caller.clone()),
 		minter_address(),
 		0u32.into(),
 		TransactionLimits::WeightAndDeposit { weight_limit: Weight::MAX, deposit_limit: u64::MAX },
 		input,
 		&ExecConfig::new_substrate_tx(),
-	)
-	.result
-	.expect("precompile call should execute")
+	);
+	(outcome.weight_consumed, outcome.result.expect("precompile call should execute"))
+}
+
+/// Call the minter precompile with `input` and return the raw execution result.
+fn call_precompile(caller: &AccountId32, input: Vec<u8>) -> pallet_revive::ExecReturnValue {
+	call_weighed(caller, input).1
 }
 
 /// Call the minter precompile with `input`, attaching `value`, and return the raw execution
@@ -96,6 +102,18 @@ fn read_minter(collection: CollectionId) -> INftClaimsMinter::collectionMinterRe
 	map_account(&reader);
 	let data = call_ok(&reader, INftClaimsMinter::collectionMinterCall { collection }.abi_encode());
 	INftClaimsMinter::collectionMinterCall::abi_decode_returns(&data).unwrap()
+}
+
+/// Every state-changing minter call, encoded for the precompile. The owner-gate and
+/// unknown-collection tests both reject the whole set, so they share this to stay in step when a
+/// call is added.
+fn mutating_minter_calls(collection: CollectionId) -> [Vec<u8>; 3] {
+	[
+		INftClaimsMinter::setRandomMinterCall { collection }.abi_encode(),
+		INftClaimsMinter::setContractMinterCall { collection, minter: H160([0xCC; 20]).0.into() }
+			.abi_encode(),
+		INftClaimsMinter::clearMinterCall { collection }.abi_encode(),
+	]
 }
 
 #[test]
@@ -193,15 +211,7 @@ fn non_owner_cannot_register_or_withdraw() {
 		let collection = setup_collection(&alice);
 		map_account(&bob);
 
-		for input in [
-			INftClaimsMinter::setRandomMinterCall { collection }.abi_encode(),
-			INftClaimsMinter::setContractMinterCall {
-				collection,
-				minter: H160([0xCC; 20]).0.into(),
-			}
-			.abi_encode(),
-			INftClaimsMinter::clearMinterCall { collection }.abi_encode(),
-		] {
+		for input in mutating_minter_calls(collection) {
 			call_reverted_with(&bob, input, "caller is not the collection owner");
 		}
 		assert_eq!(CollectionMinters::<Test>::get(collection), None);
@@ -213,12 +223,12 @@ fn unknown_collection_reverts() {
 	new_test_ext().execute_with(|| {
 		let alice = id_to_account(1);
 		map_account(&alice);
+		let unknown = 7;
 
-		call_reverted_with(
-			&alice,
-			INftClaimsMinter::setRandomMinterCall { collection: 7 }.abi_encode(),
-			"unknown collection",
-		);
+		for input in mutating_minter_calls(unknown) {
+			call_reverted_with(&alice, input, "unknown collection");
+		}
+		assert_eq!(CollectionMinters::<Test>::get(unknown), None);
 	});
 }
 
@@ -242,6 +252,45 @@ fn rejected_contract_selection_reverts() {
 
 		// The selector only checks contract selections, so random registration still works.
 		call_ok(&alice, INftClaimsMinter::setRandomMinterCall { collection }.abi_encode());
+	});
+}
+
+/// Both branches charge before they act, so the frame consumes at least what each one declares.
+///
+/// The mutator charges the pallet's `set_collection_minter` weight and the read one database
+/// read. Dropping either charge leaves the work in place and the test is what notices, since a
+/// frame that charges nothing still returns the right answer.
+#[test]
+fn each_method_charges_its_weight() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+
+		let (mutating, output) =
+			call_weighed(&alice, INftClaimsMinter::setRandomMinterCall { collection }.abi_encode());
+		assert!(!output.did_revert(), "expected success, got revert: {output:?}");
+		let declared =
+			<Test as indiv_pallet_nft_claims::Config>::WeightInfo::set_collection_minter();
+		assert!(
+			mutating.all_gte(declared),
+			"the mutator consumed {mutating:?}, less than the {declared:?} it charges"
+		);
+
+		let (read, output) = call_weighed(
+			&alice,
+			INftClaimsMinter::collectionMinterCall { collection }.abi_encode(),
+		);
+		assert!(!output.did_revert(), "expected success, got revert: {output:?}");
+		// `DbWeight` is zero in this mock, so a read shows up in the proof size alone.
+		assert!(
+			read.proof_size() >= PROOF_SIZE_PER_READ,
+			"the read consumed {read:?}, less than the one database read it charges"
+		);
+		// The read reaches no pallet call, which the mutator's execution time covers.
+		assert!(
+			read.ref_time() < mutating.ref_time(),
+			"the read consumed {read:?}, no less than the mutator's {mutating:?}"
+		);
 	});
 }
 

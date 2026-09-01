@@ -23,7 +23,8 @@ pragma solidity ^0.8.30;
 /// single item choice.
 /// @custom:security-contact admin@parity.io
 contract ClaimsMinter {
-    /// @notice The number of items the managed collection defines.
+    /// @notice The number of items this contract assumes its collection defines. It defines none
+    /// itself, and no test routes a claim through `mint`, so any non-zero value serves.
     uint32 private constant ITEM_COUNT = 4;
 
     /// @notice Pick the item to mint for a claim, ignoring which collection it targets.
