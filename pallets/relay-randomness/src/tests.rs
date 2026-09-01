@@ -186,6 +186,24 @@ fn random_mixes_subject_and_returns_moment() {
 }
 
 #[test]
+fn random_diverges_on_subject() {
+	new_test_ext().execute_with(|| {
+		process_proof(Some([1u8; 32]), [2u8; 32], 42);
+
+		let (ctx, _) = <RelayBlockRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"ctx");
+		let (other, _) =
+			<RelayBlockRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"other");
+		assert_ne!(ctx, other);
+
+		let (ctx, _) =
+			<RelayOneEpochAgoRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"ctx");
+		let (other, _) =
+			<RelayOneEpochAgoRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"other");
+		assert_ne!(ctx, other);
+	});
+}
+
+#[test]
 fn random_returns_moment_zero_before_first_observation() {
 	new_test_ext().execute_with(|| {
 		set_relay_parent_number(42);

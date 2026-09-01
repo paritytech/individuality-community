@@ -105,6 +105,7 @@ mod tests;
 pub use pallet::*;
 pub use weights::WeightInfo;
 
+use alloc::vec::Vec;
 use codec::{Decode, Encode, MaxEncodedLen};
 use cumulus_pallet_parachain_system::RelaychainDataProvider;
 use cumulus_primitives_core::relay_chain;
@@ -326,7 +327,8 @@ fn mix_subject(
 	entry: Option<RandomnessEntry>,
 ) -> ([u8; 32], relay_chain::BlockNumber) {
 	let Some(entry) = entry else { return (BlakeTwo256::hash(subject).0, 0) };
-	let mut data = subject.to_vec();
+	let mut data = Vec::with_capacity(subject.len() + entry.randomness.len());
+	data.extend_from_slice(subject);
 	data.extend_from_slice(&entry.randomness);
 	(BlakeTwo256::hash(&data).0, entry.moment)
 }
