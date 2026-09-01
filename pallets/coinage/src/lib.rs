@@ -1158,6 +1158,8 @@ pub mod pallet {
 		/// The maximum age a coin can have before it must be recycled.
 		///
 		/// At maximum age, the coin can no longer be transferred or split.
+		///
+		/// This parameter can be changed at any time.
 		type MaximumAge: Get<u16>;
 
 		/// The time period duration for unload tokens, in seconds.
@@ -1172,7 +1174,8 @@ pub mod pallet {
 		///
 		/// Use pallet view to fetch the corresponding number of unload tokens given the current
 		/// price for unload tokens.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type UnloadTokenAllowancePerTimePeriodForPeople: Get<NativeBalanceOf<Self>>;
 
 		/// The allowance of unload tokens that a lite person can use per time period, expressed in
@@ -1180,14 +1183,16 @@ pub mod pallet {
 		///
 		/// Use pallet's get_free_unload_token_info() to fetch the corresponding number of unload
 		/// tokens given the current price for unload tokens.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type UnloadTokenAllowancePerTimePeriodForLitePeople: Get<NativeBalanceOf<Self>>;
 
 		/// Hard upper bound on the number of free unload tokens per time period.
 		///
 		/// The effective free token limit is:
 		/// `min(allowance / current_fee, MaxFreeUnloadTokensPerTimePeriod)`.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type MaxFreeUnloadTokensPerTimePeriod: Get<u32>;
 
 		/// The expiration time for a recycler ring, in seconds, after it is full.
@@ -1684,6 +1689,27 @@ pub mod pallet {
 				Self::free_unload_token_limit_for_people(),
 				Self::free_unload_token_limit_for_lite_people(),
 			)
+		}
+
+		/// Returns the current value of [`Config::MaximumAge`].
+		pub fn get_maximum_age() -> u16 {
+			T::MaximumAge::get()
+		}
+
+		/// Returns the current value of [`Config::UnloadTokenAllowancePerTimePeriodForPeople`].
+		pub fn get_unload_token_allowance_per_time_period_for_people() -> NativeBalanceOf<T> {
+			T::UnloadTokenAllowancePerTimePeriodForPeople::get()
+		}
+
+		/// Returns the current value of
+		/// [`Config::UnloadTokenAllowancePerTimePeriodForLitePeople`].
+		pub fn get_unload_token_allowance_per_time_period_for_lite_people() -> NativeBalanceOf<T> {
+			T::UnloadTokenAllowancePerTimePeriodForLitePeople::get()
+		}
+
+		/// Returns the current value of [`Config::MaxFreeUnloadTokensPerTimePeriod`].
+		pub fn get_max_free_unload_tokens_per_time_period() -> u32 {
+			T::MaxFreeUnloadTokensPerTimePeriod::get()
 		}
 
 		/// Get the ring status for a recycler at a given ring index.
