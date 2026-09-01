@@ -100,7 +100,8 @@ pub trait WeightInfo {
 	fn unload_archived_recycler_into_external_asset_fee_fail() -> Weight;
 	fn unload_recyclers_into_external_asset_non_anonymous_3_8(n: u32, ) -> Weight;
 	fn unload_recyclers_into_external_asset_non_anonymous_9_max(n: u32, ) -> Weight;
-	fn unload_archived_recycler_into_external_asset() -> Weight;
+	fn unload_archived_recycler_into_external_asset_fee_native() -> Weight;
+	fn unload_archived_recycler_into_external_asset_fee_external_asset() -> Weight;
 	fn unload_recycler_into_coins_from_output_1_2(a: u32, d: u32, ) -> Weight;
 	fn unload_recycler_into_coins_from_output_3_8(a: u32, d: u32, ) -> Weight;
 	fn unload_recycler_into_coins_from_output_9_max(a: u32, d: u32, ) -> Weight;
@@ -1545,6 +1546,29 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 3667).saturating_mul(n.into()))
 	}
+	/// Storage: `System::Account` (r:3 w:3)
+	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `Coinage::Instances` (r:1 w:0)
+	/// Proof: `Coinage::Instances` (`max_values`: None, `max_size`: Some(1926), added: 4401, mode: `MaxEncodedLen`)
+	/// Storage: `Coinage::RecyclersArchives` (r:1 w:1)
+	/// Proof: `Coinage::RecyclersArchives` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
+	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
+	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(901), added: 3376, mode: `MaxEncodedLen`)
+	/// Storage: `AssetsHolder::BalancesOnHold` (r:1 w:1)
+	/// Proof: `AssetsHolder::BalancesOnHold` (`max_values`: None, `max_size`: Some(682), added: 3157, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Asset` (r:1 w:1)
+	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(808), added: 3283, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Account` (r:1 w:1)
+	/// Proof: `Assets::Account` (`max_values`: None, `max_size`: Some(732), added: 3207, mode: `MaxEncodedLen`)
+	fn unload_archived_recycler_into_external_asset_fee_native() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1360`
+		//  Estimated: `8799`
+		// Minimum execution time: 18_163_605_000 picoseconds.
+		Weight::from_parts(18_384_836_000, 8799)
+			.saturating_add(T::DbWeight::get().reads(9_u64))
+			.saturating_add(T::DbWeight::get().writes(8_u64))
+	}
 	/// Storage: `Coinage::Instances` (r:1 w:0)
 	/// Proof: `Coinage::Instances` (`max_values`: None, `max_size`: Some(1926), added: 4401, mode: `MaxEncodedLen`)
 	/// Storage: `Assets::Asset` (r:1 w:1)
@@ -1559,7 +1583,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	/// Proof: `Coinage::RecyclersArchives` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(901), added: 3376, mode: `MaxEncodedLen`)
-	fn unload_archived_recycler_into_external_asset() -> Weight {
+	fn unload_archived_recycler_into_external_asset_fee_external_asset() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1506`
 		//  Estimated: `10611`
@@ -3734,6 +3758,29 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 3667).saturating_mul(n.into()))
 	}
+	/// Storage: `System::Account` (r:3 w:3)
+	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `Coinage::Instances` (r:1 w:0)
+	/// Proof: `Coinage::Instances` (`max_values`: None, `max_size`: Some(1926), added: 4401, mode: `MaxEncodedLen`)
+	/// Storage: `Coinage::RecyclersArchives` (r:1 w:1)
+	/// Proof: `Coinage::RecyclersArchives` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
+	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
+	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(901), added: 3376, mode: `MaxEncodedLen`)
+	/// Storage: `AssetsHolder::BalancesOnHold` (r:1 w:1)
+	/// Proof: `AssetsHolder::BalancesOnHold` (`max_values`: None, `max_size`: Some(682), added: 3157, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Asset` (r:1 w:1)
+	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(808), added: 3283, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Account` (r:1 w:1)
+	/// Proof: `Assets::Account` (`max_values`: None, `max_size`: Some(732), added: 3207, mode: `MaxEncodedLen`)
+	fn unload_archived_recycler_into_external_asset_fee_native() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1360`
+		//  Estimated: `8799`
+		// Minimum execution time: 18_163_605_000 picoseconds.
+		Weight::from_parts(18_384_836_000, 8799)
+			.saturating_add(RocksDbWeight::get().reads(9_u64))
+			.saturating_add(RocksDbWeight::get().writes(8_u64))
+	}
 	/// Storage: `Coinage::Instances` (r:1 w:0)
 	/// Proof: `Coinage::Instances` (`max_values`: None, `max_size`: Some(1926), added: 4401, mode: `MaxEncodedLen`)
 	/// Storage: `Assets::Asset` (r:1 w:1)
@@ -3748,7 +3795,7 @@ impl WeightInfo for () {
 	/// Proof: `Coinage::RecyclersArchives` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(901), added: 3376, mode: `MaxEncodedLen`)
-	fn unload_archived_recycler_into_external_asset() -> Weight {
+	fn unload_archived_recycler_into_external_asset_fee_external_asset() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1506`
 		//  Estimated: `10611`

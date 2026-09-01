@@ -2757,19 +2757,42 @@ mod benches {
 		Ok(())
 	}
 
-	/// Worst-case notes:
-	/// - Ring at full capacity; unloaded trie holds all members but one (the max for a ring);
-	///   `dest` is a fresh account (asset-account creation); `ExternalAsset` is the heavier fee
-	///   branch. Ring-VRF validation is constant-cost and invalid proofs cost no more than the
-	///   valid one benchmarked here. The trie traversal is hash-addressed from the committed root,
-	///   so its depth cannot be inflated beyond the real trie's.
-	/// - `into_memory_db` hashes every supplied proof node before validation and tolerates
-	///   extraneous nodes, so an accepted proof can be padded up to `MAX_TRIE_PROOF_NODES` x
-	///   `MAX_TRIE_NODE_LEN`. The measured block therefore dispatches with the honest proof and
-	///   then builds a proof db padded to those bounds, so the weight upper-bounds that hashing for
-	///   any accepted proof.
-	#[benchmark]
-	fn unload_archived_recycler_into_external_asset() -> Result<(), BenchmarkError> {
+	/// A trie proof padded to the bounds a dispatch accepts.
+	///
+	/// `into_memory_db` hashes every supplied node before validation and tolerates extraneous
+	/// nodes, so an accepted proof can carry `MAX_TRIE_PROOF_NODES` nodes of `MAX_TRIE_NODE_LEN`
+	/// bytes. Hashing one upper-bounds that cost for any accepted proof.
+	fn worst_case_trie_proof() -> Vec<Vec<u8>> {
+		(0..crate::MAX_TRIE_PROOF_NODES)
+			.map(|i| {
+				let mut node = alloc::vec![0u8; crate::MAX_TRIE_NODE_LEN as usize];
+				node[..4].copy_from_slice(&i.to_le_bytes());
+				node
+			})
+			.collect::<Vec<_>>()
+	}
+
+	/// An archived recycler ring and the arguments that recover one coin from it.
+	struct ArchivedRecyclerUnload<T: Config> {
+		value: Denomination,
+		index: RingIndex,
+		recycler_root: MembersOf<T>,
+		unloaded_root: H256,
+		alias_proof: ProofOf<T>,
+		non_inclusion_proof: crate::testing_utils::BoundedTrieProof,
+		caller: T::AccountId,
+		dest: T::AccountId,
+		/// The asset amount `dest` receives. The pallet account is funded with it.
+		asset_amount: FungiblesBalanceOf<T>,
+		/// The archive's recoverable count before the unload.
+		member_count: u32,
+	}
+
+	/// Archive a full-capacity ring with every member but one already unloaded, and build the
+	/// proofs that recover the remaining one.
+	///
+	/// The signer's fee is not funded here, it differs per [`FeeCurrency`].
+	fn setup_archived_recycler_unload<T: Config>() -> ArchivedRecyclerUnload<T> {
 		common_setup::<T>();
 
 		let value = T::MinimumExponent::get();
@@ -2797,7 +2820,7 @@ mod benches {
 		// the insert path is recorded rather than a plain lookup proof).
 		let (unloaded_root, proof_nodes) =
 			crate::testing_utils::unloaded_root_and_non_inclusion_proof(&unloaded, &alias);
-		let bounded_proof = crate::testing_utils::to_bounded_proof(proof_nodes);
+		let non_inclusion_proof = crate::testing_utils::to_bounded_proof(proof_nodes);
 
 		// Archive the ring with all members recoverable.
 		let commitment = archive_commitment(unloaded_root, &recycler_root);
@@ -2807,28 +2830,58 @@ mod benches {
 			ArchivedRecycler { commitment, remaining: member_count },
 		);
 
-		// Back the recoverable value and fund the fee (paid in the external asset).
+		// Back the recoverable value.
 		let asset_amount = Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value)
 			.expect("denomination should be in range");
 		fund_pallet_account::<T>(asset_amount);
+
+		ArchivedRecyclerUnload {
+			value,
+			index,
+			recycler_root,
+			unloaded_root,
+			alias_proof,
+			non_inclusion_proof,
+			caller,
+			dest,
+			asset_amount,
+			member_count,
+		}
+	}
+
+	/// Worst-case notes, shared with `unload_archived_recycler_into_external_asset_fee_native`:
+	/// - Ring at full capacity; unloaded trie holds all members but one (the max for a ring);
+	///   `dest` is a fresh account (asset-account creation). Ring-VRF validation is constant-cost
+	///   and invalid proofs cost no more than the valid one benchmarked here. The trie traversal is
+	///   hash-addressed from the committed root, so its depth cannot be inflated beyond the real
+	///   trie's.
+	/// - The measured block dispatches with the honest proof and then hashes a padded one, see
+	///   `worst_case_trie_proof`.
+	///
+	/// This is the heavier fee branch: it quotes the asset and converts it into the native fee.
+	#[benchmark]
+	fn unload_archived_recycler_into_external_asset_fee_external_asset(
+	) -> Result<(), BenchmarkError> {
+		let ArchivedRecyclerUnload {
+			value,
+			index,
+			recycler_root,
+			unloaded_root,
+			alias_proof,
+			non_inclusion_proof,
+			caller,
+			dest,
+			asset_amount,
+			member_count,
+		} = setup_archived_recycler_unload::<T>();
+
 		let fee = Pallet::<T>::quote_paid_unload_token_fee_in_asset(INSTANCE_ID).expect("fee");
 		T::BenchmarkHelper::fund_account(&caller, fee.saturating_mul(2u32.into()));
 		T::BenchmarkHelper::fund_account(&T::FeeDestination::get(), fee);
 
-		// The dispatch above uses the honest few-node proof, but it accepts (and hashes, via
-		// `into_memory_db`) a proof padded to its bounds. Reproduce that maximal hashing here so
-		// the measured weight upper-bounds any accepted proof: `MAX_TRIE_PROOF_NODES` distinct
-		// nodes of `MAX_TRIE_NODE_LEN` bytes each.
-		let worst_case_proof: Vec<Vec<u8>> = (0..crate::MAX_TRIE_PROOF_NODES)
-			.map(|i| {
-				let mut node = alloc::vec![0u8; crate::MAX_TRIE_NODE_LEN as usize];
-				node[..4].copy_from_slice(&i.to_le_bytes());
-				node
-			})
-			.collect();
-
 		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
 			.expect("fee conversion is set up by `common_setup`");
+		let worst_case_proof = worst_case_trie_proof();
 
 		#[block]
 		{
@@ -2840,10 +2893,75 @@ mod benches {
 				recycler_root,
 				unloaded_root,
 				alias_proof,
-				bounded_proof,
+				non_inclusion_proof,
 				dest.clone(),
 				FeeCurrency::ExternalAsset,
 				max_fee,
+			)?;
+
+			// additionally benchmark the worst-case proof hashing.
+			let db = sp_trie::StorageProof::new(worst_case_proof)
+				.into_memory_db::<sp_runtime::traits::BlakeTwo256>();
+			core::hint::black_box(&db);
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), asset_amount);
+		assert_eq!(
+			RecyclersArchives::<T>::get((INSTANCE_ID, value, index))
+				.expect("still archived")
+				.remaining,
+			member_count - 1,
+		);
+
+		Ok(())
+	}
+
+	/// The [`FeeCurrency::Native`] branch of
+	/// [`Pallet::unload_archived_recycler_into_external_asset`].
+	///
+	/// Worst-case notes match `unload_archived_recycler_into_external_asset_fee_external_asset`.
+	/// This branch charges the native fee directly, so it skips the asset quote and the
+	/// asset-to-native conversion.
+	#[benchmark]
+	fn unload_archived_recycler_into_external_asset_fee_native() -> Result<(), BenchmarkError> {
+		let ArchivedRecyclerUnload {
+			value,
+			index,
+			recycler_root,
+			unloaded_root,
+			alias_proof,
+			non_inclusion_proof,
+			caller,
+			dest,
+			asset_amount,
+			member_count,
+		} = setup_archived_recycler_unload::<T>();
+
+		// The signer keeps the existential deposit on top of the fee, because the transfer
+		// preserves its account.
+		let fee_native = Pallet::<T>::paid_unload_token_fees_in_native(1);
+		let ed = T::NativeFungible::minimum_balance();
+		T::NativeFungible::mint_into(&caller, fee_native.saturating_add(ed))
+			.expect("should mint native");
+		T::NativeFungible::mint_into(&T::FeeDestination::get(), ed)
+			.expect("should mint to fee destination");
+
+		let worst_case_proof = worst_case_trie_proof();
+
+		#[block]
+		{
+			Pallet::<T>::unload_archived_recycler_into_external_asset(
+				frame_system::RawOrigin::Signed(caller).into(),
+				INSTANCE_ID,
+				value,
+				index,
+				recycler_root,
+				unloaded_root,
+				alias_proof,
+				non_inclusion_proof,
+				dest.clone(),
+				FeeCurrency::Native,
+				fee_native,
 			)?;
 
 			// additionally benchmark the worst-case proof hashing.
