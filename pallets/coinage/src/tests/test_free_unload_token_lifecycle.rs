@@ -31,7 +31,7 @@ use verifiable::GenerateVerifiable;
 
 /// Type of free unload token (people or lite people).
 #[derive(Clone, Copy)]
-enum FreeTokenType {
+pub(super) enum FreeTokenType {
 	People,
 	LitePeople,
 }
@@ -45,7 +45,7 @@ enum FreeTokenType {
 ///
 /// Each free unload token is identified by the tuple `(period, counter)`
 /// and cannot be reused.
-fn build_unload_free_token_ext(
+pub(super) fn build_unload_free_token_ext(
 	call: RuntimeCall,
 	period: u32,
 	counter: u32,
@@ -105,7 +105,7 @@ fn build_unload_free_token_ext(
 }
 
 /// Helper to validate whether a free unload token counter is accepted for a token type.
-fn test_free_unload_counter_validity(
+pub(super) fn test_free_unload_counter_validity(
 	token_type: FreeTokenType,
 	value: Denomination,
 	current_period: u32,
