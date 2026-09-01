@@ -997,7 +997,14 @@ impl indiv_pallet_airdrop::benchmarking::BenchmarkHelper<Runtime> for AirdropBen
 impl indiv_pallet_people_airdrops::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people_airdrops::WeightInfo<Runtime>;
 	type Suffix = NetworkSuffix;
-	type EnsurePerson = indiv_pallet_people::EnsurePersonalAliasInContext<Runtime>;
+	// Draws are open to every proven person, whichever tier: a full person's alias and a lite
+	// person's alias both resolve in the airdrops context. The two collections use distinct
+	// member keys, so their aliases are disjoint; a person holding both identities registers as
+	// two independent aliases, which is inherent to the two-tier design.
+	type EnsurePerson = frame_support::traits::EitherOf<
+		indiv_pallet_people::EnsurePersonalAliasInContext<Runtime>,
+		indiv_pallet_people_lite::EnsureLiteAliasInContext<Runtime>,
+	>;
 	type AirdropAssetId = <Runtime as pallet_assets::Config>::AssetId;
 	type AirdropAssetBalance = Balance;
 	type Airdrop = Airdrop;
@@ -1226,12 +1233,17 @@ parameter_types! {
 }
 
 // The contexts in which lite people may set up account aliases. The pallet's own authentication
-// context, and the score context, in which a lite person can designate an account to play the game.
+// context, the score context, in which a lite person can designate an account to play the game,
+// and the people-airdrops context, in which a lite person can designate an account to register
+// for and claim airdrop draws. Every context accepted by a pallet whose `EnsurePerson` admits
+// lite aliases needs an entry here, otherwise no account can be bound to a lite alias in that
+// context and the lite side of the person origin is unreachable.
 pub struct LitePeopleAccountContexts;
 impl frame_support::traits::Contains<Context> for LitePeopleAccountContexts {
 	fn contains(l: &Context) -> bool {
 		l == &indiv_pallet_people_lite::Pallet::<Runtime>::auth_context() ||
-			l == &indiv_pallet_score::Pallet::<Runtime>::score_context()
+			l == &indiv_pallet_score::Pallet::<Runtime>::score_context() ||
+			l == &indiv_pallet_people_airdrops::Pallet::<Runtime>::people_airdrops_context()
 	}
 }
 

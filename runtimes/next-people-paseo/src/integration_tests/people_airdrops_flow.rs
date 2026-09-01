@@ -83,6 +83,40 @@ fn bind_alias_account(secret: &VrfSecret, context: Context, account: &sr25519::P
 	exec_as_alias_with_proof(secret, context, set_alias.into());
 }
 
+/// Bind `account` to the lite person's alias in `context`, the lite-tier counterpart of
+/// [`bind_alias_account`].
+fn bind_lite_alias_account(secret: &VrfSecret, context: Context, account: &sr25519::Pair) {
+	let set_alias = indiv_pallet_people_lite::Call::<Runtime>::set_alias_account {
+		account: pair_to_account_id(account),
+		valid_at_block: frame_system::Pallet::<Runtime>::block_number(),
+	};
+	let uxt = build_as_lite_alias_with_proof_ext(secret, context, set_alias.into());
+	Executive::apply_extrinsic(uxt)
+		.expect("the lite alias setup transaction is valid")
+		.expect("the lite alias setup dispatch succeeds");
+}
+
+/// Build a transaction dispatching `call` from the lite alias the account `who` is bound to,
+/// authenticated by `who`'s signature and nonce.
+fn build_as_lite_alias_with_account_ext(
+	who: &sr25519::Pair,
+	call: RuntimeCall,
+) -> UncheckedExtrinsic {
+	build_people_lite_auth_ext(
+		who,
+		indiv_pallet_people_lite::PeopleLiteAuthData::AsLiteAliasWithAccount,
+		call,
+	)
+}
+
+/// Dispatch `call` from the lite alias the account `who` is bound to, expecting success.
+fn exec_as_lite_alias_with_account(who: &sr25519::Pair, call: RuntimeCall) {
+	let uxt = build_as_lite_alias_with_account_ext(who, call);
+	Executive::apply_extrinsic(uxt)
+		.expect("the lite alias transaction is valid")
+		.expect("the lite alias dispatch succeeds");
+}
+
 /// Enable the external asset for airdrops and fund the people-airdrops prize source with
 /// `draws * MAX_WINNERS` prizes. `enable_asset` also debits the asset's minimum balance from
 /// the source to seed the pot's asset account.
@@ -168,6 +202,89 @@ fn person_registers_and_claims_a_draw() {
 
 		assert_eq!(FungibleExternalAsset::balance(&destination), AIRDROP_PRIZE_PER_WINNER);
 		assert!(!indiv_pallet_airdrop::Winners::<Runtime>::contains_key(event_id, &entry));
+	});
+}
+
+/// A lite person registers for a draw through their airdrop alias account and claims the prize,
+/// the same journey as a full person: draws are open to every proven person, whichever tier.
+#[test]
+fn lite_person_registers_and_claims_a_draw() {
+	new_test_ext().execute_with(|| {
+		let lite_pair = sr25519::Pair::from_seed(&[30u8; 32]);
+		let lite_secret = register_lite_person_for_integration(&lite_pair);
+		// The lite helper onboards and builds the ring synchronously, so no block has executed
+		// yet and the relay randomness that salts a scheduled draw is still empty.
+		advance_block();
+		let alias_account_pair = sr25519::Pair::from_seed(&[31u8; 32]);
+		bind_lite_alias_account(&lite_secret, people_airdrops_context(), &alias_account_pair);
+
+		setup_people_airdrops_prize_asset(1);
+		let event_id = schedule_one_draw();
+		drive_airdrop_to_registering(event_id);
+
+		let register = indiv_pallet_people_airdrops::Call::<Runtime>::register {
+			event_ids: vec![event_id].try_into().expect("one draw fits the batch"),
+		};
+		exec_as_lite_alias_with_account(&alias_account_pair, register.into());
+
+		let alias = Crypto::alias_in_context(&lite_secret, &people_airdrops_context()[..])
+			.expect("the lite person can derive their airdrop alias");
+		let entry = RegistrationEntry::Alias { alias };
+		let slot = indiv_pallet_people_airdrops::Pallet::<Runtime>::slot_for(
+			&event_id,
+			&indiv_pallet_people_airdrops::DrawSalts::<Runtime>::get(event_id)
+				.expect("a scheduled draw has a salt")
+				.0,
+			&alias,
+		);
+		assert_eq!(
+			indiv_pallet_airdrop::Registrations::<Runtime>::get(event_id, slot),
+			Some(entry.clone())
+		);
+
+		drive_airdrop_to_claiming(event_id);
+		assert!(indiv_pallet_airdrop::Winners::<Runtime>::contains_key(event_id, &entry));
+
+		// The prize goes to an account with no personhood and no alias binding.
+		let destination = Sr25519Keyring::Charlie.to_account_id();
+		assert_eq!(FungibleExternalAsset::balance(&destination), 0);
+		let claim = indiv_pallet_people_airdrops::Call::<Runtime>::claim {
+			event_id,
+			destination: destination.clone(),
+		};
+		exec_as_lite_alias_with_account(&alias_account_pair, claim.into());
+
+		assert_eq!(FungibleExternalAsset::balance(&destination), AIRDROP_PRIZE_PER_WINNER);
+		assert!(!indiv_pallet_airdrop::Winners::<Runtime>::contains_key(event_id, &entry));
+	});
+}
+
+/// A lite alias account bound in another context resolves to a lite person, but not to one in
+/// the people-airdrops context, so it cannot register.
+#[test]
+fn lite_alias_account_in_another_context_cannot_register() {
+	new_test_ext().execute_with(|| {
+		let lite_pair = sr25519::Pair::from_seed(&[40u8; 32]);
+		let lite_secret = register_lite_person_for_integration(&lite_pair);
+		// The lite helper onboards and builds the ring synchronously, so no block has executed
+		// yet and the relay randomness that salts a scheduled draw is still empty.
+		advance_block();
+		let alias_account_pair = sr25519::Pair::from_seed(&[41u8; 32]);
+		bind_lite_alias_account(&lite_secret, score_context(), &alias_account_pair);
+
+		setup_people_airdrops_prize_asset(1);
+		let event_id = schedule_one_draw();
+		drive_airdrop_to_registering(event_id);
+
+		let register = indiv_pallet_people_airdrops::Call::<Runtime>::register {
+			event_ids: vec![event_id].try_into().expect("one draw fits the batch"),
+		};
+		let uxt = build_as_lite_alias_with_account_ext(&alias_account_pair, register.into());
+
+		assert_eq!(
+			Executive::apply_extrinsic(uxt).expect("transaction is valid"),
+			Err(DispatchError::BadOrigin)
+		);
 	});
 }
 
