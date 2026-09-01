@@ -538,6 +538,20 @@ mod evm_fixture {
 			}
 			function bootstrap(BootstrapConfig config) external returns (uint32 collection);
 		}
+
+		interface IClaimsMinterCaller {
+			function readMinterInStaticFrame(address claims, uint32 collection)
+				external
+				view
+				returns (bool ok, bytes returnData);
+			function registerInStaticFrame(address claims, uint32 collection)
+				external
+				view
+				returns (bool ok, bytes returnData);
+			function register(address claims, uint32 collection)
+				external
+				returns (bool ok, bytes returnData);
+		}
 	}
 
 	fn contract_account(address: H160) -> AccountId32 {
@@ -635,6 +649,78 @@ mod evm_fixture {
 			assert_eq!(registration.kind, crate::KIND_CONTRACT);
 			assert_eq!(registration.minter, alloy_address(minter_contract));
 			assert_eq!(registration.owner, address_of::<Test>(&alice));
+		});
+	}
+
+	#[test]
+	fn a_read_only_frame_serves_the_read_and_denies_the_registration() {
+		let code = fixture_code("ClaimsMinterCaller");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			map_account(&alice);
+			let caller = deploy(&alice, code);
+			let owner = contract_account(caller);
+			// The contract owns the collection, so it pays the deposit that creating one incurs.
+			Balances::make_free_balance_be(&owner, u64::MAX / 2);
+			let collection = pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone())
+				.expect("collection is created");
+			let claims = alloy_address(minter_address());
+
+			let read = |collection| {
+				let data = call_contract(
+					&alice,
+					caller,
+					IClaimsMinterCaller::readMinterInStaticFrameCall { claims, collection }
+						.abi_encode(),
+				);
+				let outcome =
+					IClaimsMinterCaller::readMinterInStaticFrameCall::abi_decode_returns(&data)
+						.unwrap();
+				assert!(outcome.ok, "a read must be served in a read-only frame");
+				INftClaimsMinter::collectionMinterCall::abi_decode_returns(&outcome.returnData)
+					.expect("the read answers with an encoded registration")
+			};
+
+			assert_eq!(read(collection).kind, crate::KIND_NONE);
+
+			// The registration is denied and the frame traps rather than reverting, so nothing
+			// comes back. An empty return rules out the mapped reverts, which each carry a reason,
+			// but names no error: a trapped frame reports none to its caller.
+			let data = call_contract(
+				&alice,
+				caller,
+				IClaimsMinterCaller::registerInStaticFrameCall { claims, collection }.abi_encode(),
+			);
+			let denied =
+				IClaimsMinterCaller::registerInStaticFrameCall::abi_decode_returns(&data).unwrap();
+			assert!(!denied.ok, "a registration must be denied in a read-only frame");
+			assert!(
+				denied.returnData.is_empty(),
+				"expected a trapped frame, got {:?}",
+				denied.returnData
+			);
+			assert_eq!(CollectionMinters::<Test>::get(collection), None);
+
+			// The same call outside a read-only frame goes through, which leaves the frame's
+			// read-only flag as the reason for the denial above.
+			let data = call_contract(
+				&alice,
+				caller,
+				IClaimsMinterCaller::registerCall { claims, collection }.abi_encode(),
+			);
+			let registered = IClaimsMinterCaller::registerCall::abi_decode_returns(&data).unwrap();
+			assert!(
+				registered.ok,
+				"the owner registers outside a read-only frame, got {:?}",
+				registered.returnData
+			);
+			assert_eq!(
+				CollectionMinters::<Test>::get(collection),
+				Some(CollectionMinter { owner, selection: ItemSelection::Random })
+			);
+
+			// The read-only frame reports the registration the writable one made.
+			assert_eq!(read(collection).kind, crate::KIND_RANDOM);
 		});
 	}
 }
