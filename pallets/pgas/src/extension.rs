@@ -234,7 +234,10 @@ impl<T: Config> AsPgas<T> {
 		let alias = ca.alias;
 		let day_be = Day::from(day);
 
-		// Pool-hygiene pre-check; dispatch re-checks authoritatively.
+		// Reject a duplicate at validity time so a settled claim cannot re-enter the pool or
+		// occupy blockspace as a feeless failed dispatch. The one-claim-per-(day, alias)
+		// invariant is enforced in `do_claim_pgas`, which re-checks next to the write and
+		// covers dispatch paths that bypass this extension.
 		ensure!(
 			!ClaimedGasAliases::<T>::contains_key(day_be, alias),
 			CustomValidity::AlreadyClaimed
@@ -317,20 +320,19 @@ impl<T: Config> AsPgas<T> {
 			ValidTransaction::with_tag_prefix("Pgas:Claim").priority(tx_priority::USER_DEFAULT);
 		for (ca, slot_index) in cas.iter().zip(slot_indices.iter()) {
 			let alias = ca.alias;
-			// Pool-hygiene pre-check; dispatch re-checks authoritatively.
+			// Reject a duplicate claim.
 			ensure!(
 				!ClaimedGasAliases::<T>::contains_key(day_be, alias),
 				CustomValidity::AlreadyClaimed
 			);
 			// Same tag domain as single claims, so a batch and a single claim for the same
 			// slot conflict in the pool.
-			validity = validity
-				.and_provides(twox_64(&("pgas-slot", identifier, alias, day, *slot_index).encode()));
+			validity = validity.and_provides(twox_64(
+				&("pgas-slot", identifier, alias, day, *slot_index).encode(),
+			));
 			// `slot_indices` is bounded by `MaxPgasClaimsPerBatch`, which `integrity_test`
 			// asserts fits `BatchAliases`.
-			aliases
-				.try_push(alias)
-				.map_err(|_| InvalidTransaction::ExhaustsResources)?;
+			aliases.try_push(alias).map_err(|_| InvalidTransaction::ExhaustsResources)?;
 		}
 
 		let local_origin = Origin::BatchClaimAliases { aliases, day: day_be, collection };

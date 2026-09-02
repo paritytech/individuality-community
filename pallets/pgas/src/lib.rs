@@ -444,8 +444,9 @@ pub mod pallet {
 
 		/// Record `alias` under `day` and mint [`Config::PgasClaimAmount`] into `target`.
 		///
-		/// The [`AsPgas`] extension pre-checks uniqueness for pool hygiene; this re-checks
-		/// authoritatively before the write.
+		/// Enforces the one-claim-per-(day, alias) invariant with a check next to the write.
+		/// The check must stay here, not only in [`AsPgas`], because dispatch paths that
+		/// bypass the extension can also reach this function.
 		fn do_claim_pgas(
 			alias: Alias,
 			day: Day,
