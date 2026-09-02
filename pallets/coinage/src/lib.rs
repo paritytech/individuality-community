@@ -714,6 +714,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -739,6 +740,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -771,6 +773,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -796,6 +799,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -813,6 +817,34 @@ pub mod pallet {
 		AliasState,
 		OptionQuery,
 	>;
+
+	/// Number of aliases unloaded from each recycler ring.
+	///
+	/// Equals the number of [RecyclerAliasStates] entries of the ring in state
+	/// [`AliasState::Unloaded`], so `RingStatus::total` minus this value is the number of coins the
+	/// ring still holds. Absent for a ring that already had alias states when the count was
+	/// introduced, because recovering its number needs a scan; such a ring is never counted.
+	///
+	/// **WARNING**: Do not use this storage directly, use [`RecyclerManager`] type instead.
+	///
+	/// This storage item is managed by [`RecyclerManager`] and is part of a consistent set:
+	/// * [RecyclerCollectionCreated] - whether the collection exists for an instance and
+	///   denomination.
+	/// * [RecyclersLastRemovedRingIndex] - the last removed ring index for each instance and
+	///   denomination.
+	/// * [RecyclersCoinToRecycler] - the mapping from member key to the instance and denomination
+	///   it is in.
+	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
+	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
+	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
+	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
+	///   coins.
+	///
+	/// Ring members, pending members, and ring state are managed by [`Config::MemberService`].
+	#[pallet::storage]
+	pub type RecyclersUnloadedCount<T> =
+		StorageMap<_, Twox64Concat, (InstanceId, Denomination, RingIndex), u32, OptionQuery>;
 
 	/// Marks recycler rings that have deferred recycler dust pending removal.
 	///
@@ -832,6 +864,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -866,6 +899,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.

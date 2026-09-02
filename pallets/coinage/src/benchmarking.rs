@@ -1552,6 +1552,9 @@ mod benches {
 				AliasState::Unloaded,
 			);
 		}
+		// Keep the counter in step with the entries written above; `clean_unchecked` compares the
+		// two.
+		RecyclersUnloadedCount::<T>::insert((INSTANCE_ID, value, ring_index), m);
 
 		// Advance time past expiration
 		let status = T::MemberService::ring_status(&identifier, 0).expect("ring exists");
