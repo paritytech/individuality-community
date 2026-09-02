@@ -127,6 +127,14 @@ use sp_runtime::{traits::BlakeTwo256, DispatchError};
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-claims";
 
+/// Number of metadata entries a claim mints with, which `mint_hook_weight` prices per entry.
+///
+/// The weight annotation runs before the dispatch builds that metadata, so this cannot read the
+/// vector's length. It is also the ceiling, because a dispatch may refund weight but never add
+/// any, so a mint passing more entries than this undercharges and reports nothing. Raise it in
+/// the same change that gives the mint metadata to pass.
+const CLAIM_METADATA_PAIRS: u32 = 0;
+
 /// Successful output of a collection's minter contract.
 pub struct Selection {
 	/// The item, within the collection the contract was asked about, the claim mints.
@@ -442,7 +450,7 @@ pub mod pallet {
 				ClaimantKind::Person => T::WeightInfo::claim_person(proof.len() as u32),
 			}
 			.saturating_add(T::CollectionSelector::max_weight())
-			.saturating_add(T::Nfts::mint_hook_weight())
+			.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS))
 		)]
 		pub fn claim(
 			origin: OriginFor<T>,
@@ -529,7 +537,7 @@ pub mod pallet {
 			// failure above returns before the mint.
 			Ok(Some(
 				base.saturating_add(selection_weight)
-					.saturating_add(T::Nfts::mint_hook_weight()),
+					.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS)),
 			)
 			.into())
 		}
@@ -605,7 +613,7 @@ pub mod pallet {
 				T::WeightInfo::claim_account(T::MaxProofNodes::get())
 					.max(T::WeightInfo::claim_person(T::MaxProofNodes::get()))
 					.saturating_add(T::CollectionSelector::max_weight())
-					.saturating_add(T::Nfts::mint_hook_weight()),
+					.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS)),
 			);
 		}
 

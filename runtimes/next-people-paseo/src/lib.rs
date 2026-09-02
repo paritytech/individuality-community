@@ -279,7 +279,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 1_000_036,
+	spec_version: 3_001_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 5,

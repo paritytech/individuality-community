@@ -936,6 +936,35 @@ fn the_metadata_policy_refuses_a_value_on_every_write_path() {
 	});
 }
 
+/// The depositless mint's hook weight covers the metadata policy, which runs once per entry.
+///
+/// The only in-tree caller mints bare, so a policy charge missing here would cost nothing today
+/// and undercharge the first caller that mints with metadata.
+#[test]
+fn the_depositless_mint_hook_weight_covers_the_policy() {
+	use crate::{MintWithoutDeposit, OnPurseOccupied, ValidateMetadata};
+
+	let policy_weight = |pairs| {
+		<<Test as crate::Config>::MetadataPolicy as ValidateMetadata<
+			MetadataKeyOf<Test>,
+			MetadataValueOf<Test>,
+		>>::validate_weight(pairs)
+	};
+	let hook_weight = |pairs| <Scarcity as MintWithoutDeposit<u64>>::mint_hook_weight(pairs);
+
+	new_test_ext().execute_with(|| {
+		assert_eq!(hook_weight(0), RecordPurseOccupancy::on_purse_occupied_weight());
+		assert_eq!(
+			hook_weight(3),
+			RecordPurseOccupancy::on_purse_occupied_weight().saturating_add(policy_weight(3))
+		);
+		assert!(
+			policy_weight(3).all_gt(frame_support::weights::Weight::zero()),
+			"not tautological"
+		);
+	});
+}
+
 /// The policy's weight rides on every call that can write metadata, scaled by the pairs it
 /// carries, so a runtime cannot wire an expensive rule the calls do not pay for.
 #[test]
@@ -950,20 +979,76 @@ fn metadata_weights_include_the_policy() {
 		>>::validate_weight(pairs)
 	};
 
-	let declared =
-		crate::Call::<Test>::set_collection_metadata { collection: 0, key: key(b"k"), value: None }
-			.get_dispatch_info()
-			.call_weight;
-	assert_eq!(declared, <() as WeightInfo>::set_collection_metadata().saturating_add(policy(1)));
+	new_test_ext().execute_with(|| {
+		let declared = crate::Call::<Test>::set_collection_metadata {
+			collection: 0,
+			key: key(b"k"),
+			value: None,
+		}
+		.get_dispatch_info()
+		.call_weight;
+		assert_eq!(
+			declared,
+			<() as WeightInfo>::set_collection_metadata().saturating_add(policy(1))
+		);
 
-	let declared = crate::Call::<Test>::define_item {
-		collection: 0,
-		transferability: Transferability::Transferable,
-		metadata: metadata(&[(b"one", b"1"), (b"two", b"2")]),
+		let declared = crate::Call::<Test>::define_item {
+			collection: 0,
+			transferability: Transferability::Transferable,
+			metadata: metadata(&[(b"one", b"1"), (b"two", b"2")]),
+		}
+		.get_dispatch_info()
+		.call_weight;
+		assert_eq!(declared, <() as WeightInfo>::define_item(2).saturating_add(policy(2)));
+	});
+}
+
+/// The `integrity_test` holds each call a runtime sizes to a share of a block.
+///
+/// The drivers are the metadata entries a call carries and the weight of the runtime hooks, so
+/// these raise one of each. A runtime that overshoots produces a call that no block can hold.
+mod integrity {
+	use super::*;
+	use frame_support::{traits::Hooks, weights::Weight};
+
+	#[test]
+	fn passes_with_the_default_configuration() {
+		new_test_ext().execute_with(|| {
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
 	}
-	.get_dispatch_info()
-	.call_weight;
-	assert_eq!(declared, <() as WeightInfo>::define_item(2).saturating_add(policy(2)));
+
+	/// `mint` carries `MaxInstanceMetadata` entries and `burn` removes them, so the limit sets
+	/// the worst case of both.
+	#[test]
+	#[should_panic = "`mint` worst-case weight"]
+	fn rejects_an_oversized_instance_metadata_limit() {
+		new_test_ext().execute_with(|| {
+			MaxInstanceMetadata::set(&1_000_000);
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
+	}
+
+	/// The policy runs once per entry on every call that writes metadata, and `mint` is the one
+	/// that carries the most.
+	#[test]
+	#[should_panic = "`mint` worst-case weight"]
+	fn rejects_an_expensive_metadata_policy() {
+		new_test_ext().execute_with(|| {
+			PolicyWeightPerPair::set(&Weight::from_parts(u64::MAX / 100, 0));
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
+	}
+
+	/// The deletion hook runs on every `delete_collection`, which charges it up front.
+	#[test]
+	#[should_panic = "`delete_collection` worst-case weight"]
+	fn rejects_an_expensive_deletion_hook() {
+		new_test_ext().execute_with(|| {
+			DeletionHookWeight::set(&Weight::from_parts(u64::MAX / 100, 0));
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
+	}
 }
 
 #[test]
@@ -1347,6 +1432,40 @@ fn item_defs_are_immutable() {
 
 		define(0);
 		assert_eq!(ItemDefs::<Test>::get(0, 0), Some(before));
+	});
+}
+
+/// A failed `transfer` charges its submitter, unlike the success path.
+///
+/// The purse-key origin pays nothing when a move lands, which is what lets a holder with no
+/// balance move an instance. A failure writes nothing, so the same transaction stays valid and
+/// waiving its fee too would buy unlimited block weight for free.
+#[test]
+fn a_failed_transfer_pays_its_fee() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		mint(0, OTHER);
+
+		let nft = NftsByOwner::<Test>::get(RECIPIENT).expect("the holder has an instance");
+		let error = Scarcity::transfer(nft_origin(RECIPIENT, nft), OTHER)
+			.expect_err("the destination already holds an instance");
+		assert_eq!(error.error, Error::<Test>::AddressOccupied.into());
+		assert_eq!(error.post_info.pays_fee, Pays::Yes);
+	});
+}
+
+/// A failed `burn` charges its submitter, for the reason given on `a_failed_transfer_pays_its_fee`.
+#[test]
+fn a_failed_burn_pays_its_fee() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+
+		let error = Scarcity::burn(RuntimeOrigin::signed(RECIPIENT))
+			.expect_err("burning needs the purse-key origin");
+		assert_eq!(error.error, sp_runtime::DispatchError::BadOrigin);
+		assert_eq!(error.post_info.pays_fee, Pays::Yes);
 	});
 }
 
@@ -2240,14 +2359,16 @@ fn delete_collection_weight_includes_the_deletion_hook() {
 	use crate::weights::WeightInfo;
 	use frame_support::dispatch::GetDispatchInfo;
 
-	let declared = crate::Call::<Test>::delete_collection { collection: 0 }
-		.get_dispatch_info()
-		.call_weight;
-	assert_eq!(
-		declared,
-		<() as WeightInfo>::delete_collection()
-			.saturating_add(RecordCollectionDeletion::on_delete_weight())
-	);
+	new_test_ext().execute_with(|| {
+		let declared = crate::Call::<Test>::delete_collection { collection: 0 }
+			.get_dispatch_info()
+			.call_weight;
+		assert_eq!(
+			declared,
+			<() as WeightInfo>::delete_collection()
+				.saturating_add(RecordCollectionDeletion::on_delete_weight())
+		);
+	});
 }
 
 #[test]
@@ -2255,23 +2376,28 @@ fn mint_weight_includes_the_purse_occupancy_hook() {
 	use crate::{weights::WeightInfo, OnPurseOccupied};
 	use frame_support::dispatch::GetDispatchInfo;
 
-	let declared = crate::Call::<Test>::mint {
-		collection: 0,
-		item: 0,
-		to: RECIPIENT,
-		metadata: alloc::vec![],
-	}
-	.get_dispatch_info()
-	.call_weight;
-	assert_eq!(
-		declared,
-		<() as WeightInfo>::mint(0).saturating_add(RecordPurseOccupancy::on_mint_weight())
-	);
+	new_test_ext().execute_with(|| {
+		let declared = crate::Call::<Test>::mint {
+			collection: 0,
+			item: 0,
+			to: RECIPIENT,
+			metadata: alloc::vec![],
+		}
+		.get_dispatch_info()
+		.call_weight;
+		assert_eq!(
+			declared,
+			<() as WeightInfo>::mint(0)
+				.saturating_add(RecordPurseOccupancy::on_purse_occupied_weight())
+		);
+	});
 }
 
-/// Both mint entries notify, so a runtime hook cannot be reached by one and missed by the other.
+/// Every path that gives a key an instance notifies, so a runtime hook cannot be reached by one
+/// and missed by another. A holder the hook misses reads as holding nothing, and its address
+/// resolves to a different account.
 #[test]
-fn every_mint_path_notifies_the_purse_occupancy_hook() {
+fn every_occupying_path_notifies_the_purse_occupancy_hook() {
 	new_test_ext().execute_with(|| {
 		setup_item();
 		assert!(OccupiedPurses::get().is_empty());
@@ -2287,10 +2413,37 @@ fn every_mint_path_notifies_the_purse_occupancy_hook() {
 		));
 		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER]);
 
-		// Moves do not notify: the fee-less path would write an unpaid entry at every hop.
 		assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, 4));
-		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER]);
+		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER, 4]);
+
+		assert_ok!(Scarcity::do_transfer_by_holder(&4, 0, 5));
+		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER, 4, 5]);
+
+		// The fee-less holder path has its own body rather than calling `do_transfer_by_holder`,
+		// so reaching it through the extrinsic is what proves the hook is wired there too.
+		let nft = NftsByOwner::<Test>::get(5).expect("the instance moved to 5");
+		assert_ok!(Scarcity::transfer(nft_origin(5, nft), 6));
+		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER, 4, 5, 6]);
 	});
+}
+
+/// Both moves declare the hook's weight, as the mint paths do.
+#[test]
+fn transfer_weights_include_the_purse_occupancy_hook() {
+	use crate::{weights::WeightInfo, OnPurseOccupied};
+	use frame_support::dispatch::GetDispatchInfo;
+
+	let hook = RecordPurseOccupancy::on_purse_occupied_weight();
+	assert_eq!(
+		crate::Call::<Test>::transfer { to: RECIPIENT }.get_dispatch_info().call_weight,
+		<() as WeightInfo>::transfer().saturating_add(hook)
+	);
+	assert_eq!(
+		crate::Call::<Test>::force_transfer { instance: 0, to: RECIPIENT }
+			.get_dispatch_info()
+			.call_weight,
+		<() as WeightInfo>::force_transfer().saturating_add(hook)
+	);
 }
 
 #[test]
@@ -2576,9 +2729,11 @@ fn try_state_accepts_issuer_depositless_transferred_and_burned_states() {
 mod migration {
 	use super::*;
 	use crate::migration::{v1::MigrateToTransferability, MigrateV0ToV1};
+	#[cfg(feature = "try-runtime")]
+	use codec::Decode;
 	use frame_support::{
 		storage::unhashed,
-		traits::{GetStorageVersion, OnRuntimeUpgrade, UncheckedOnRuntimeUpgrade},
+		traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion, UncheckedOnRuntimeUpgrade},
 	};
 
 	/// Write an item definition in the shape stored before transferability existed.
@@ -2589,6 +2744,140 @@ mod migration {
 	fn put_old_definition(collection: u32, item: u32, deposit: u64) {
 		let old = (3u32, 2u32, 1u32, deposit);
 		unhashed::put_raw(&ItemDefs::<Test>::hashed_key_for(collection, item), &old.encode());
+	}
+
+	/// Build a collection and item through the pallet, then downgrade only the stored definition.
+	///
+	/// Leaves every counter, deposit and index exactly as a chain running the old code would have
+	/// them, which is what lets the state be checked as a whole after migrating.
+	fn downgrade_a_real_definition() {
+		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+		define(0);
+		let definition = ItemDefs::<Test>::get(0, 0).expect("the item was defined");
+		let old = (definition.supply, definition.live_supply, definition.metadata_count, {
+			let deposit: u64 = definition.deposit;
+			deposit
+		});
+		unhashed::put_raw(&ItemDefs::<Test>::hashed_key_for(0, 0), &old.encode());
+		assert_eq!(ItemDefs::<Test>::get(0, 0), None, "the downgrade must be unreadable");
+	}
+
+	/// The gate runs the translation on a chain still at version 0, and closes behind it.
+	///
+	/// Every other translating case drives the inner migration, so without this nothing exercises
+	/// the type the runtime actually wires.
+	#[test]
+	fn the_versioned_migration_translates_and_bumps_the_version() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<Scarcity>();
+			put_old_definition(0, 0, 77);
+
+			let weight = <MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				ItemDefs::<Test>::get(0, 0).expect("translated").transferability,
+				Transferability::Transferable
+			);
+			assert_eq!(Scarcity::on_chain_storage_version(), 1, "the gate must close behind it");
+			// One read and write for the one definition, one more read for the end of the
+			// prefix iteration, and a read and write for the version the gate checks and
+			// stamps.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			assert_eq!(weight, db.reads_writes(3, 2), "the translation must charge what it did");
+		});
+	}
+
+	/// Running the wired migration twice is safe, which is the property the gate exists for.
+	///
+	/// Sequenced the way a chain would reach it: migrate the old rows, define a soulbound item
+	/// against the new code, then upgrade again. The second run is the one that would decode that
+	/// item as its own four-field prefix and clear the flag if the version did not gate it.
+	#[test]
+	fn the_versioned_migration_is_idempotent() {
+		new_test_ext().execute_with(|| {
+			downgrade_a_real_definition();
+			StorageVersion::new(0).put::<Scarcity>();
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			assert_eq!(
+				ItemDefs::<Test>::get(0, 0).expect("translated").transferability,
+				Transferability::Transferable
+			);
+
+			define_as(0, Transferability::Soulbound);
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				ItemDefs::<Test>::get(0, 1).expect("the soulbound item exists").transferability,
+				Transferability::Soulbound,
+				"the second run must not decode the migrated value as its own prefix"
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// The translation leaves the pallet's own invariants satisfied, and unblocks what the
+	/// undecodable definition blocked.
+	///
+	/// Deletion is the case with the worst tail: a definition that cannot be read cannot be
+	/// deleted, so `item_count` never reaches zero, so the collection cannot be deleted and its
+	/// deposit stays held.
+	#[test]
+	fn a_translated_definition_is_usable_again() {
+		new_test_ext().execute_with(|| {
+			downgrade_a_real_definition();
+			assert_noop!(
+				Scarcity::delete_item(RuntimeOrigin::signed(OWNER), 0, 0),
+				Error::<Test>::UnknownItem
+			);
+
+			MigrateToTransferability::<Test>::on_runtime_upgrade();
+
+			assert_ok!(Scarcity::do_try_state());
+			assert_ok!(Scarcity::delete_item(RuntimeOrigin::signed(OWNER), 0, 0));
+			assert_ok!(Scarcity::delete_collection(RuntimeOrigin::signed(OWNER), 0));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// The try-runtime checks pass over the state the migration is meant for.
+	///
+	/// `pre_upgrade` has to count keys rather than entries, because the values do not decode
+	/// until the migration has run. Counting entries would report an empty map and make
+	/// `post_upgrade` fail an upgrade that had in fact succeeded.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_try_runtime_checks_span_the_translation() {
+		new_test_ext().execute_with(|| {
+			for (collection, item) in [(0, 0), (0, 1), (1, 0)] {
+				put_old_definition(collection, item, 5);
+			}
+			assert_eq!(ItemDefs::<Test>::iter().count(), 0, "nothing decodes before the migration");
+
+			let state = MigrateToTransferability::<Test>::pre_upgrade().expect("counts the keys");
+			assert_eq!(u32::decode(&mut &state[..]).unwrap(), 3, "keys are counted, not entries");
+
+			MigrateToTransferability::<Test>::on_runtime_upgrade();
+
+			assert_ok!(MigrateToTransferability::<Test>::post_upgrade(state));
+		});
+	}
+
+	/// `post_upgrade` fails when a definition does not survive, rather than reporting success.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_post_upgrade_check_catches_a_lost_definition() {
+		new_test_ext().execute_with(|| {
+			put_old_definition(0, 0, 5);
+			let state = MigrateToTransferability::<Test>::pre_upgrade().expect("counts the keys");
+
+			// A value that decodes as neither shape is dropped by `translate_values`, which is
+			// the loss the count is there to notice.
+			unhashed::put_raw(&ItemDefs::<Test>::hashed_key_for(0, 0), &[0xffu8]);
+			MigrateToTransferability::<Test>::on_runtime_upgrade();
+
+			assert!(MigrateToTransferability::<Test>::post_upgrade(state).is_err());
+		});
 	}
 
 	/// The old encoding is unreadable under the current type, and the migration recovers it.
