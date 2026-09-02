@@ -124,7 +124,7 @@ function resolveBlockOption() {
 
 describeRuntimeUpgrade("Paseo next-people-paseo -> local next-people-paseo runtime upgrade", () => {
   test(
-    "builds a block and seeds the subscription whitelist after injecting local next-people-paseo runtime",
+    "builds a block after injecting local next-people-paseo runtime",
     async () => {
       const runtimeWasm = await resolveNextPeoplePaseoRuntimeWasm();
       const dbPath = resolve(
@@ -163,15 +163,13 @@ describeRuntimeUpgrade("Paseo next-people-paseo -> local next-people-paseo runti
         const wasm = await readFile(runtimeWasm);
         block.setWasm(`0x${wasm.toString("hex")}`);
 
-        // Build a block with the injected runtime.
+        // Build a block with the injected runtime. Executive runs the migrations
+        // only when the spec version changed.
         const upgradedBlock = await ctx.chain.newBlock();
         const newVersion = await upgradedBlock.runtimeVersion;
         expect(newVersion.specName).toBe(SPEC_NAME);
-        expect(upgradedBlock.number).toBeGreaterThan(block.number);
-
-        // Executive only runs migrations when the spec version changed, so without
-        // a bump over the live chain the seeding migration would silently not run.
         expect(newVersion.specVersion).toBeGreaterThan(oldVersion.specVersion);
+        expect(upgradedBlock.number).toBeGreaterThan(block.number);
 
         // SeedSubscriptionWhitelist ran in the upgrade block and seeded asset hub.
         const rawSubscription = await upgradedBlock.get(whitelistKey);
