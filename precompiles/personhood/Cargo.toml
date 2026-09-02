@@ -15,12 +15,14 @@ workspace = true
 codec = { workspace = true, features = ["derive"] }
 frame-support = { workspace = true }
 frame-system = { workspace = true }
+indiv-precompile-support = { workspace = true }
 indiv-support = { workspace = true }
 log = { workspace = true }
 pallet-revive = { workspace = true }
 
 [dev-dependencies]
 hex-literal = { workspace = true }
+indiv-precompile-fixtures = { workspace = true }
 indiv-pallet-alias-accounts = { workspace = true }
 indiv-pallet-members-subscriber = { workspace = true }
 pallet-assets = { workspace = true }
@@ -40,6 +42,7 @@ std = [
 	"frame-system/std",
 	"indiv-pallet-alias-accounts/std",
 	"indiv-pallet-members-subscriber/std",
+	"indiv-precompile-support/std",
 	"indiv-support/std",
 	"log/std",
 	"pallet-assets/std",
@@ -57,6 +60,7 @@ runtime-benchmarks = [
 	"frame-system/runtime-benchmarks",
 	"indiv-pallet-alias-accounts/runtime-benchmarks",
 	"indiv-pallet-members-subscriber/runtime-benchmarks",
+	"indiv-precompile-support/runtime-benchmarks",
 	"indiv-support/runtime-benchmarks",
 	"pallet-assets/runtime-benchmarks",
 	"pallet-balances/runtime-benchmarks",
@@ -69,6 +73,7 @@ try-runtime = [
 	"frame-system/try-runtime",
 	"indiv-pallet-alias-accounts/try-runtime",
 	"indiv-pallet-members-subscriber/try-runtime",
+	"indiv-precompile-support/try-runtime",
 	"pallet-assets/try-runtime",
 	"pallet-balances/try-runtime",
 	"pallet-revive/try-runtime",

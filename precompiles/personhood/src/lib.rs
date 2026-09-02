@@ -31,6 +31,20 @@
 //! IPersonhood.PersonhoodInfo memory info = personhood.personhoodStatus(addr, bytes32("dotns"));
 //! if (info.status == 2) { /* full person */ }
 //! ```
+//!
+//! # Frame guards
+//!
+//! - A delegate call reverts. Under delegate call a precompile runs with the delegator's address
+//!   and storage, so it can trust neither. Neither function derives identity from either today, so
+//!   the refusal guards a later one that does.
+//! - Attached value reverts. This address has no owner, no code and no withdrawal path, so value
+//!   sent here is unrecoverable.
+//!
+//! Both reverts leave the caller the gas it forwarded, which a trap would consume instead.
+//!
+//! No read-only guard exists. `personhoodStatus` and `personhoodInfoByProof` are views that write
+//! nothing, so a read-only frame serves both. A mutating selector added later needs a guard gated
+//! on that selector, as `scarcity` and `nft-claims` do, not the blanket denial their factory uses.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -48,6 +62,7 @@ use pallet_revive::{
 	sp_runtime::Weight,
 };
 
+use indiv_precompile_support::{ensure_no_value, ensure_not_delegate};
 use indiv_support::traits::{Context, PersonhoodLookup, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER};
 
 #[cfg(test)]
@@ -126,6 +141,9 @@ where
 		input: &Self::Interface,
 		env: &mut impl Ext<T = Self::T>,
 	) -> Result<Vec<u8>, Error> {
+		ensure_not_delegate(env)?;
+		ensure_no_value(env)?;
+
 		match input {
 			IPersonhood::IPersonhoodCalls::personhoodStatus(call) => {
 				let charged = env.charge(T::PersonhoodResolver::personhood_info_weight())?;
