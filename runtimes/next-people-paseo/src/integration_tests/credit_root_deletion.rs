@@ -21,13 +21,11 @@ use super::*;
 use codec::{Compact, Decode};
 use frame_support::{assert_noop, assert_ok, BoundedVec};
 use indiv_pallet_nft_credits::{NftClaimCreditRoots, RootExpiries};
-use indiv_support::credit_trees::{
-	expiry_bucket, CreditProofNode, NftClaimCreditTree, EXPIRY_BUCKET_SECONDS,
-};
+use indiv_support::credit_trees::{CreditProofNode, ExpiryTimestamp, NftClaimCreditTree};
 use paseo_runtime_constants::system_parachain::NextAssetHubParaId;
 use sp_runtime::DispatchError;
 
-const TIMESTAMP: u32 = EXPIRY_BUCKET_SECONDS;
+const TIMESTAMP: u32 = 1_000_000;
 
 const BLOCK: BlockNumber = 42;
 
@@ -76,7 +74,7 @@ fn the_claims_chain_deletes_a_root_and_its_expiry_entry() {
 		));
 
 		assert!(!NftClaimCreditRoots::<Runtime>::contains_key(BLOCK));
-		assert!(!RootExpiries::<Runtime>::contains_key(expiry_bucket(TIMESTAMP), BLOCK));
+		assert!(!RootExpiries::<Runtime>::contains_key(ExpiryTimestamp::from(TIMESTAMP), BLOCK));
 	});
 }
 

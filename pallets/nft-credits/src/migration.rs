@@ -24,7 +24,7 @@ use sp_runtime::Saturating;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-credits::migration";
 
-/// Files every recorded root under the bucket its deadline falls in.
+/// Files every recorded root under the timestamp its deadline runs from.
 ///
 /// A root recorded before this upgrade has no [`RootExpiries`](crate::RootExpiries) entry, so no
 /// sweep reads it and it stays on chain for good, together with the awards the claims chain builds
@@ -40,10 +40,10 @@ pub type MigrateV0ToV1<T> = VersionedMigration<
 pub mod v1 {
 	use super::*;
 
-	/// Use [`MigrateV0ToV1`](super::MigrateV0ToV1) rather than this directly.
+	/// Use [`MigrateV0ToV1`] rather than this directly.
 	///
-	/// The root carries the award block's wall-clock time, which is what the bucket comes from, so
-	/// each root is filed under the same bucket a root recorded today would be.
+	/// The root carries the award block's wall-clock time, which is what it is filed under, so
+	/// each root ends up where one recorded today would.
 	pub struct MigrateToRootExpiries<T>(PhantomData<T>);
 
 	impl<T: Config> UncheckedOnRuntimeUpgrade for MigrateToRootExpiries<T> {
@@ -53,26 +53,24 @@ pub mod v1 {
 
 			for (block, tree) in NftClaimCreditRoots::<T>::iter() {
 				reads.saturating_inc();
-				// This lowers the watermark to the earliest bucket held, so the sweep starts at
-				// the oldest root rather than behind it.
 				Pallet::<T>::note_root_expiry(block, tree.timestamp);
-				writes.saturating_accrue(2);
+				writes.saturating_inc();
 			}
 
-			log::info!(target: LOG_TARGET, "filed {reads} roots under their expiry bucket");
+			log::info!(target: LOG_TARGET, "filed {reads} roots for expiry");
 			T::DbWeight::get().reads_writes(reads.saturating_add(1), writes)
 		}
 
 		#[cfg(feature = "try-runtime")]
 		fn post_upgrade(_state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
-			use crate::{NextRootExpiryBucket, RootExpiries};
-			use indiv_support::credit_trees::expiry_bucket;
+			use crate::RootExpiries;
+			use indiv_support::credit_trees::ExpiryTimestamp;
 
-			let next = NextRootExpiryBucket::<T>::get();
 			for (block, tree) in NftClaimCreditRoots::<T>::iter() {
-				let bucket = expiry_bucket(tree.timestamp);
-				ensure!(RootExpiries::<T>::contains_key(bucket, block), "a root has no bucket");
-				ensure!(next.is_some_and(|next| next <= bucket), "a root is behind the sweep");
+				ensure!(
+					RootExpiries::<T>::contains_key(ExpiryTimestamp::from(tree.timestamp), block),
+					"a root has no expiry entry"
+				);
 			}
 			Ok(())
 		}

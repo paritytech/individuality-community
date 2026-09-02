@@ -33,7 +33,7 @@ use frame_system::{
 use indiv_support::{
 	credit_trees::{
 		credit_leaf, AwardBlock, CreditProofNode, CreditTreeDelivery, NftClaimCredit,
-		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence, EXPIRY_BUCKET_SECONDS,
+		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
 	},
 	identity::AccountOrPerson,
 	traits::Alias,
@@ -183,10 +183,9 @@ parameter_types! {
 	pub storage StatefulSelectorItem: ItemIndex = 0;
 	/// Whether the mock selector accepts a registered contract address as deployed code.
 	pub storage ContractValid: bool = true;
-	/// A whole number of buckets, so a test states deadlines in whole days.
-	pub storage TreeTtl: u64 = 2 * EXPIRY_BUCKET_SECONDS as u64;
+	pub storage TreeTtl: u64 = 2 * 24 * 60 * 60;
 	pub storage MaxQueuedTreeDeletions: u32 = 4;
-	/// Small, so a test fills a bucket with a few trees. It bounds the sweep as well as the message.
+	/// Small, so a few trees outlast one sweep. It bounds the sweep as well as the message.
 	pub storage MaxTreeDeletionsPerMessage: u32 = 2;
 	pub GameChainLocation: Location = Location::new(1, [Parachain(1000)]);
 	pub const GameChainPalletIndex: u8 = 42;
@@ -212,10 +211,10 @@ pub fn set_now(secs: u64) {
 	MOCK_UNIX_TIME.with_borrow_mut(|now| *now = Duration::from_secs(secs));
 }
 
-/// The first second at which every tree of `bucket` is past its deadline. A sweep of that bucket
-/// needs the clock to read this.
-pub fn bucket_due_at(bucket: u32) -> u64 {
-	indiv_support::credit_trees::bucket_deadline(bucket, TreeTtl::get())
+/// The first second at which a tree committed to at `timestamp` is past its deadline. A sweep that
+/// removes it needs the clock to read this.
+pub fn due_at(timestamp: u32) -> u64 {
+	indiv_support::credit_trees::expiry_deadline(timestamp, TreeTtl::get())
 }
 
 /// Captures the XCM messages the pallet sends to the game chain. A test makes it fail to drive the

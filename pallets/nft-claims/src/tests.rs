@@ -22,8 +22,7 @@ use crate::{
 };
 use frame_support::{assert_noop, assert_ok, dispatch::GetDispatchInfo, BoundedVec};
 use indiv_support::credit_trees::{
-	expiry_bucket, AwardBlock, CreditProofNode, CreditTreeDelivery, NftClaimCreditTree,
-	EXPIRY_BUCKET_SECONDS,
+	AwardBlock, CreditProofNode, CreditTreeDelivery, ExpiryTimestamp, NftClaimCreditTree,
 };
 use sp_runtime::DispatchError;
 
@@ -303,7 +302,7 @@ mod claim {
 	fn store_tree(awards: &[Award]) {
 		let tree = tree_of(BLOCK, awards);
 		CreditTrees::<Test>::insert(BLOCK, tree);
-		TreeExpiries::<Test>::insert(expiry_bucket(tree.timestamp), BLOCK, ());
+		TreeExpiries::<Test>::insert(ExpiryTimestamp::from(tree.timestamp), BLOCK, ());
 		register_collection(ItemSelection::Random);
 	}
 
@@ -478,7 +477,10 @@ mod claim {
 			for leaf_index in 0..awards.len() as u32 {
 				assert!(leaf_is_claimed(BLOCK, leaf_index));
 			}
-			assert!(TreeExpiries::<Test>::contains_key(expiry_bucket(tree.timestamp), BLOCK));
+			assert!(TreeExpiries::<Test>::contains_key(
+				ExpiryTimestamp::from(tree.timestamp),
+				BLOCK
+			));
 		});
 	}
 
@@ -500,9 +502,10 @@ mod claim {
 			));
 			assert_eq!(claimed_leaves(BLOCK), 1);
 
+			set_now(due_at(tree.timestamp));
 			assert_ok!(NftClaims::sweep_expired_trees(
 				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
-				expiry_bucket(tree.timestamp),
+				tree.timestamp,
 				1
 			));
 
@@ -559,10 +562,10 @@ mod claim {
 			assert_eq!(PendingTreeDeletions::<Test>::get().to_vec(), vec![BLOCK]);
 			System::reset_events();
 
-			let bucket = expiry_bucket(tree.timestamp);
+			set_now(due_at(tree.timestamp));
 			assert_ok!(NftClaims::sweep_expired_trees(
 				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
-				bucket,
+				tree.timestamp,
 				1
 			));
 
@@ -572,8 +575,7 @@ mod claim {
 				vec![BLOCK],
 				"the deletion was queued by the claim, and the sweep holds no tree to queue again"
 			);
-			assert!(nft_claims_events().contains(&Event::ExpiryBucketSwept { bucket }));
-			assert!(!nft_claims_events().contains(&Event::CreditTreesExpired { bucket, count: 1 }));
+			assert!(!nft_claims_events().contains(&Event::CreditTreesExpired { count: 1 }));
 		});
 	}
 
@@ -1514,11 +1516,14 @@ mod claim {
 			// The claimed leaves outlive the tree, and their expiry entry stays with them, which
 			// `try_state` accepts.
 			assert!(!CreditTrees::<Test>::contains_key(BLOCK));
-			assert!(TreeExpiries::<Test>::contains_key(expiry_bucket(tree.timestamp), BLOCK));
+			assert!(TreeExpiries::<Test>::contains_key(
+				ExpiryTimestamp::from(tree.timestamp),
+				BLOCK
+			));
 			assert_ok!(NftClaims::do_try_state());
 
 			// Without that entry no sweep reaches the bitmap, so it would sit there for good.
-			TreeExpiries::<Test>::remove(expiry_bucket(tree.timestamp), BLOCK);
+			TreeExpiries::<Test>::remove(ExpiryTimestamp::from(tree.timestamp), BLOCK);
 			assert!(NftClaims::do_try_state().is_err());
 		});
 	}
@@ -1780,32 +1785,38 @@ mod set_collection_minter {
 
 mod expiry {
 	use super::*;
-	use crate::{AuthorizeInvalidity, NextExpiryBucket, PendingTreeDeletions, TreeExpiries};
+	use crate::{AuthorizeInvalidity, PendingTreeDeletions, TreeExpiries};
 	use frame_support::pallet_prelude::{
 		InvalidTransaction, TransactionSource, TransactionValidityError,
 	};
+	use indiv_support::credit_trees::oldest_expiry;
 
-	/// The bucket the mock's `tree(block)` timestamps fall in. It is the first bucket.
-	const BUCKET: u32 = 0;
+	/// The timestamp the mock's `tree(10)` commits to, which is the oldest any test here files.
+	const TIMESTAMP: u32 = 1_010;
 
-	fn sweep(bucket: u32) -> frame_support::dispatch::DispatchResultWithPostInfo {
+	fn sweep(oldest: u32) -> frame_support::dispatch::DispatchResultWithPostInfo {
 		NftClaims::sweep_expired_trees(
 			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
-			bucket,
+			oldest,
 			1,
 		)
 	}
 
+	/// The timestamp the next sweep starts at.
+	fn oldest_filed() -> Option<u32> {
+		oldest_expiry::<TreeExpiries<Test>, AwardBlock>()
+	}
+
 	#[test]
-	fn a_received_tree_is_filed_under_its_bucket() {
+	fn a_received_tree_is_filed_under_its_timestamp() {
 		new_test_ext().execute_with(|| {
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
 				batch(vec![update(0, 10)])
 			));
 
-			assert!(TreeExpiries::<Test>::contains_key(BUCKET, 10));
-			assert_eq!(NextExpiryBucket::<Test>::get(), Some(BUCKET));
+			assert!(TreeExpiries::<Test>::contains_key(ExpiryTimestamp::from(TIMESTAMP), 10));
+			assert_eq!(oldest_filed(), Some(TIMESTAMP));
 		});
 	}
 
@@ -1813,7 +1824,7 @@ mod expiry {
 	fn a_tree_that_arrives_past_its_deadline_is_not_stored() {
 		new_test_ext().execute_with(|| {
 			// The tree of block 10 is timestamped 1010, so its deadline is one TTL later.
-			set_now(1010 + TreeTtl::get());
+			set_now(due_at(TIMESTAMP));
 
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
@@ -1821,8 +1832,7 @@ mod expiry {
 			));
 
 			assert!(!CreditTrees::<Test>::contains_key(10));
-			assert!(!TreeExpiries::<Test>::contains_key(BUCKET, 10));
-			assert_eq!(NextExpiryBucket::<Test>::get(), None);
+			assert_eq!(oldest_filed(), None);
 			assert_eq!(
 				nft_claims_events(),
 				vec![
@@ -1858,7 +1868,7 @@ mod expiry {
 	#[test]
 	fn a_tree_one_second_short_of_its_deadline_is_still_stored() {
 		new_test_ext().execute_with(|| {
-			set_now(1010 + TreeTtl::get() - 1);
+			set_now(due_at(TIMESTAMP) - 1);
 
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
@@ -1870,142 +1880,122 @@ mod expiry {
 	}
 
 	#[test]
-	fn a_sweep_removes_the_buckets_trees_and_queues_their_deletion() {
+	fn a_sweep_removes_the_due_trees_and_queues_their_deletion() {
 		new_test_ext().execute_with(|| {
-			// One tree against a `MaxTreeDeletionsPerMessage` of two. The sweep comes up short of
-			// its limit, which tells it the bucket is finished.
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
 				batch(vec![update(0, 10)])
 			));
+			set_now(due_at(TIMESTAMP));
 			System::reset_events();
 
-			assert_ok!(sweep(BUCKET));
+			assert_ok!(sweep(TIMESTAMP));
 
 			assert!(!CreditTrees::<Test>::contains_key(10));
-			assert_eq!(TreeExpiries::<Test>::iter_prefix(BUCKET).count(), 0);
+			assert_eq!(oldest_filed(), None);
 			assert_eq!(PendingTreeDeletions::<Test>::get().to_vec(), vec![10]);
-			assert_eq!(NextExpiryBucket::<Test>::get(), Some(BUCKET + 1));
-			assert!(nft_claims_events().contains(&Event::ExpiryBucketSwept { bucket: BUCKET }));
-			assert!(nft_claims_events()
-				.contains(&Event::CreditTreesExpired { bucket: BUCKET, count: 1 }));
+			assert!(nft_claims_events().contains(&Event::CreditTreesExpired { count: 1 }));
 		});
 	}
 
 	#[test]
-	fn a_bucket_drained_to_the_limit_takes_one_more_sweep() {
+	fn a_sweep_stops_at_the_first_tree_that_is_not_due() {
 		new_test_ext().execute_with(|| {
-			// Exactly `MaxTreeDeletionsPerMessage` trees. The drain reaches its limit, so the sweep
-			// cannot tell an emptied bucket from a full one without another call.
+			// Block 11's tree is timestamped one second after block 10's, so its deadline is one
+			// second later as well.
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
 				batch(vec![update(0, 10), update(1, 11)])
 			));
+			set_now(due_at(TIMESTAMP));
 
-			assert_ok!(sweep(BUCKET));
-			assert_eq!(CreditTrees::<Test>::iter().count(), 0);
-			assert_eq!(NextExpiryBucket::<Test>::get(), Some(BUCKET));
-			assert!(!nft_claims_events().contains(&Event::ExpiryBucketSwept { bucket: BUCKET }));
-			System::reset_events();
+			let post = sweep(TIMESTAMP).expect("the sweep goes through");
 
-			assert_ok!(sweep(BUCKET));
-			assert_eq!(NextExpiryBucket::<Test>::get(), Some(BUCKET + 1));
-			assert!(nft_claims_events().contains(&Event::ExpiryBucketSwept { bucket: BUCKET }));
-			// The further call removes nothing, so it reports no expiry.
-			assert!(!nft_claims_events()
-				.iter()
-				.any(|event| matches!(event, Event::CreditTreesExpired { .. })));
+			assert_eq!(
+				post.actual_weight,
+				Some(<MockWeightInfo as crate::WeightInfo>::sweep_expired_trees(1)),
+			);
+			assert!(!CreditTrees::<Test>::contains_key(10));
+			assert!(CreditTrees::<Test>::contains_key(11), "the tree that is not due stays");
+			assert_eq!(oldest_filed(), Some(TIMESTAMP + 1));
+			assert_eq!(PendingTreeDeletions::<Test>::get().to_vec(), vec![10]);
 		});
 	}
 
 	#[test]
-	fn a_bucket_holding_more_trees_than_one_sweep_takes_several() {
+	fn more_due_trees_than_one_sweep_removes_take_several() {
 		new_test_ext().execute_with(|| {
 			// Three trees against a `MaxTreeDeletionsPerMessage` of two.
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
 				batch(vec![update(0, 10), update(1, 11), update(2, 12)])
 			));
+			set_now(due_at(TIMESTAMP + 2));
 
-			let post = sweep(BUCKET).expect("the first sweep goes through");
+			let post = sweep(TIMESTAMP).expect("the first sweep goes through");
 			assert_eq!(
 				post.actual_weight,
 				Some(<MockWeightInfo as crate::WeightInfo>::sweep_expired_trees(2)),
 			);
-			assert_eq!(TreeExpiries::<Test>::iter_prefix(BUCKET).count(), 1);
-			assert_eq!(
-				NextExpiryBucket::<Test>::get(),
-				Some(BUCKET),
-				"an unfinished bucket does not move the sweep on",
-			);
+			assert_eq!(oldest_filed(), Some(TIMESTAMP + 2), "the sweep is up to the third tree");
 
-			let post = sweep(BUCKET).expect("the second sweep goes through");
+			let post = sweep(TIMESTAMP + 2).expect("the second sweep goes through");
 			assert_eq!(
 				post.actual_weight,
 				Some(<MockWeightInfo as crate::WeightInfo>::sweep_expired_trees(1)),
 			);
-			assert_eq!(NextExpiryBucket::<Test>::get(), Some(BUCKET + 1));
 			assert_eq!(CreditTrees::<Test>::iter().count(), 0);
+			assert_eq!(oldest_filed(), None);
 		});
 	}
 
 	#[test]
-	fn a_sweep_of_an_empty_bucket_only_moves_the_watermark_on() {
+	fn a_tree_that_arrives_out_of_order_is_swept_first() {
 		new_test_ext().execute_with(|| {
-			NextExpiryBucket::<Test>::put(BUCKET);
-
-			assert_ok!(sweep(BUCKET));
-
-			assert_eq!(NextExpiryBucket::<Test>::get(), Some(BUCKET + 1));
-			assert!(PendingTreeDeletions::<Test>::get().is_empty());
-		});
-	}
-
-	#[test]
-	fn a_tree_arriving_in_an_earlier_bucket_lowers_the_watermark() {
-		new_test_ext().execute_with(|| {
-			// A tree two buckets in, then one in the first bucket, as an out-of-order delivery
-			// gives.
-			let late = AwardBlock::from(2 * EXPIRY_BUCKET_SECONDS);
-			CreditTrees::<Test>::insert(late, tree(late));
-			crate::Pallet::<Test>::note_tree_expiry(late, tree(late).timestamp);
-			assert_eq!(NextExpiryBucket::<Test>::get(), Some(2));
-
+			// A later block's tree first, then an earlier one, as an out-of-order delivery gives.
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
-				batch(vec![update(0, 10)])
+				batch(vec![update(0, 11)])
+			));
+			assert_ok!(NftClaims::receive_credit_trees(
+				game_chain_origin(),
+				batch(vec![replay(10)])
 			));
 
-			assert_eq!(NextExpiryBucket::<Test>::get(), Some(BUCKET));
+			assert_eq!(oldest_filed(), Some(TIMESTAMP), "the sweep starts at the earlier tree");
+
+			set_now(due_at(TIMESTAMP));
+			assert_ok!(sweep(TIMESTAMP));
+
+			assert!(!CreditTrees::<Test>::contains_key(10));
+			assert!(CreditTrees::<Test>::contains_key(11), "the tree that is not due stays");
 		});
 	}
 
 	#[test]
 	fn the_offchain_worker_submits_one_sweep_per_block() {
 		new_test_ext().execute_with(|| {
-			// Three trees against a `MaxTreeDeletionsPerMessage` of two, so the bucket outlasts one
-			// sweep and both blocks sweep the same bucket.
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
-				batch(vec![update(0, 10), update(1, 11), update(2, 12)])
+				batch(vec![update(0, 10)])
 			));
-			set_now(bucket_due_at(BUCKET));
+			set_now(due_at(TIMESTAMP));
 
 			run_offchain_worker(5);
 			run_offchain_worker(6);
 
-			// The discriminator is the submitting block, so consecutive sweeps of one bucket
-			// differ. `bucket` alone cannot tell them apart, and a repeated encoding gives a hash
-			// the pool has banned.
+			// The discriminator is the submitting block, so the sweeps of two blocks differ while
+			// no sweep has been included. `oldest` alone cannot tell them apart, and a repeated
+			// encoding gives a hash the pool has banned.
 			assert_eq!(
 				submitted_calls(),
 				vec![
 					RuntimeCall::NftClaims(crate::Call::sweep_expired_trees {
-						bucket: BUCKET,
+						oldest: TIMESTAMP,
 						discriminator: 5
 					}),
 					RuntimeCall::NftClaims(crate::Call::sweep_expired_trees {
-						bucket: BUCKET,
+						oldest: TIMESTAMP,
 						discriminator: 6
 					}),
 				]
@@ -2014,57 +2004,56 @@ mod expiry {
 	}
 
 	#[test]
-	fn a_sweep_is_authorized_only_for_the_bucket_that_is_due() {
+	fn a_sweep_is_authorized_only_for_the_oldest_filed_timestamp() {
 		new_test_ext().execute_with(|| {
 			assert_eq!(
 				crate::Pallet::<Test>::authorize_sweep_expired_trees(
 					TransactionSource::Local,
-					&BUCKET
+					&TIMESTAMP
 				),
 				Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(
 					AuthorizeInvalidity::NothingToSweep as u8
 				))),
-				"nothing has ever been stored",
+				"nothing is filed",
 			);
 
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
-				batch(vec![update(0, 10)])
+				batch(vec![update(0, 10), update(1, 11)])
 			));
 
 			assert_eq!(
 				crate::Pallet::<Test>::authorize_sweep_expired_trees(
 					TransactionSource::Local,
-					&BUCKET
+					&TIMESTAMP
 				),
 				Err(InvalidTransaction::Future.into()),
-				"the bucket's deadline has not passed",
+				"the oldest tree's deadline has not passed",
 			);
 
-			set_now(bucket_due_at(BUCKET));
+			set_now(due_at(TIMESTAMP));
 			assert!(crate::Pallet::<Test>::authorize_sweep_expired_trees(
 				TransactionSource::Local,
-				&BUCKET
+				&TIMESTAMP
 			)
 			.is_ok());
 
 			assert_eq!(
 				crate::Pallet::<Test>::authorize_sweep_expired_trees(
 					TransactionSource::Local,
-					&(BUCKET + 1)
+					&(TIMESTAMP + 1)
 				),
 				Err(InvalidTransaction::Future.into()),
-				"a bucket the sweep has not reached",
+				"a timestamp the sweep has not reached",
 			);
 
-			NextExpiryBucket::<Test>::put(BUCKET + 1);
 			assert_eq!(
 				crate::Pallet::<Test>::authorize_sweep_expired_trees(
 					TransactionSource::Local,
-					&BUCKET
+					&(TIMESTAMP - 1)
 				),
 				Err(InvalidTransaction::Stale.into()),
-				"a bucket the sweep is past",
+				"a timestamp the sweep is past",
 			);
 		});
 	}
@@ -2076,12 +2065,12 @@ mod expiry {
 				game_chain_origin(),
 				batch(vec![update(0, 10)])
 			));
-			set_now(bucket_due_at(BUCKET));
+			set_now(due_at(TIMESTAMP));
 
 			assert_eq!(
 				crate::Pallet::<Test>::authorize_sweep_expired_trees(
 					TransactionSource::External,
-					&BUCKET
+					&TIMESTAMP
 				),
 				Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(
 					AuthorizeInvalidity::TransactionNotLocal as u8
@@ -2255,16 +2244,18 @@ mod migration {
 			v1::{ClaimedCounts, ClaimedCredits},
 			MigrateV0ToV1,
 		},
-		ClaimedLeaves, NextExpiryBucket,
+		ClaimedLeaves,
 	};
 	use frame_support::traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion};
 	use indiv_support::credit_trees::NftClaimCreditLeaf;
 
-	/// The bucket the mock's `tree(block)` timestamps fall in.
-	const BUCKET: u32 = 0;
+	/// Whether the tree of `block` is filed for expiry under the timestamp it commits to.
+	fn filed(block: AwardBlock) -> bool {
+		TreeExpiries::<Test>::contains_key(ExpiryTimestamp::from(tree(block).timestamp), block)
+	}
 
 	/// Stores the tree of `block` the way a chain running the old code left it: the tree alone,
-	/// under no expiry bucket, with `claimed` of its leaves recorded by hash.
+	/// with no expiry entry and with `claimed` of its leaves recorded by hash.
 	fn store_old_tree(block: AwardBlock, claimed: u32) {
 		CreditTrees::<Test>::insert(block, tree(block));
 		for index in 0..claimed {
@@ -2279,15 +2270,14 @@ mod migration {
 	}
 
 	#[test]
-	fn the_migration_files_an_unclaimed_tree_under_its_bucket() {
+	fn the_migration_files_an_unclaimed_tree_under_its_timestamp() {
 		new_test_ext().execute_with(|| {
 			store_old_tree(10, 0);
 
 			migrate();
 
 			assert_eq!(CreditTrees::<Test>::get(10), Some(tree(10)));
-			assert!(TreeExpiries::<Test>::contains_key(BUCKET, 10));
-			assert_eq!(NextExpiryBucket::<Test>::get(), Some(BUCKET));
+			assert!(filed(10));
 			assert!(!ClaimedLeaves::<Test>::contains_key(10), "no leaf of it was claimed");
 			assert_eq!(NftClaims::on_chain_storage_version(), 1);
 		});
@@ -2307,7 +2297,7 @@ mod migration {
 				vec![0b111u8],
 				"every leaf of it counts as spent"
 			);
-			assert!(TreeExpiries::<Test>::contains_key(BUCKET, 10), "the sweep drops the bitmap");
+			assert!(filed(10), "the sweep drops the bitmap");
 			assert_eq!(PendingTreeDeletions::<Test>::get().into_inner(), vec![10]);
 		});
 	}
@@ -2343,7 +2333,7 @@ mod migration {
 			migrate();
 
 			assert_eq!(CreditTrees::<Test>::get(10), None);
-			assert!(!TreeExpiries::<Test>::contains_key(BUCKET, 10), "nothing is left to sweep");
+			assert!(!filed(10), "nothing is left to sweep");
 			assert!(!ClaimedLeaves::<Test>::contains_key(10), "no bitmap covers its leaves");
 			assert_eq!(PendingTreeDeletions::<Test>::get().into_inner(), vec![10]);
 		});
@@ -2367,16 +2357,13 @@ mod migration {
 		new_test_ext().execute_with(|| {
 			store_old_tree(10, 0);
 			migrate();
-			// A sweep after the migration moved the watermark past the bucket the tree sat in.
-			NextExpiryBucket::<Test>::put(BUCKET + 1);
 
+			// A tree of the shape the migration files, stored after it ran. Only a second run
+			// files this one, and the version gate is what stops that.
+			store_old_tree(11, 0);
 			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
 
-			assert_eq!(
-				NextExpiryBucket::<Test>::get(),
-				Some(BUCKET + 1),
-				"the second run must not pull the sweep back to a swept bucket"
-			);
+			assert!(!filed(11), "the version gate must keep the migration from running twice");
 		});
 	}
 }

@@ -21,7 +21,6 @@ use super::*;
 use codec::Encode;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
-use indiv_support::credit_trees::EXPIRY_BUCKET_SECONDS;
 use sp_runtime::{traits::One, transaction_validity::TransactionSource};
 
 /// What the benchmarks cannot set up themselves, because only the runtime knows how its XCM
@@ -206,47 +205,40 @@ mod benches {
 		Ok(())
 	}
 
-	/// Worst case for `n` removals: the bucket holds exactly `n` roots, so the call pays for every
-	/// removal. Below the limit it also takes the branch that moves the watermark on.
-	///
-	/// A drain that reaches the limit cannot tell that it emptied the bucket. At `n` equal to
-	/// [`Config::MaxRootsPerSweep`] that branch is unreachable, and the fit then charges the call
-	/// for one write it does not make.
+	/// Worst case for `n` removals: `n` roots are due, each under a timestamp of its own, so the
+	/// call pays for every removal and for one map key per root. A root that is not due follows
+	/// them, which is the entry the sweep reads to stop.
 	#[benchmark]
 	fn sweep_expired_roots(
 		n: Linear<0, { T::MaxRootsPerSweep::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let bucket = expiry_bucket(ROOT_TIMESTAMP);
-		record_roots::<T>(n);
+		fill_due_expiries::<T>(n);
 		let origin = RawOrigin::Authorized;
 
 		#[extrinsic_call]
-		_(origin, bucket, BlockNumberFor::<T>::from(0u32));
+		_(origin, FIRST_ROOT_TIMESTAMP, BlockNumberFor::<T>::from(0u32));
 
-		assert_eq!(NftClaimCreditRoots::<T>::iter().count(), 0);
-		assert_eq!(RootExpiries::<T>::iter_prefix(bucket).count(), 0);
-		if n < T::MaxRootsPerSweep::get() {
-			assert_eq!(NextRootExpiryBucket::<T>::get(), Some(bucket.saturating_add(1)));
-		}
+		// Only the root that is not due is left, which is the one filed last.
+		assert_eq!(NftClaimCreditRoots::<T>::iter().count(), 1);
+		assert_eq!(RootExpiries::<T>::iter().count(), 1);
+		assert_eq!(oldest_expiry::<RootExpiries<T>, BlockNumberFor<T>>(), Some(root_timestamp(n)));
 
 		Ok(())
 	}
 
-	/// Authorizing a sweep reads the watermark and the clock. Neither grows with any input, so the
-	/// benchmark only needs a bucket whose TTL has run out.
+	/// Authorizing a sweep reads the oldest entry and the clock. The map holds one sweep's worth
+	/// of entries, each under a key of its own, which is the state a sweep is submitted against.
 	#[benchmark]
 	fn authorize_sweep_expired_roots() -> Result<(), BenchmarkError> {
-		let bucket = expiry_bucket(ROOT_TIMESTAMP);
-		record_roots::<T>(1);
-		<T as Config>::BenchmarkHelper::set_unix_time(bucket_deadline(
-			bucket,
-			pallet::Pallet::<T>::root_ttl(),
-		));
+		fill_due_expiries::<T>(T::MaxRootsPerSweep::get());
 
 		#[block]
 		{
-			pallet::Pallet::<T>::authorize_sweep_expired_roots(TransactionSource::Local, &bucket)
-				.expect("must authorize");
+			pallet::Pallet::<T>::authorize_sweep_expired_roots(
+				TransactionSource::Local,
+				&FIRST_ROOT_TIMESTAMP,
+			)
+			.expect("must authorize");
 		}
 
 		Ok(())
@@ -257,29 +249,49 @@ mod benches {
 	// benchmarks themselves are exercised by `frame-omni-bencher` against the runtime.
 }
 
-/// The `timestamp` every benchmarked root commits to. It sits one whole bucket in, so the clock can
-/// reach the bucket's deadline.
-const ROOT_TIMESTAMP: u32 = EXPIRY_BUCKET_SECONDS;
+/// The `timestamp` the first benchmarked root commits to. The value is arbitrary, because
+/// `fill_due_expiries` sets the clock from it.
+const FIRST_ROOT_TIMESTAMP: u32 = 1_000_000;
 
-/// Records `n` roots, one per block, each filed under [`ROOT_TIMESTAMP`]'s expiry bucket, and
-/// returns their blocks.
+/// The `timestamp` the root of `index` commits to. One timestamp per root is the worst case: every
+/// entry then holds a key of its own, where roots sharing a timestamp would share the map's first
+/// key.
+fn root_timestamp(index: u32) -> u32 {
+	FIRST_ROOT_TIMESTAMP.saturating_add(index)
+}
+
+/// Records `n` roots, one per block, each filed under a timestamp of its own, and returns their
+/// blocks.
 fn record_roots<T: Config>(n: u32) -> Vec<BlockNumberFor<T>> {
 	let blocks = (1..=n).map(BlockNumberFor::<T>::from).collect::<Vec<_>>();
 
 	for (index, block) in blocks.iter().enumerate() {
+		let timestamp = root_timestamp(index as u32);
 		NftClaimCreditRoots::<T>::insert(
 			block,
 			NftClaimCreditTree {
 				game_index: 7,
 				root: CreditProofNode([index as u8; 32]),
 				leaf_count: 1,
-				timestamp: ROOT_TIMESTAMP,
+				timestamp,
 			},
 		);
-		pallet::Pallet::<T>::note_root_expiry(*block, ROOT_TIMESTAMP);
+		pallet::Pallet::<T>::note_root_expiry(*block, timestamp);
 	}
 
 	blocks
+}
+
+/// Records `n` roots that are due, plus one that is not, and sets the clock to the deadline of the
+/// last due one. The root filed after it is what stops the sweep.
+fn fill_due_expiries<T: Config>(n: u32) {
+	record_roots::<T>(n.saturating_add(1));
+
+	let last_due = FIRST_ROOT_TIMESTAMP.saturating_add(n).saturating_sub(1);
+	<T as Config>::BenchmarkHelper::set_unix_time(expiry_deadline(
+		last_due,
+		pallet::Pallet::<T>::root_ttl(),
+	));
 }
 
 /// Records `n` credit trees, one per block, and queues every one of them for delivery.

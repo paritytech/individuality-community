@@ -127,10 +127,9 @@ use indiv_pallet_game::{
 };
 use indiv_support::{
 	credit_trees::{
-		authorize_bucket_sweep, bucket_deadline, drain_expiry_bucket, expiry_bucket,
-		note_expiry_bucket, AwardBlock, AwardCredits, BucketState, BucketSweepTx, CreditProofNode,
-		CreditTreeDelivery, ExpiryBucket, NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree,
-		TreeSequence, ROOT_TTL_GRACE,
+		authorize_expiry_sweep, drain_due_expiries, expiry_deadline, oldest_expiry, AwardBlock,
+		AwardCredits, CreditProofNode, CreditTreeDelivery, ExpirySweepTx, ExpiryTimestamp,
+		NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence, ROOT_TTL_GRACE,
 	},
 	identity::AccountOrPerson,
 	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
@@ -319,7 +318,7 @@ pub mod pallet {
 		/// Maximum number of roots one [`Pallet::sweep_expired_roots`] removes.
 		///
 		/// This bounds the call's weight against the block. The offchain worker submits one call
-		/// per block until the buckets that are due hold nothing.
+		/// per block until nothing is due.
 		#[pallet::constant]
 		type MaxRootsPerSweep: Get<u32>;
 	}
@@ -452,29 +451,23 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type LastReplayTime<T: Config> = StorageValue<_, u64, OptionQuery>;
 
-	/// The award blocks whose roots fall due in one bucket of wall-clock time.
+	/// Every award block whose root is still recorded, filed under the timestamp that root commits
+	/// to.
 	///
-	/// A root's bucket is `expiry_bucket(tree.timestamp)`. This orders the roots by deadline, which
-	/// [`NftClaimCreditRoots`] does not, so a sweep names the roots that are due instead of reading
-	/// every root to find them. Both removal paths remove a root's entry with the root.
+	/// The key is hashed with `Identity` and encoded big-endian, so the map iterates from the
+	/// oldest deadline to the newest, which [`NftClaimCreditRoots`] does not. A sweep takes the
+	/// roots that are due and stops at the first that is not. Both removal paths remove a root's
+	/// entry with the root.
 	#[pallet::storage]
 	pub type RootExpiries<T: Config> = StorageDoubleMap<
 		_,
-		Twox64Concat,
-		ExpiryBucket,
+		Identity,
+		ExpiryTimestamp,
 		Twox64Concat,
 		BlockNumberFor<T>,
 		(),
 		OptionQuery,
 	>;
-
-	/// The oldest bucket of [`RootExpiries`] that has not been swept.
-	///
-	/// `None` until the first root is recorded. A sweep would otherwise start at the UNIX epoch and
-	/// spend one call per bucket to reach the present. This chain records roots in ascending block
-	/// order, so nothing lowers the bucket once it is set.
-	#[pallet::storage]
-	pub type NextRootExpiryBucket<T: Config> = StorageValue<_, ExpiryBucket, OptionQuery>;
 
 	/// The sequence number the next queued credit tree is delivered under.
 	///
@@ -533,15 +526,13 @@ pub mod pallet {
 		/// Every credit those roots committed to has been minted, or the claims chain's deadline
 		/// for them has passed. No proof can be built against them again.
 		CreditRootsDeleted { named: u32, count: u32 },
-		/// `count` of `bucket`'s roots outlived [`Pallet::root_ttl`] with the claims chain never
-		/// asking for their deletion, so this chain removed them. Its deadline for them passed
-		/// first, so nothing mintable is lost.
+		/// `count` roots outlived [`Pallet::root_ttl`] with the claims chain never asking for
+		/// their deletion, so this chain removed them. Its deadline for them passed first, so
+		/// nothing mintable is lost.
 		///
 		/// The blocks are not named. A root this sweep removes is one the claims chain gave up on
 		/// long before, so nothing is waiting on the removal.
-		CreditRootsExpired { bucket: ExpiryBucket, count: u32 },
-		/// The sweep emptied `bucket`. The next sweep looks at the bucket after it.
-		RootExpiryBucketSwept { bucket: ExpiryBucket },
+		CreditRootsExpired { count: u32 },
 	}
 
 	#[pallet::error]
@@ -575,7 +566,7 @@ pub mod pallet {
 		TransactionNotLocal = 200,
 		/// No credit tree is waiting to be delivered to the NFT claims chain.
 		NoQueuedCreditTrees = 201,
-		/// No root has ever been recorded, so there is no bucket to sweep.
+		/// No root is filed for expiry, so there is nothing to sweep.
 		NothingToSweep = 202,
 	}
 
@@ -700,31 +691,31 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Removes the roots of the oldest bucket whose [`Pallet::root_ttl`] has run out.
+		/// Removes the roots whose [`Pallet::root_ttl`] has run out, oldest first.
 		///
 		/// This pallet's offchain worker submits this authorized call. It is accepted from a local
 		/// or in-block source only, so no external submission reaches it.
 		///
 		/// The claims chain's TTL is the shorter one, so the sweep only removes roots that chain
-		/// has already given up on and strands nothing mintable. `bucket` must be the bucket the
-		/// sweep is up to, which makes a retry that raced a successful sweep stale instead of a
-		/// second pass.
-		#[pallet::authorize(|source, bucket, _discriminator| {
-			Self::authorize_sweep_expired_roots(source, bucket)
+		/// has already given up on and strands nothing mintable. `oldest` must be the timestamp
+		/// [`RootExpiries`] holds its oldest entry under, which makes a retry that raced a
+		/// successful sweep stale instead of a second pass.
+		#[pallet::authorize(|source, oldest, _discriminator| {
+			Self::authorize_sweep_expired_roots(source, oldest)
 		})]
 		#[pallet::call_index(21)]
 		#[pallet::weight(<T as Config>::WeightInfo::sweep_expired_roots(T::MaxRootsPerSweep::get()))]
 		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_sweep_expired_roots())]
 		pub fn sweep_expired_roots(
 			origin: OriginFor<T>,
-			bucket: ExpiryBucket,
-			// The submitting block, which gives each block's sweep of one bucket a transaction
-			// hash of its own. See `Pallet::submit_root_expiry_sweep`.
+			_oldest: u32,
+			// The submitting block, which gives each block's sweep a transaction hash of its own.
+			// See `Pallet::submit_root_expiry_sweep`.
 			_discriminator: BlockNumberFor<T>,
 		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
 
-			Ok(Self::do_sweep_expired_roots(bucket))
+			Ok(Self::do_sweep_expired_roots())
 		}
 
 		/// Award an NFT claim credit to `claimant` outside of a game.
@@ -1578,23 +1569,16 @@ impl<T: Config> Pallet<T> {
 		T::ClaimsChainTreeTtl::get().saturating_add(ROOT_TTL_GRACE)
 	}
 
-	/// Files the root of `block` under the bucket its [`Pallet::root_ttl`] runs out in, so a sweep
-	/// finds it.
-	///
-	/// This chain records roots in ascending block order, so in practice the first root sets
-	/// [`NextRootExpiryBucket`] and no later one lowers it. [`note_expiry_bucket`] does not rely on
-	/// that order: a root filed under an earlier bucket lowers it, rather than sitting behind the
-	/// sweep where no sweep reads it.
+	/// Files the root of `block` under the timestamp it commits to, so a sweep finds it once that
+	/// timestamp is [`Pallet::root_ttl`] old.
 	pub(crate) fn note_root_expiry(block: BlockNumberFor<T>, timestamp: u32) {
-		let bucket = expiry_bucket(timestamp);
-		RootExpiries::<T>::insert(bucket, block, ());
-		note_expiry_bucket::<NextRootExpiryBucket<T>>(bucket);
+		RootExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
 	}
 
 	/// Records `tree` as `block`'s root, for a runtime's own tests, which write the roots they
 	/// start from to storage instead of awarding them.
 	///
-	/// This makes both writes a recorded root needs. A root filed under no bucket is one no sweep
+	/// This makes both writes a recorded root needs. A root with no expiry entry is one no sweep
 	/// finds, and a caller cannot produce that state through this function.
 	#[cfg(feature = "std")]
 	pub fn record_credit_root_for_tests(block: BlockNumberFor<T>, tree: NftClaimCreditTree) {
@@ -1610,7 +1594,7 @@ impl<T: Config> Pallet<T> {
 		let Some(tree) = NftClaimCreditRoots::<T>::take(block) else {
 			return false;
 		};
-		RootExpiries::<T>::remove(expiry_bucket(tree.timestamp), block);
+		RootExpiries::<T>::remove(ExpiryTimestamp::from(tree.timestamp), block);
 		true
 	}
 
@@ -1630,14 +1614,14 @@ impl<T: Config> Pallet<T> {
 		Self::deposit_event(Event::<T>::CreditRootsDeleted { named, count });
 	}
 
-	/// Removes up to [`Config::MaxRootsPerSweep`] of `bucket`'s roots, as
+	/// Removes up to [`Config::MaxRootsPerSweep`] roots whose TTL has run out, as
 	/// [`Pallet::sweep_expired_roots`] does once its origin is checked.
-	pub(crate) fn do_sweep_expired_roots(bucket: ExpiryBucket) -> PostDispatchInfo {
-		let (expired, state) = drain_expiry_bucket::<
-			RootExpiries<T>,
-			NextRootExpiryBucket<T>,
-			BlockNumberFor<T>,
-		>(bucket, T::MaxRootsPerSweep::get());
+	pub(crate) fn do_sweep_expired_roots() -> PostDispatchInfo {
+		let expired = drain_due_expiries::<RootExpiries<T>, BlockNumberFor<T>>(
+			Self::root_ttl(),
+			T::UnixTime::now().as_secs(),
+			T::MaxRootsPerSweep::get(),
+		);
 
 		for block in &expired {
 			NftClaimCreditRoots::<T>::remove(block);
@@ -1645,55 +1629,51 @@ impl<T: Config> Pallet<T> {
 
 		let count = expired.len() as u32;
 		if count > 0 {
-			Self::deposit_event(Event::<T>::CreditRootsExpired { bucket, count });
-		}
-		if state == BucketState::Emptied {
-			Self::deposit_event(Event::<T>::RootExpiryBucketSwept { bucket });
+			Self::deposit_event(Event::<T>::CreditRootsExpired { count });
 		}
 
 		Some(<T as Config>::WeightInfo::sweep_expired_roots(count)).into()
 	}
 
-	/// Validates a [`Pallet::sweep_expired_roots`] transaction, as [`authorize_bucket_sweep`] does,
+	/// Validates a [`Pallet::sweep_expired_roots`] transaction, as [`authorize_expiry_sweep`] does,
 	/// the deadline being the one [`Pallet::root_ttl`] names.
 	pub fn authorize_sweep_expired_roots(
 		source: TransactionSource,
-		bucket: &ExpiryBucket,
+		oldest: &u32,
 	) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
-		authorize_bucket_sweep::<T>(
-			BucketSweepTx {
+		authorize_expiry_sweep::<T, RootExpiries<T>, BlockNumberFor<T>>(
+			ExpirySweepTx {
 				tag: "game:sweep-expired-roots",
 				not_local: AuthorizeInvalidity::TransactionNotLocal.into(),
 				nothing_to_sweep: AuthorizeInvalidity::NothingToSweep.into(),
 			},
 			source,
-			*bucket,
-			NextRootExpiryBucket::<T>::get(),
+			*oldest,
+			Self::root_ttl(),
 			T::UnixTime::now().as_secs(),
-			bucket_deadline(*bucket, Self::root_ttl()),
 		)
 	}
 
-	/// Submits a [`Pallet::sweep_expired_roots`] for the bucket the sweep is up to, if its TTL has
+	/// Submits a [`Pallet::sweep_expired_roots`] for the oldest filed timestamp, if its TTL has
 	/// run out.
 	///
 	/// This repeats the TTL check that `authorize` makes. Without it a chain with nothing expired
 	/// submits a transaction every block that the pool holds as `Future`.
 	pub(crate) fn submit_root_expiry_sweep(block_number: BlockNumberFor<T>) {
-		let Some(bucket) = NextRootExpiryBucket::<T>::get() else {
+		let Some(oldest) = oldest_expiry::<RootExpiries<T>, BlockNumberFor<T>>() else {
 			return;
 		};
-		if T::UnixTime::now().as_secs() < bucket_deadline(bucket, Self::root_ttl()) {
+		if T::UnixTime::now().as_secs() < expiry_deadline(oldest, Self::root_ttl()) {
 			return;
 		}
 
 		let call = Call::<T>::sweep_expired_roots {
-			bucket,
+			oldest,
 			// The submitting block, not the retry window `indiv_support::offchain` paces other
-			// calls by. A bucket that takes more than one sweep keeps `bucket` the same, so a
-			// window would allow one sweep per window: the pool bans the hash of the sweep it
-			// included, and the next attempt of that window repeats it. The `provides` tag keeps
-			// one attempt in the pool.
+			// calls by. Roots at one timestamp can outnumber one sweep's limit, which keeps
+			// `oldest` the same, so a window would allow one sweep per window: the pool bans the
+			// hash of the sweep it included, and the next attempt of that window repeats it. The
+			// `provides` tag keeps one attempt in the pool.
 			discriminator: block_number,
 		};
 

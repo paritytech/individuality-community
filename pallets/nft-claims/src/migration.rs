@@ -27,8 +27,8 @@ use sp_runtime::Saturating;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-claims::migration";
 
-/// Files every stored tree under its expiry bucket and replaces the per-leaf claim records with
-/// the [`ClaimedLeaves`] bitmap.
+/// Files every stored tree for expiry and replaces the per-leaf claim records with the
+/// [`ClaimedLeaves`] bitmap.
 ///
 /// Without the expiry entry a tree stored before this upgrade is one no sweep ever reads, so it
 /// stays on chain for good, and the claims against it keep succeeding past their deadline.
@@ -117,7 +117,7 @@ pub mod v1 {
 				// Every tree the sweep has to reach, and every bitmap it has to remove, is filed
 				// here. A tree removed above keeps its entry, as both removal paths do.
 				Pallet::<T>::note_tree_expiry(block, tree.timestamp);
-				writes.saturating_accrue(2);
+				writes.saturating_inc();
 				indexed.saturating_inc();
 			}
 
@@ -140,7 +140,7 @@ pub mod v1 {
 
 			log::info!(
 				target: LOG_TARGET,
-				"Filed {indexed} trees under their expiry bucket, settled {settled} of them as \
+				"Filed {indexed} trees for expiry, settled {settled} of them as \
 				 fully claimed, removed {} oversized ones, and cleared {} leaf records",
 				(removed.len() as u64).saturating_sub(settled),
 				credits.unique,
@@ -150,8 +150,8 @@ pub mod v1 {
 
 		#[cfg(feature = "try-runtime")]
 		fn post_upgrade(_state: Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
-			use crate::{NextExpiryBucket, TreeExpiries};
-			use indiv_support::credit_trees::expiry_bucket;
+			use crate::TreeExpiries;
+			use indiv_support::credit_trees::ExpiryTimestamp;
 
 			ensure!(
 				ClaimedCredits::<T>::iter().next().is_none(),
@@ -162,15 +162,15 @@ pub mod v1 {
 				"a claimed count survived the migration"
 			);
 
-			let next = NextExpiryBucket::<T>::get();
 			for (block, tree) in CreditTrees::<T>::iter() {
 				ensure!(
 					tree.leaf_count <= T::MaxCreditsPerAwardBlock::get(),
 					"an oversized tree survived the migration"
 				);
-				let bucket = expiry_bucket(tree.timestamp);
-				ensure!(TreeExpiries::<T>::contains_key(bucket, block), "a tree has no bucket");
-				ensure!(next.is_some_and(|next| next <= bucket), "a tree is behind the sweep");
+				ensure!(
+					TreeExpiries::<T>::contains_key(ExpiryTimestamp::from(tree.timestamp), block),
+					"a tree has no expiry entry"
+				);
 			}
 			Ok(())
 		}

@@ -28,7 +28,8 @@
 //! inclusion and stay far below the rotator's ban. [`RETRY_WINDOW`] is 16 seconds at a 2-second
 //! block time and 8 of them fit [`TX_LONGEVITY`], so 8 hashes of one job live at once.
 //!
-//! A call whose arguments repeat, such as a sweep of one bucket, carries the block number itself.
+//! A call whose arguments repeat, such as a sweep that takes several blocks to clear one
+//! timestamp, carries the block number itself.
 //! Under a window the rotator's ban would hold that call to one attempt per window. Its `provides`
 //! tag bounds the pool instead: every attempt shares the tag, so the pool keeps one.
 //!

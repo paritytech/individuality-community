@@ -129,8 +129,8 @@ impl CreditsWeightInfo for MockWeightInfo {
 	fn receive_tree_deletions(n: u32) -> Weight {
 		Weight::from_parts(300 + 10 * n as u64, 30 + n as u64)
 	}
-	/// Non-zero and scales with `n` in both dimensions, so the refund a sweep of a partly filled
-	/// bucket reports stays below its worst case.
+	/// Non-zero and scales with `n` in both dimensions, so a sweep that removes fewer roots than
+	/// `MaxRootsPerSweep` refunds a measurable amount.
 	fn sweep_expired_roots(n: u32) -> Weight {
 		Weight::from_parts(400 + 10 * n as u64, 40 + n as u64)
 	}
@@ -154,12 +154,10 @@ parameter_types! {
 	pub const ReplayCooldownSeconds: u64 = 60;
 	pub const NftClaimsRemoteWeight: Weight = Weight::from_parts(1_000, 0);
 	pub storage MaxTreeDeletionsPerMessage: u32 = 4;
-	/// Small, so a test fills a bucket with a few roots.
+	/// Small, so a few roots outlast one sweep.
 	pub storage MaxRootsPerSweep: u32 = 2;
-	/// A whole number of buckets, so a test states deadlines in whole days. The TTL the pallet sweeps
-	/// by is this plus `ROOT_TTL_GRACE`, which is a whole number of buckets as well.
-	pub storage ClaimsChainTreeTtl: u64 =
-		2 * indiv_support::credit_trees::EXPIRY_BUCKET_SECONDS as u64;
+	/// The TTL the pallet sweeps by is this plus `ROOT_TTL_GRACE`.
+	pub storage ClaimsChainTreeTtl: u64 = 2 * 24 * 60 * 60;
 }
 
 /// Captures the XCM messages the pallet sends to the NFT claims chain and can be made to fail

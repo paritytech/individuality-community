@@ -18,14 +18,14 @@
 //! The game pallet builds the commitments on the People chain and ships them over XCM.
 //! The nft-claims pallet receives them in a batch.
 //!
-//! Both chains expire what they hold on the same bucket scheme, one keyed by the tree's timestamp,
-//! and the helpers driving a sweep of it are shared so the two sweeps behave alike.
+//! Both chains file what they hold under the tree's timestamp, and the helpers driving a sweep of
+//! those entries are shared so the two sweeps behave alike.
 
 use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode, FullCodec, MaxEncodedLen};
 use frame_support::{
 	pallet_prelude::{BoundedVec, Get},
-	storage::{IterableStorageDoubleMap, StorageValue},
+	storage::IterableStorageDoubleMap,
 	weights::Weight,
 	CloneNoBound, DebugNoBound, EqNoBound, PartialEqNoBound,
 };
@@ -38,7 +38,7 @@ use sp_runtime::{
 	SaturatedConversion,
 };
 
-use crate::{identity::AccountOrPerson, offchain::TX_LONGEVITY, tx_priority};
+use crate::{identity::AccountOrPerson, offchain::TX_LONGEVITY, tx_priority, utils::BigEndianU32};
 
 /// An NFT claim credit earned by a player.
 /// Hashes one successful report of one player on another, in one round of one game.
@@ -121,20 +121,17 @@ pub type TreeSequence = u64;
 /// block number type.
 pub type AwardBlock = u32;
 
-/// The width of one expiry bucket, in seconds.
+/// The wall-clock second a credit tree commits to, as both chains key an expiry entry by it.
 ///
-/// Both chains group a tree under `timestamp / EXPIRY_BUCKET_SECONDS`, so a sweep finds the trees
-/// that are due without reading the ones that are still live. A day holds many trees while games
-/// run, so a sweep walks buckets rather than trees. A tree also outlives its TTL by less than a
-/// day, which is the price of the grouping.
-pub const EXPIRY_BUCKET_SECONDS: u32 = 24 * 60 * 60;
+/// Encoded big-endian, so an `Identity`-hashed map of these keys iterates from the oldest
+/// timestamp to the newest. A sweep therefore reaches every due entry before the first that is
+/// not due.
+pub type ExpiryTimestamp = BigEndianU32;
 
-/// The bucket a tree is swept in, derived from the wall-clock time it commits to.
-pub type ExpiryBucket = u32;
-
-/// The bucket that holds the trees committed to at `timestamp`.
-pub fn expiry_bucket(timestamp: u32) -> ExpiryBucket {
-	timestamp / EXPIRY_BUCKET_SECONDS
+/// The wall-clock second at which a tree committed to at `timestamp` has outlived `ttl` seconds.
+/// `timestamp` and the result are seconds since the UNIX epoch; `ttl` is a duration.
+pub fn expiry_deadline(timestamp: u32, ttl: u64) -> u64 {
+	u64::from(timestamp).saturating_add(ttl)
 }
 
 /// How long, in seconds, the game chain keeps a credit root past the claims chain's deadline for
@@ -146,117 +143,94 @@ pub fn expiry_bucket(timestamp: u32) -> ExpiryBucket {
 /// exists for: a deletion message that never arrived.
 pub const ROOT_TTL_GRACE: u64 = 30 * 24 * 60 * 60;
 
-/// The wall-clock second at which every tree in `bucket` has outlived a TTL of `ttl` seconds.
-///
-/// The bucket's last timestamp decides this. A tree is therefore swept up to
-/// [`EXPIRY_BUCKET_SECONDS`] after its own deadline, and never before it.
-pub fn bucket_deadline(bucket: ExpiryBucket, ttl: u64) -> u64 {
-	// One second past the last timestamp the bucket holds.
-	let bucket_end = (u64::from(bucket) + 1).saturating_mul(u64::from(EXPIRY_BUCKET_SECONDS));
-	bucket_end.saturating_add(ttl)
-}
-
-/// Records in `Next` that `bucket` holds something to sweep.
-///
-/// The sweep starts at the earliest bucket ever filed, so a bucket earlier than the one held lowers
-/// it. Filing under a later bucket alone would leave the entry behind the sweep, where no sweep
-/// reads it. Only a bucket that lowers the watermark writes, because entries ordinarily arrive in
-/// ascending order and every one of them calls this.
-pub fn note_expiry_bucket<Next>(bucket: ExpiryBucket)
+/// The timestamp of the oldest entry of `Expiries`, which is where the next sweep starts.
+/// `None` means nothing is filed. The map iterates in timestamp order, so this reads one entry.
+pub fn oldest_expiry<Expiries, Key>() -> Option<u32>
 where
-	Next: StorageValue<ExpiryBucket, Query = Option<ExpiryBucket>>,
-{
-	if Next::get().is_none_or(|next| bucket < next) {
-		Next::put(bucket);
-	}
-}
-
-/// What [`drain_expiry_bucket`] left behind in the bucket it took from.
-#[derive(Debug, PartialEq, Eq)]
-pub enum BucketState {
-	/// The bucket is empty and the sweep has moved on to the next one.
-	Emptied,
-	/// The take hit its limit, so a further call has to sweep the same bucket again.
-	MoreToTake,
-}
-
-/// Takes up to `limit` of `bucket`'s entries out of `Expiries` and reports whether that emptied it.
-///
-/// A short take means the bucket is empty, and only then does `Next` move on to the bucket after
-/// it. Moving on one bucket per call keeps a stretch of buckets that hold nothing from becoming one
-/// unbounded pass. A bucket holding a multiple of `limit` therefore takes one further call that
-/// takes nothing.
-pub fn drain_expiry_bucket<Expiries, Next, Key>(
-	bucket: ExpiryBucket,
-	limit: u32,
-) -> (Vec<Key>, BucketState)
-where
-	Expiries: IterableStorageDoubleMap<ExpiryBucket, Key, ()>,
-	Next: StorageValue<ExpiryBucket, Query = Option<ExpiryBucket>>,
+	Expiries: IterableStorageDoubleMap<ExpiryTimestamp, Key, ()>,
 	Key: FullCodec,
 {
-	let limit = limit as usize;
-	let drained = Expiries::drain_prefix(bucket)
-		.take(limit)
-		.map(|(key, ())| key)
-		.collect::<Vec<_>>();
-
-	if drained.len() < limit {
-		Next::put(bucket.saturating_add(1));
-		return (drained, BucketState::Emptied);
-	}
-
-	(drained, BucketState::MoreToTake)
+	Expiries::iter_keys().next().map(|(timestamp, _)| timestamp.0)
 }
 
-/// The parts of a bucket sweep's validity only the sweeping pallet can name.
-pub struct BucketSweepTx {
+/// Removes up to `limit` entries of `Expiries` that `now` has reached the deadline of, oldest
+/// first, and returns their keys.
+///
+/// The map iterates in timestamp order, so this stops at the first entry that is not due and never
+/// reads the ones after it. A call that reaches `limit` leaves the rest to the next call.
+pub fn drain_due_expiries<Expiries, Key>(ttl: u64, now: u64, limit: u32) -> Vec<Key>
+where
+	Expiries: IterableStorageDoubleMap<ExpiryTimestamp, Key, ()>,
+	Key: FullCodec,
+{
+	let due = Expiries::iter_keys()
+		.take_while(|(timestamp, _)| now >= expiry_deadline(timestamp.0, ttl))
+		.take(limit as usize)
+		.collect::<Vec<_>>();
+
+	// Collected before any removal, because removing an entry the storage iterator has not
+	// reached yet invalidates it.
+	due.into_iter()
+		.map(|(timestamp, key)| {
+			Expiries::remove(timestamp, &key);
+			key
+		})
+		.collect::<Vec<_>>()
+}
+
+/// The parts of an expiry sweep's validity only the sweeping pallet can name.
+pub struct ExpirySweepTx {
 	/// Tag prefix of the sweep's `provides` tag, which is the pallet's call name. It must not be
 	/// empty.
 	pub tag: &'static str,
 	/// Reported for a source that is neither local nor in-block.
 	pub not_local: TransactionValidityError,
-	/// Reported when nothing has ever been filed, so there is no bucket to sweep.
+	/// Reported when nothing is filed, so there is nothing to sweep.
 	pub nothing_to_sweep: TransactionValidityError,
 }
 
-/// Validates a sweep of `bucket`, `next` being the bucket the sweep is up to and `due` the second
-/// its entries have all outlived their TTL at.
+/// Validates a sweep of `Expiries` that starts at `oldest`, the entries being kept `ttl` seconds
+/// past the timestamp they are filed under.
 ///
 /// Only a pallet's own offchain worker submits such a sweep, so this accepts local and in-block
-/// sources only. `bucket` must equal `next`, which orders retries: an earlier bucket is swept and
-/// `Stale`, a later one is `Future` until the sweep reaches it. A bucket that is not yet due is
-/// `Future` as well, because time alone makes that transaction valid.
-pub fn authorize_bucket_sweep<T: frame_system::Config>(
-	tx: BucketSweepTx,
+/// sources only. `oldest` must be the timestamp of the map's oldest entry, which orders retries:
+/// an earlier timestamp is swept and `Stale`, a later one is `Future` until the sweep reaches it.
+/// An entry that is not yet due is `Future` as well, because time alone makes that transaction
+/// valid.
+pub fn authorize_expiry_sweep<T, Expiries, Key>(
+	tx: ExpirySweepTx,
 	source: TransactionSource,
-	bucket: ExpiryBucket,
-	next: Option<ExpiryBucket>,
+	oldest: u32,
+	ttl: u64,
 	now: u64,
-	due: u64,
-) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
+) -> Result<(ValidTransaction, Weight), TransactionValidityError>
+where
+	T: frame_system::Config,
+	Expiries: IterableStorageDoubleMap<ExpiryTimestamp, Key, ()>,
+	Key: FullCodec,
+{
 	if !matches!(source, TransactionSource::InBlock | TransactionSource::Local) {
 		return Err(tx.not_local);
 	}
 
-	let Some(next) = next else {
+	let Some(filed) = oldest_expiry::<Expiries, Key>() else {
 		return Err(tx.nothing_to_sweep);
 	};
-	if bucket < next {
+	if oldest < filed {
 		return Err(InvalidTransaction::Stale.into());
 	}
-	if bucket > next || now < due {
+	if oldest > filed || now < expiry_deadline(filed, ttl) {
 		return Err(InvalidTransaction::Future.into());
 	}
 
 	// A finite longevity drops a stranded retry from the pool. Propagation is off because peers
 	// validate a gossiped transaction with a source of `External`, which this call rejects.
 	//
-	// The tag is the bucket, so every sweep of one bucket shares it and the pool keeps one attempt.
-	// A submitter that sweeps a bucket over successive blocks replaces its own pending attempt, so
-	// one block holds at most one sweep of a bucket.
+	// The tag is the timestamp, so every sweep that starts at one timestamp shares it and the pool
+	// keeps one attempt. A submitter that sweeps one timestamp over successive blocks replaces its
+	// own pending attempt, so one block holds at most one sweep of it.
 	let validity = ValidTransaction::with_tag_prefix(tx.tag)
-		.and_provides(next)
+		.and_provides(filed)
 		.priority(
 			tx_priority::BACKGROUND_PROGRESS
 				.saturating_add(frame_system::Pallet::<T>::block_number().saturated_into::<u64>()),

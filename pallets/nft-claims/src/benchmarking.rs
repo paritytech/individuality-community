@@ -19,8 +19,7 @@
 use super::*;
 use crate::{
 	pallet::{
-		ClaimedLeaves, CollectionMinters, NextExpectedSequence, NextExpiryBucket,
-		PendingTreeDeletions, TreeExpiries,
+		ClaimedLeaves, CollectionMinters, NextExpectedSequence, PendingTreeDeletions, TreeExpiries,
 	},
 	types::CreditTreeBatch,
 	BenchmarkHelper,
@@ -33,7 +32,7 @@ use frame_support::{
 	BoundedVec,
 };
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
-use indiv_support::credit_trees::{CreditTreeDelivery, EXPIRY_BUCKET_SECONDS};
+use indiv_support::credit_trees::CreditTreeDelivery;
 
 /// The `i`-th distinct credit a benchmarked tree commits to.
 fn credit(i: u32) -> NftClaimCredit {
@@ -228,42 +227,43 @@ mod benches {
 		Ok(())
 	}
 
-	/// Worst case for `n` removals: the bucket holds exactly `n` trees, so the call pays for every
-	/// removal. Below the limit it also takes the branch that moves the watermark on.
-	///
-	/// A drain that reaches the limit cannot tell that it emptied the bucket. At `n` equal to
-	/// [`Config::MaxTreeDeletionsPerMessage`] that branch is unreachable, and the fit then charges
-	/// the call for one write it does not make.
+	/// Worst case for `n` removals: `n` trees are due, each under a timestamp of its own, so the
+	/// call pays for every removal and for one map key per tree. A tree that is not due follows
+	/// them, which is the entry the sweep reads to stop.
 	#[benchmark]
 	fn sweep_expired_trees(
 		n: Linear<0, { T::MaxTreeDeletionsPerMessage::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let bucket = fill_expiry_bucket::<T>(n);
+		fill_due_expiries::<T>(n);
 		let origin = RawOrigin::Authorized;
 
 		#[extrinsic_call]
-		_(origin, bucket, BlockNumberFor::<T>::from(0u32));
+		_(origin, FIRST_EXPIRY_TIMESTAMP, BlockNumberFor::<T>::from(0u32));
 
 		assert_eq!(PendingTreeDeletions::<T>::get().len(), n as usize);
-		assert_eq!(TreeExpiries::<T>::iter_prefix(bucket).count(), 0);
-		if n < T::MaxTreeDeletionsPerMessage::get() {
-			assert_eq!(NextExpiryBucket::<T>::get(), Some(bucket.saturating_add(1)));
-		}
+		// Only the tree that is not due is left, which is the one filed last.
+		assert_eq!(TreeExpiries::<T>::iter().count(), 1);
+		assert_eq!(
+			oldest_expiry::<TreeExpiries<T>, AwardBlock>(),
+			Some(FIRST_EXPIRY_TIMESTAMP.saturating_add(n))
+		);
 
 		Ok(())
 	}
 
-	/// Authorizing a sweep reads the watermark and the clock. Neither grows with any input, so the
-	/// benchmark only needs a bucket whose deadline has passed.
+	/// Authorizing a sweep reads the oldest entry and the clock. The map holds one sweep's worth
+	/// of entries, each under a key of its own, which is the state a sweep is submitted against.
 	#[benchmark]
 	fn authorize_sweep_expired_trees() -> Result<(), BenchmarkError> {
-		let bucket = fill_expiry_bucket::<T>(1);
-		T::BenchmarkHelper::set_unix_time(bucket_deadline(bucket, T::TreeTtl::get()));
+		fill_due_expiries::<T>(T::MaxTreeDeletionsPerMessage::get());
 
 		#[block]
 		{
-			Pallet::<T>::authorize_sweep_expired_trees(TransactionSource::Local, &bucket)
-				.expect("must authorize");
+			Pallet::<T>::authorize_sweep_expired_trees(
+				TransactionSource::Local,
+				&FIRST_EXPIRY_TIMESTAMP,
+			)
+			.expect("must authorize");
 		}
 
 		Ok(())
@@ -379,7 +379,7 @@ fn claimable_tree<T: Config>(
 		BLOCK,
 		NftClaimCreditTree { game_index: 1, root: proof.root.into(), leaf_count, timestamp },
 	);
-	TreeExpiries::<T>::insert(expiry_bucket(timestamp), BLOCK, ());
+	TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), BLOCK, ());
 
 	let sibling_hashes = BoundedVec::try_from(
 		proof.proof.into_iter().map(CreditProofNode::from).collect::<Vec<_>>(),
@@ -389,14 +389,19 @@ fn claimable_tree<T: Config>(
 	Ok((origin, claimant, credits, leaf_index, sibling_hashes))
 }
 
-/// Files `n` trees under one expiry bucket and points the sweep's watermark at it. A sweep of a
-/// bucket that has fallen due starts from this state.
-fn fill_expiry_bucket<T: Config>(n: u32) -> ExpiryBucket {
-	// The first bucket past a whole TTL, so the clock can reach its deadline.
-	let bucket = expiry_bucket(T::TreeTtl::get().saturated_into::<u32>()).saturating_add(1);
-	let timestamp = bucket.saturating_mul(EXPIRY_BUCKET_SECONDS);
+/// The timestamp the first filed tree of a sweep benchmark commits to, which is what the sweep
+/// names. Each further tree adds a second to it, so every tree holds a key of its own. The value
+/// itself is arbitrary, because `fill_due_expiries` sets the clock from it.
+const FIRST_EXPIRY_TIMESTAMP: u32 = 1_000_000;
 
-	for block in 0..n {
+/// Files `n` trees that are due, each under a timestamp of its own, plus one that is not.
+///
+/// One timestamp per tree is the worst case: every removal reads and writes a key of its own,
+/// where trees sharing a timestamp would share the map's first key. The clock ends at the deadline
+/// of the last due tree, so the tree filed after it is what stops the sweep.
+fn fill_due_expiries<T: Config>(n: u32) {
+	for block in 0..=n {
+		let timestamp = FIRST_EXPIRY_TIMESTAMP.saturating_add(block);
 		CreditTrees::<T>::insert(
 			block,
 			NftClaimCreditTree {
@@ -406,13 +411,12 @@ fn fill_expiry_bucket<T: Config>(n: u32) -> ExpiryBucket {
 				timestamp,
 			},
 		);
-		TreeExpiries::<T>::insert(bucket, block, ());
+		TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
 		// A partly claimed tree, so the sweep pays for removing a bitmap that is there.
 		ClaimedLeaves::<T>::insert(block, BoundedVec::truncate_from(alloc::vec![0b01u8]));
 	}
-	NextExpiryBucket::<T>::put(bucket);
-
-	bucket
+	let last_due = FIRST_EXPIRY_TIMESTAMP.saturating_add(n).saturating_sub(1);
+	T::BenchmarkHelper::set_unix_time(expiry_deadline(last_due, T::TreeTtl::get()));
 }
 
 /// Marks every leaf of [`BLOCK`]'s tree claimed except `leaf_index`, so the next claim of it
