@@ -243,19 +243,19 @@ fn setup_recycler_with_pending<T: Config>(
 	members
 }
 
-/// Setup a built recycler (ring completed) with n members.
+/// Setup a built recycler (ring completed) with `count` members.
 /// Returns the ring index, revision, and secrets/members.
 ///
-/// The member count is padded to fill the ring so the onboarding cohort constraint is
-/// satisfied. Callers should use `members[..n]` for their actual proofs and
-/// `members.iter()` for the full ring member list.
+/// Each member costs a key generation, a load and a slot in the ring commitment, so ask for the
+/// members the benchmark proves against and no more. Below capacity the ring stays open, so a
+/// benchmark that needs a cleanable recycler has to ask for a ring capacity worth of members:
+/// only a full ring turns immutable, and only an immutable ring expires.
 fn setup_built_recycler<T: Config>(
 	value: Denomination,
 	count: u32,
 	seed: u32,
 ) -> (RingIndex, RevisionIndex, Vec<(SecretOf<T>, MemberOf<T>)>) {
-	let padded_count = count.max(T::RecyclerRingExponent::get().ring_capacity());
-	let members = setup_recycler_with_pending::<T>(value, padded_count, seed);
+	let members = setup_recycler_with_pending::<T>(value, count.max(1), seed);
 	let identifier = Pallet::<T>::recycler_collection_identifier(INSTANCE_ID, value);
 	let ring_index = 0u32;
 	T::MemberService::onboard_all_and_build_ring(&identifier, ring_index)
@@ -350,6 +350,19 @@ fn generate_alias_proof<T: Config>(
 	(proof, alias)
 }
 
+/// The unloaded-alias set a recycler commits to when every member but one has unloaded, the
+/// heaviest set an archive can hold.
+///
+/// The archived unload proves non-inclusion against the trie root over this set, so the
+/// measurement follows the set size and the spread of its keys, not which member produced each
+/// alias. Hashing keeps that spread and skips a ring's worth of VRF alias derivations.
+fn worst_case_unloaded_aliases<T: Config>() -> Vec<Alias> {
+	let count = T::RecyclerRingExponent::get().ring_capacity().saturating_sub(1);
+	(0..count)
+		.map(|i| sp_crypto_hashing::blake2_256(&(b"coinage-bench-unloaded-alias", i).encode()))
+		.collect::<Vec<_>>()
+}
+
 /// Setup paid unload token ring with n pending members.
 /// Returns the period, ring index, and secrets/members.
 fn setup_paid_token_ring_pending<T: Config>(
@@ -372,16 +385,15 @@ fn setup_paid_token_ring_pending<T: Config>(
 	(period, index, members)
 }
 
-/// Setup a built paid token ring with n members.
+/// Setup a built paid token ring with `count` members.
 ///
-/// The member count is padded to fill the ring so the onboarding cohort constraint is
-/// satisfied.
+/// The ring holds exactly `count` members. Nothing in the paid unload token flow requires a
+/// full ring: the cleanup and deletion paths only ask whether the ring has any member at all.
 fn setup_built_paid_token_ring<T: Config>(
 	count: u32,
 	seed: u32,
 ) -> (u32, u32, Vec<(SecretOf<T>, MemberOf<T>)>) {
-	let padded_count = count.max(T::PaidUnloadTokenRingExponent::get().ring_capacity());
-	let (period, index, members) = setup_paid_token_ring_pending::<T>(padded_count, seed);
+	let (period, index, members) = setup_paid_token_ring_pending::<T>(count.max(1), seed);
 	let identifier = Pallet::<T>::paid_token_collection_identifier(period);
 	T::MemberService::onboard_all_and_build_ring(&identifier, index).expect("should build ring");
 	(period, index, members)
@@ -1537,21 +1549,24 @@ mod benches {
 		// benchmark is still valid because the cost depends on iterating over the unloaded
 		// entries and, whenever coins remain recoverable, building the unloaded-aliases trie
 		// root over the m entries and recording the archival commitment, independent of the
-		// actual member count. The setup pads the ring to full capacity, so the archival branch
+		// actual member count. The setup fills the ring to capacity, so the archival branch
 		// (including `unloaded_aliases_root`) runs for every point of the `m` sweep except
 		// m == capacity (where nothing remains recoverable and it is legitimately skipped), and
 		// its cost is captured by the `m` slope.
 		common_setup::<T>();
 
 		let value = T::MinimumExponent::get();
-		// Fill ring 0 with n members. This advances CurrentRingIndex to 1 and sets
-		// immutable_since on ring 0.
-		let (_index, _revision, _members) = setup_built_recycler::<T>(value, n, 0);
+		let ring_index: RingIndex = 0;
+		// Fill ring 0 to capacity. This advances CurrentRingIndex to 1 and sets immutable_since
+		// on ring 0, which is what makes the recycler expire and become cleanable. `n` cannot
+		// size the ring for that reason, so every sample carries a full ring and the `n` slope
+		// stays flat: the intercept charges the whole `ring_members` read.
+		let ring_size = T::RecyclerRingExponent::get().ring_capacity();
+		let (_index, _revision, _members) = setup_built_recycler::<T>(value, n.max(ring_size), 0);
 		let identifier = Pallet::<T>::recycler_collection_identifier(INSTANCE_ID, value);
 
 		// Insert m unloaded alias-state entries to simulate consumed aliases.
 		// This captures the cost of iterating over unloaded entries in `clean_unchecked`.
-		let ring_index: RingIndex = 0;
 		for i in 0..m {
 			let mut alias: Alias = [0u8; 32];
 			alias[0..4].copy_from_slice(&i.to_le_bytes());
@@ -2784,19 +2799,16 @@ mod benches {
 		common_setup::<T>();
 
 		let value = T::MinimumExponent::get();
-		// Build a ring; member 0 will recover, the rest form the committed unloaded set.
+		// The recovering member is the only one the ring has to hold: ring-VRF validation reads
+		// the root, whose size and cost do not follow the member count. The other members of a
+		// full ring reach the measurement only through the unloaded set they committed to.
 		let (index, _revision, members) = setup_built_recycler::<T>(value, 1, 0);
 		let recycler_root =
 			Pallet::<T>::recycler_ring_root(INSTANCE_ID, value, index).expect("ring root exists");
 
 		let member_keys: Vec<MemberOf<T>> = members.iter().map(|(_, m)| m.clone()).collect();
-		let unloaded: Vec<Alias> = members[1..]
-			.iter()
-			.map(|(s, _)| {
-				CryptoOf::<T>::alias_in_context(s, pallet::UNLOADING_RECYCLER_CONTEXT.as_ref())
-					.expect("alias")
-			})
-			.collect();
+		let unloaded = worst_case_unloaded_aliases::<T>();
+		let member_count = T::RecyclerRingExponent::get().ring_capacity();
 
 		let caller: T::AccountId = account("caller", 0, 0);
 		let dest: T::AccountId = account("dest", 1, 0);
@@ -2812,7 +2824,6 @@ mod benches {
 
 		// Archive the ring with all members recoverable.
 		let commitment = archive_commitment(unloaded_root, &recycler_root);
-		let member_count = members.len() as u32;
 		RecyclersArchives::<T>::insert(
 			(INSTANCE_ID, value, index),
 			ArchivedRecycler { commitment, remaining: member_count },
@@ -3512,19 +3523,14 @@ mod benches {
 		common_setup::<T>();
 
 		let value = T::MinimumExponent::get();
-		// Build a ring; member 0 recovers, the rest form the committed unloaded set.
+		// Only the recovering member needs a ring slot; see the note on
+		// `unload_archived_recycler_into_external_asset`.
 		let (index, _revision, members) = setup_built_recycler::<T>(value, 1, 0);
 		let recycler_root =
 			Pallet::<T>::recycler_ring_root(INSTANCE_ID, value, index).expect("ring root exists");
 
 		let member_keys: Vec<MemberOf<T>> = members.iter().map(|(_, m)| m.clone()).collect();
-		let unloaded: Vec<Alias> = members[1..]
-			.iter()
-			.map(|(s, _)| {
-				CryptoOf::<T>::alias_in_context(s, pallet::UNLOADING_RECYCLER_CONTEXT.as_ref())
-					.expect("alias")
-			})
-			.collect();
+		let unloaded = worst_case_unloaded_aliases::<T>();
 
 		let caller: T::AccountId = account("caller", 0, 0);
 		let proven_msg = Pallet::<T>::unload_archived_proof_message(&caller);
@@ -3535,7 +3541,7 @@ mod benches {
 
 		// Archive the ring; the call's roots must match this commitment at validation.
 		let commitment = archive_commitment(unloaded_root, &recycler_root);
-		let remaining = members.len() as u32;
+		let remaining = T::RecyclerRingExponent::get().ring_capacity();
 		RecyclersArchives::<T>::insert(
 			(INSTANCE_ID, value, index),
 			ArchivedRecycler { commitment, remaining },
@@ -4279,7 +4285,10 @@ mod benches {
 		common_setup::<T>();
 
 		let value = T::MinimumExponent::get();
-		let (_index, _revision, _members) = setup_built_recycler::<T>(value, 1, 0);
+		// `ensure_can_clean` only passes on an expired recycler, and a ring turns immutable, and
+		// so expirable, once it is full.
+		let ring_size = T::RecyclerRingExponent::get().ring_capacity();
+		let (_index, _revision, _members) = setup_built_recycler::<T>(value, ring_size, 0);
 
 		// Advance time past expiration
 		let identifier = Pallet::<T>::recycler_collection_identifier(INSTANCE_ID, value);
