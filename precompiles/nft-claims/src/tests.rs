@@ -17,7 +17,8 @@
 use super::*;
 use crate::mock::*;
 
-use indiv_pallet_nft_claims::CollectionMinter;
+use indiv_pallet_nft_claims::{CollectionMinter, WeightInfo};
+use indiv_precompile_support::PROOF_SIZE_PER_READ;
 use pallet_revive::{
 	precompiles::{
 		alloy::sol_types::{Revert, SolCall, SolError, SolInterface},
@@ -28,18 +29,23 @@ use pallet_revive::{
 };
 use sp_runtime::AccountId32;
 
-/// Call the minter precompile with `input` and return the raw execution result.
-fn call_precompile(caller: &AccountId32, input: Vec<u8>) -> pallet_revive::ExecReturnValue {
-	pallet_revive::Pallet::<Test>::bare_call(
+/// Call the minter precompile with `input` and return the weight the call consumed alongside the
+/// raw execution result.
+fn call_weighed(caller: &AccountId32, input: Vec<u8>) -> (Weight, pallet_revive::ExecReturnValue) {
+	let outcome = pallet_revive::Pallet::<Test>::bare_call(
 		RuntimeOrigin::signed(caller.clone()),
 		minter_address(),
 		0u32.into(),
 		TransactionLimits::WeightAndDeposit { weight_limit: Weight::MAX, deposit_limit: u64::MAX },
 		input,
 		&ExecConfig::new_substrate_tx(),
-	)
-	.result
-	.expect("precompile call should execute")
+	);
+	(outcome.weight_consumed, outcome.result.expect("precompile call should execute"))
+}
+
+/// Call the minter precompile with `input` and return the raw execution result.
+fn call_precompile(caller: &AccountId32, input: Vec<u8>) -> pallet_revive::ExecReturnValue {
+	call_weighed(caller, input).1
 }
 
 /// Call the minter precompile with `input`, attaching `value`, and return the raw execution
@@ -96,6 +102,18 @@ fn read_minter(collection: CollectionId) -> INftClaimsMinter::collectionMinterRe
 	map_account(&reader);
 	let data = call_ok(&reader, INftClaimsMinter::collectionMinterCall { collection }.abi_encode());
 	INftClaimsMinter::collectionMinterCall::abi_decode_returns(&data).unwrap()
+}
+
+/// Every state-changing minter call, encoded for the precompile. The owner-gate and
+/// unknown-collection tests both reject the whole set, so they share this to stay in step when a
+/// call is added.
+fn mutating_minter_calls(collection: CollectionId) -> [Vec<u8>; 3] {
+	[
+		INftClaimsMinter::setRandomMinterCall { collection }.abi_encode(),
+		INftClaimsMinter::setContractMinterCall { collection, minter: H160([0xCC; 20]).0.into() }
+			.abi_encode(),
+		INftClaimsMinter::clearMinterCall { collection }.abi_encode(),
+	]
 }
 
 #[test]
@@ -193,15 +211,7 @@ fn non_owner_cannot_register_or_withdraw() {
 		let collection = setup_collection(&alice);
 		map_account(&bob);
 
-		for input in [
-			INftClaimsMinter::setRandomMinterCall { collection }.abi_encode(),
-			INftClaimsMinter::setContractMinterCall {
-				collection,
-				minter: H160([0xCC; 20]).0.into(),
-			}
-			.abi_encode(),
-			INftClaimsMinter::clearMinterCall { collection }.abi_encode(),
-		] {
+		for input in mutating_minter_calls(collection) {
 			call_reverted_with(&bob, input, "caller is not the collection owner");
 		}
 		assert_eq!(CollectionMinters::<Test>::get(collection), None);
@@ -213,12 +223,12 @@ fn unknown_collection_reverts() {
 	new_test_ext().execute_with(|| {
 		let alice = id_to_account(1);
 		map_account(&alice);
+		let unknown = 7;
 
-		call_reverted_with(
-			&alice,
-			INftClaimsMinter::setRandomMinterCall { collection: 7 }.abi_encode(),
-			"unknown collection",
-		);
+		for input in mutating_minter_calls(unknown) {
+			call_reverted_with(&alice, input, "unknown collection");
+		}
+		assert_eq!(CollectionMinters::<Test>::get(unknown), None);
 	});
 }
 
@@ -242,6 +252,45 @@ fn rejected_contract_selection_reverts() {
 
 		// The selector only checks contract selections, so random registration still works.
 		call_ok(&alice, INftClaimsMinter::setRandomMinterCall { collection }.abi_encode());
+	});
+}
+
+/// Both branches charge before they act, so the frame consumes at least what each one declares.
+///
+/// The mutator charges the pallet's `set_collection_minter` weight and the read one database
+/// read. Dropping either charge leaves the work in place and the test is what notices, since a
+/// frame that charges nothing still returns the right answer.
+#[test]
+fn each_method_charges_its_weight() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+
+		let (mutating, output) =
+			call_weighed(&alice, INftClaimsMinter::setRandomMinterCall { collection }.abi_encode());
+		assert!(!output.did_revert(), "expected success, got revert: {output:?}");
+		let declared =
+			<Test as indiv_pallet_nft_claims::Config>::WeightInfo::set_collection_minter();
+		assert!(
+			mutating.all_gte(declared),
+			"the mutator consumed {mutating:?}, less than the {declared:?} it charges"
+		);
+
+		let (read, output) = call_weighed(
+			&alice,
+			INftClaimsMinter::collectionMinterCall { collection }.abi_encode(),
+		);
+		assert!(!output.did_revert(), "expected success, got revert: {output:?}");
+		// `DbWeight` is zero in this mock, so a read shows up in the proof size alone.
+		assert!(
+			read.proof_size() >= PROOF_SIZE_PER_READ,
+			"the read consumed {read:?}, less than the one database read it charges"
+		);
+		// The read reaches no pallet call, which the mutator's execution time covers.
+		assert!(
+			read.ref_time() < mutating.ref_time(),
+			"the read consumed {read:?}, no less than the mutator's {mutating:?}"
+		);
 	});
 }
 
@@ -416,6 +465,9 @@ mod guards {
 		}
 	}
 
+	/// The revert message `Error::try_to_revert` produces for a delegate call.
+	const DELEGATE_DENIED_REVERT: &str = "illegal to call this pre-compile via delegate call";
+
 	#[test]
 	fn delegate_call_is_denied() {
 		new_test_ext().execute_with(|| {
@@ -423,13 +475,18 @@ mod guards {
 			setup.set_delegate_call(true);
 			let (mut ext, _) = setup.ext();
 
+			// The guard reverts with a reason rather than trapping, so a delegatecaller keeps
+			// its gas and can catch the failure.
 			for input in [read_call(), mutating_call()] {
 				let result = run_precompile::<NftClaimsMinter<Test, MINTER_INDEX>, _>(
 					&mut ext,
 					&minter_address().0,
 					&input,
 				);
-				assert_denied_with(result, pallet_revive::Error::<Test>::PrecompileDelegateDenied);
+				assert!(
+					matches!(&result, Err(Error::Revert(r)) if r.reason == DELEGATE_DENIED_REVERT),
+					"expected a delegate-call revert, got {result:?}"
+				);
 			}
 		});
 	}
@@ -457,6 +514,213 @@ mod guards {
 			.expect("reads must succeed in a read-only frame");
 			let minter = INftClaimsMinter::collectionMinterCall::abi_decode_returns(&read).unwrap();
 			assert_eq!(minter.kind, KIND_NONE);
+		});
+	}
+}
+
+/// End-to-end tests driving the minter precompile from real compiled EVM contracts: a contract
+/// that owns a collection and registers itself as the minter, and a standalone minter contract a
+/// collection owner registers. Compiled on demand by `indiv-precompile-fixtures`, which panics if
+/// `solc` or `resolc` is missing, so a passing run always exercised real bytecode.
+mod evm_fixture {
+	use super::*;
+	use frame_support::traits::Currency;
+	use indiv_precompile_fixtures::fixture_code;
+	use indiv_precompile_support::test_helpers::alloy_address;
+	use pallet_revive::{precompiles::AddressMapper, Code};
+
+	alloy::sol! {
+		interface ISelfMinter {
+			struct BootstrapConfig {
+				address factory;
+				uint16 prefix;
+				address claims;
+			}
+			function bootstrap(BootstrapConfig config) external returns (uint32 collection);
+		}
+
+		interface IClaimsMinterCaller {
+			function readMinterInStaticFrame(address claims, uint32 collection)
+				external
+				view
+				returns (bool ok, bytes returnData);
+			function registerInStaticFrame(address claims, uint32 collection)
+				external
+				view
+				returns (bool ok, bytes returnData);
+			function register(address claims, uint32 collection)
+				external
+				returns (bool ok, bytes returnData);
+		}
+	}
+
+	fn contract_account(address: H160) -> AccountId32 {
+		<Test as pallet_revive::Config>::AddressMapper::to_account_id(&address)
+	}
+
+	fn deploy(owner: &AccountId32, code: Vec<u8>) -> H160 {
+		pallet_revive::Pallet::<Test>::bare_instantiate(
+			RuntimeOrigin::signed(owner.clone()),
+			0u32.into(),
+			TransactionLimits::WeightAndDeposit {
+				weight_limit: Weight::MAX,
+				deposit_limit: 1u64 << 50,
+			},
+			Code::Upload(code),
+			Vec::new(),
+			None,
+			&ExecConfig::new_substrate_tx(),
+		)
+		.result
+		.expect("contract instantiates")
+		.addr
+	}
+
+	/// Panics if the call reverts.
+	fn call_contract(caller: &AccountId32, contract: H160, input: Vec<u8>) -> Vec<u8> {
+		let output = pallet_revive::Pallet::<Test>::bare_call(
+			RuntimeOrigin::signed(caller.clone()),
+			contract,
+			0u32.into(),
+			TransactionLimits::WeightAndDeposit {
+				weight_limit: Weight::MAX,
+				deposit_limit: u64::MAX,
+			},
+			input,
+			&ExecConfig::new_substrate_tx(),
+		)
+		.result
+		.expect("contract call executes");
+		assert!(!output.did_revert(), "expected success, got revert: {output:?}");
+		output.data
+	}
+
+	#[test]
+	fn contract_owns_collection_and_self_registers() {
+		let code = fixture_code("SelfMinter");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			map_account(&alice);
+			let self_minter = deploy(&alice, code);
+			// The contract, not the caller, pays the collection and item deposits it incurs.
+			Balances::make_free_balance_be(&contract_account(self_minter), u64::MAX / 2);
+
+			let bootstrapped = call_contract(
+				&alice,
+				self_minter,
+				ISelfMinter::bootstrapCall {
+					config: ISelfMinter::BootstrapConfig {
+						factory: alloy_address(factory_address()),
+						prefix: COLLECTION_PREFIX,
+						claims: alloy_address(minter_address()),
+					},
+				}
+				.abi_encode(),
+			);
+			let collection = ISelfMinter::bootstrapCall::abi_decode_returns(&bootstrapped).unwrap();
+
+			// The registration names the contract as both the collection owner and the minter.
+			let registration = read_minter(collection);
+			assert_eq!(registration.kind, crate::KIND_CONTRACT);
+			assert_eq!(registration.minter, alloy_address(self_minter));
+			assert_eq!(registration.owner, alloy_address(self_minter));
+		});
+	}
+
+	#[test]
+	fn deployed_contract_is_registered_as_minter() {
+		let code = fixture_code("ClaimsMinter");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let minter_contract = deploy(&alice, code);
+
+			// The collection owner registers the deployed contract as its claims minter.
+			call_ok(
+				&alice,
+				INftClaimsMinter::setContractMinterCall {
+					collection,
+					minter: alloy_address(minter_contract),
+				}
+				.abi_encode(),
+			);
+
+			let registration = read_minter(collection);
+			assert_eq!(registration.kind, crate::KIND_CONTRACT);
+			assert_eq!(registration.minter, alloy_address(minter_contract));
+			assert_eq!(registration.owner, address_of::<Test>(&alice));
+		});
+	}
+
+	#[test]
+	fn a_read_only_frame_serves_the_read_and_denies_the_registration() {
+		let code = fixture_code("ClaimsMinterCaller");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			map_account(&alice);
+			let caller = deploy(&alice, code);
+			let owner = contract_account(caller);
+			// The contract owns the collection, so it pays the deposit that creating one incurs.
+			Balances::make_free_balance_be(&owner, u64::MAX / 2);
+			let collection = pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone())
+				.expect("collection is created");
+			let claims = alloy_address(minter_address());
+
+			let read = |collection| {
+				let data = call_contract(
+					&alice,
+					caller,
+					IClaimsMinterCaller::readMinterInStaticFrameCall { claims, collection }
+						.abi_encode(),
+				);
+				let outcome =
+					IClaimsMinterCaller::readMinterInStaticFrameCall::abi_decode_returns(&data)
+						.unwrap();
+				assert!(outcome.ok, "a read must be served in a read-only frame");
+				INftClaimsMinter::collectionMinterCall::abi_decode_returns(&outcome.returnData)
+					.expect("the read answers with an encoded registration")
+			};
+
+			assert_eq!(read(collection).kind, crate::KIND_NONE);
+
+			// The registration is denied and the frame traps rather than reverting, so nothing
+			// comes back. An empty return rules out the mapped reverts, which each carry a reason,
+			// but names no error: a trapped frame reports none to its caller.
+			let data = call_contract(
+				&alice,
+				caller,
+				IClaimsMinterCaller::registerInStaticFrameCall { claims, collection }.abi_encode(),
+			);
+			let denied =
+				IClaimsMinterCaller::registerInStaticFrameCall::abi_decode_returns(&data).unwrap();
+			assert!(!denied.ok, "a registration must be denied in a read-only frame");
+			assert!(
+				denied.returnData.is_empty(),
+				"expected a trapped frame, got {:?}",
+				denied.returnData
+			);
+			assert_eq!(CollectionMinters::<Test>::get(collection), None);
+
+			// The same call outside a read-only frame goes through, which leaves the frame's
+			// read-only flag as the reason for the denial above.
+			let data = call_contract(
+				&alice,
+				caller,
+				IClaimsMinterCaller::registerCall { claims, collection }.abi_encode(),
+			);
+			let registered = IClaimsMinterCaller::registerCall::abi_decode_returns(&data).unwrap();
+			assert!(
+				registered.ok,
+				"the owner registers outside a read-only frame, got {:?}",
+				registered.returnData
+			);
+			assert_eq!(
+				CollectionMinters::<Test>::get(collection),
+				Some(CollectionMinter { owner, selection: ItemSelection::Random })
+			);
+
+			// The read-only frame reports the registration the writable one made.
+			assert_eq!(read(collection).kind, crate::KIND_RANDOM);
 		});
 	}
 }

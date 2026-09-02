@@ -18,20 +18,22 @@ pub use super::*;
 
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{
-		fungible::HoldConsideration, ConstU32, ConstU64, ConstU8, Currency, LinearStoragePrice,
-		UnixTime,
-	},
+	traits::{fungible::HoldConsideration, ConstU32, ConstU64, ConstU8, LinearStoragePrice},
 };
 use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateTransaction, CreateTransactionBase},
 	AuthorizeCall,
 };
 use indiv_pallet_nft_claims::{CollectionSelector, Selection, SelectionError};
+use indiv_precompile_scarcity::{ScarcityCollection, ScarcityFactory};
+use indiv_precompile_support::test_helpers::{
+	map_account as map_account_shared, precompile_address,
+};
 use indiv_support::{credit_trees::NftClaimCredit, identity::AccountOrPerson};
-use pallet_revive::precompiles::AddressMapper;
-use sp_runtime::{testing::UintAuthorityId, traits::Identity, AccountId32, BuildStorage};
+use sp_runtime::{testing::UintAuthorityId, traits::Identity, AccountId32, BuildStorage, Weight};
 use xcm::latest::{Junction::Parachain, Location};
+
+pub use indiv_precompile_support::test_helpers::{id_to_account, MockNow, MockUnixTime};
 
 /// The nft-claims pallet submits authorized calls from its offchain worker. Its `Config` therefore
 /// needs a runtime that builds such a transaction, which a `MockBlock` does not.
@@ -47,6 +49,10 @@ pub type Extrinsic = sp_runtime::generic::UncheckedExtrinsic<
 
 /// Fixed address index of the minter-registration precompile in this mock.
 pub const MINTER_INDEX: u16 = 0x0522;
+/// Address prefix of the per-collection Scarcity precompile in this mock.
+pub const COLLECTION_PREFIX: u16 = 0x0520;
+/// Fixed address index of the Scarcity factory precompile in this mock.
+pub const FACTORY_INDEX: u16 = 0x0521;
 
 frame_support::construct_runtime!(
 	pub enum Test
@@ -65,6 +71,8 @@ impl frame_system::Config for Test {
 	type AccountId = AccountId32;
 	type Lookup = sp_runtime::traits::IdentityLookup<Self::AccountId>;
 	type AccountData = pallet_balances::AccountData<u64>;
+	// These tests register minters and mint nothing, so no purse key needs auto-mapping and the
+	// account hooks the runtime wires for that are left off.
 }
 
 impl<LocalCall> CreateTransactionBase<LocalCall> for Test
@@ -102,18 +110,6 @@ where
 impl pallet_balances::Config for Test {
 	type AccountStore = System;
 	type MaxFreezes = frame_support::traits::VariantCountOf<RuntimeFreezeReason>;
-}
-
-parameter_types! {
-	pub static MockNow: u64 = 0;
-}
-
-/// Test-controlled Unix time source.
-pub struct MockUnixTime;
-impl UnixTime for MockUnixTime {
-	fn now() -> core::time::Duration {
-		core::time::Duration::from_secs(MockNow::get())
-	}
 }
 
 parameter_types! {
@@ -254,28 +250,28 @@ impl pallet_revive::Config for Test {
 	type AddressMapper = pallet_revive::AccountId32Mapper<Self>;
 	type Balance = u64;
 	type Currency = Balances;
-	type Precompiles = (NftClaimsMinter<Self, MINTER_INDEX>,);
+	type Precompiles = (
+		NftClaimsMinter<Self, MINTER_INDEX>,
+		ScarcityCollection<Self, COLLECTION_PREFIX>,
+		ScarcityFactory<Self, FACTORY_INDEX>,
+	);
 	type UploadOrigin = frame_system::EnsureSigned<AccountId32>;
 	type InstantiateOrigin = frame_system::EnsureSigned<AccountId32>;
 }
 
-/// The minter-registration precompile's fixed address under [`MINTER_INDEX`].
+/// The minter-registration precompile's fixed address.
 pub fn minter_address() -> H160 {
-	let mut address = [0u8; 20];
-	address[16..18].copy_from_slice(&MINTER_INDEX.to_be_bytes());
-	H160(address)
+	precompile_address::<NftClaimsMinter<Test, MINTER_INDEX>>()
 }
 
-/// Fund `account` and register its H160↔AccountId32 mapping with `pallet-revive`.
+/// The Scarcity factory precompile's fixed address.
+pub fn factory_address() -> H160 {
+	precompile_address::<ScarcityFactory<Test, FACTORY_INDEX>>()
+}
+
+/// Fund `account` and register its H160-to-AccountId32 mapping with `pallet-revive`.
 pub fn map_account(account: &AccountId32) {
-	Balances::make_free_balance_be(account, u64::MAX / 2);
-	let _ = <Test as pallet_revive::Config>::AddressMapper::map(account);
-}
-
-pub fn id_to_account(id: u64) -> AccountId32 {
-	let mut bytes = [0u8; 32];
-	bytes[..8].copy_from_slice(&id.to_le_bytes());
-	AccountId32::new(bytes)
+	map_account_shared::<Test>(account)
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
