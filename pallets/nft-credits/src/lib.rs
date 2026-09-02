@@ -1190,7 +1190,8 @@ impl<T: Config> Pallet<T> {
 			first_sequence,
 			discriminator: block_number / RETRY_WINDOW.into(),
 		};
-		submit_authorized::<T, _>(call, block_number, "send_credit_trees", LOG_TARGET);
+
+		submit_authorized::<T, _>(call, "send_credit_trees", LOG_TARGET);
 	}
 
 	/// Note `block` as the newest award block whose [`NftClaimCreditAwards`] are retained,
@@ -1695,7 +1696,8 @@ impl<T: Config> Pallet<T> {
 			// one attempt in the pool.
 			discriminator: block_number,
 		};
-		submit_authorized::<T, _>(call, block_number, "sweep_expired_roots", LOG_TARGET);
+
+		submit_authorized::<T, _>(call, "sweep_expired_roots", LOG_TARGET);
 	}
 
 	/// Awards `claimant` the credit `attester` would earn them in `round` of `game_index`, as

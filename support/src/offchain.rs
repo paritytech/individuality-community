@@ -35,11 +35,7 @@
 //! Every pallet that submits this way goes through [`submit_authorized`], so a stalled submitter
 //! behaves the same whichever pallet it belongs to.
 
-use frame_system::{
-	offchain::{CreateAuthorizedTransaction, SubmitTransaction},
-	pallet_prelude::BlockNumberFor,
-};
-use sp_runtime::traits::Zero;
+use frame_system::offchain::{CreateAuthorizedTransaction, SubmitTransaction};
 
 /// Retry window, in blocks, for an offchain worker's submissions.
 /// The `discriminator` a submission carries stays constant over one window.
@@ -52,38 +48,17 @@ pub const RETRY_WINDOW: u32 = 8;
 /// matches.
 pub const TX_LONGEVITY: u64 = 64;
 
-/// Period, in blocks, at which a failed submission logs a warning instead of a `debug` message.
-///
-/// A submission fails inside every retry window, so only a streak of failures shows a stall.
-/// Nothing else reports a stalled submitter.
-pub const STALL_WARN_PERIOD: u32 = 32;
-
-/// Hands the authorized `call` of pallet `T` to the transaction pool, reporting a stall under
+/// Hands the authorized `call` of pallet `T` to the transaction pool, reporting a rejection under
 /// `log_target` as `name`.
 ///
-/// A submission fails inside every retry window, because the pool deduplicates attempts that
-/// encode identically. A submission that carries the block number fails when it does not outrank
-/// the attempt the pool already holds. Neither is a fault, so a failure logs a warning every
-/// [`STALL_WARN_PERIOD`] blocks and a `debug` message otherwise.
-pub fn submit_authorized<T, Call>(
-	call: Call,
-	block_number: BlockNumberFor<T>,
-	name: &str,
-	log_target: &str,
-) where
+/// A retry the pool already holds is rejected, so a warning every block is the steady state while
+/// a job waits for inclusion.
+pub fn submit_authorized<T, Call>(call: Call, name: &str, log_target: &str)
+where
 	T: frame_system::Config + CreateAuthorizedTransaction<Call>,
 {
 	let tx = T::create_authorized_transaction(call.into());
-	if SubmitTransaction::<T, Call>::submit_transaction(tx).is_ok() {
-		return;
-	}
-
-	if (block_number % STALL_WARN_PERIOD.into()).is_zero() {
-		log::warn!(
-			target: log_target,
-			"offchain worker: `{name}` repeatedly rejected by the transaction pool, possible stall",
-		);
-	} else {
-		log::debug!(target: log_target, "offchain worker: failed to submit `{name}`");
+	if SubmitTransaction::<T, Call>::submit_transaction(tx).is_err() {
+		log::warn!(target: log_target, "offchain worker: `{name}` rejected by the transaction pool");
 	}
 }
