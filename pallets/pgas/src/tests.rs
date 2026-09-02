@@ -326,10 +326,7 @@ fn batch_claim_pgas_success() {
 			<Assets as Inspect<AccountId32>>::balance(PgasAssetId::get(), &target),
 			PgasClaimAmount::get() * slots.len() as u64,
 		);
-		assert_eq!(
-			ClaimedGasAliases::<Test>::iter_prefix(Day::from(1u32)).count(),
-			slots.len()
-		);
+		assert_eq!(ClaimedGasAliases::<Test>::iter_prefix(Day::from(1u32)).count(), slots.len());
 		let claim_events = System::events()
 			.iter()
 			.filter(|r| matches!(&r.event, RuntimeEvent::Pgas(Event::PgasClaimed { .. })))
@@ -444,7 +441,11 @@ fn batch_claim_pgas_direct_dispatch_requires_batch_claim_origin() {
 			sp_runtime::DispatchError::BadOrigin,
 		);
 		assert_noop!(
-			Pallet::<Test>::batch_claim_pgas(SystemOrigin::None.into(), slots.clone(), target.clone()),
+			Pallet::<Test>::batch_claim_pgas(
+				SystemOrigin::None.into(),
+				slots.clone(),
+				target.clone()
+			),
 			sp_runtime::DispatchError::BadOrigin,
 		);
 		let single_origin: RuntimeOrigin = crate::Origin::ClaimAlias {
