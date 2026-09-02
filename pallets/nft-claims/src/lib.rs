@@ -442,7 +442,8 @@ pub mod pallet {
 	/// A tree's bucket is `expiry_bucket(tree.timestamp)`. This orders the trees by deadline, which
 	/// [`CreditTrees`] does not. A bucket whose last timestamp is more than [`Config::TreeTtl`] old
 	/// holds expired trees only, so a sweep names them directly instead of reading every tree to
-	/// find the few that are due. Both removal paths remove a tree's entry with the tree.
+	/// find the few that are due. Only a sweep of the bucket removes an entry: a fully claimed
+	/// tree keeps its entry, so that sweep removes its bitmap.
 	#[pallet::storage]
 	pub type TreeExpiries<T: Config> =
 		StorageDoubleMap<_, Twox64Concat, ExpiryBucket, Twox64Concat, AwardBlock, (), OptionQuery>;
