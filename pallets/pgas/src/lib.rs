@@ -354,7 +354,7 @@ pub mod pallet {
 		/// Mint PGAS for a batch of verified claim slots.
 		///
 		/// Must be submitted with the [`AsPgas`] transaction extension carrying
-		/// [`AsPgasInfo::BatchClaim`](extension::AsPgasInfo::BatchClaim), which verifies a
+		/// [`AsPgasInfo::BatchClaim`], which verifies a
 		/// single multi-context proof covering one context per entry in `slot_indices` and
 		/// produces an [`Origin::BatchClaimAliases`]. The outer origin must be `None`; any
 		/// other origin is rejected.
