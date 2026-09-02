@@ -185,8 +185,11 @@ pub mod pallet {
 		type MaxPgasClaimRecordCleanupPerCall: Get<u32>;
 
 		/// Maximum number of claim slots a single [`Call::batch_claim_pgas`] may carry.
-		/// Must not exceed [`MAX_PGAS_BATCH_CLAIMS`] or the largest per-collection claim
-		/// count; both asserted in `integrity_test`.
+		///
+		/// This value must not exceed [`MAX_PGAS_BATCH_CLAIMS`] or the largest per-collection claim
+		/// count. This value cannot be changed dynamically without a runtime upgrade because it
+		/// determines the weight of the batch claim call, so increasing this value without
+		/// re-benchmarking will make that call consume more blockspace than expected.
 		#[pallet::constant]
 		type MaxPgasClaimsPerBatch: Get<u32>;
 
