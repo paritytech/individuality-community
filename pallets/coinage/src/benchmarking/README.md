@@ -5,8 +5,10 @@
 Without a warm cache, some `frame-omni-bencher` runs get extremely slow,
 especially the larger `8_max` / `9_max` unload benchmarks.
 
-If the CI benchmark-runtime job runs longer than 30 minutes, the cache is
-probably missing entries. A healthy run finishes in 21–30 minutes.
+A miss is logged at warn level as `alias proof cache miss`, so a run under
+`RUNTIME_LOG=warn` shows directly whether the cache still matches. Each miss
+costs over a second of ring-VRF proof creation, so a run that is slower than
+expected is the same symptom.
 
 ## What is cached
 
@@ -19,11 +21,25 @@ Each cache entry stores:
 The lookup in [proof_cache.rs](./proof_cache.rs) uses binary search, so entries
 must stay sorted by the first hash key.
 
-## Current CI-relevant ring exponent
+## Current ring exponent
 
-`next-people-paseo-runtime` uses `RecyclerRingExponent = R2e10`, so the table
-that matters for CI is `CACHE_ENTRIES_R2E10`. `CACHE_ENTRIES_R2E9` is kept in
-`proof_cache.rs` but is not used by CI and does not need regenerating.
+A cache key hashes the ring's whole member list, so entries only ever match one
+`RecyclerRingExponent`. `next-people-paseo-runtime`, the only runtime with
+coinage, uses `R2e10`, and `CACHE_ENTRIES_R2E10` is the single table. A runtime
+on another exponent misses every lookup and logs a warning.
+
+## When to regenerate
+
+Regenerate whenever a benchmark setup changes what a proof commits to: the ring
+member set, the proven message, or the accounts and values feeding into it.
+Those all feed the cache key, so a stale entry does not go wrong, it simply
+never matches, and the run pays full ring-VRF proof generation instead.
+
+A component step picks the values a proof is built over, so an entry only
+matches runs at a step count whose sweep visits the same values. The harvest
+therefore runs every step count from 2 to 8 and takes the union; a run at any
+of them is warm, a run at another step count is partly cold. Pass `--steps` to
+the script to cover a different set.
 
 ## Regeneration feature flags
 
@@ -56,15 +72,22 @@ python3 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py
 ```
 
 The script builds the R2e10 runtime with the regeneration feature (using the
-stable toolchain pinned in `rust-toolchain.toml`), runs `frame-omni-bencher`,
-deduplicates and sorts the captured `CACHE_ENTRY:`
-lines, and splices the result into `CACHE_ENTRIES_R2E10` in `proof_cache.rs`.
+stable toolchain pinned in `rust-toolchain.toml`), runs `frame-omni-bencher`
+once per extrinsic and per step count in parallel, deduplicates and sorts the
+captured `CACHE_ENTRY:` lines, and splices the union into `CACHE_ENTRIES_R2E10`
+in `proof_cache.rs`. A full harvest creates every proof cold, tens of CPU
+hours in total, so run it on a many-core machine.
 
 Flags:
 
 - `--no-build` — skip the cargo build and reuse existing WASM.
 - `--no-write` — run the full harvest and print the entry count without
   modifying `proof_cache.rs`. Useful for dry runs.
+- `--profile <profile>` — cargo profile for the runtime build, `production` by
+  default. The cached proofs are the same either way, so `release` trades a
+  slower harvest for a much shorter build.
+- `--steps N [N ...]` — step counts to harvest, `2 3 4 5 6 7 8` by default.
+- `--jobs N` — parallel `frame-omni-bencher` processes, CPU count by default.
 
 After the script finishes, still run the step 5 verification below.
 
@@ -110,6 +133,10 @@ RUNTIME_LOG=error frame-omni-bencher v1 benchmark pallet \
 `RUNTIME_LOG=error` is used to include the `CACHE_ENTRY:` lines. `RUNTIME_LOG=off` hides them.
 
 ### 2. Harvest full runtime entries
+
+The command below harvests one step count. Repeat it for each step count a
+later run may use (the script covers 2 to 8) and concatenate the logs before
+step 3.
 
 ```bash
 cargo build --profile production -p next-people-paseo-runtime \
@@ -158,5 +185,5 @@ Paste the entries from `/tmp/coinage-r2e10-cache-entries.txt` into
 cargo test -p indiv-pallet-coinage --features runtime-benchmarks benchmarking::benches
 ```
 
-Then rerun the runtime benchmark job to confirm the slow coinage benchmarks no
-longer time out.
+Then rerun the runtime benchmark under `RUNTIME_LOG=warn` at a harvested step
+count and check that no `alias proof cache miss` line appears.

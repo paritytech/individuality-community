@@ -298,9 +298,10 @@ fn emit_cache_entry(cache_key: &[u8; 32], proof: &[u8], alias: &Alias) {
 /// Generate alias proof for recycler unload.
 /// First checks the proof cache, falls back to computing the proof if not cached.
 ///
-/// Proof generation takes several minutes during benchmarks, so the cache is important.
-/// To regenerate the cache, build with the `benchmark-proof-cache-regenerate` feature
-/// (or `coinage-benchmark-proof-cache-regenerate` on the runtime); see
+/// A ring-VRF proof takes over a second to create in WASM, so a miss is logged at warn level:
+/// a run that is slower than expected is a cache that no longer matches its inputs. To
+/// regenerate the cache, build with the `benchmark-proof-cache-regenerate` feature (or
+/// `coinage-benchmark-proof-cache-regenerate` on the runtime); see
 /// `pallets/coinage/src/benchmarking/README.md` for the full procedure.
 fn generate_alias_proof<T: Config>(
 	secret: &SecretOf<T>,
@@ -310,13 +311,20 @@ fn generate_alias_proof<T: Config>(
 	let member = CryptoOf::<T>::member_from_secret(secret);
 
 	#[cfg(not(feature = "benchmark-proof-cache-regenerate"))]
-	if let Some(cached) = proof_cache::lookup_alias_proof::<_, ProofOf<T>>(
-		T::RecyclerRingExponent::get(),
-		&member,
-		all_members,
-		msg,
-	) {
-		return cached;
+	{
+		if let Some(cached) = proof_cache::lookup_alias_proof::<_, ProofOf<T>>(
+			T::RecyclerRingExponent::get(),
+			&member,
+			all_members,
+			msg,
+		) {
+			return cached;
+		}
+		log::warn!(
+			target: LOG_TARGET,
+			"alias proof cache miss: creating a ring-VRF proof; regenerate the cache with \
+			 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py"
+		);
 	}
 
 	// Cache miss: compute the proof
