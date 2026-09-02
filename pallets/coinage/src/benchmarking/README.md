@@ -37,7 +37,7 @@ never matches, and the run pays full ring-VRF proof generation instead.
 
 A component step picks the values a proof is built over, so an entry only
 matches runs at a step count whose sweep visits the same values. The harvest
-therefore runs every step count from 2 to 8 and takes the union; a run at any
+therefore runs every step count from 2 to 10 and takes the union; a run at any
 of them is warm, a run at another step count is partly cold. Pass `--steps` to
 the script to cover a different set.
 
@@ -86,7 +86,7 @@ Flags:
 - `--profile <profile>` — cargo profile for the runtime build, `production` by
   default. The cached proofs are the same either way, so `release` trades a
   slower harvest for a much shorter build.
-- `--steps N [N ...]` — step counts to harvest, `2 3 4 5 6 7 8` by default.
+- `--steps N [N ...]` — step counts to harvest, 2 to 10 by default.
 - `--jobs N` — parallel `frame-omni-bencher` processes, CPU count by default.
 
 After the script finishes, still run the step 5 verification below.
@@ -135,7 +135,7 @@ RUNTIME_LOG=error frame-omni-bencher v1 benchmark pallet \
 ### 2. Harvest full runtime entries
 
 The command below harvests one step count. Repeat it for each step count a
-later run may use (the script covers 2 to 8) and concatenate the logs before
+later run may use (the script covers 2 to 10) and concatenate the logs before
 step 3.
 
 ```bash

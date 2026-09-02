@@ -29,7 +29,7 @@ Mirrors steps 2-4 of `pallets/coinage/src/benchmarking/README.md`:
        `pallets/coinage/src/benchmarking/proof_cache.rs`.
 
 A cache entry is keyed on the component values the proof was built over, so
-the harvest runs every step count a later benchmark run may use (2 to 8 by
+the harvest runs every step count a later benchmark run may use (2 to 10 by
 default) and takes the union. `frame-omni-bencher` is single-threaded, so the
 (extrinsic, steps) jobs run in parallel, one process each.
 
@@ -56,7 +56,7 @@ PROOF_CACHE = REPO_ROOT / "pallets" / "coinage" / "src" / "benchmarking" / "proo
 RUNTIME = "next-people-paseo"
 PALLET = "indiv_pallet_coinage"
 BENCHER = "frame-omni-bencher"
-DEFAULT_STEPS = [2, 3, 4, 5, 6, 7, 8]
+DEFAULT_STEPS = list(range(2, 11))
 
 CACHE_ENTRY_RE = re.compile(r"CACHE_ENTRY:\s*(\(.*\),)\s*$")
 
