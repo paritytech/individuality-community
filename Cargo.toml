@@ -42,9 +42,11 @@ members = [
 	"paseo-support/paseo-runtime-constants",
 	"paseo-support/system-parachains-common",
 	"paseo-support/system-parachains-constants",
+	"precompiles/fixtures",
 	"precompiles/nft-claims",
 	"precompiles/personhood",
 	"precompiles/scarcity",
+	"precompiles/support",
 	"runtimes/next-asset-hub-paseo",
 	"runtimes/next-people-paseo",
 	"support",
@@ -152,9 +154,11 @@ indiv-pallet-proof-of-ink = { path = "pallets/proof-of-ink", default-features = 
 indiv-pallet-relay-randomness = { path = "pallets/relay-randomness", default-features = false }
 indiv-pallet-resources = { path = "pallets/resources", default-features = false }
 indiv-pallet-score = { path = "pallets/score", default-features = false }
+indiv-precompile-fixtures = { path = "precompiles/fixtures", default-features = false }
 indiv-precompile-nft-claims = { path = "precompiles/nft-claims", default-features = false }
 indiv-precompile-personhood = { path = "precompiles/personhood", default-features = false }
 indiv-precompile-scarcity = { path = "precompiles/scarcity", default-features = false }
+indiv-precompile-support = { path = "precompiles/support", default-features = false }
 indiv-support = { path = "support", default-features = false }
 log = { version = "0.4.22", default-features = false }
 merlin = { version = "3.0", default-features = false }
