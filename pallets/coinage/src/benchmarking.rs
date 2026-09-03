@@ -35,7 +35,9 @@ use frame_support::{
 };
 use frame_system::RawOrigin as SystemOrigin;
 use sp_runtime::{
-	traits::{AppendZerosInput, DispatchTransaction, Dispatchable, One, SaturatedConversion},
+	traits::{
+		AppendZerosInput, Bounded, DispatchTransaction, Dispatchable, One, SaturatedConversion,
+	},
 	transaction_validity::TransactionSource,
 	Saturating,
 };
@@ -298,9 +300,10 @@ fn emit_cache_entry(cache_key: &[u8; 32], proof: &[u8], alias: &Alias) {
 /// Generate alias proof for recycler unload.
 /// First checks the proof cache, falls back to computing the proof if not cached.
 ///
-/// Proof generation takes several minutes during benchmarks, so the cache is important.
-/// To regenerate the cache, build with the `benchmark-proof-cache-regenerate` feature
-/// (or `coinage-benchmark-proof-cache-regenerate` on the runtime); see
+/// A ring-VRF proof takes over a second to create in WASM, so a miss is logged at warn level:
+/// a run that is slower than expected is a cache that no longer matches its inputs. To
+/// regenerate the cache, build with the `benchmark-proof-cache-regenerate` feature (or
+/// `coinage-benchmark-proof-cache-regenerate` on the runtime); see
 /// `pallets/coinage/src/benchmarking/README.md` for the full procedure.
 fn generate_alias_proof<T: Config>(
 	secret: &SecretOf<T>,
@@ -310,13 +313,20 @@ fn generate_alias_proof<T: Config>(
 	let member = CryptoOf::<T>::member_from_secret(secret);
 
 	#[cfg(not(feature = "benchmark-proof-cache-regenerate"))]
-	if let Some(cached) = proof_cache::lookup_alias_proof::<_, ProofOf<T>>(
-		T::RecyclerRingExponent::get(),
-		&member,
-		all_members,
-		msg,
-	) {
-		return cached;
+	{
+		if let Some(cached) = proof_cache::lookup_alias_proof::<_, ProofOf<T>>(
+			T::RecyclerRingExponent::get(),
+			&member,
+			all_members,
+			msg,
+		) {
+			return cached;
+		}
+		log::warn!(
+			target: LOG_TARGET,
+			"alias proof cache miss: creating a ring-VRF proof; regenerate the cache with \
+			 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py"
+		);
 	}
 
 	// Cache miss: compute the proof
@@ -645,22 +655,12 @@ mod benches {
 		Some(pieces)
 	}
 
-	fn prepare_from_output_unload_recycler_into_coins_bench<T: Config>(
-		input_value: Denomination,
-		index: RingIndex,
-		aliases: &BoundedAliasesOf<T>,
-	) -> (T::AccountId, NativeBalanceOf<T>, FungiblesBalanceOf<T>) {
-		let destroyed_before = TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID);
-		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-
-		// The extension premarks the first alias before dispatch in `FromOutput` mode.
-		RecyclerManager::<T>::mark_alias_unloaded(INSTANCE_ID, input_value, index, aliases[0]);
-
-		(fee_dest, fee_dest_before, destroyed_before)
-	}
-
 	/// Fee mode an unload benchmark scenario is set up for.
+	///
+	/// Neither mode dominates the other: `Prepaid` verifies one more proof, `FromOutput` adds a fee
+	/// transfer and a remainder burn. Each dual-mode call is therefore benchmarked in both modes;
+	/// the call charges the component-wise maximum up front and refunds down to the mode it ran
+	/// via `PostDispatchInfo`.
 	#[derive(Clone, Copy, PartialEq)]
 	enum UnloadFeeBenchMode {
 		/// The unload fee is settled by the token; no fee is reserved from the output. All `a`
@@ -1743,21 +1743,20 @@ mod benches {
 
 	// ==================== UnloadToken-origin extrinsics ====================
 
-	/// The benchmark for `unload_recycler_into_coin` is split into three separate benchmarks
-	/// for different range of `n` (number of input aliases).
-	/// This is because the cost is not linear on `n`, there is a sublinear coefficient for the cost
-	/// of the batch validation of the proofs.
-	/// By benchmarking on a smaller range we approximate the sublinear cost over a range.
+	/// Each unload call is benchmarked at the fixed alias counts 1, 2, 4, 8 and its maximum, with
+	/// no `Linear` component for the count. Ring-VRF batch verification is sublinear in the
+	/// proof count, so a linear fit over the whole range misprices small batches; the pallet
+	/// interpolates between the samples instead, see `crate::weight_interpolation`.
 	///
-	/// The ranges are `1..=2`, `4..=8` and `8..=max`, it uses powers of two because the call
-	/// is valid only for powers of two.
-	#[benchmark]
-	fn unload_recycler_into_coin_1_2(n: Linear<1, 2>) -> Result<(), BenchmarkError> {
+	/// `unload_recycler_into_coin` accepts a power of two aliases, so its maximum is the largest
+	/// power of two within the per-ring alias limit.
+	fn prepare_unload_recycler_into_coin<T: Config>(
+		n: u32,
+	) -> (impl FnOnce() -> Result<(), BenchmarkError>, T::AccountId) {
 		let (aliases, bounded_proofs, value, index, revision, dest, _asset_amount) =
 			setup_single_recycler_unload::<T>(n, 1, UnloadFeeBenchMode::Prepaid);
-
-		#[block]
-		{
+		let to = dest.clone();
+		let call = move || -> Result<(), BenchmarkError> {
 			Pallet::<T>::unload_recycler_into_coin(
 				Origin::UnloadToken {
 					alias_proofs: bounded_proofs,
@@ -1770,98 +1769,88 @@ mod benches {
 				value,
 				index,
 				revision,
-				dest.clone(),
+				to,
 			)?;
-		}
-
-		assert!(CoinsByOwner::<T>::contains_key(&dest));
-
-		Ok(())
+			Ok(())
+		};
+		(call, dest)
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_coin_4_8(n: Linear<4, 8>) -> Result<(), BenchmarkError> {
-		if !n.is_power_of_two() {
-			return Err(BenchmarkError::Skip);
-		}
-
-		let (aliases, bounded_proofs, value, index, revision, dest, _asset_amount) =
-			setup_single_recycler_unload::<T>(n, 1, UnloadFeeBenchMode::Prepaid);
+	fn unload_recycler_into_coin_1() -> Result<(), BenchmarkError> {
+		let (call, dest) = prepare_unload_recycler_into_coin::<T>(1);
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_coin(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				value,
-				index,
-				revision,
-				dest.clone(),
-			)?;
+			call()?;
 		}
 
 		assert!(CoinsByOwner::<T>::contains_key(&dest));
-
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_coin_8_max(
-		n: Linear<
-			8,
-			{ T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity()) },
-		>,
-	) -> Result<(), BenchmarkError> {
-		if !n.is_power_of_two() {
-			return Err(BenchmarkError::Skip);
-		}
-
-		let (aliases, bounded_proofs, value, index, revision, dest, _asset_amount) =
-			setup_single_recycler_unload::<T>(n, 1, UnloadFeeBenchMode::Prepaid);
+	fn unload_recycler_into_coin_2() -> Result<(), BenchmarkError> {
+		let (call, dest) = prepare_unload_recycler_into_coin::<T>(2);
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_coin(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				value,
-				index,
-				revision,
-				dest.clone(),
-			)?;
+			call()?;
 		}
 
 		assert!(CoinsByOwner::<T>::contains_key(&dest));
-
 		Ok(())
 	}
 
-	/// The benchmark for `unload_recycler_into_external_asset` is split into three separate
-	/// benchmarks for different range of `n` (number of input aliases).
-	/// This is because the cost is not linear on `n`, there is a sublinear coefficient for the cost
-	/// of the batch validation of the proofs.
-	/// By benchmarking on a smaller range we approximate the sublinear cost over a range.
 	#[benchmark]
-	fn unload_recycler_into_external_asset_prepaid_1_2(
-		n: Linear<1, 2>,
-	) -> Result<(), BenchmarkError> {
+	fn unload_recycler_into_coin_4() -> Result<(), BenchmarkError> {
+		let (call, dest) = prepare_unload_recycler_into_coin::<T>(4);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert!(CoinsByOwner::<T>::contains_key(&dest));
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coin_8() -> Result<(), BenchmarkError> {
+		let (call, dest) = prepare_unload_recycler_into_coin::<T>(8);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert!(CoinsByOwner::<T>::contains_key(&dest));
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coin_max() -> Result<(), BenchmarkError> {
+		let (call, dest) =
+			prepare_unload_recycler_into_coin::<T>(Pallet::<T>::max_aliases_per_coin_unload());
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert!(CoinsByOwner::<T>::contains_key(&dest));
+		Ok(())
+	}
+
+	/// Sets up a `Prepaid` unload of `n` aliases into the external asset. Returns the call, the
+	/// destination and the amount it must receive.
+	fn prepare_unload_recycler_into_external_asset_prepaid<T: Config>(
+		n: u32,
+	) -> (impl FnOnce() -> Result<(), BenchmarkError>, T::AccountId, FungiblesBalanceOf<T>) {
 		let (aliases, bounded_proofs, value, index, revision, dest, asset_amount) =
 			setup_single_recycler_unload::<T>(n, 2, UnloadFeeBenchMode::Prepaid);
-
-		#[block]
-		{
+		let to = dest.clone();
+		let call = move || -> Result<(), BenchmarkError> {
 			Pallet::<T>::unload_recycler_into_external_asset(
 				Origin::UnloadToken {
 					alias_proofs: bounded_proofs,
@@ -1874,111 +1863,128 @@ mod benches {
 				value,
 				index,
 				revision,
-				dest.clone(),
+				to,
 				Zero::zero(),
 			)?;
+			Ok(())
+		};
+		(call, dest, asset_amount.saturating_mul(n.into()))
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_prepaid_1() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(1);
+
+		#[block]
+		{
+			call()?;
 		}
 
-		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), asset_amount * n.into(),);
-
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_prepaid_3_8(
-		n: Linear<3, 8>,
-	) -> Result<(), BenchmarkError> {
-		let (aliases, bounded_proofs, value, index, revision, dest, asset_amount) =
-			setup_single_recycler_unload::<T>(n, 2, UnloadFeeBenchMode::Prepaid);
+	fn unload_recycler_into_external_asset_prepaid_2() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(2);
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				value,
-				index,
-				revision,
-				dest.clone(),
-				Zero::zero(),
-			)?;
+			call()?;
 		}
 
-		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), asset_amount * n.into(),);
-
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_prepaid_9_max(
-		n: Linear<
-			9,
-			{ T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity()) },
-		>,
-	) -> Result<(), BenchmarkError> {
-		let (aliases, bounded_proofs, value, index, revision, dest, asset_amount) =
-			setup_single_recycler_unload::<T>(n, 2, UnloadFeeBenchMode::Prepaid);
+	fn unload_recycler_into_external_asset_prepaid_4() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(4);
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				value,
-				index,
-				revision,
-				dest.clone(),
-				Zero::zero(),
-			)?;
+			call()?;
 		}
 
-		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), asset_amount * n.into(),);
-
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
 		Ok(())
 	}
 
-	/// `FromOutput` counterparts of the `unload_recycler_into_external_asset` buckets.
+	#[benchmark]
+	fn unload_recycler_into_external_asset_prepaid_8() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(8);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_prepaid_max() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(
+			Pallet::<T>::max_aliases_per_unload(),
+		);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	/// The balances a `FromOutput` unload moves: the destination gains the output net of the fee
+	/// and the fee destination gains the fee.
+	struct FromOutputBalances<T: Config> {
+		dest: T::AccountId,
+		dest_before: FungiblesBalanceOf<T>,
+		fee_dest: T::AccountId,
+		fee_dest_before: NativeBalanceOf<T>,
+	}
+
+	impl<T: Config> FromOutputBalances<T> {
+		fn record(dest: T::AccountId) -> Self {
+			let fee_dest = T::FeeDestination::get();
+			Self {
+				dest_before: T::Fungibles::balance(asset_id::<T>(), &dest),
+				fee_dest_before: T::NativeFungible::balance(&fee_dest),
+				dest,
+				fee_dest,
+			}
+		}
+
+		/// Both balances grew; the destination by less than `output` when given, since the fee
+		/// came out of it.
+		fn assert_moved(&self, output: Option<FungiblesBalanceOf<T>>) {
+			let dest_balance = T::Fungibles::balance(asset_id::<T>(), &self.dest);
+			assert!(dest_balance > self.dest_before);
+			if let Some(output) = output {
+				assert!(dest_balance < output);
+			}
+			assert!(T::NativeFungible::balance(&self.fee_dest) > self.fee_dest_before);
+		}
+	}
+
+	/// Sets up a `FromOutput` unload of `n` aliases into the external asset. The extension
+	/// pre-marks the first alias, so the call verifies `n - 1` proofs and moves the fee.
 	///
-	/// The `FromOutput` path verifies `n - 1` proofs (the first alias is pre-marked in the
-	/// extension) and additionally deducts the unload fee from the output and burns the remainder,
-	/// whereas the `Prepaid` buckets verify all `n` proofs and move no fee. Both are measured; the
-	/// `AsCoinage` extension charges the difference for the mode it mints (see
-	/// the `FromOutput` `PostDispatchInfo` refund).
-	///
-	/// The low bucket sweeps `n` over `1..=3` even though it only serves `n <= 2`. At `n = 1` the
-	/// single alias is the pre-marked fee recycler, so no recycler ring is unloaded and the
-	/// ring-unload storage keys are never touched. Those keys are first read at `n = 2`, so a
-	/// `1..=2` sweep would leave them with a single data point and the per-prefix proof-size
-	/// regression fails with "only 1 unique value". Extending to `n = 3` gives every prefix two
-	/// distinct alias counts. The cost is `base + (n - 1) * per_unload`, linear in `n`, so the fit
-	/// stays accurate for the `n <= 2` values actually served.
-	#[benchmark]
-	fn unload_recycler_into_external_asset_from_output_1_2(
-		n: Linear<1, 3>,
-	) -> Result<(), BenchmarkError> {
+	/// At `n = 1` the single alias is the pre-marked one: the call unloads no ring and touches no
+	/// ring-unload storage, so the `_1` sample is much cheaper than `_2`. The same holds for the
+	/// `FromOutput` samples of the other unload calls.
+	fn prepare_unload_recycler_into_external_asset_from_output<T: Config>(
+		n: u32,
+	) -> (impl FnOnce() -> Result<(), BenchmarkError>, FromOutputBalances<T>) {
 		let (aliases, bounded_proofs, value, index, revision, dest, _asset_amount) =
 			setup_single_recycler_unload::<T>(n, 2, UnloadFeeBenchMode::FromOutput);
-		let dest_before = T::Fungibles::balance(asset_id::<T>(), &dest);
-		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-
+		let balances = FromOutputBalances::<T>::record(dest.clone());
 		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
 			.expect("fee conversion is set up by `common_setup`");
-
-		#[block]
-		{
+		let call = move || -> Result<(), BenchmarkError> {
 			Pallet::<T>::unload_recycler_into_external_asset(
 				Origin::UnloadToken {
 					alias_proofs: bounded_proofs,
@@ -1994,624 +2000,561 @@ mod benches {
 				value,
 				index,
 				revision,
-				dest.clone(),
+				dest,
 				max_fee,
 			)?;
+			Ok(())
+		};
+		(call, balances)
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_from_output_1() -> Result<(), BenchmarkError> {
+		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(1);
+
+		#[block]
+		{
+			call()?;
 		}
 
-		// The destination received the output net of the fee, which went to the fee destination.
-		assert!(T::Fungibles::balance(asset_id::<T>(), &dest) > dest_before);
-		assert!(T::NativeFungible::balance(&fee_dest) > fee_dest_before);
-
+		balances.assert_moved(None);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_from_output_3_8(
-		n: Linear<3, 8>,
-	) -> Result<(), BenchmarkError> {
-		let (aliases, bounded_proofs, value, index, revision, dest, _asset_amount) =
-			setup_single_recycler_unload::<T>(n, 2, UnloadFeeBenchMode::FromOutput);
-		let dest_before = T::Fungibles::balance(asset_id::<T>(), &dest);
-		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-
-		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-			.expect("fee conversion is set up by `common_setup`");
+	fn unload_recycler_into_external_asset_from_output_2() -> Result<(), BenchmarkError> {
+		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(2);
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::FromOutput {
-						fee_recycler_value: value,
-						fee_recycler_index: index,
-					},
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				value,
-				index,
-				revision,
-				dest.clone(),
-				max_fee,
-			)?;
+			call()?;
 		}
 
-		assert!(T::Fungibles::balance(asset_id::<T>(), &dest) > dest_before);
-		assert!(T::NativeFungible::balance(&fee_dest) > fee_dest_before);
-
+		balances.assert_moved(None);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_from_output_9_max(
-		n: Linear<
-			9,
-			{ T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity()) },
-		>,
-	) -> Result<(), BenchmarkError> {
-		let (aliases, bounded_proofs, value, index, revision, dest, _asset_amount) =
-			setup_single_recycler_unload::<T>(n, 2, UnloadFeeBenchMode::FromOutput);
-		let dest_before = T::Fungibles::balance(asset_id::<T>(), &dest);
-		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-
-		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-			.expect("fee conversion is set up by `common_setup`");
+	fn unload_recycler_into_external_asset_from_output_4() -> Result<(), BenchmarkError> {
+		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(4);
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::FromOutput {
-						fee_recycler_value: value,
-						fee_recycler_index: index,
-					},
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				value,
-				index,
-				revision,
-				dest.clone(),
-				max_fee,
-			)?;
+			call()?;
 		}
 
-		assert!(T::Fungibles::balance(asset_id::<T>(), &dest) > dest_before);
-		assert!(T::NativeFungible::balance(&fee_dest) > fee_dest_before);
-
+		balances.assert_moved(None);
 		Ok(())
 	}
 
-	/// The benchmark for `unload_recycler_into_external_asset_and_loaded_coins` is split into three
-	/// separate benchmarks for different range of `a` (number of input aliases).
-	/// This is because the cost is not linear on `a`, there is a sublinear coefficient for the cost
-	/// of the batch validation of the proofs.
-	/// By benchmarking on a smaller range we approximate the sublinear cost over a range.
-	///
+	#[benchmark]
+	fn unload_recycler_into_external_asset_from_output_8() -> Result<(), BenchmarkError> {
+		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(8);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		balances.assert_moved(None);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_from_output_max() -> Result<(), BenchmarkError> {
+		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(
+			Pallet::<T>::max_aliases_per_unload(),
+		);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		balances.assert_moved(None);
+		Ok(())
+	}
+
+	/// What a mixed-output unload leaves behind: the aliases unloaded, the loaded coins
+	/// registered and the external portion at the destination, net of the fee in `FromOutput`
+	/// mode.
+	struct MixedOutputExpectation<T: Config> {
+		aliases: BoundedAliasesOf<T>,
+		loaded_coins: BoundedVec<(Denomination, MemberOf<T>), T::MaxSplitOutputs>,
+		input_value: Denomination,
+		index: RingIndex,
+		external_asset_amount: FungiblesBalanceOf<T>,
+		balances: FromOutputBalances<T>,
+	}
+
+	impl<T: Config> MixedOutputExpectation<T> {
+		fn assert_unloaded(&self, mode: UnloadFeeBenchMode) {
+			match mode {
+				UnloadFeeBenchMode::Prepaid => assert_eq!(
+					T::Fungibles::balance(asset_id::<T>(), &self.balances.dest),
+					self.external_asset_amount,
+				),
+				UnloadFeeBenchMode::FromOutput =>
+					self.balances.assert_moved(Some(self.external_asset_amount)),
+			}
+			for alias in &self.aliases {
+				assert!(matches!(
+					RecyclerAliasStates::<T>::get((
+						INSTANCE_ID,
+						self.input_value,
+						self.index,
+						alias
+					)),
+					Some(AliasState::Unloaded),
+				));
+			}
+			for (value, member_key) in &self.loaded_coins {
+				assert_eq!(
+					RecyclersCoinToRecycler::<T>::get(member_key),
+					Some((INSTANCE_ID, *value))
+				);
+			}
+		}
+	}
+
+	/// Sets up an unload of `a` aliases into the external asset and `d` loaded coins. In
+	/// `FromOutput` mode the fee comes out of the external-asset portion and the remainder is
+	/// burnt.
+	fn prepare_unload_recycler_into_external_asset_and_loaded_coins<T: Config>(
+		a: u32,
+		d: u32,
+		mode: UnloadFeeBenchMode,
+	) -> Result<
+		(impl FnOnce() -> Result<(), BenchmarkError>, MixedOutputExpectation<T>),
+		BenchmarkError,
+	> {
+		let scenario = setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(a, d, mode)?;
+		let expectation = MixedOutputExpectation {
+			aliases: scenario.aliases.clone(),
+			loaded_coins: scenario.loaded_coins.clone(),
+			input_value: scenario.input_value,
+			index: scenario.index,
+			external_asset_amount: scenario.external_asset_amount,
+			balances: FromOutputBalances::<T>::record(scenario.dest.clone()),
+		};
+		let (fee, max_fee) = match mode {
+			UnloadFeeBenchMode::Prepaid => (UnloadFee::Prepaid, Zero::zero()),
+			UnloadFeeBenchMode::FromOutput => (
+				UnloadFee::FromOutput {
+					fee_recycler_value: scenario.input_value,
+					fee_recycler_index: scenario.index,
+				},
+				Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
+					.expect("fee conversion is set up by `common_setup`"),
+			),
+		};
+		let call = move || -> Result<(), BenchmarkError> {
+			Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins(
+				Origin::UnloadToken {
+					alias_proofs: scenario.alias_proofs,
+					proven_msg: [0u8; 32],
+					fee,
+				}
+				.into(),
+				INSTANCE_ID,
+				scenario.aliases,
+				scenario.input_value,
+				scenario.index,
+				scenario.revision,
+				scenario.dest,
+				scenario.external_asset_amount,
+				scenario.loaded_coins,
+				max_fee,
+			)?;
+			Ok(())
+		};
+		Ok((call, expectation))
+	}
+
 	/// `d` scales the loaded-coin output count over the full `MaxSplitOutputs` range.
 	#[benchmark]
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_1_2(
-		a: Linear<1, 2>,
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let scenario = setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			a,
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			1,
 			d,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
-		let aliases_copy = scenario.aliases.clone();
-		let loaded_coins_copy = scenario.loaded_coins.clone();
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins(
-				Origin::UnloadToken {
-					alias_proofs: scenario.alias_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
-				}
-				.into(),
-				INSTANCE_ID,
-				scenario.aliases,
-				scenario.input_value,
-				scenario.index,
-				scenario.revision,
-				scenario.dest.clone(),
-				scenario.external_asset_amount,
-				scenario.loaded_coins,
-				Zero::zero(),
-			)?;
+			call()?;
 		}
 
-		assert_eq!(
-			T::Fungibles::balance(asset_id::<T>(), &scenario.dest),
-			scenario.external_asset_amount,
-		);
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((
-					INSTANCE_ID,
-					scenario.input_value,
-					scenario.index,
-					alias
-				)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		for (value, member_key) in &loaded_coins_copy {
-			assert_eq!(RecyclersCoinToRecycler::<T>::get(member_key), Some((INSTANCE_ID, *value)));
-		}
-
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_3_8(
-		a: Linear<3, 8>,
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let scenario = setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			a,
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			2,
 			d,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
-		let aliases_copy = scenario.aliases.clone();
-		let loaded_coins_copy = scenario.loaded_coins.clone();
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins(
-				Origin::UnloadToken {
-					alias_proofs: scenario.alias_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
-				}
-				.into(),
-				INSTANCE_ID,
-				scenario.aliases,
-				scenario.input_value,
-				scenario.index,
-				scenario.revision,
-				scenario.dest.clone(),
-				scenario.external_asset_amount,
-				scenario.loaded_coins,
-				Zero::zero(),
-			)?;
+			call()?;
 		}
 
-		assert_eq!(
-			T::Fungibles::balance(asset_id::<T>(), &scenario.dest),
-			scenario.external_asset_amount,
-		);
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((
-					INSTANCE_ID,
-					scenario.input_value,
-					scenario.index,
-					alias
-				)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		for (value, member_key) in &loaded_coins_copy {
-			assert_eq!(RecyclersCoinToRecycler::<T>::get(member_key), Some((INSTANCE_ID, *value)));
-		}
-
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_9_max(
-		a: Linear<
-			9,
-			{ T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity()) },
-		>,
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let scenario = setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			a,
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			4,
 			d,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
-		let aliases_copy = scenario.aliases.clone();
-		let loaded_coins_copy = scenario.loaded_coins.clone();
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins(
-				Origin::UnloadToken {
-					alias_proofs: scenario.alias_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
-				}
-				.into(),
-				INSTANCE_ID,
-				scenario.aliases,
-				scenario.input_value,
-				scenario.index,
-				scenario.revision,
-				scenario.dest.clone(),
-				scenario.external_asset_amount,
-				scenario.loaded_coins,
-				Zero::zero(),
-			)?;
+			call()?;
 		}
 
-		assert_eq!(
-			T::Fungibles::balance(asset_id::<T>(), &scenario.dest),
-			scenario.external_asset_amount,
-		);
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((
-					INSTANCE_ID,
-					scenario.input_value,
-					scenario.index,
-					alias
-				)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		for (value, member_key) in &loaded_coins_copy {
-			assert_eq!(RecyclersCoinToRecycler::<T>::get(member_key), Some((INSTANCE_ID, *value)));
-		}
-
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
 		Ok(())
 	}
 
-	/// `FromOutput` counterparts of the `unload_recycler_into_external_asset_and_loaded_coins`
-	/// buckets.
-	///
-	/// The `FromOutput` path verifies `a - 1` proofs (the first alias is pre-marked in the
-	/// extension) and additionally deducts the unload fee from the external-asset portion and
-	/// burns the remainder, whereas the `Prepaid` buckets verify all `a` proofs and move no fee.
-	/// Both are measured; the `AsCoinage` extension charges the difference for the mode it mints
-	/// (see the `FromOutput` `PostDispatchInfo` refund).
-	///
-	/// The low bucket sweeps `a` over `1..=3` even though it only serves `a <= 2`. At `a = 1` the
-	/// single alias is the pre-marked fee recycler, so no recycler ring is unloaded and the
-	/// ring-unload storage keys are never touched. Those keys are first read at `a = 2`, so a
-	/// `1..=2` sweep would leave them with a single data point and the per-prefix proof-size
-	/// regression fails with "only 1 unique value". Extending to `a = 3` gives every prefix two
-	/// distinct alias counts. The cost is `base + (a - 1) * per_unload`, linear in `a`, so the fit
-	/// stays accurate for the `a <= 2` values actually served.
 	#[benchmark]
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_1_2(
-		a: Linear<1, 3>,
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let scenario = setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			a,
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			8,
+			d,
+			UnloadFeeBenchMode::Prepaid,
+		)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			Pallet::<T>::max_aliases_per_unload(),
+			d,
+			UnloadFeeBenchMode::Prepaid,
+		)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			1,
 			d,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
-		let aliases_copy = scenario.aliases.clone();
-		let loaded_coins_copy = scenario.loaded_coins.clone();
-		let dest_before = T::Fungibles::balance(asset_id::<T>(), &scenario.dest);
-		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-
-		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-			.expect("fee conversion is set up by `common_setup`");
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins(
-				Origin::UnloadToken {
-					alias_proofs: scenario.alias_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::FromOutput {
-						fee_recycler_value: scenario.input_value,
-						fee_recycler_index: scenario.index,
-					},
-				}
-				.into(),
-				INSTANCE_ID,
-				scenario.aliases,
-				scenario.input_value,
-				scenario.index,
-				scenario.revision,
-				scenario.dest.clone(),
-				scenario.external_asset_amount,
-				scenario.loaded_coins,
-				max_fee,
-			)?;
+			call()?;
 		}
 
-		// The destination received the external portion net of the fee, which went to the fee
-		// destination.
-		let dest_balance = T::Fungibles::balance(asset_id::<T>(), &scenario.dest);
-		assert!(dest_balance > dest_before && dest_balance < scenario.external_asset_amount);
-		assert!(T::NativeFungible::balance(&fee_dest) > fee_dest_before);
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((
-					INSTANCE_ID,
-					scenario.input_value,
-					scenario.index,
-					alias
-				)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		for (value, member_key) in &loaded_coins_copy {
-			assert_eq!(RecyclersCoinToRecycler::<T>::get(member_key), Some((INSTANCE_ID, *value)));
-		}
-
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_3_8(
-		a: Linear<3, 8>,
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_2(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let scenario = setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			a,
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			2,
 			d,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
-		let aliases_copy = scenario.aliases.clone();
-		let loaded_coins_copy = scenario.loaded_coins.clone();
-		let dest_before = T::Fungibles::balance(asset_id::<T>(), &scenario.dest);
-		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-
-		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-			.expect("fee conversion is set up by `common_setup`");
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins(
-				Origin::UnloadToken {
-					alias_proofs: scenario.alias_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::FromOutput {
-						fee_recycler_value: scenario.input_value,
-						fee_recycler_index: scenario.index,
-					},
-				}
-				.into(),
-				INSTANCE_ID,
-				scenario.aliases,
-				scenario.input_value,
-				scenario.index,
-				scenario.revision,
-				scenario.dest.clone(),
-				scenario.external_asset_amount,
-				scenario.loaded_coins,
-				max_fee,
-			)?;
+			call()?;
 		}
 
-		let dest_balance = T::Fungibles::balance(asset_id::<T>(), &scenario.dest);
-		assert!(dest_balance > dest_before && dest_balance < scenario.external_asset_amount);
-		assert!(T::NativeFungible::balance(&fee_dest) > fee_dest_before);
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((
-					INSTANCE_ID,
-					scenario.input_value,
-					scenario.index,
-					alias
-				)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		for (value, member_key) in &loaded_coins_copy {
-			assert_eq!(RecyclersCoinToRecycler::<T>::get(member_key), Some((INSTANCE_ID, *value)));
-		}
-
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_9_max(
-		a: Linear<
-			9,
-			{ T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity()) },
-		>,
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_4(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let scenario = setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			a,
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			4,
 			d,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
-		let aliases_copy = scenario.aliases.clone();
-		let loaded_coins_copy = scenario.loaded_coins.clone();
-		let dest_before = T::Fungibles::balance(asset_id::<T>(), &scenario.dest);
-		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-
-		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-			.expect("fee conversion is set up by `common_setup`");
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins(
-				Origin::UnloadToken {
-					alias_proofs: scenario.alias_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::FromOutput {
-						fee_recycler_value: scenario.input_value,
-						fee_recycler_index: scenario.index,
-					},
-				}
-				.into(),
-				INSTANCE_ID,
-				scenario.aliases,
-				scenario.input_value,
-				scenario.index,
-				scenario.revision,
-				scenario.dest.clone(),
-				scenario.external_asset_amount,
-				scenario.loaded_coins,
-				max_fee,
-			)?;
+			call()?;
 		}
 
-		let dest_balance = T::Fungibles::balance(asset_id::<T>(), &scenario.dest);
-		assert!(dest_balance > dest_before && dest_balance < scenario.external_asset_amount);
-		assert!(T::NativeFungible::balance(&fee_dest) > fee_dest_before);
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((
-					INSTANCE_ID,
-					scenario.input_value,
-					scenario.index,
-					alias
-				)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		for (value, member_key) in &loaded_coins_copy {
-			assert_eq!(RecyclersCoinToRecycler::<T>::get(member_key), Some((INSTANCE_ID, *value)));
-		}
-
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
 		Ok(())
 	}
 
-	/// The benchmark for `unload_recycler_into_external_asset_non_anonymous` is split into three
-	/// separate benchmarks for different range of `n` (number of input aliases).
-	/// This is because the cost is not linear on `n`, there is a sublinear coefficient for the cost
-	/// of the batch validation of the proofs.
-	/// By benchmarking on a smaller range we approximate the sublinear cost over a range.
 	#[benchmark]
-	fn unload_recycler_into_external_asset_non_anonymous_1_2(
-		n: Linear<1, 2>,
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			8,
+			d,
+			UnloadFeeBenchMode::FromOutput,
+		)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_max(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			Pallet::<T>::max_aliases_per_unload(),
+			d,
+			UnloadFeeBenchMode::FromOutput,
+		)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
+
+	/// Sets up a signed unload of `n` aliases from one recycler. Returns the call, the
+	/// destination and the amount it must receive.
+	fn prepare_unload_recycler_into_external_asset_non_anonymous<T: Config>(
+		n: u32,
+	) -> (impl FnOnce() -> Result<(), BenchmarkError>, T::AccountId, FungiblesBalanceOf<T>) {
 		let (input, bounded_proofs, caller, dest, asset_amount) =
 			setup_single_recycler_unload_non_anonymous::<T>(n);
-
 		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
 			.expect("fee conversion is set up by `common_setup`");
-
-		#[block]
-		{
+		let to = dest.clone();
+		let call = move || -> Result<(), BenchmarkError> {
 			Pallet::<T>::unload_recycler_into_external_asset_non_anonymous(
 				frame_system::RawOrigin::Signed(caller).into(),
 				INSTANCE_ID,
 				input,
 				bounded_proofs,
-				dest.clone(),
+				to,
 				FeeCurrency::ExternalAsset,
 				max_fee,
 			)?;
-		}
-
-		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), asset_amount * n.into(),);
-
-		Ok(())
+			Ok(())
+		};
+		(call, dest, asset_amount.saturating_mul(n.into()))
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_non_anonymous_3_8(
-		n: Linear<3, 8>,
-	) -> Result<(), BenchmarkError> {
-		let (input, bounded_proofs, caller, dest, asset_amount) =
-			setup_single_recycler_unload_non_anonymous::<T>(n);
-
-		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-			.expect("fee conversion is set up by `common_setup`");
+	fn unload_recycler_into_external_asset_non_anonymous_1() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) =
+			prepare_unload_recycler_into_external_asset_non_anonymous::<T>(1);
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset_non_anonymous(
-				frame_system::RawOrigin::Signed(caller).into(),
-				INSTANCE_ID,
-				input,
-				bounded_proofs,
-				dest.clone(),
-				FeeCurrency::ExternalAsset,
-				max_fee,
-			)?;
+			call()?;
 		}
 
-		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), asset_amount * n.into(),);
-
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_external_asset_non_anonymous_9_max(
-		n: Linear<
-			9,
-			{ T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity()) },
-		>,
-	) -> Result<(), BenchmarkError> {
-		let (input, bounded_proofs, caller, dest, asset_amount) =
-			setup_single_recycler_unload_non_anonymous::<T>(n);
-
-		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-			.expect("fee conversion is set up by `common_setup`");
+	fn unload_recycler_into_external_asset_non_anonymous_2() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) =
+			prepare_unload_recycler_into_external_asset_non_anonymous::<T>(2);
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_external_asset_non_anonymous(
-				frame_system::RawOrigin::Signed(caller).into(),
-				INSTANCE_ID,
-				input,
-				bounded_proofs,
-				dest.clone(),
-				FeeCurrency::ExternalAsset,
-				max_fee,
-			)?;
+			call()?;
 		}
 
-		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), asset_amount * n.into(),);
-
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
 		Ok(())
 	}
 
-	/// The benchmark for `unload_recyclers_into_external_asset_non_anonymous` is split into three
-	/// separate benchmarks for different range of `n` (number of input aliases).
-	/// This is because the cost is not linear on `n`, there is a sublinear coefficient for the cost
-	/// of the batch validation of the proofs.
-	/// By benchmarking on a smaller range we approximate the sublinear cost over a range.
-	///
-	/// In the worst case we unload from different recyclers, in the benchmark we do one recycler
-	/// per denomination.
-	///
-	/// `n` drives both dimensions: number of recyclers (one per coin denomination) and total alias
-	/// proofs (one per recycler). Using a single parameter is valid because the worst case is one
-	/// alias per recycler — multiple aliases within one recycler are cheaper (shared ring
-	/// verification), so benchmarking one-alias-per-recycler captures the upper bound.
 	#[benchmark]
-	fn unload_recyclers_into_external_asset_non_anonymous_1_2(
-		n: Linear<1, 2>,
-	) -> Result<(), BenchmarkError> {
+	fn unload_recycler_into_external_asset_non_anonymous_4() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) =
+			prepare_unload_recycler_into_external_asset_non_anonymous::<T>(4);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_non_anonymous_8() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) =
+			prepare_unload_recycler_into_external_asset_non_anonymous::<T>(8);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_non_anonymous_max() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_non_anonymous::<T>(
+			Pallet::<T>::max_aliases_per_unload(),
+		);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	/// Sets up a signed unload of one alias from each of `n` recyclers, one per denomination.
+	/// Returns the call, the destination and the amount it must receive.
+	///
+	/// One alias per recycler is the worst case per alias: aliases sharing a recycler share its
+	/// ring verification. The pallet charges per alias and extends the last segment above the
+	/// recycler maximum, see `crate::weight_interpolation`.
+	fn prepare_unload_recyclers_into_external_asset_non_anonymous<T: Config>(
+		n: u32,
+	) -> (impl FnOnce() -> Result<(), BenchmarkError>, T::AccountId, FungiblesBalanceOf<T>) {
 		let (inputs, bounded_proofs, caller, dest, total_asset_amount) =
 			setup_multi_recycler_unload_non_anonymous::<T>(n);
-
 		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, n)
 			.expect("fee conversion is set up by `common_setup`");
-
-		#[block]
-		{
+		let to = dest.clone();
+		let call = move || -> Result<(), BenchmarkError> {
 			Pallet::<T>::unload_recyclers_into_external_asset_non_anonymous(
 				frame_system::RawOrigin::Signed(caller).into(),
 				INSTANCE_ID,
 				inputs,
 				bounded_proofs,
-				dest.clone(),
+				to,
 				FeeCurrency::ExternalAsset,
 				max_fee,
 			)?;
+			Ok(())
+		};
+		(call, dest, total_asset_amount)
+	}
+
+	#[benchmark]
+	fn unload_recyclers_into_external_asset_non_anonymous_1() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) =
+			prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(1);
+
+		#[block]
+		{
+			call()?;
 		}
 
-		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), total_asset_amount,);
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
 
+	#[benchmark]
+	fn unload_recyclers_into_external_asset_non_anonymous_2() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) =
+			prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(2);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recyclers_into_external_asset_non_anonymous_4() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) =
+			prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(4);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recyclers_into_external_asset_non_anonymous_8() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) =
+			prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(8);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recyclers_into_external_asset_non_anonymous_max() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(
+			Pallet::<T>::max_recyclers_per_unload(),
+		);
+
+		#[block]
+		{
+			call()?;
+		}
+
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
 		Ok(())
 	}
 
@@ -2694,68 +2637,6 @@ mod benches {
 			Err(Error::<T>::FeeExceedsMaxFee.into()),
 			"the call must be rejected on the fee bound",
 		);
-
-		Ok(())
-	}
-
-	#[benchmark]
-	fn unload_recyclers_into_external_asset_non_anonymous_3_8(
-		n: Linear<3, 8>,
-	) -> Result<(), BenchmarkError> {
-		let (inputs, bounded_proofs, caller, dest, total_asset_amount) =
-			setup_multi_recycler_unload_non_anonymous::<T>(n);
-
-		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, n)
-			.expect("fee conversion is set up by `common_setup`");
-
-		#[block]
-		{
-			Pallet::<T>::unload_recyclers_into_external_asset_non_anonymous(
-				frame_system::RawOrigin::Signed(caller).into(),
-				INSTANCE_ID,
-				inputs,
-				bounded_proofs,
-				dest.clone(),
-				FeeCurrency::ExternalAsset,
-				max_fee,
-			)?;
-		}
-
-		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), total_asset_amount,);
-
-		Ok(())
-	}
-
-	#[benchmark]
-	fn unload_recyclers_into_external_asset_non_anonymous_9_max(
-		n: Linear<
-			9,
-			{
-				((T::MaximumExponent::get() as i32 - T::MinimumExponent::get() as i32 + 1) as u32)
-					.min(T::MaxConsolidation::get())
-			},
-		>,
-	) -> Result<(), BenchmarkError> {
-		let (inputs, bounded_proofs, caller, dest, total_asset_amount) =
-			setup_multi_recycler_unload_non_anonymous::<T>(n);
-
-		let max_fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, n)
-			.expect("fee conversion is set up by `common_setup`");
-
-		#[block]
-		{
-			Pallet::<T>::unload_recyclers_into_external_asset_non_anonymous(
-				frame_system::RawOrigin::Signed(caller).into(),
-				INSTANCE_ID,
-				inputs,
-				bounded_proofs,
-				dest.clone(),
-				FeeCurrency::ExternalAsset,
-				max_fee,
-			)?;
-		}
-
-		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), total_asset_amount,);
 
 		Ok(())
 	}
@@ -2866,260 +2747,93 @@ mod benches {
 		Ok(())
 	}
 
-	/// The benchmark for `unload_recycler_into_coins` is split into three
-	/// separate benchmarks for different range of `n` (number of input aliases).
-	/// This is because the cost is not linear on `n`, there is a sublinear coefficient for the cost
-	/// of the batch validation of the proofs.
-	/// By benchmarking on a smaller range we approximate the sublinear cost over a range.
-	///
-	/// Bucketed variants for alias-count ranges while preserving destination scaling with
-	/// `d: Linear<1, MaxSplitOutputs>`.
-	///
-	/// - `a`: number of aliases (alias proofs to verify)
-	/// - `d`: number of destinations (output coins to create)
-	#[benchmark]
-	fn unload_recycler_into_coins_from_output_1_2(
-		a: Linear<1, 2>,
-		d: Linear<1, { T::MaxSplitOutputs::get() }>,
-	) -> Result<(), BenchmarkError> {
-		let (aliases, bounded_proofs, input_value, index, revision, split_into, max_fee) =
-			setup_unload_recycler_into_coins::<T>(a, d, UnloadFeeBenchMode::FromOutput)?;
-		let aliases_copy = aliases.clone();
-		let split_into_copy = split_into.clone();
-		let (fee_dest, fee_dest_before, destroyed_before) =
-			prepare_from_output_unload_recycler_into_coins_bench::<T>(input_value, index, &aliases);
-
-		#[block]
-		{
-			Pallet::<T>::unload_recycler_into_coins(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::FromOutput {
-						fee_recycler_value: input_value,
-						fee_recycler_index: index,
-					},
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				input_value,
-				index,
-				revision,
-				split_into,
-				max_fee,
-			)?;
-		}
-
-		for (v, dests) in &split_into_copy {
-			for dest in dests {
-				let coin = CoinsByOwner::<T>::get(dest).expect("destination should have a coin");
-				assert_eq!(coin.value, *v);
-				assert_eq!(coin.age, 1);
-			}
-		}
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((INSTANCE_ID, input_value, index, alias)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		assert!(T::NativeFungible::balance(&fee_dest) > fee_dest_before);
-		assert!(TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID) > destroyed_before);
-
-		Ok(())
-	}
-
-	#[benchmark]
-	fn unload_recycler_into_coins_from_output_3_8(
-		a: Linear<3, 8>,
-		d: Linear<1, { T::MaxSplitOutputs::get() }>,
-	) -> Result<(), BenchmarkError> {
-		let (aliases, bounded_proofs, input_value, index, revision, split_into, max_fee) =
-			setup_unload_recycler_into_coins::<T>(a, d, UnloadFeeBenchMode::FromOutput)?;
-		let aliases_copy = aliases.clone();
-		let split_into_copy = split_into.clone();
-		let (fee_dest, fee_dest_before, destroyed_before) =
-			prepare_from_output_unload_recycler_into_coins_bench::<T>(input_value, index, &aliases);
-
-		#[block]
-		{
-			Pallet::<T>::unload_recycler_into_coins(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::FromOutput {
-						fee_recycler_value: input_value,
-						fee_recycler_index: index,
-					},
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				input_value,
-				index,
-				revision,
-				split_into,
-				max_fee,
-			)?;
-		}
-
-		for (v, dests) in &split_into_copy {
-			for dest in dests {
-				let coin = CoinsByOwner::<T>::get(dest).expect("destination should have a coin");
-				assert_eq!(coin.value, *v);
-				assert_eq!(coin.age, 1);
-			}
-		}
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((INSTANCE_ID, input_value, index, alias)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		assert!(T::NativeFungible::balance(&fee_dest) > fee_dest_before);
-		assert!(TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID) > destroyed_before);
-
-		Ok(())
-	}
-
-	#[benchmark]
-	fn unload_recycler_into_coins_from_output_9_max(
-		a: Linear<
-			9,
-			{ T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity()) },
+	/// What an unload into coins leaves behind: the aliases unloaded and each destination
+	/// holding its coin. `FromOutput` also moves the fee and burns the remainder; `Prepaid`
+	/// does neither.
+	struct CoinsUnloadExpectation<T: Config> {
+		aliases: BoundedAliasesOf<T>,
+		split_into: BoundedVec<
+			(Denomination, BoundedVec<T::AccountId, T::MaxSplitOutputs>),
+			T::MaxSplitOutputs,
 		>,
-		d: Linear<1, { T::MaxSplitOutputs::get() }>,
-	) -> Result<(), BenchmarkError> {
-		let (aliases, bounded_proofs, input_value, index, revision, split_into, max_fee) =
-			setup_unload_recycler_into_coins::<T>(a, d, UnloadFeeBenchMode::FromOutput)?;
-		let aliases_copy = aliases.clone();
-		let split_into_copy = split_into.clone();
-		let (fee_dest, fee_dest_before, destroyed_before) =
-			prepare_from_output_unload_recycler_into_coins_bench::<T>(input_value, index, &aliases);
-
-		#[block]
-		{
-			Pallet::<T>::unload_recycler_into_coins(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::FromOutput {
-						fee_recycler_value: input_value,
-						fee_recycler_index: index,
-					},
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				input_value,
-				index,
-				revision,
-				split_into,
-				max_fee,
-			)?;
-		}
-
-		for (v, dests) in &split_into_copy {
-			for dest in dests {
-				let coin = CoinsByOwner::<T>::get(dest).expect("destination should have a coin");
-				assert_eq!(coin.value, *v);
-				assert_eq!(coin.age, 1);
-			}
-		}
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((INSTANCE_ID, input_value, index, alias)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		assert!(T::NativeFungible::balance(&fee_dest) > fee_dest_before);
-		assert!(TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID) > destroyed_before);
-
-		Ok(())
+		input_value: Denomination,
+		index: RingIndex,
+		fee_dest: T::AccountId,
+		fee_dest_before: NativeBalanceOf<T>,
+		destroyed_before: FungiblesBalanceOf<T>,
 	}
 
-	/// `Prepaid` counterparts of the `unload_recycler_into_coins` buckets.
-	///
-	/// The `Prepaid` path verifies all `a` alias proofs (the first alias is not pre-marked by the
-	/// extension) and moves no fee, whereas the `FromOutput` buckets verify `a - 1` proofs and add
-	/// a fee transfer and remainder burn. Neither path dominates the other, so both are measured;
-	/// the `AsCoinage` extension charges the difference for the mode it mints (see
-	/// the `Prepaid` `PostDispatchInfo` refund).
-	#[benchmark]
-	fn unload_recycler_into_coins_prepaid_1_2(
-		a: Linear<1, 2>,
-		d: Linear<1, { T::MaxSplitOutputs::get() }>,
-	) -> Result<(), BenchmarkError> {
-		let (aliases, bounded_proofs, input_value, index, revision, split_into, max_fee) =
-			setup_unload_recycler_into_coins::<T>(a, d, UnloadFeeBenchMode::Prepaid)?;
-		let aliases_copy = aliases.clone();
-		let split_into_copy = split_into.clone();
-		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-		let destroyed_before = TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID);
-
-		#[block]
-		{
-			Pallet::<T>::unload_recycler_into_coins(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
+	impl<T: Config> CoinsUnloadExpectation<T> {
+		fn assert_unloaded(&self, mode: UnloadFeeBenchMode) {
+			for (value, dests) in &self.split_into {
+				for dest in dests {
+					let coin =
+						CoinsByOwner::<T>::get(dest).expect("destination should have a coin");
+					assert_eq!(coin.value, *value);
+					assert_eq!(coin.age, 1);
 				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				input_value,
-				index,
-				revision,
-				split_into,
-				max_fee,
-			)?;
-		}
-
-		for (v, dests) in &split_into_copy {
-			for dest in dests {
-				let coin = CoinsByOwner::<T>::get(dest).expect("destination should have a coin");
-				assert_eq!(coin.value, *v);
-				assert_eq!(coin.age, 1);
+			}
+			for alias in &self.aliases {
+				assert!(matches!(
+					RecyclerAliasStates::<T>::get((
+						INSTANCE_ID,
+						self.input_value,
+						self.index,
+						alias
+					)),
+					Some(AliasState::Unloaded),
+				));
+			}
+			let fee_dest_after = T::NativeFungible::balance(&self.fee_dest);
+			let destroyed_after = TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID);
+			match mode {
+				UnloadFeeBenchMode::Prepaid => {
+					assert_eq!(fee_dest_after, self.fee_dest_before);
+					assert_eq!(destroyed_after, self.destroyed_before);
+				},
+				UnloadFeeBenchMode::FromOutput => {
+					assert!(fee_dest_after > self.fee_dest_before);
+					assert!(destroyed_after > self.destroyed_before);
+				},
 			}
 		}
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((INSTANCE_ID, input_value, index, alias)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		// `Prepaid` moves no fee and burns nothing.
-		assert_eq!(T::NativeFungible::balance(&fee_dest), fee_dest_before);
-		assert_eq!(TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID), destroyed_before);
-
-		Ok(())
 	}
 
-	#[benchmark]
-	fn unload_recycler_into_coins_prepaid_3_8(
-		a: Linear<3, 8>,
-		d: Linear<1, { T::MaxSplitOutputs::get() }>,
-	) -> Result<(), BenchmarkError> {
+	/// Sets up an unload of `a` aliases into `d` coins. In `FromOutput` mode the fee comes out of
+	/// the output and the remainder is burnt.
+	fn prepare_unload_recycler_into_coins<T: Config>(
+		a: u32,
+		d: u32,
+		mode: UnloadFeeBenchMode,
+	) -> Result<
+		(impl FnOnce() -> Result<(), BenchmarkError>, CoinsUnloadExpectation<T>),
+		BenchmarkError,
+	> {
 		let (aliases, bounded_proofs, input_value, index, revision, split_into, max_fee) =
-			setup_unload_recycler_into_coins::<T>(a, d, UnloadFeeBenchMode::Prepaid)?;
-		let aliases_copy = aliases.clone();
-		let split_into_copy = split_into.clone();
+			setup_unload_recycler_into_coins::<T>(a, d, mode)?;
+		// `FromOutput` pre-marks the first alias in the extension before dispatch.
+		if mode == UnloadFeeBenchMode::FromOutput {
+			RecyclerManager::<T>::mark_alias_unloaded(INSTANCE_ID, input_value, index, aliases[0]);
+		}
 		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-		let destroyed_before = TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID);
-
-		#[block]
-		{
+		let expectation = CoinsUnloadExpectation {
+			aliases: aliases.clone(),
+			split_into: split_into.clone(),
+			input_value,
+			index,
+			fee_dest_before: T::NativeFungible::balance(&fee_dest),
+			fee_dest,
+			destroyed_before: TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID),
+		};
+		let fee = match mode {
+			UnloadFeeBenchMode::Prepaid => UnloadFee::Prepaid,
+			UnloadFeeBenchMode::FromOutput =>
+				UnloadFee::FromOutput { fee_recycler_value: input_value, fee_recycler_index: index },
+		};
+		let call = move || -> Result<(), BenchmarkError> {
 			Pallet::<T>::unload_recycler_into_coins(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
-				}
-				.into(),
+				Origin::UnloadToken { alias_proofs: bounded_proofs, proven_msg: [0u8; 32], fee }
+					.into(),
 				INSTANCE_ID,
 				aliases,
 				input_value,
@@ -3128,78 +2842,175 @@ mod benches {
 				split_into,
 				max_fee,
 			)?;
+			Ok(())
+		};
+		Ok((call, expectation))
+	}
+
+	/// `d` scales the output coin count over the full `MaxSplitOutputs` range.
+	#[benchmark]
+	fn unload_recycler_into_coins_from_output_1(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(1, d, UnloadFeeBenchMode::FromOutput)?;
+
+		#[block]
+		{
+			call()?;
 		}
 
-		for (v, dests) in &split_into_copy {
-			for dest in dests {
-				let coin = CoinsByOwner::<T>::get(dest).expect("destination should have a coin");
-				assert_eq!(coin.value, *v);
-				assert_eq!(coin.age, 1);
-			}
-		}
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((INSTANCE_ID, input_value, index, alias)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		assert_eq!(T::NativeFungible::balance(&fee_dest), fee_dest_before);
-		assert_eq!(TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID), destroyed_before);
-
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
 		Ok(())
 	}
 
 	#[benchmark]
-	fn unload_recycler_into_coins_prepaid_9_max(
-		a: Linear<
-			9,
-			{ T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity()) },
-		>,
+	fn unload_recycler_into_coins_from_output_2(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let (aliases, bounded_proofs, input_value, index, revision, split_into, max_fee) =
-			setup_unload_recycler_into_coins::<T>(a, d, UnloadFeeBenchMode::Prepaid)?;
-		let aliases_copy = aliases.clone();
-		let split_into_copy = split_into.clone();
-		let fee_dest = T::FeeDestination::get();
-		let fee_dest_before = T::NativeFungible::balance(&fee_dest);
-		let destroyed_before = TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID);
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(2, d, UnloadFeeBenchMode::FromOutput)?;
 
 		#[block]
 		{
-			Pallet::<T>::unload_recycler_into_coins(
-				Origin::UnloadToken {
-					alias_proofs: bounded_proofs,
-					proven_msg: [0u8; 32],
-					fee: UnloadFee::Prepaid,
-				}
-				.into(),
-				INSTANCE_ID,
-				aliases,
-				input_value,
-				index,
-				revision,
-				split_into,
-				max_fee,
-			)?;
+			call()?;
 		}
 
-		for (v, dests) in &split_into_copy {
-			for dest in dests {
-				let coin = CoinsByOwner::<T>::get(dest).expect("destination should have a coin");
-				assert_eq!(coin.value, *v);
-				assert_eq!(coin.age, 1);
-			}
-		}
-		for alias in &aliases_copy {
-			assert!(matches!(
-				RecyclerAliasStates::<T>::get((INSTANCE_ID, input_value, index, alias)),
-				Some(AliasState::Unloaded),
-			));
-		}
-		assert_eq!(T::NativeFungible::balance(&fee_dest), fee_dest_before);
-		assert_eq!(TotalValueOfDestroyedCoins::<T>::get(INSTANCE_ID), destroyed_before);
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
 
+	#[benchmark]
+	fn unload_recycler_into_coins_from_output_4(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(4, d, UnloadFeeBenchMode::FromOutput)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_from_output_8(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(8, d, UnloadFeeBenchMode::FromOutput)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_from_output_max(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
+			Pallet::<T>::max_aliases_per_unload(),
+			d,
+			UnloadFeeBenchMode::FromOutput,
+		)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_prepaid_1(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(1, d, UnloadFeeBenchMode::Prepaid)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_prepaid_2(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(2, d, UnloadFeeBenchMode::Prepaid)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_prepaid_4(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(4, d, UnloadFeeBenchMode::Prepaid)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_prepaid_8(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(8, d, UnloadFeeBenchMode::Prepaid)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_prepaid_max(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
+			Pallet::<T>::max_aliases_per_unload(),
+			d,
+			UnloadFeeBenchMode::Prepaid,
+		)?;
+
+		#[block]
+		{
+			call()?;
+		}
+
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
 		Ok(())
 	}
 
@@ -3315,10 +3126,7 @@ mod benches {
 
 	#[benchmark(extra)]
 	fn batch_verify_recycler_large(
-		n: Linear<
-			8,
-			{ T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity()) },
-		>,
+		n: Linear<8, { Pallet::<T>::max_aliases_per_unload() }>,
 	) -> Result<(), BenchmarkError> {
 		let (value, ring_index, _aliases, proofs, proven_msg) =
 			T::BenchmarkHelper::setup_batch_verify(n)?;
@@ -3447,13 +3255,7 @@ mod benches {
 	/// (multiple inputs, validates n recycler revisions).
 	#[benchmark]
 	fn as_none_tx_ext_unload_recyclers_into_external_asset_non_anonymous(
-		n: Linear<
-			1,
-			{
-				((T::MaximumExponent::get() as i32 - T::MinimumExponent::get() as i32 + 1) as u32)
-					.min(T::MaxConsolidation::get())
-			},
-		>,
+		n: Linear<1, { Pallet::<T>::max_recyclers_per_unload() }>,
 	) -> Result<(), BenchmarkError> {
 		common_setup::<T>();
 
@@ -3969,7 +3771,10 @@ mod benches {
 			CryptoOf::<T>::alias_in_context(secret, pallet::UNLOADING_RECYCLER_CONTEXT.as_ref())
 				.expect("alias should be valid");
 
-		// Create the call first to compute inherited_implication
+		// Create the call first to compute inherited_implication. The alias proof signs the call,
+		// so `max_fee` must not depend on the weights: a quoted fee would change with every
+		// weights regeneration and stale the cached proof. Validation only compares `max_fee`
+		// against the required fee, so the maximum costs the same as any sufficient value.
 		let call = Call::<T>::unload_recycler_into_external_asset {
 			instance_id: INSTANCE_ID,
 			aliases: vec![alias].try_into().unwrap(),
@@ -3977,8 +3782,7 @@ mod benches {
 			index,
 			revision,
 			to: account("dest", 0, 0),
-			max_fee: Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-				.expect("fee conversion is set up by `common_setup`"),
+			max_fee: FungiblesBalanceOf::<T>::max_value(),
 		};
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
@@ -4161,13 +3965,7 @@ mod benches {
 	// full recyclers.
 	#[benchmark]
 	fn validate_unload_calls(
-		r: Linear<
-			1,
-			{
-				((T::MaximumExponent::get() as i32 - T::MinimumExponent::get() as i32 + 1) as u32)
-					.min(T::MaxConsolidation::get())
-			},
-		>,
+		r: Linear<1, { Pallet::<T>::max_recyclers_per_unload() }>,
 		d: Linear<0, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
 		common_setup::<T>();
