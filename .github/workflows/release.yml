@@ -125,14 +125,50 @@ jobs:
     if: ${{ always() && needs.chain-tests.result == 'failure' }}
     runs-on: parity-ubuntu
     steps:
+      # The gate's junit lands in THIS run (a called workflow's jobs do), so the
+      # failing suites can be named rather than just linked to.
+      - name: Collect the gate's test results
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-gate-test-results-*
+          path: gate-results
+
+      - name: Compose the message
+        id: msg
+        run: |
+          set -euo pipefail
+          FAILED=$(node -e '
+            const fs = require("fs"), path = require("path");
+            const walk = (d) => fs.existsSync(d) ? fs.readdirSync(d, {withFileTypes: true})
+              .flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]) : [];
+            const names = new Set();
+            for (const f of walk("gate-results").filter((f) => f.endsWith(".xml"))) {
+              const xml = fs.readFileSync(f, "utf8");
+              for (const m of xml.matchAll(/<testsuite name="([^"]+)"[^>]*failures="([1-9]\d*)"/g)) {
+                names.add(m[1].replace(/^src\/tests\//, ""));
+              }
+            }
+            console.log([...names].join(", "));
+          ')
+          {
+            echo "text<<GATEMSG"
+            echo "[CRITICAL] E2E Release Tests Failed (${{ github.ref_name }})"
+            if [ -n "$FAILED" ]; then
+              echo "$FAILED"
+            else
+              echo "failed before the tests ran (fork spawn, or the runtime was refused)"
+            fi
+            echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "GATEMSG"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: s3krit/matrix-message-action@v0.0.3
         with:
           room_id: "!llIELBsiHpuJTvtzhb:parity.io"
           access_token: ${{ secrets.ENG_AUT_MATRIX_TOKEN }}
           server: m.parity.io
-          message: |
-            release blocked: chain-tests failed against a fork of previewnet and paseo-next-v2, so nothing was published.
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          message: ${{ steps.msg.outputs.text }}
 
   publish-release:
     runs-on: parity-ubuntu
