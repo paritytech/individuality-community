@@ -1,0 +1,46 @@
+[package]
+name = "indiv-precompile-support"
+description = "Shared helpers for pallet-revive precompiles: value and delegate-call guards, caller resolution and read-weight charging"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+frame-support = { workspace = true }
+frame-system = { workspace = true }
+pallet-balances = { workspace = true, optional = true }
+pallet-revive = { workspace = true }
+sp-runtime = { workspace = true, optional = true }
+
+[features]
+default = ["std"]
+std = [
+	"frame-support/std",
+	"frame-system/std",
+	"pallet-balances?/std",
+	"pallet-revive/std",
+	"sp-runtime?/std",
+]
+runtime-benchmarks = [
+	"frame-support/runtime-benchmarks",
+	"frame-system/runtime-benchmarks",
+	"pallet-balances?/runtime-benchmarks",
+	"pallet-revive/runtime-benchmarks",
+	"sp-runtime?/runtime-benchmarks",
+]
+try-runtime = [
+	"frame-support/try-runtime",
+	"frame-system/try-runtime",
+	"pallet-balances?/try-runtime",
+	"pallet-revive/try-runtime",
+	"sp-runtime?/try-runtime",
+]
+# Runtime-agnostic helpers shared by the precompile crates' test mocks. Enabled only as a
+# dev-dependency feature, so the production library never pulls the test-only dependencies.
+test-helpers = ["dep:pallet-balances", "dep:sp-runtime", "std"]
