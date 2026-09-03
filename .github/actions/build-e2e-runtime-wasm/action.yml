@@ -50,22 +50,30 @@ runs:
         shared-key: individuality-cache-e2e-runtime-wasm
 
     # A runtime upgrade only runs when spec_version increases, and a build from
-    # source carries the value the chain already has. +1 lands in the YYY band
+    # source carries whatever is committed — which can be BEHIND the deployed
+    # networks, since a release bumps the value on main. So stamp above the higher
+    # of the two: committed, and the newest release's. +1 lands in the YYY band
     # RELEASE.md reserves for nightlies. Workspace only; nothing is committed.
     - name: Stamp a strictly-greater spec_version
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         set -euo pipefail
+        LATEST=$(.github/scripts/latest_release_spec_version.sh || true)
+        [ -n "$LATEST" ] && echo "newest release spec_version: $LATEST" \
+          || echo "no readable release spec_version; using the committed values"
         for lib in runtimes/next-asset-hub-paseo/src/lib.rs runtimes/next-people-paseo/src/lib.rs; do
-          # sed captures only the number: a bare [0-9_]+ grep also matches the
-          # underscore inside "spec_version" itself.
-          BASE=$(sed -nE 's/.*spec_version:[[:space:]]*([0-9_]+).*/\1/p' "$lib" | head -1 | tr -d '_')
+          # Anchored: a bare match also picks up commented-out lines.
+          BASE=$(sed -nE 's/^[[:space:]]*spec_version: ([0-9][0-9_]*),$/\1/p' "$lib" | head -1 | tr -d '_')
           [ -n "$BASE" ] || { echo "::error::no spec_version found in $lib"; exit 1; }
-          STAMP=$((BASE + 1))
+          FLOOR=$BASE
+          [ -n "$LATEST" ] && [ "$LATEST" -gt "$FLOOR" ] && FLOOR=$LATEST
+          STAMP=$((FLOOR + 1))
           GROUPED=$(sed -E 's/(.{1,3})(.{3})(.{3})$/\1_\2_\3/' <<< "$STAMP")
-          sed -i -E "s/spec_version:[[:space:]]*[0-9_]+/spec_version: ${GROUPED}/" "$lib"
+          sed -i -E "s/^([[:space:]]*spec_version: )[0-9][0-9_]*,$/\1${GROUPED},/" "$lib"
           echo "  $lib: $BASE -> $GROUPED"
         done
-
       shell: bash
 
     # production (lto, codegen-units=1) is the profile srtool uses for releases.

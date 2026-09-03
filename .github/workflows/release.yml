@@ -106,6 +106,10 @@ jobs:
   # headed for should not be cut as a release.
   chain-tests:
     needs: [build-runtimes]
+    # A called workflow inherits the caller's token. It only reads this repo's
+    # artifacts, so hand it nothing else.
+    permissions:
+      contents: read
     uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
     with:
       environment: previewnet,paseo-next-v2

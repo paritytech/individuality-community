@@ -107,6 +107,10 @@ jobs:
   # gate failure that only reds the badge is easy to miss.
   chain-tests:
     needs: [build-runtimes]
+    # A called workflow inherits the caller's token. It only reads this repo's
+    # artifacts, so hand it nothing else.
+    permissions:
+      contents: read
     uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
     with:
       # Both networks this runtime is deployed to; each forks separately.
