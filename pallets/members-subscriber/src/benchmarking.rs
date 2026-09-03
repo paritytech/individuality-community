@@ -34,9 +34,9 @@ use frame_support::{
 	traits::{Authorize, EnsureOrigin, Get},
 	BoundedVec,
 };
-use frame_system::RawOrigin as SystemOrigin;
+use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin as SystemOrigin};
 use indiv_support::traits::RingExponent;
-use sp_runtime::transaction_validity::TransactionSource;
+use sp_runtime::{traits::Zero, transaction_validity::TransactionSource};
 
 const BENCH_IDENTIFIER: Identifier = [0u8; 32];
 
@@ -93,6 +93,37 @@ fn worst_case_collection_state<T: Config>(
 	}
 }
 
+/// Collection state that leaves `n` unexamined indices below the frontier, with both missing
+/// and deleted sets as large as the scan and the `authorize` accept.
+///
+/// `deleted_indices` sits one below capacity, because at capacity `authorize` rejects the call.
+/// `missing_indices` holds every entry the map can take while still fitting the `n` gaps the
+/// scan is about to record, so the last insert lands in a full-sized map. Both sets stay below
+/// the cursor and outside the scanned range, so every scanned index takes the full
+/// read-lookup-insert path.
+fn gap_scan_worst_case_state<T: Config>(
+	n: u32,
+) -> RingCollectionState<T::MaxMissingRootsPerCollection, T::MaxDeletedRingsPerCollection> {
+	let deleted = T::MaxDeletedRingsPerCollection::get().saturating_sub(1);
+	let missing = T::MaxMissingRootsPerCollection::get().saturating_sub(n);
+	let frontier = deleted.saturating_add(T::MaxMissingRootsPerCollection::get());
+
+	RingCollectionState {
+		ring_count: 0,
+		next_ring_index: frontier,
+		next_scan_index: frontier.saturating_sub(n),
+		missing_indices: (deleted..deleted.saturating_add(missing))
+			.map(|i| (i, 0u32))
+			.collect::<BTreeMap<_, _>>()
+			.try_into()
+			.expect("missing count is at most the bound"),
+		deleted_indices: (0..deleted)
+			.collect::<BTreeSet<_>>()
+			.try_into()
+			.expect("one below the bound"),
+	}
+}
+
 /// Distinct collection identifier.
 fn bench_identifier(c: u32) -> Identifier {
 	let mut identifier = [0u8; 32];
@@ -112,14 +143,6 @@ mod benches {
 
 		// Initializing from Terminated state (storage already cleared during termination)
 		Subscription::<T>::put(SubscriptionStatus::Terminated);
-
-		// Setting next_ring_index so that detect_missing_rings_in_batch has no delta
-		// inside the extrinsic.
-		// The detect_missing_rings_in_batch cost is accounted for separately.
-		RingCollectionStates::<T>::insert(
-			BENCH_IDENTIFIER,
-			RingCollectionState { next_ring_index: n, ..Default::default() },
-		);
 
 		// Worst case for the collection bound: the batch adds the last collection that fits,
 		// so the call walks every existing exponent before accepting it.
@@ -340,7 +363,7 @@ mod benches {
 		QueuedRingPurge::<T>::put(RingPurgeProgress { generation: 0, page: 0 });
 
 		#[extrinsic_call]
-		_(SystemOrigin::Authorized);
+		_(SystemOrigin::Authorized, 0, 0, BlockNumberFor::<T>::zero());
 
 		assert_eq!(RingRoots::<T>::iter().count(), 0);
 		assert_eq!(QueuedRingPurge::<T>::get(), Some(RingPurgeProgress { generation: 1, page: 0 }));
@@ -357,7 +380,11 @@ mod benches {
 		CurrentGeneration::<T>::put(1);
 		QueuedRingPurge::<T>::put(RingPurgeProgress { generation: 0, page: 0 });
 
-		let call = Call::<T>::purge_stale_ring_roots {};
+		let call = Call::<T>::purge_stale_ring_roots {
+			generation: 0,
+			page: 0,
+			discriminator: BlockNumberFor::<T>::zero(),
+		};
 
 		#[block]
 		{
@@ -396,7 +423,7 @@ mod benches {
 			(0..n).collect::<Vec<_>>().try_into().expect("within bounds");
 
 		#[extrinsic_call]
-		_(SystemOrigin::Authorized, BENCH_IDENTIFIER, indices);
+		_(SystemOrigin::Authorized, BENCH_IDENTIFIER, indices, BlockNumberFor::<T>::zero());
 
 		// XCM sent and replay timestamp updated
 		assert!(ProcessingState::<T>::get().last_replay_request_time > 0);
@@ -443,7 +470,11 @@ mod benches {
 		let indices: BoundedVec<_, T::MaxMissingRootsPerCollection> =
 			(0..n).collect::<Vec<_>>().try_into().expect("within bounds");
 
-		let call = Call::<T>::replay_missing_roots { identifier: BENCH_IDENTIFIER, indices };
+		let call = Call::<T>::replay_missing_roots {
+			identifier: BENCH_IDENTIFIER,
+			indices,
+			discriminator: BlockNumberFor::<T>::zero(),
+		};
 
 		#[block]
 		{
@@ -469,43 +500,50 @@ mod benches {
 		Ok(())
 	}
 
-	/// Benchmark for the scan loop in `detect_missing_rings_in_batch`.
-	/// Measures cost of scanning a range of `n` indices, swept over the full per-batch
-	/// scan cap since the extrinsics charge up to `MaxGapScanPerBatch` indices.
 	#[benchmark]
-	fn detect_missing_in_range(
-		n: Linear<1, { T::MaxGapScanPerBatch::get() }>,
+	fn detect_missing_rings(
+		n: Linear<1, { T::MaxGapScanPerCall::get() }>,
 	) -> Result<(), BenchmarkError> {
 		T::init();
 
 		Subscription::<T>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
 		ProcessingState::<T>::mutate(|s| s.last_processed_sequence = 1);
 
-		// Every index is a gap.
-		RingCollectionStates::<T>::insert(
-			BENCH_IDENTIFIER,
-			RingCollectionState { ring_count: 0, next_ring_index: n, ..Default::default() },
-		);
+		let state = gap_scan_worst_case_state::<T>(n);
+		let scan_from = state.next_scan_index;
+		RingCollectionStates::<T>::insert(BENCH_IDENTIFIER, state);
 
-		// The batch only carries the collection identifier for the scan; the scanned range
-		// comes from the stored state's frontier and scan cursor.
-		let batch = RingRootUpdatesBatch::<T> {
+		#[extrinsic_call]
+		_(SystemOrigin::Authorized, BENCH_IDENTIFIER, scan_from, BlockNumberFor::<T>::zero());
+
+		// Every scanned index was a gap, filling the map to its bound
+		let state = RingCollectionStates::<T>::get(BENCH_IDENTIFIER);
+		assert_eq!(state.missing_indices.len(), T::MaxMissingRootsPerCollection::get() as usize);
+		assert_eq!(state.next_scan_index, state.next_ring_index);
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn authorize_detect_missing_rings() -> Result<(), BenchmarkError> {
+		T::init();
+
+		Subscription::<T>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
+
+		let state = gap_scan_worst_case_state::<T>(1);
+		let scan_from = state.next_scan_index;
+		RingCollectionStates::<T>::insert(BENCH_IDENTIFIER, state);
+
+		let call = Call::<T>::detect_missing_rings {
 			identifier: BENCH_IDENTIFIER,
-			sequence: 2,
-			source_time: 2000,
-			updates: BoundedVec::new(),
-			next_ring_index: n,
+			scan_from,
+			discriminator: BlockNumberFor::<T>::zero(),
 		};
 
 		#[block]
 		{
-			Pallet::<T>::detect_missing_rings_in_batch(&batch);
+			call.authorize(TransactionSource::InBlock).unwrap().unwrap();
 		}
-
-		assert_eq!(
-			RingCollectionStates::<T>::get(BENCH_IDENTIFIER).missing_indices.len(),
-			n as usize
-		);
 
 		Ok(())
 	}

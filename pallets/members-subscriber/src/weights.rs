@@ -64,7 +64,8 @@ pub trait WeightInfo {
 	fn replay_missing_roots(n: u32, ) -> Weight;
 	fn authorize_replay_missing_roots(n: u32, ) -> Weight;
 	fn send_replay_request() -> Weight;
-	fn detect_missing_in_range(n: u32, ) -> Weight;
+	fn detect_missing_rings(n: u32, ) -> Weight;
+	fn authorize_detect_missing_rings() -> Weight;
 }
 
 /// Weights for `indiv_pallet_members_subscriber` using the Substrate node and recommended hardware.
@@ -301,7 +302,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	/// Storage: `MembersSubscriber::RingRoots` (r:32 w:0)
 	/// Proof: `MembersSubscriber::RingRoots` (`max_values`: None, `max_size`: Some(1005), added: 3480, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 32]`.
-	fn detect_missing_in_range(n: u32, ) -> Weight {
+	fn detect_missing_rings(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `154`
 		//  Estimated: `5969 + n * (3480 ±0)`
@@ -313,6 +314,22 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 			.saturating_add(Weight::from_parts(0, 3480).saturating_mul(n.into()))
+	}
+	/// Storage: `MembersSubscriber::Subscription` (r:1 w:0)
+	/// Proof: `MembersSubscriber::Subscription` (`max_values`: Some(1), `max_size`: Some(9), added: 504, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `MembersSubscriber::ProcessingState` (r:1 w:0)
+	/// Proof: `MembersSubscriber::ProcessingState` (`max_values`: Some(1), `max_size`: Some(24), added: 519, mode: `MaxEncodedLen`)
+	/// Storage: `MembersSubscriber::RingCollectionStates` (r:1 w:0)
+	/// Proof: `MembersSubscriber::RingCollectionStates` (`max_values`: None, `max_size`: Some(2504), added: 4979, mode: `MaxEncodedLen`)
+	fn authorize_detect_missing_rings() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `199`
+		//  Estimated: `5969`
+		// Minimum execution time: 15_021_000 picoseconds.
+		Weight::from_parts(16_366_110, 5969)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
 	}
 }
 
@@ -549,7 +566,7 @@ impl WeightInfo for () {
 	/// Storage: `MembersSubscriber::RingRoots` (r:32 w:0)
 	/// Proof: `MembersSubscriber::RingRoots` (`max_values`: None, `max_size`: Some(1005), added: 3480, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 32]`.
-	fn detect_missing_in_range(n: u32, ) -> Weight {
+	fn detect_missing_rings(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `154`
 		//  Estimated: `5969 + n * (3480 ±0)`
@@ -561,5 +578,21 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(RocksDbWeight::get().writes(1_u64))
 			.saturating_add(Weight::from_parts(0, 3480).saturating_mul(n.into()))
+	}
+	/// Storage: `MembersSubscriber::Subscription` (r:1 w:0)
+	/// Proof: `MembersSubscriber::Subscription` (`max_values`: Some(1), `max_size`: Some(9), added: 504, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `MembersSubscriber::ProcessingState` (r:1 w:0)
+	/// Proof: `MembersSubscriber::ProcessingState` (`max_values`: Some(1), `max_size`: Some(24), added: 519, mode: `MaxEncodedLen`)
+	/// Storage: `MembersSubscriber::RingCollectionStates` (r:1 w:0)
+	/// Proof: `MembersSubscriber::RingCollectionStates` (`max_values`: None, `max_size`: Some(2504), added: 4979, mode: `MaxEncodedLen`)
+	fn authorize_detect_missing_rings() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `199`
+		//  Estimated: `5969`
+		// Minimum execution time: 15_021_000 picoseconds.
+		Weight::from_parts(16_366_110, 5969)
+			.saturating_add(RocksDbWeight::get().reads(4_u64))
 	}
 }
