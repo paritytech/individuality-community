@@ -115,12 +115,6 @@ jobs:
       runtime_asset_hub: "artifact:*-runtime"
       runtime_people: "artifact:*-runtime"
       runs_on: parity-large
-    secrets:
-      # The gate needs contents:read on paritytech/preview-net-v1 — the private
-      # engine that spawns the fork. That is the ONLY private repo involved: the
-      # runtimes come from the artifact above rather than being fetched from
-      # paritytech/individuality, and every other pin is a public repo.
-      GH_PAT: ${{ secrets.GH_PAT_PPNV1 }}
 
   publish-nightly:
     runs-on: parity-ubuntu
