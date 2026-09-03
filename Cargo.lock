@@ -5187,12 +5187,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "indiv-precompile-fixtures"
+version = "0.1.0"
+dependencies = [
+ "array-bytes 6.2.3",
+]
+
+[[package]]
 name = "indiv-precompile-nft-claims"
 version = "0.1.0"
 dependencies = [
  "frame-support 48.0.0",
  "frame-system 48.0.0",
  "indiv-pallet-nft-claims",
+ "indiv-precompile-fixtures",
+ "indiv-precompile-scarcity",
+ "indiv-precompile-support",
  "indiv-support",
  "pallet-balances",
  "pallet-revive",
@@ -5232,12 +5242,25 @@ version = "0.1.0"
 dependencies = [
  "frame-support 48.0.0",
  "frame-system 48.0.0",
+ "indiv-precompile-fixtures",
+ "indiv-precompile-support",
  "pallet-balances",
  "pallet-revive",
  "pallet-scarcity",
  "parity-scale-codec",
  "scale-info",
  "sp-io 48.0.0",
+ "sp-runtime 48.0.0",
+]
+
+[[package]]
+name = "indiv-precompile-support"
+version = "0.1.0"
+dependencies = [
+ "frame-support 48.0.0",
+ "frame-system 48.0.0",
+ "pallet-balances",
+ "pallet-revive",
  "sp-runtime 48.0.0",
 ]
 

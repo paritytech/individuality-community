@@ -44,23 +44,22 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::{marker::PhantomData, num::NonZero};
 
-use frame_support::traits::Get;
 use frame_system::RawOrigin;
 use indiv_pallet_nft_claims::{
 	CollectionMinters, Error as NftClaimsError, ItemSelection, Pallet as NftClaims, WeightInfo as _,
 };
 use pallet_revive::{
 	precompiles::{
-		alloy::{
-			self,
-			primitives::Address,
-			sol_types::{Revert, SolCall},
-		},
-		AddressMapper, AddressMatcher, Error, Ext, H160,
+		alloy::{self, primitives::Address, sol_types::SolCall},
+		AddressMatcher, Error, Ext, H160,
 	},
-	sp_runtime::{DispatchError, Weight},
+	sp_runtime::DispatchError,
 };
 use pallet_scarcity::CollectionId;
+
+pub(crate) use indiv_precompile_support::{
+	address_of, caller_account, charge_reads, ensure_no_value, ensure_not_delegate, revert,
+};
 
 #[cfg(test)]
 mod mock;
@@ -78,12 +77,10 @@ pub const KIND_RANDOM: u8 = 1;
 /// `collectionMinter` kind: the registered minter contract picks the item.
 pub const KIND_CONTRACT: u8 = 2;
 
-const ERR_INVALID_CALLER: &str = "invalid caller";
-const ERR_VALUE_NOT_ACCEPTED: &str = "this precompile does not accept value";
-
-fn revert(reason: &str) -> Error {
-	Error::Revert(Revert { reason: reason.into() })
-}
+/// Revert reason when no collection exists at the queried address.
+pub const ERR_UNKNOWN_COLLECTION: &str = "unknown collection";
+/// Revert reason when the caller is not the collection owner.
+pub const ERR_NOT_COLLECTION_OWNER: &str = "caller is not the collection owner";
 
 /// Map the `pallet-nft-claims` errors registration can trigger to catchable reverts.
 ///
@@ -97,8 +94,8 @@ fn revert(reason: &str) -> Error {
 /// else propagates as a plain error, which traps the frame rather than reverting.
 fn revert_nft_claims<T: indiv_pallet_nft_claims::Config>(e: DispatchError) -> Error {
 	let cases: [(NftClaimsError<T>, &str); 2] = [
-		(NftClaimsError::UnknownCollection, "unknown collection"),
-		(NftClaimsError::NotCollectionOwner, "caller is not the collection owner"),
+		(NftClaimsError::UnknownCollection, ERR_UNKNOWN_COLLECTION),
+		(NftClaimsError::NotCollectionOwner, ERR_NOT_COLLECTION_OWNER),
 	];
 	for (error, reason) in cases {
 		if e == DispatchError::from(error) {
@@ -109,46 +106,6 @@ fn revert_nft_claims<T: indiv_pallet_nft_claims::Config>(e: DispatchError) -> Er
 		DispatchError::Other(reason) => revert(reason),
 		other => other.into(),
 	}
-}
-
-/// The signing account behind the EVM caller.
-fn caller_account<T: pallet_revive::Config>(
-	env: &mut impl Ext<T = T>,
-) -> Result<T::AccountId, Error> {
-	env.caller().account_id().cloned().map_err(|_| revert(ERR_INVALID_CALLER))
-}
-
-/// Reject a call carrying native value.
-///
-/// Every function of the interface is ABI-`nonpayable`, so a caller attaching value has made
-/// a mistake, and the precompile has no way to make good on it: the address it would land on
-/// has no owner, no code and no withdrawal path.
-fn ensure_no_value<T: pallet_revive::Config>(env: &impl Ext<T = T>) -> Result<(), Error> {
-	if env.value_transferred().is_zero() {
-		return Ok(());
-	}
-	Err(revert(ERR_VALUE_NOT_ACCEPTED))
-}
-
-fn address_of<T: pallet_revive::Config>(account: &T::AccountId) -> Address {
-	Address::from(<T as pallet_revive::Config>::AddressMapper::to_address(account).0)
-}
-
-/// Proof size charged per storage read.
-///
-/// `DbWeight` carries only `ref_time`, but on a parachain every read also pulls trie nodes
-/// into the proof. The registration entry is bounded far below this headroom; a crate
-/// benchmark can replace the estimate.
-const PROOF_SIZE_PER_READ: u64 = 4 * 1024;
-
-/// Charge `n` worst-case database reads before performing them.
-fn charge_reads<T: frame_system::Config + pallet_revive::Config>(
-	env: &mut impl Ext<T = T>,
-	n: u64,
-) -> Result<(), Error> {
-	let ref_time = <T as frame_system::Config>::DbWeight::get().reads(n).ref_time();
-	env.charge(Weight::from_parts(ref_time, n.saturating_mul(PROOF_SIZE_PER_READ)))?;
-	Ok(())
 }
 
 /// Collection-minter registration for NFT claims at the fixed address index `INDEX`.
@@ -172,10 +129,7 @@ where
 		input: &Self::Interface,
 		env: &mut impl Ext<T = Self::T>,
 	) -> Result<Vec<u8>, Error> {
-		frame_support::ensure!(
-			!env.is_delegate_call(),
-			pallet_revive::Error::<T>::PrecompileDelegateDenied
-		);
+		ensure_not_delegate(env)?;
 		ensure_no_value(env)?;
 		if env.is_read_only() && is_mutating(input) {
 			return Err(Error::Error(pallet_revive::Error::<T>::StateChangeDenied.into()));
