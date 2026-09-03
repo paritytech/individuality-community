@@ -55,11 +55,13 @@ use core::marker::PhantomData;
 /// Weight functions needed for `indiv_pallet_pgas`.
 pub trait WeightInfo {
 	fn claim_pgas() -> Weight;
+	fn batch_claim_pgas() -> Weight;
 	fn create_pgas_asset() -> Weight;
 	fn authorize_create_pgas_asset() -> Weight;
 	fn clean_pgas_claim_records(n: u32, ) -> Weight;
 	fn authorize_clean_pgas_claim_records() -> Weight;
 	fn as_pgas_claim_tx_ext() -> Weight;
+	fn as_pgas_batch_claim_tx_ext() -> Weight;
 }
 
 /// Weights for `indiv_pallet_pgas` using the Substrate node and recommended hardware.
@@ -83,6 +85,25 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(72_708_000, 3675)
 			.saturating_add(T::DbWeight::get().reads(5_u64))
 			.saturating_add(T::DbWeight::get().writes(5_u64))
+	}
+	/// Storage: `Pgas::ClaimedGasAliases` (r:8 w:8)
+	/// Proof: `Pgas::ClaimedGasAliases` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Asset` (r:1 w:1)
+	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Account` (r:1 w:1)
+	/// Proof: `Assets::Account` (`max_values`: None, `max_size`: Some(134), added: 2609, mode: `MaxEncodedLen`)
+	/// Storage: `System::Account` (r:1 w:1)
+	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `Revive::OriginalAccount` (r:1 w:1)
+	/// Proof: `Revive::OriginalAccount` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	fn batch_claim_pgas() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `3756`
+		//  Estimated: `21364`
+		// Minimum execution time: 580_000_000 picoseconds.
+		Weight::from_parts(590_000_000, 21364)
+			.saturating_add(T::DbWeight::get().reads(12_u64))
+			.saturating_add(T::DbWeight::get().writes(12_u64))
 	}
 	/// Storage: `Assets::Asset` (r:1 w:1)
 	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
@@ -153,6 +174,24 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(29_237_786_000, 5898)
 			.saturating_add(T::DbWeight::get().reads(5_u64))
 	}
+	/// Storage: `Assets::Asset` (r:1 w:0)
+	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `MembersSubscriber::RingCollectionExponents` (r:1 w:0)
+	/// Proof: `MembersSubscriber::RingCollectionExponents` (`max_values`: None, `max_size`: Some(49), added: 2524, mode: `MaxEncodedLen`)
+	/// Storage: `MembersSubscriber::RingRoots` (r:1 w:0)
+	/// Proof: `MembersSubscriber::RingRoots` (`max_values`: None, `max_size`: Some(2433), added: 4908, mode: `MaxEncodedLen`)
+	/// Storage: `Pgas::ClaimedGasAliases` (r:8 w:0)
+	/// Proof: `Pgas::ClaimedGasAliases` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	fn as_pgas_batch_claim_tx_ext() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1305`
+		//  Estimated: `23587`
+		// Minimum execution time: 233_543_000_000 picoseconds.
+		Weight::from_parts(233_902_288_000, 23587)
+			.saturating_add(T::DbWeight::get().reads(12_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -175,6 +214,25 @@ impl WeightInfo for () {
 		Weight::from_parts(72_708_000, 3675)
 			.saturating_add(RocksDbWeight::get().reads(5_u64))
 			.saturating_add(RocksDbWeight::get().writes(5_u64))
+	}
+	/// Storage: `Pgas::ClaimedGasAliases` (r:8 w:8)
+	/// Proof: `Pgas::ClaimedGasAliases` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Asset` (r:1 w:1)
+	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Account` (r:1 w:1)
+	/// Proof: `Assets::Account` (`max_values`: None, `max_size`: Some(134), added: 2609, mode: `MaxEncodedLen`)
+	/// Storage: `System::Account` (r:1 w:1)
+	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `Revive::OriginalAccount` (r:1 w:1)
+	/// Proof: `Revive::OriginalAccount` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	fn batch_claim_pgas() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `3756`
+		//  Estimated: `21364`
+		// Minimum execution time: 580_000_000 picoseconds.
+		Weight::from_parts(590_000_000, 21364)
+			.saturating_add(RocksDbWeight::get().reads(12_u64))
+			.saturating_add(RocksDbWeight::get().writes(12_u64))
 	}
 	/// Storage: `Assets::Asset` (r:1 w:1)
 	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
@@ -244,5 +302,23 @@ impl WeightInfo for () {
 		// Minimum execution time: 29_192_909_000 picoseconds.
 		Weight::from_parts(29_237_786_000, 5898)
 			.saturating_add(RocksDbWeight::get().reads(5_u64))
+	}
+	/// Storage: `Assets::Asset` (r:1 w:0)
+	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `MembersSubscriber::RingCollectionExponents` (r:1 w:0)
+	/// Proof: `MembersSubscriber::RingCollectionExponents` (`max_values`: None, `max_size`: Some(49), added: 2524, mode: `MaxEncodedLen`)
+	/// Storage: `MembersSubscriber::RingRoots` (r:1 w:0)
+	/// Proof: `MembersSubscriber::RingRoots` (`max_values`: None, `max_size`: Some(2433), added: 4908, mode: `MaxEncodedLen`)
+	/// Storage: `Pgas::ClaimedGasAliases` (r:8 w:0)
+	/// Proof: `Pgas::ClaimedGasAliases` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	fn as_pgas_batch_claim_tx_ext() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1305`
+		//  Estimated: `23587`
+		// Minimum execution time: 233_543_000_000 picoseconds.
+		Weight::from_parts(233_902_288_000, 23587)
+			.saturating_add(RocksDbWeight::get().reads(12_u64))
 	}
 }

@@ -2521,6 +2521,8 @@ impl indiv_pallet_pgas::Config for Runtime {
 	type MaxClaimsPerPeriodPerPerson = ConstU32<100>;
 	type MaxClaimsPerPeriodPerLitePerson = ConstU32<40>;
 	type MaxPgasClaimRecordCleanupPerCall = ConstU32<20>;
+	// Enough for setting an alias account
+	type MaxPgasClaimsPerBatch = ConstU32<5>;
 	type PgasAdmin = PgasAdmin;
 	type PgasMinBalance = PgasMinBalance;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -2569,11 +2571,11 @@ impl indiv_pallet_pgas::benchmarking::BenchmarkHelper<Runtime> for PgasBenchHelp
 	}
 
 	/// Seed a single-member Bandersnatch ring at `(identifier, ring_index)` in members-subscriber
-	/// storage and return a real ring-VRF proof for that ring against `context` + `message`.
+	/// storage and return a real ring-VRF proof for that ring against `contexts` + `message`.
 	fn seed_and_create_proof(
 		identifier: &indiv_support::traits::Identifier,
 		ring_index: indiv_support::traits::RingIndex,
-		context: &indiv_support::traits::Context,
+		contexts: &[indiv_support::traits::Context],
 		message: &[u8],
 	) -> indiv_pallet_pgas::ProofOf<Runtime> {
 		use indiv_support::{
@@ -2614,8 +2616,10 @@ impl indiv_pallet_pgas::benchmarking::BenchmarkHelper<Runtime> for PgasBenchHelp
 		);
 
 		let commitment = Crypto::open(domain, &member, core::iter::once(member)).expect("open");
-		let (proof, _alias) =
-			Crypto::create(commitment, &secret, &context[..], message).expect("create proof");
+		let context_slices = contexts.iter().map(|c| &c[..]).collect::<alloc::vec::Vec<_>>();
+		let (proof, _aliases) =
+			Crypto::create_multi_context(commitment, &secret, &context_slices, message)
+				.expect("create proof");
 		proof
 	}
 }
