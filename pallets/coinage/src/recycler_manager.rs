@@ -25,7 +25,7 @@ use alloc::{
 	vec::Vec,
 };
 use codec::Encode;
-use frame_support::traits::UnixTime;
+use frame_support::{defensive, traits::UnixTime};
 use indiv_support::{
 	traits::{AppendOnlyMembers, MembershipProver, RingMembershipProof, RingMode},
 	tx_priority,
@@ -355,14 +355,14 @@ impl<T: Config> RecyclerManager<T> {
 		Ok(alias)
 	}
 
-	/// Marks a single alias as unloaded.
+	/// Marks a single alias as unloaded and counts it in [`RecyclersUnloadedCount`].
 	/// Should only be called after successful validation via `validate_alias_proof`.
 	///
 	/// Overwrites any existing temporary lock for the alias because a successful unload consumes
-	/// it permanently.
+	/// it permanently. Use [`Self::mark_unloaded_alias_locked`] to undo the mark.
 	///
-	/// Does not emit [`Event::RecyclerAliasUnloaded`]: the caller must emit it if (and only if)
-	/// the mark persists. In particular the transaction-extension premark is reverted in
+	/// Does not emit [`Event::RecyclerAliasUnloaded`]: the caller must emit it if (and only if) the
+	/// mark persists. In particular the transaction-extension premark is reverted in
 	/// `post_dispatch` on dispatch failure, so it only emits the event on success.
 	pub fn mark_alias_unloaded(
 		instance_id: InstanceId,
@@ -370,10 +370,70 @@ impl<T: Config> RecyclerManager<T> {
 		index: RingIndex,
 		alias: Alias,
 	) {
-		RecyclerAliasStates::<T>::insert((instance_id, value, index, alias), AliasState::Unloaded);
+		// Read before the write below, which would make the ring look used. Every alias state of a
+		// ring is written through this function, so a ring that has state but no count is one that
+		// predates the count: it stays uncounted, since only a scan could recover its number.
+		let count = Self::unloaded_count(instance_id, value, index);
+
+		let previous =
+			RecyclerAliasStates::<T>::mutate((instance_id, value, index, alias), |state| {
+				state.replace(AliasState::Unloaded)
+			});
+
+		if let Some(count) = count.filter(|_| previous != Some(AliasState::Unloaded)) {
+			RecyclersUnloadedCount::<T>::insert(
+				(instance_id, value, index),
+				count.saturating_add(1),
+			);
+		}
 	}
 
-	fn has_pending_dust(instance_id: InstanceId, value: Denomination, index: RingIndex) -> bool {
+	/// Turns the unloaded mark of an alias into a temporary lock, and takes it out of
+	/// [`RecyclersUnloadedCount`] again.
+	///
+	/// This undoes [`Self::mark_alias_unloaded`] for a premark whose dispatch failed, leaving the
+	/// alias unloadable again once `lock` expires. The alias must still carry the premark: any
+	/// other state means the caller marked and locked out of step.
+	pub fn mark_unloaded_alias_locked(
+		instance_id: InstanceId,
+		value: Denomination,
+		index: RingIndex,
+		alias: Alias,
+		lock: LockInfo,
+	) {
+		let previous =
+			RecyclerAliasStates::<T>::mutate((instance_id, value, index, alias), |state| {
+				state.replace(AliasState::Locked(lock))
+			});
+
+		if previous != Some(AliasState::Unloaded) {
+			defensive!("coinage: locked an alias that was not marked unloaded", previous);
+			return;
+		}
+
+		RecyclersUnloadedCount::<T>::mutate((instance_id, value, index), |unloaded| {
+			if let Some(count) = unloaded {
+				*count = count.saturating_sub(1);
+			}
+		});
+	}
+
+	/// The number of aliases unloaded from a recycler ring, or `None` if the ring is not counted.
+	///
+	/// A ring that already had alias states when [`RecyclersUnloadedCount`] was introduced is never
+	/// counted, so a caller that needs its number has to scan [`RecyclerAliasStates`] over the
+	/// ring's prefix. A ring with no alias state at all has had no unload, so it reports zero
+	/// without ever having been written to.
+	pub fn unloaded_count(
+		instance_id: InstanceId,
+		value: Denomination,
+		index: RingIndex,
+	) -> Option<u32> {
+		RecyclersUnloadedCount::<T>::get((instance_id, value, index))
+			.or_else(|| (!Self::has_alias_states(instance_id, value, index)).then_some(0))
+	}
+
+	fn has_alias_states(instance_id: InstanceId, value: Denomination, index: RingIndex) -> bool {
 		RecyclerAliasStates::<T>::iter_prefix((instance_id, value, index))
 			.next()
 			.is_some()
@@ -565,6 +625,17 @@ impl<T: Config> RecyclerManager<T> {
 		let unloaded_count = unloaded_aliases.len() as u32;
 		let remaining = status.total.saturating_sub(unloaded_count);
 
+		// The ring goes away here, so drop its unloaded count. The scan above is the ground truth
+		// for `remaining`; the count only serves readers, and a mismatch on a counted ring means
+		// the two went out of step somewhere in the unload paths.
+		let counted = RecyclersUnloadedCount::<T>::take((instance_id, value, next_ring));
+		if counted.is_some_and(|counted| counted != unloaded_count) {
+			defensive!(
+				"coinage: unloaded count does not match the ring's unloaded aliases",
+				(counted, unloaded_count)
+			);
+		}
+
 		// Archive the recycler before removing the ring if it still has not-yet-unloaded coins, so
 		// a member can later recover their value via `unload_archived`. Commit to the
 		// unloaded-alias set together with the ring-VRF root, both still readable until
@@ -586,7 +657,7 @@ impl<T: Config> RecyclerManager<T> {
 		}
 
 		// Queue any deferred ring dust for bounded cleanup.
-		if Self::has_pending_dust(instance_id, value, next_ring) {
+		if Self::has_alias_states(instance_id, value, next_ring) {
 			pallet::RecyclersDusting::<T>::insert((instance_id, value, next_ring), ());
 		}
 

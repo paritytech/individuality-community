@@ -46,10 +46,7 @@ where
 		input: &Self::Interface,
 		env: &mut impl Ext<T = Self::T>,
 	) -> Result<Vec<u8>, Error> {
-		frame_support::ensure!(
-			!env.is_delegate_call(),
-			pallet_revive::Error::<T>::PrecompileDelegateDenied
-		);
+		ensure_not_delegate(env)?;
 		ensure_no_value(env)?;
 		if env.is_read_only() && is_mutating(input) {
 			return Err(Error::Error(pallet_revive::Error::<T>::StateChangeDenied.into()));
@@ -396,15 +393,11 @@ where
 		))
 	}
 
-	/// Royalty terms a sale can actually be priced against, or `None`.
+	/// Royalty terms a sale can be priced against, or `None`.
 	///
-	/// Every way a collection can fail to configure a royalty answers `None` rather than
-	/// reverting: an unset key, a receiver that is not an address or is the zero address,
-	/// basis points that do not decode, and a share above 100%. A marketplace that calls this
-	/// without catching reverts would otherwise fail the whole sale, which makes one bad
-	/// metadata value cost far more than the royalty it was meant to collect. Implementations
-	/// backed by typed storage reject these when the royalty is set; this one stores raw bytes
-	/// under a metadata key, so the read is the only place left to reject them.
+	/// Answers `None` for every misconfiguration: an unset key, a receiver that is not an address
+	/// or is the zero address, basis points that do not decode, and a share above 100%. The values
+	/// are raw metadata bytes, so this read is the only place that can reject them.
 	fn royalty_terms(nft: &Nft) -> Result<Option<([u8; 20], u128)>, Error> {
 		let (Some(receiver), Some(basis_points)) = (
 			Self::item_bytes(nft, ROYALTY_RECEIVER_KEY)?,
@@ -415,11 +408,9 @@ where
 		let Ok(receiver) = <[u8; 20]>::try_from(receiver) else {
 			return Ok(None);
 		};
-		// Quoting an amount payable to the zero address would have a marketplace burn it.
-		// Note this is not the fallback sentinel it is elsewhere: implementations that store
-		// the receiver and the share together read a zero item-level receiver as "use the
-		// collection default", whereas resolution here has already chosen the item-level value,
-		// so a zero receiver means no royalty and discards the collection's terms.
+		// A zero receiver means no royalty: quoting an amount payable to it would have a
+		// marketplace burn it. Item-scope resolution has already chosen the item value, so a zero
+		// receiver here does not fall back to the collection's terms.
 		if receiver == [0u8; 20] {
 			return Ok(None);
 		}
@@ -620,7 +611,7 @@ where
 	/// Answers [`Acknowledgement::Unavailable`] for every destination carrying code: the
 	/// `IERC721Receiver::onERC721Received` call this owes them needs `Ext::call`, whose
 	/// reentrancy argument `pallet-revive` does not export. See the crate documentation for
-	/// what the call does once it can be made, and why it will not permit reentry.
+	/// what the call would do and why it would not permit reentry.
 	fn acknowledge_receipt(
 		transfer: &Transfer<'_>,
 		_data: &[u8],
@@ -715,12 +706,10 @@ where
 	/// Announce a metadata write that changes what a standard read returns.
 	///
 	/// Only the reserved keys behind `tokenURI` and `contractURI` have a standard event. Every
-	/// other key emits nothing, `name` and `symbol` included: no standard defines an event for
-	/// them, and announcing a change that no standard read reflects would have consumers refetch a
-	/// document that did not move.
+	/// other key emits nothing, `name` and `symbol` included, because no standard defines an event
+	/// for them.
 	///
-	/// A removal announces even when the key was absent. Telling them apart costs a read, and a
-	/// consumer refetching once too often is cheaper than one that never learns.
+	/// A removal announces even when the key was absent, because telling them apart costs a read.
 	fn announce_metadata_write(
 		key: &[u8],
 		scope: Scope,
