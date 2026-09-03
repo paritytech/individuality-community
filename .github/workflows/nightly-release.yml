@@ -116,6 +116,22 @@ jobs:
       runtime_people: "artifact:*-runtime"
       runs_on: parity-large
 
+  # A blocked release is silent otherwise: nothing is published and the only
+  # trace is a red badge nobody is watching.
+  notify-gate-failure:
+    needs: [chain-tests]
+    if: ${{ always() && needs.chain-tests.result == 'failure' }}
+    runs-on: parity-ubuntu
+    steps:
+      - uses: s3krit/matrix-message-action@v0.0.3
+        with:
+          room_id: "!llIELBsiHpuJTvtzhb:parity.io"
+          access_token: ${{ secrets.ENG_AUT_MATRIX_TOKEN }}
+          server: m.parity.io
+          message: |
+            nightly blocked: chain-tests failed against a fork of previewnet and paseo-next-v2, so nothing was published.
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
   publish-nightly:
     runs-on: parity-ubuntu
     needs: [check-changes, build-runtimes, chain-tests]
