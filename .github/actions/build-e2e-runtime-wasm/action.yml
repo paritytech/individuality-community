@@ -49,17 +49,56 @@ runs:
       with:
         shared-key: individuality-cache-e2e-runtime-wasm
 
+    # A runtime upgrade only runs when spec_version increases, and a build from
+    # source carries whatever is committed — which can be BEHIND the deployed
+    # networks, since a release bumps the value on main. So stamp above the higher
+    # of the two: committed, and the newest release's. +1 lands in the YYY band
+    # RELEASE.md reserves for nightlies. Workspace only; nothing is committed.
+    - name: Stamp a strictly-greater spec_version
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        LATEST=$(.github/scripts/latest_release_spec_version.sh || true)
+        [ -n "$LATEST" ] && echo "newest release spec_version: $LATEST" \
+          || echo "no readable release spec_version; using the committed values"
+        for lib in runtimes/next-asset-hub-paseo/src/lib.rs runtimes/next-people-paseo/src/lib.rs; do
+          # Anchored: a bare match also picks up commented-out lines.
+          BASE=$(sed -nE 's/^[[:space:]]*spec_version: ([0-9][0-9_]*),$/\1/p' "$lib" | head -1 | tr -d '_')
+          [ -n "$BASE" ] || { echo "::error::no spec_version found in $lib"; exit 1; }
+          FLOOR=$BASE
+          [ -n "$LATEST" ] && [ "$LATEST" -gt "$FLOOR" ] && FLOOR=$LATEST
+          STAMP=$((FLOOR + 1))
+          GROUPED=$(sed -E 's/(.{1,3})(.{3})(.{3})$/\1_\2_\3/' <<< "$STAMP")
+          sed -i -E "s/^([[:space:]]*spec_version: )[0-9][0-9_]*,$/\1${GROUPED},/" "$lib"
+          echo "  $lib: $BASE -> $GROUPED"
+        done
+      shell: bash
+
+    # production (lto, codegen-units=1) is the profile srtool uses for releases.
+    # --release put people over the relay's 3 MiB max_code_size, so the chain
+    # refused the upgrade with parachain_system TooBig.
     - name: Build E2E runtime WASM artifacts
-      run: cargo build --release -p next-people-paseo-runtime -p next-asset-hub-paseo-runtime --locked
+      run: cargo build --profile production -p next-people-paseo-runtime -p next-asset-hub-paseo-runtime --locked
       shell: bash
 
     - name: Stage E2E runtime WASM artifacts
       run: |
         mkdir -p "${{ inputs.artifact-dir }}"
-        cp target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.wasm \
+        cp target/production/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.wasm \
           "${{ inputs.artifact-dir }}/next_people_paseo_runtime.wasm"
-        cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm \
+        cp target/production/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm \
           "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime.wasm"
+        # The compressed variants too — an on-chain upgrade takes those, and they
+        # must stay under the relay's max_code_size (3 MiB) or the chain refuses.
+        cp target/production/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.compact.compressed.wasm \
+          "${{ inputs.artifact-dir }}/next_people_paseo_runtime.compact.compressed.wasm"
+        cp target/production/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.compact.compressed.wasm \
+          "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime.compact.compressed.wasm"
+
+        echo "staged (relay max_code_size is 3145728 bytes):"
+        ls -l "${{ inputs.artifact-dir }}"
       shell: bash
 
     - name: Upload E2E runtime WASM artifacts

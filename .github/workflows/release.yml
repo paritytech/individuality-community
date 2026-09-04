@@ -100,9 +100,42 @@ jobs:
     with:
       spec-version: ${{ inputs.spec-version }}
 
+  # Gates this release against a fork of every network these runtimes are
+  # deployed to, reusing the wasm build-runtimes just produced. Publishing waits
+  # on it: a runtime that cannot be upgraded onto a fork of the networks it is
+  # headed for should not be cut as a release.
+  chain-tests:
+    needs: [build-runtimes]
+    # A called workflow inherits the caller's token. It only reads this repo's
+    # artifacts, so hand it nothing else.
+    permissions:
+      contents: read
+    uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
+    with:
+      environment: previewnet,paseo-next-v2
+      # build-runtimes uploads one artifact per runtime; the glob collects both.
+      runtime_asset_hub: "artifact:*-runtime"
+      runtime_people: "artifact:*-runtime"
+      runs_on: parity-large
+
+  # A blocked release is silent otherwise: nothing is published and the only
+  # trace is a red badge nobody is watching.
+  notify-gate-failure:
+    needs: [chain-tests]
+    if: ${{ always() && needs.chain-tests.result == 'failure' }}
+    runs-on: parity-ubuntu
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/notify-gate-failure
+        with:
+          kind: Release
+          access_token: ${{ secrets.ENG_AUT_MATRIX_TOKEN }}
+
   publish-release:
     runs-on: parity-ubuntu
-    needs: [build-runtimes]
+    needs: [build-runtimes, chain-tests]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
