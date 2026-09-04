@@ -466,6 +466,26 @@ mod benches {
 	use super::*;
 	use indiv_support::traits::RingMembershipProof;
 
+	/// Returns the smallest denomination exponent, at least `floor`, whose asset amount covers
+	/// `required`. Panics when no exponent up to `MaximumExponent` covers `required`.
+	fn smallest_exponent_covering<T: Config>(
+		floor: Denomination,
+		required: FungiblesBalanceOf<T>,
+	) -> Denomination {
+		let mut value = floor;
+		while Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value)
+			.unwrap_or_default() <
+			required
+		{
+			assert!(
+				value < T::MaximumExponent::get(),
+				"no denomination up to the maximum exponent covers the required amount"
+			);
+			value = value.saturating_add(1);
+		}
+		value
+	}
+
 	fn setup_single_recycler_unload<T: Config>(
 		n: u32,
 		fund_multiplier: u32,
@@ -486,22 +506,15 @@ mod benches {
 		// both the fee and the destination's minimum balance, otherwise the `n = 1` sample would
 		// fail (the remainder transfer drops below the existential deposit) and get skipped,
 		// leaving too few points to fit a slope.
-		let mut value = T::MinimumExponent::get();
-		if mode == UnloadFeeBenchMode::FromOutput {
-			let fee = Pallet::<T>::quote_paid_unload_token_fee_in_asset(INSTANCE_ID)
-				.expect("fee should be available after setup");
-			let required = fee.saturating_add(T::Fungibles::minimum_balance(asset_id::<T>()));
-			while Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value)
-				.unwrap_or_default() <
-				required
-			{
-				assert!(
-					value < T::MaximumExponent::get(),
-					"no denomination up to the maximum exponent covers the unload fee and minimum balance"
-				);
-				value = value.saturating_add(1);
-			}
-		}
+		let value = match mode {
+			UnloadFeeBenchMode::FromOutput => {
+				let fee = Pallet::<T>::quote_paid_unload_token_fee_in_asset(INSTANCE_ID)
+					.expect("fee should be available after setup");
+				let required = fee.saturating_add(T::Fungibles::minimum_balance(asset_id::<T>()));
+				smallest_exponent_covering::<T>(T::MinimumExponent::get(), required)
+			},
+			UnloadFeeBenchMode::Prepaid => T::MinimumExponent::get(),
+		};
 		let (index, revision, members) = setup_built_recycler::<T>(value, n, 0);
 		let asset_amount = Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value)
 			.expect("denomination should be in range");
@@ -3957,8 +3970,14 @@ mod benches {
 	fn as_unload_token_from_output_tx_ext() -> Result<(), BenchmarkError> {
 		common_setup::<T>();
 
-		// Setup recycler with a denomination large enough for the penalty fee.
-		let value = T::MinimumExponentForOutputUnloadFee::get();
+		// The fee recycler denomination must be at least `MinimumExponentForOutputUnloadFee` and
+		// its single output must cover the unload fee taken out of it.
+		let required_fee = Pallet::<T>::quote_paid_unload_token_fee_in_asset(INSTANCE_ID)
+			.expect("fee conversion is set up by `common_setup`");
+		let value = smallest_exponent_covering::<T>(
+			T::MinimumExponentForOutputUnloadFee::get(),
+			required_fee,
+		);
 
 		let (index, revision, members) = setup_built_recycler::<T>(value, 1, 0);
 
