@@ -208,6 +208,9 @@ where
 					return Ok(IPersonhood::personhoodInfoByProofCall::abi_encode_returns(&false));
 				}
 
+				// Decode runs over calldata up to the bound checked above, so this path keeps the
+				// full pre-charge. A refund would price malformed max-length proofs at the call
+				// overhead.
 				let proof = match T::Proof::decode(&mut &call.request.proof[..]) {
 					Ok(p) => p,
 					Err(_) => {

@@ -365,6 +365,9 @@ mod evm_fixture {
 		let _ = <Test as pallet_revive::Config>::AddressMapper::map(account);
 	}
 
+	// Mirrors the `ProofVerificationRequest` struct in `sol/IPersonhood.sol`, which `lib.rs`
+	// compiles with `alloy::sol!`. Keep the field order in step with that file, or this test
+	// encodes the wrong calldata and still passes.
 	alloy::sol! {
 		struct ProofVerificationRequest {
 			uint8 expectedStatus;

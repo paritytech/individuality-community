@@ -33,6 +33,8 @@ pragma solidity ^0.8.30;
 /// serves them.
 /// @custom:reverts "this precompile does not accept value"
 /// @custom:reverts "illegal to call this pre-compile via delegate call"
+/// @dev pallet-revive owns the delegate-call reason (`PrecompileDelegateDenied`). Update it here
+///      if that wording changes upstream.
 /// @custom:security-contact admin@parity.io
 interface IPersonhood {
     /// @notice Personhood information for an account in a given context

@@ -20,7 +20,7 @@ import "../../personhood/sol/IPersonhood.sol";
 
 /// @title PersonhoodCaller
 /// @notice Queries the personhood precompile four ways: a read and a proof verification inside a
-/// read-only frame that both succeed, a delegate call the precompile refuses, and a call that
+/// read-only frame that both succeed, a delegate call the precompile refuses and a call that
 /// carries value and is also refused. Both selectors have a read-only path, because a guard added
 /// for one does not cover the other. Each function captures what came back and hands it to its
 /// caller, so a test can inspect it.
