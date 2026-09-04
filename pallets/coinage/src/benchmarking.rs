@@ -3965,9 +3965,8 @@ mod benches {
 	fn as_unload_token_from_output_tx_ext() -> Result<(), BenchmarkError> {
 		common_setup::<T>();
 
-		let value = denomination_covering_unload_fee::<T>(
-			T::MinimumExponentForOutputUnloadFee::get()
-		);
+		let value =
+			denomination_covering_unload_fee::<T>(T::MinimumExponentForOutputUnloadFee::get());
 
 		let (index, revision, members) = setup_built_recycler::<T>(value, 1, 0);
 
