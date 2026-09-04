@@ -39,7 +39,9 @@ pub type MigrateV0ToV1<T> = VersionedMigration<
 	<T as frame_system::Config>::DbWeight,
 >;
 
-pub mod v1 {
+/// Version-unchecked migration logic. Crate-private, so a runtime can only run it through the
+/// version gate [`MigrateV0ToV1`]. Tests reach it directly to show what the gate prevents.
+pub(crate) mod v1 {
 	use super::*;
 
 	/// An item definition as stored before item transferability existed.
