@@ -17,8 +17,8 @@
 
 //! # Scarcity Pallet
 //!
-//! `pallet-scarcity` defines NFT collections and item definitions, then mints instances using a
-//! coinage-style ownership model: each purse key can hold at most one NFT. The pallet knows
+//! `indiv-pallet-scarcity` defines NFT collections and item definitions, then mints instances using
+//! a coinage-style ownership model: each purse key can hold at most one NFT. The pallet knows
 //! ownership, supply, metadata, and deposits; it knows nothing about what an item means. Item
 //! semantics and access-control policy can live in a higher-level runtime pallet or collection
 //! contract. At this storage layer the collection owner has full control over its definitions,

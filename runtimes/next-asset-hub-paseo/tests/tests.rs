@@ -1109,7 +1109,7 @@ mod pgas_fees {
 		let tx_ext = TxExtension::from((
 			(
 				(),
-				pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
+				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
 				frame_system::AuthorizeCall::<Runtime>::new(),
 				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
 				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
@@ -1254,7 +1254,7 @@ mod pgas_fees {
 				assert_ok!(Scarcity::do_define_item(
 					owner.clone(),
 					collection,
-					pallet_scarcity::Transferability::Transferable,
+					indiv_pallet_scarcity::Transferability::Transferable,
 					Vec::new()
 				));
 				assert_ok!(NftClaims::set_collection_minter(
@@ -1307,7 +1307,7 @@ mod pgas_fees {
 				assert!(indiv_pallet_nft_claims::ClaimedCredits::<Runtime>::contains_key(
 					1u32, leaf
 				));
-				assert!(pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&mint_to));
+				assert!(indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&mint_to));
 
 				let paid = endowment - <Assets as FungiblesInspect<AccountId>>::balance(pgas, &bob);
 				assert!(paid > 0, "the claim's fee should have been taken in PGAS");

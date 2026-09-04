@@ -93,7 +93,7 @@ fn call_reverted_with(caller: &AccountId32, input: Vec<u8>, reason: &str) {
 
 fn setup_collection(owner: &AccountId32) -> CollectionId {
 	map_account(owner);
-	pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone()).unwrap()
+	indiv_pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone()).unwrap()
 }
 
 /// The registration `collectionMinter` reports for `collection`.
@@ -662,8 +662,9 @@ mod evm_fixture {
 			let owner = contract_account(caller);
 			// The contract owns the collection, so it pays the deposit that creating one incurs.
 			Balances::make_free_balance_be(&owner, u64::MAX / 2);
-			let collection = pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone())
-				.expect("collection is created");
+			let collection =
+				indiv_pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone())
+					.expect("collection is created");
 			let claims = alloy_address(minter_address());
 
 			let read = |collection| {

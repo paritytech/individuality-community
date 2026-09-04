@@ -44,7 +44,7 @@ frame_support::construct_runtime!(
 	{
 		System: frame_system,
 		Balances: pallet_balances,
-		Scarcity: pallet_scarcity,
+		Scarcity: indiv_pallet_scarcity,
 		NftClaims: indiv_pallet_nft_claims,
 		Revive: pallet_revive,
 	}
@@ -68,13 +68,13 @@ impl pallet_balances::Config for Test {
 
 parameter_types! {
 	pub const ScarcityHoldReason: RuntimeHoldReason =
-		RuntimeHoldReason::Scarcity(pallet_scarcity::HoldReason::StorageDeposit);
+		RuntimeHoldReason::Scarcity(indiv_pallet_scarcity::HoldReason::StorageDeposit);
 }
 
 type StoragePrice = LinearStoragePrice<ConstU64<1>, ConstU64<1>, u64>;
 type Consideration = HoldConsideration<AccountId32, Balances, ScarcityHoldReason, Identity, u64>;
 
-impl pallet_scarcity::Config for Test {
+impl indiv_pallet_scarcity::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
 	type WeightInfo = ();
 	type UnixTime = MockUnixTime;
@@ -139,22 +139,22 @@ impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId32> for MockBenchmarkHelp
 	fn prepare_collection(
 		owner: &AccountId32,
 		collection: CollectionId,
-		item: pallet_scarcity::ItemIndex,
+		item: indiv_pallet_scarcity::ItemIndex,
 	) {
 		map_account(owner);
-		while pallet_scarcity::NextCollectionId::<Test>::get() <= collection {
-			pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone())
+		while indiv_pallet_scarcity::NextCollectionId::<Test>::get() <= collection {
+			indiv_pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone())
 				.expect("collection is created; qed");
 		}
-		while pallet_scarcity::Collections::<Test>::get(collection)
+		while indiv_pallet_scarcity::Collections::<Test>::get(collection)
 			.expect("the collection was just created; qed")
 			.next_item_index <=
 			item
 		{
-			pallet_scarcity::Pallet::<Test>::do_define_item(
+			indiv_pallet_scarcity::Pallet::<Test>::do_define_item(
 				owner.clone(),
 				collection,
-				pallet_scarcity::Transferability::Transferable,
+				indiv_pallet_scarcity::Transferability::Transferable,
 				Vec::new(),
 			)
 			.expect("item is defined; qed");

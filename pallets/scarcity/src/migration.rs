@@ -23,7 +23,7 @@ use frame_support::{
 };
 use sp_runtime::Saturating;
 
-const LOG_TARGET: &str = "runtime::pallet-scarcity::migration";
+const LOG_TARGET: &str = "runtime::indiv-pallet-scarcity::migration";
 
 /// Adds [`Transferability`] to every stored item definition, as [`Transferability::Transferable`].
 ///

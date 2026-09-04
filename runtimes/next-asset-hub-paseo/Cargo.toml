@@ -34,6 +34,7 @@ indiv-pallet-network-suffix = { workspace = true }
 indiv-pallet-nft-claims = { workspace = true }
 indiv-pallet-origin-restriction = { workspace = true }
 indiv-pallet-pgas = { workspace = true }
+indiv-pallet-scarcity = { workspace = true }
 indiv-precompile-nft-claims = { workspace = true }
 indiv-precompile-personhood = { workspace = true }
 indiv-precompile-scarcity = { workspace = true }
@@ -74,7 +75,6 @@ pallet-message-queue = { workspace = true }
 pallet-multi-asset-bounties = { workspace = true }
 pallet-multisig = { workspace = true }
 pallet-nfts = { workspace = true }
-pallet-scarcity = { workspace = true }
 pallet-nfts-runtime-api = { workspace = true }
 pallet-parameters = { workspace = true }
 pallet-pgas-allowance = { workspace = true }
@@ -204,6 +204,7 @@ runtime-benchmarks = [
 	"indiv-pallet-nft-claims/runtime-benchmarks",
 	"indiv-pallet-origin-restriction/runtime-benchmarks",
 	"indiv-pallet-pgas/runtime-benchmarks",
+	"indiv-pallet-scarcity/runtime-benchmarks",
 	"indiv-precompile-nft-claims/runtime-benchmarks",
 	"indiv-precompile-personhood/runtime-benchmarks",
 	"indiv-precompile-scarcity/runtime-benchmarks",
@@ -239,7 +240,6 @@ runtime-benchmarks = [
 	"pallet-proxy/runtime-benchmarks",
 	"pallet-referenda/runtime-benchmarks",
 	"pallet-revive/runtime-benchmarks",
-	"pallet-scarcity/runtime-benchmarks",
 	"pallet-scheduler/runtime-benchmarks",
 	"pallet-session/runtime-benchmarks",
 	"pallet-staking-async-rc-client/runtime-benchmarks",
@@ -297,6 +297,7 @@ try-runtime = [
 	"indiv-pallet-nft-claims/try-runtime",
 	"indiv-pallet-origin-restriction/try-runtime",
 	"indiv-pallet-pgas/try-runtime",
+	"indiv-pallet-scarcity/try-runtime",
 	"indiv-precompile-nft-claims/try-runtime",
 	"indiv-precompile-personhood/try-runtime",
 	"indiv-precompile-scarcity/try-runtime",
@@ -331,7 +332,6 @@ try-runtime = [
 	"pallet-proxy/try-runtime",
 	"pallet-referenda/try-runtime",
 	"pallet-revive/try-runtime",
-	"pallet-scarcity/try-runtime",
 	"pallet-scheduler/try-runtime",
 	"pallet-session/try-runtime",
 	"pallet-staking-async-rc-client/try-runtime",
@@ -393,6 +393,7 @@ std = [
 	"indiv-pallet-nft-claims/std",
 	"indiv-pallet-origin-restriction/std",
 	"indiv-pallet-pgas/std",
+	"indiv-pallet-scarcity/std",
 	"indiv-precompile-nft-claims/std",
 	"indiv-precompile-personhood/std",
 	"indiv-precompile-scarcity/std",
@@ -432,7 +433,6 @@ std = [
 	"pallet-proxy/std",
 	"pallet-referenda/std",
 	"pallet-revive/std",
-	"pallet-scarcity/std",
 	"pallet-scheduler/std",
 	"pallet-session/std",
 	"pallet-staking-async-rc-client/std",

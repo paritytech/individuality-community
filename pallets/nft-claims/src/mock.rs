@@ -25,6 +25,9 @@ use frame_support::{
 	weights::Weight,
 	BoundedVec,
 };
+use indiv_pallet_scarcity::{
+	CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit,
+};
 use indiv_support::{
 	credit_trees::{
 		credit_leaf, AwardBlock, CreditProofNode, CreditTreeDelivery, NftClaimCredit,
@@ -33,7 +36,6 @@ use indiv_support::{
 	identity::AccountOrPerson,
 	traits::Alias,
 };
-use pallet_scarcity::{CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit};
 use sp_core::H160;
 use sp_runtime::{traits::BlakeTwo256, BuildStorage, DispatchError};
 

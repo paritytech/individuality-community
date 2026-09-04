@@ -153,6 +153,7 @@ indiv-pallet-pgas = { path = "pallets/pgas", default-features = false }
 indiv-pallet-proof-of-ink = { path = "pallets/proof-of-ink", default-features = false }
 indiv-pallet-relay-randomness = { path = "pallets/relay-randomness", default-features = false }
 indiv-pallet-resources = { path = "pallets/resources", default-features = false }
+indiv-pallet-scarcity = { path = "pallets/scarcity", default-features = false }
 indiv-pallet-score = { path = "pallets/score", default-features = false }
 indiv-precompile-fixtures = { path = "precompiles/fixtures", default-features = false }
 indiv-precompile-nft-claims = { path = "precompiles/nft-claims", default-features = false }
@@ -205,7 +206,6 @@ pallet-proxy = { version = "49.0.0", default-features = false }
 pallet-referenda = { version = "49.0.0", default-features = false }
 pallet-revive = { version = "0.19.0", default-features = false }
 pallet-revive-fixtures = { version = "0.15.0" }
-pallet-scarcity = { path = "pallets/scarcity", default-features = false }
 pallet-scheduler = { version = "50.0.0", default-features = false }
 pallet-session = { version = "49.0.0", default-features = false }
 pallet-skip-feeless-payment = { version = "23.0.0", default-features = false }

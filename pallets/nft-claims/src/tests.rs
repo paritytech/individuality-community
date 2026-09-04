@@ -230,8 +230,8 @@ mod claim {
 		},
 		ClaimedCounts, ClaimedCredits, CollectionMinter, CollectionMinters, Error, ItemSelection,
 	};
+	use indiv_pallet_scarcity::CollectionId;
 	use indiv_support::{credit_trees::credit_leaf, identity::AccountOrPerson};
-	use pallet_scarcity::CollectionId;
 	use sp_core::H160;
 
 	/// Like [`assert_noop!`], but for `claim`: asserts the error kind and that no storage
@@ -1490,7 +1490,7 @@ mod set_collection_minter {
 
 			// Scarcity calls the deletion hook when the collection is deleted, so no
 			// registration outlives the collection it names and none can be stranded.
-			<crate::ClearCollectionMinter<Test> as pallet_scarcity::OnCollectionDeleted>::on_collection_deleted(
+			<crate::ClearCollectionMinter<Test> as indiv_pallet_scarcity::OnCollectionDeleted>::on_collection_deleted(
 				COLLECTION,
 			);
 			assert_eq!(CollectionMinters::<Test>::get(COLLECTION), None);

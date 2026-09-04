@@ -15,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Benchmarks for `pallet_scarcity`.
+//! Benchmarks for `indiv_pallet_scarcity`.
 
 extern crate alloc;
 
