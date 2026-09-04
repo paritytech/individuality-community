@@ -5222,6 +5222,8 @@ dependencies = [
  "hex-literal",
  "indiv-pallet-alias-accounts",
  "indiv-pallet-members-subscriber",
+ "indiv-precompile-fixtures",
+ "indiv-precompile-support",
  "indiv-support",
  "log",
  "pallet-assets",
