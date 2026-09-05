@@ -23,7 +23,6 @@ import { setupContext } from "@acala-network/chopsticks-testing";
 import { constants as fsConstants } from "node:fs";
 import { access, mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { Bytes, Struct, Tuple, u8, Vector } from "scale-ts";
 
 const UPGRADE_TEST_TIMEOUT = 20 * 60_000;
 const ENABLE_RUNTIME_UPGRADE_TESTS = process.env.RUN_RUNTIME_UPGRADE_TESTS === "1";
@@ -38,34 +37,12 @@ const DEFAULT_ENDPOINT = "wss://paseo-people-next-system-rpc.polkadot.io";
 /** r2e9 (3 pages) + r2e10 (5 pages) at the runtime's `ChunkPageSize`. */
 const EXPECTED_CHUNK_PAGE_HASHES = 8;
 
-// The expected outcome of the SeedSubscriptionWhitelist migration, mirroring
-// people::asset_hub_subscription_whitelist() in runtimes/next-people-paseo.
-const ASSET_HUB_PARA_ID = 1500;
-const SUBSCRIBER_PALLET_INDEX = 97;
-const PEOPLE_IDENTIFIER = "pop:polkadot.network/people     ";
-const PEOPLE_LITE_IDENTIFIER = "pop:polkadot.network/people-lite";
-// RingExponent::R2e9 encodes as its explicit discriminant.
-const PEOPLE_RING_EXPONENT = 9;
-
-// SCALE layout of indiv_pallet_members_notifier::WhitelistedSubscription.
-const whitelistedSubscriptionCodec = Struct({
-  collections: Vector(Tuple(Bytes(32), u8)),
-  palletIndex: u8,
-});
-
 /**
  * `twox128(pallet) ++ twox128(item)` — the full key of a plain storage value and the key prefix
  * of a map. `pallet` is the name as declared in `construct_runtime!`.
  */
 function storagePrefix(pallet: string, item: string) {
   return `${xxhashAsHex(pallet, 128)}${xxhashAsHex(item, 128).slice(2)}` as `0x${string}`;
-}
-
-function subscriptionWhitelistKey(paraId: number): string {
-  const paraIdLe = Buffer.alloc(4);
-  paraIdLe.writeUInt32LE(paraId, 0);
-  // Identity-hashed map key: the storage prefix followed by the ParaId as u32 LE.
-  return `${storagePrefix("MembersNotifier", "SubscriptionWhitelist")}${paraIdLe.toString("hex")}`;
 }
 
 async function isReadable(path: string) {
@@ -152,12 +129,6 @@ describeRuntimeUpgrade("Paseo next-people-paseo -> local next-people-paseo runti
         const oldVersion = await block.runtimeVersion;
         expect(oldVersion.specName).toBe(SPEC_NAME);
 
-        // The seeding migration assumes it runs on a chain whose whitelist was never
-        // seeded. When this fails, the upgrade carrying SeedSubscriptionWhitelist is
-        // live: remove the migration from the Migrations tuple and this section with it.
-        const whitelistKey = subscriptionWhitelistKey(ASSET_HUB_PARA_ID);
-        expect(await block.get(whitelistKey)).toBeFalsy();
-
         // This is the simulated runtime upgrade: inject the local
         // next-people-paseo runtime WASM into the block.
         const wasm = await readFile(runtimeWasm);
@@ -170,22 +141,6 @@ describeRuntimeUpgrade("Paseo next-people-paseo -> local next-people-paseo runti
         expect(newVersion.specName).toBe(SPEC_NAME);
         expect(newVersion.specVersion).toBeGreaterThan(oldVersion.specVersion);
         expect(upgradedBlock.number).toBeGreaterThan(block.number);
-
-        // SeedSubscriptionWhitelist ran in the upgrade block and seeded asset hub.
-        const rawSubscription = await upgradedBlock.get(whitelistKey);
-        expect(rawSubscription, "the migration seeds the asset hub whitelist entry").toBeTruthy();
-        const subscription = whitelistedSubscriptionCodec.dec(rawSubscription as string);
-        expect(subscription.palletIndex).toBe(SUBSCRIBER_PALLET_INDEX);
-        const textDecoder = new TextDecoder();
-        expect(
-          subscription.collections.map(([identifier, exponent]) => [
-            textDecoder.decode(identifier),
-            exponent,
-          ]),
-        ).toEqual([
-          [PEOPLE_IDENTIFIER, PEOPLE_RING_EXPONENT],
-          [PEOPLE_LITE_IDENTIFIER, PEOPLE_RING_EXPONENT],
-        ]);
 
         // The bootstrap migrations run in the upgrade block. They log errors rather than
         // panicking, so without these assertions a failed migration is invisible here.
