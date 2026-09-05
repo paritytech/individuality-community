@@ -176,7 +176,7 @@ pub trait OnPurseOccupied<AccountId> {
 
 	/// Worst-case weight of one [`Self::on_purse_occupied`]. Every entry that occupies a key
 	/// adds it: the extrinsic through its annotation, callers of
-	/// [`MintWithoutDeposit`](crate::MintWithoutDeposit) through `mint_hook_weight`, and a
+	/// [`MintWithoutDeposit`] through `mint_hook_weight`, and a
 	/// precompile calling a pallet entry directly, where no annotation applies.
 	///
 	/// Benchmarks run against a runtime that wires a real handler measure the handler inside
@@ -201,7 +201,7 @@ impl<AccountId> OnPurseOccupied<AccountId> for () {
 /// an ERC-721 view where `name` is a `string`, states that rule here rather than at the interface.
 /// Every write reaches one of the three per-scope setters, so this is the only place a rule holds
 /// for all of them at once, including entries carried by `define_item`, `mint` and
-/// [`MintWithoutDeposit`](crate::MintWithoutDeposit).
+/// [`MintWithoutDeposit`].
 pub trait ValidateMetadata<Key, Value> {
 	/// Runs before the pair is stored, on the value being written but not on a removal.
 	fn validate(key: &Key, value: &Value) -> Result<(), sp_runtime::DispatchError>;

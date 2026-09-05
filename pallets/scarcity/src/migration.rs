@@ -51,7 +51,7 @@ pub mod v1 {
 		pub deposit: Balance,
 	}
 
-	/// Use [`MigrateV0ToV1`](super::MigrateV0ToV1) rather than this directly.
+	/// Use [`MigrateV0ToV1`] rather than this directly.
 	///
 	/// Running this twice would reset a soulbound item to transferable: the new encoding is the
 	/// old one plus a trailing byte, and `Decode` reads a prefix, so a migrated definition still
