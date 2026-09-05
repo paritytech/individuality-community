@@ -8,3 +8,4 @@
 - Do not run any destructive Git commands (`reset --hard`, `push --force` etc.)
 - Never add `Co-Authored-By` to commits
 - When resolving merge conflicts in enums with explicit integer discriminants, never reuse a value. Assign new discriminants by final position. After resolving, verify the sequence is strictly increasing with no gaps or duplicates.
+- Describe changes as high-level behavior, one point per sentence

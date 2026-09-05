@@ -72,6 +72,7 @@ mod coinage_non_anonymous_flow;
 mod coinage_paid_flow;
 mod coinage_people_flow;
 mod coinage_token_allowance;
+mod credit_root_deletion;
 mod external_asset_teleport;
 mod lite_people_free_tx;
 mod lite_people_game_flow;

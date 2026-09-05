@@ -19,11 +19,16 @@
 use crate::{
 	self as pallet_nft_claims, ClaimantKind, CollectionSelector, Event, Selection, SelectionError,
 };
+use codec::{Decode, Encode};
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{EnsureOrigin, EnsureOriginWithArg},
+	traits::{EnsureOrigin, EnsureOriginWithArg, Hooks},
 	weights::Weight,
 	BoundedVec,
+};
+use frame_system::{
+	offchain::{CreateAuthorizedTransaction, CreateTransaction, CreateTransactionBase},
+	AuthorizeCall,
 };
 use indiv_support::{
 	credit_trees::{
@@ -34,10 +39,26 @@ use indiv_support::{
 	traits::Alias,
 };
 use pallet_scarcity::{CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit};
-use sp_core::H160;
-use sp_runtime::{traits::BlakeTwo256, BuildStorage, DispatchError};
+use sp_core::{
+	offchain::{
+		testing::{PoolState, TestTransactionPoolExt},
+		TransactionPoolExt,
+	},
+	H160,
+};
+use sp_runtime::{testing::UintAuthorityId, traits::BlakeTwo256, BuildStorage, DispatchError};
+use std::{cell::RefCell, sync::Arc, time::Duration};
+use xcm::latest::{Junction::Parachain, Location};
 
-pub type Block = frame_system::mocking::MockBlock<Test>;
+pub type TransactionExtension = AuthorizeCall<Test>;
+pub type Header = sp_runtime::generic::Header<u64, BlakeTwo256>;
+pub type Block = sp_runtime::generic::Block<Header, Extrinsic>;
+pub type Extrinsic = sp_runtime::generic::UncheckedExtrinsic<
+	u64,
+	RuntimeCall,
+	UintAuthorityId,
+	TransactionExtension,
+>;
 
 frame_support::construct_runtime!(
 	pub enum Test
@@ -51,6 +72,37 @@ frame_support::construct_runtime!(
 impl frame_system::Config for Test {
 	type Block = Block;
 	type AccountData = ();
+}
+
+impl<LocalCall> CreateTransactionBase<LocalCall> for Test
+where
+	RuntimeCall: From<LocalCall>,
+{
+	type Extrinsic = Extrinsic;
+	type RuntimeCall = RuntimeCall;
+}
+
+impl<LocalCall> CreateTransaction<LocalCall> for Test
+where
+	RuntimeCall: From<LocalCall>,
+{
+	type Extension = TransactionExtension;
+
+	fn create_transaction(
+		call: <Self as CreateTransactionBase<LocalCall>>::RuntimeCall,
+		extension: Self::Extension,
+	) -> Self::Extrinsic {
+		Extrinsic::new_transaction(call, extension)
+	}
+}
+
+impl<LocalCall> CreateAuthorizedTransaction<LocalCall> for Test
+where
+	RuntimeCall: From<LocalCall>,
+{
+	fn create_extension() -> Self::Extension {
+		AuthorizeCall::new()
+	}
 }
 
 /// The account the mock accepts as the game chain's XCM origin.
@@ -103,30 +155,11 @@ impl EnsureOriginWithArg<RuntimeOrigin, ClaimantKind> for MockEnsureClaimant {
 	}
 }
 
-/// Weights that tell the two claimant kinds apart, so a test of the weight the `claim` call
-/// declares fails if the call charges the wrong branch.
-pub struct MockWeightInfo;
-impl pallet_nft_claims::WeightInfo for MockWeightInfo {
-	fn receive_credit_trees(n: u32) -> Weight {
-		Weight::from_parts(1_000 + 10 * n as u64, 0)
-	}
-
-	fn claim_account(n: u32) -> Weight {
-		Weight::from_parts(2_000 + 10 * n as u64, 100)
-	}
-
-	fn claim_person(n: u32) -> Weight {
-		Weight::from_parts(5_000 + 10 * n as u64, 200)
-	}
-
-	fn set_collection_minter() -> Weight {
-		Weight::from_parts(3_000, 50)
-	}
-}
-
 parameter_types! {
 	pub const MaxTreesPerMessage: u32 = 4;
 	pub const MaxProofNodes: u32 = 16;
+	/// Wider than a byte, so the tests cover a bitmap of more than one byte.
+	pub storage MaxCreditsPerAwardBlock: u32 = 12;
 	/// The instances the mock minter has handed out, as `(collection, item, owner)` in mint order.
 	pub storage MintedInstances: Vec<(CollectionId, ItemIndex, u64)> = Vec::new();
 	/// The collections the mock backend holds, as `(collection, owner, next_item_index)`.
@@ -150,6 +183,12 @@ parameter_types! {
 	pub storage StatefulSelectorItem: ItemIndex = 0;
 	/// Whether the mock selector accepts a registered contract address as deployed code.
 	pub storage ContractValid: bool = true;
+	pub storage TreeTtl: u64 = 2 * 24 * 60 * 60;
+	pub storage MaxQueuedTreeDeletions: u32 = 4;
+	/// Small, so a few trees outlast one sweep. It bounds the sweep as well as the message.
+	pub storage MaxTreeDeletionsPerMessage: u32 = 2;
+	pub GameChainLocation: Location = Location::new(1, [Parachain(1000)]);
+	pub const GameChainPalletIndex: u8 = 42;
 }
 
 /// Make `collection` exist in the mock backend, owned by `owner` with items `0..next_item_index`.
@@ -158,6 +197,94 @@ pub fn add_collection(collection: CollectionId, owner: u64, next_item_index: Ite
 	collections.retain(|(existing, _, _)| *existing != collection);
 	collections.push((collection, owner, next_item_index));
 	MockCollections::set(&collections);
+}
+
+/// The wall clock the mock runs on. A test moves it forward to put a tree past its deadline.
+pub struct MockTime;
+impl frame_support::traits::UnixTime for MockTime {
+	fn now() -> Duration {
+		MOCK_UNIX_TIME.with_borrow(|now| *now)
+	}
+}
+
+pub fn set_now(secs: u64) {
+	MOCK_UNIX_TIME.with_borrow_mut(|now| *now = Duration::from_secs(secs));
+}
+
+/// The first second at which a tree committed to at `timestamp` is past its deadline. A sweep that
+/// removes it needs the clock to read this.
+pub fn due_at(timestamp: u32) -> u64 {
+	indiv_support::credit_trees::expiry_deadline(timestamp, TreeTtl::get())
+}
+
+/// Captures the XCM messages the pallet sends to the game chain. A test makes it fail to drive the
+/// retry path.
+pub struct MockXcmRouter;
+
+impl xcm::latest::SendXcm for MockXcmRouter {
+	type Ticket = (xcm::latest::Location, Vec<u8>);
+
+	fn validate(
+		destination: &mut Option<xcm::latest::Location>,
+		message: &mut Option<xcm::latest::Xcm<()>>,
+	) -> xcm::latest::SendResult<Self::Ticket> {
+		let destination = destination.take().unwrap_or(xcm::latest::Location::here());
+		let message = message.take().unwrap_or_default();
+
+		Ok(((destination, message.encode()), xcm::latest::Assets::new()))
+	}
+
+	fn deliver(ticket: Self::Ticket) -> Result<xcm::latest::XcmHash, xcm::latest::SendError> {
+		if XCM_SEND_SHOULD_FAIL.with_borrow(|fail| *fail) {
+			return Err(xcm::latest::SendError::Transport("mock failure"));
+		}
+		SENT_XCMS.with_borrow_mut(|sent| sent.push(ticket));
+		Ok([0u8; 32])
+	}
+}
+
+pub fn sent_deletion_xcms() -> Vec<(xcm::latest::Location, Vec<u8>)> {
+	SENT_XCMS.with_borrow(|sent| sent.clone())
+}
+
+/// The award blocks named by the last deletion message. This also checks the pallet index and call
+/// index the message was addressed to.
+pub fn last_sent_deletions() -> Vec<AwardBlock> {
+	use xcm::latest::{Instruction, Xcm};
+
+	let (_, encoded) = sent_deletion_xcms().pop().expect("an XCM was sent");
+	let message: Xcm<()> = Xcm::decode(&mut &encoded[..]).expect("XCM decodes");
+	let call = message
+		.0
+		.into_iter()
+		.find_map(|instruction| match instruction {
+			Instruction::Transact { call, .. } => Some(call.into_encoded()),
+			_ => None,
+		})
+		.expect("the XCM carries a Transact");
+
+	assert_eq!(call[0], GameChainPalletIndex::get(), "addressed to the nft-credits pallet");
+	assert_eq!(call[1], 20, "the call index of `receive_tree_deletions`");
+	Vec::<AwardBlock>::decode(&mut &call[2..]).expect("the blocks decode")
+}
+
+/// Makes the next XCM send fail, as a closed or congested channel would.
+pub fn fail_deletion_xcms(fail: bool) {
+	XCM_SEND_SHOULD_FAIL.with_borrow_mut(|flag| *flag = fail);
+}
+
+thread_local! {
+	/// The transactions the offchain worker has submitted. See [`submitted_calls`].
+	static TRANSACTION_POOL: RefCell<Arc<parking_lot::RwLock<PoolState>>> = RefCell::new(Arc::new(
+		parking_lot::RwLock::new(PoolState { transactions: Vec::new() }),
+	));
+	/// See [`MockTime`].
+	static MOCK_UNIX_TIME: RefCell<Duration> = const { RefCell::new(Duration::from_secs(0)) };
+	/// See [`MockXcmRouter`].
+	static XCM_SEND_SHOULD_FAIL: RefCell<bool> = const { RefCell::new(false) };
+	/// See [`MockXcmRouter`].
+	static SENT_XCMS: RefCell<Vec<(xcm::latest::Location, Vec<u8>)>> =
+		const { RefCell::new(Vec::new()) };
 }
 
 /// Stands in for Scarcity: allocates instance identifiers in mint order and enforces the one
@@ -307,6 +434,14 @@ impl pallet_nft_claims::BenchmarkHelper<u64> for MockBenchmarkHelper {
 	fn prepare_contract(_owner: &u64) -> H160 {
 		H160::repeat_byte(1)
 	}
+
+	fn set_unix_time(secs: u64) {
+		set_now(secs);
+	}
+
+	fn open_game_chain_channel(_max_message_size: u32) {
+		// `MockXcmRouter` accepts every destination, so there is no channel to open.
+	}
 }
 
 impl pallet_nft_claims::Config for Test {
@@ -317,15 +452,107 @@ impl pallet_nft_claims::Config for Test {
 	type Nfts = MockNfts;
 	type CollectionSelector = MockSelector;
 	type MaxProofNodes = MaxProofNodes;
+	type MaxCreditsPerAwardBlock = MaxCreditsPerAwardBlock;
+	type UnixTime = MockTime;
+	type TreeTtl = TreeTtl;
+	type MaxQueuedTreeDeletions = MaxQueuedTreeDeletions;
+	type MaxTreeDeletionsPerMessage = MaxTreeDeletionsPerMessage;
+	type XcmRouter = MockXcmRouter;
+	type GameChainLocation = GameChainLocation;
+	type GameChainPalletIndex = GameChainPalletIndex;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockBenchmarkHelper;
 }
 
+/// Weights that differ per branch and tell the two claimant kinds apart, so a test of a refund
+/// fails if the pallet reports the wrong branch. Every value is non-zero and scales with the
+/// component in both dimensions.
+pub struct MockWeightInfo;
+impl pallet_nft_claims::WeightInfo for MockWeightInfo {
+	fn receive_credit_trees(n: u32) -> Weight {
+		Weight::from_parts(100 + 10 * n as u64, 10 + n as u64)
+	}
+
+	fn claim_account(n: u32) -> Weight {
+		Weight::from_parts(200 + 10 * n as u64, 20 + n as u64)
+	}
+
+	fn claim_person(n: u32) -> Weight {
+		Weight::from_parts(350 + 10 * n as u64, 35 + n as u64)
+	}
+
+	fn claim_last_account(n: u32) -> Weight {
+		Weight::from_parts(500 + 10 * n as u64, 50 + n as u64)
+	}
+
+	fn claim_last_person(n: u32) -> Weight {
+		Weight::from_parts(700 + 10 * n as u64, 70 + n as u64)
+	}
+
+	fn set_collection_minter() -> Weight {
+		Weight::from_parts(150, 15)
+	}
+
+	fn sweep_expired_trees(n: u32) -> Weight {
+		Weight::from_parts(300 + 10 * n as u64, 30 + n as u64)
+	}
+
+	fn authorize_sweep_expired_trees() -> Weight {
+		Weight::from_parts(50, 5)
+	}
+
+	fn send_tree_deletions(n: u32) -> Weight {
+		Weight::from_parts(400 + 10 * n as u64, 40 + n as u64)
+	}
+
+	fn authorize_send_tree_deletions() -> Weight {
+		Weight::from_parts(60, 6)
+	}
+}
+
 pub fn new_test_ext() -> sp_io::TestExternalities {
+	MOCK_UNIX_TIME.with_borrow_mut(|now| *now = Duration::from_secs(0));
+	XCM_SEND_SHOULD_FAIL.with_borrow_mut(|fail| *fail = false);
+	SENT_XCMS.with_borrow_mut(|sent| sent.clear());
+
 	let storage = frame_system::GenesisConfig::<Test>::default().build_storage().unwrap();
 	let mut ext: sp_io::TestExternalities = storage.into();
+	// The offchain worker submits sweeps and deletion messages, so it needs a transaction pool to
+	// submit them to.
+	let (pool, pool_state) = TestTransactionPoolExt::new();
+	TRANSACTION_POOL.set(pool_state);
+	ext.register_extension(TransactionPoolExt::new(pool));
 	ext.execute_with(|| System::set_block_number(1));
 	ext
+}
+
+/// Runs this pallet's offchain worker for `block`, as a node does once it has imported it.
+pub fn run_offchain_worker(block: u64) {
+	System::set_block_number(block);
+	NftClaims::offchain_worker(block);
+}
+
+/// The calls of the transactions the offchain worker has submitted, oldest first.
+pub fn submitted_calls() -> Vec<RuntimeCall> {
+	TRANSACTION_POOL.with_borrow(|pool| {
+		pool.read()
+			.transactions
+			.iter()
+			.map(|transaction| {
+				Extrinsic::decode(&mut &transaction[..]).expect("transaction decodes").function
+			})
+			.collect()
+	})
+}
+
+/// Whether the leaf at `leaf_index` of `block`'s tree is recorded as claimed.
+pub fn leaf_is_claimed(block: AwardBlock, leaf_index: u32) -> bool {
+	NftClaims::leaf_is_claimed(&crate::ClaimedLeaves::<Test>::get(block), leaf_index)
+}
+
+/// How many of `block`'s leaves are recorded as claimed.
+pub fn claimed_leaves(block: AwardBlock) -> u32 {
+	NftClaims::claimed_leaf_count(&crate::ClaimedLeaves::<Test>::get(block))
 }
 
 pub fn game_chain_origin() -> RuntimeOrigin {

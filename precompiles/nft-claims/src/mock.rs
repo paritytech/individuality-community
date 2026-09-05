@@ -18,7 +18,11 @@ pub use super::*;
 
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{fungible::HoldConsideration, ConstU32, ConstU64, LinearStoragePrice},
+	traits::{fungible::HoldConsideration, ConstU32, ConstU64, ConstU8, LinearStoragePrice},
+};
+use frame_system::{
+	offchain::{CreateAuthorizedTransaction, CreateTransaction, CreateTransactionBase},
+	AuthorizeCall,
 };
 use indiv_pallet_nft_claims::{CollectionSelector, Selection, SelectionError};
 use indiv_precompile_scarcity::{ScarcityCollection, ScarcityFactory};
@@ -26,11 +30,22 @@ use indiv_precompile_support::test_helpers::{
 	map_account as map_account_shared, precompile_address,
 };
 use indiv_support::{credit_trees::NftClaimCredit, identity::AccountOrPerson};
-use sp_runtime::{traits::Identity, AccountId32, BuildStorage, Weight};
+use sp_runtime::{testing::UintAuthorityId, traits::Identity, AccountId32, BuildStorage, Weight};
+use xcm::latest::{Junction::Parachain, Location};
 
 pub use indiv_precompile_support::test_helpers::{id_to_account, MockNow, MockUnixTime};
 
-type Block = frame_system::mocking::MockBlock<Test>;
+/// The nft-claims pallet submits authorized calls from its offchain worker. Its `Config` therefore
+/// needs a runtime that builds such a transaction, which a `MockBlock` does not.
+pub type TransactionExtension = AuthorizeCall<Test>;
+pub type Header = sp_runtime::generic::Header<u64, sp_runtime::traits::BlakeTwo256>;
+pub type Block = sp_runtime::generic::Block<Header, Extrinsic>;
+pub type Extrinsic = sp_runtime::generic::UncheckedExtrinsic<
+	AccountId32,
+	RuntimeCall,
+	UintAuthorityId,
+	TransactionExtension,
+>;
 
 /// Fixed address index of the minter-registration precompile in this mock.
 pub const MINTER_INDEX: u16 = 0x0522;
@@ -60,6 +75,37 @@ impl frame_system::Config for Test {
 	// account hooks the runtime wires for that are left off.
 }
 
+impl<LocalCall> CreateTransactionBase<LocalCall> for Test
+where
+	RuntimeCall: From<LocalCall>,
+{
+	type Extrinsic = Extrinsic;
+	type RuntimeCall = RuntimeCall;
+}
+
+impl<LocalCall> CreateTransaction<LocalCall> for Test
+where
+	RuntimeCall: From<LocalCall>,
+{
+	type Extension = TransactionExtension;
+
+	fn create_transaction(
+		call: <Self as CreateTransactionBase<LocalCall>>::RuntimeCall,
+		extension: Self::Extension,
+	) -> Self::Extrinsic {
+		Extrinsic::new_transaction(call, extension)
+	}
+}
+
+impl<LocalCall> CreateAuthorizedTransaction<LocalCall> for Test
+where
+	RuntimeCall: From<LocalCall>,
+{
+	fn create_extension() -> Self::Extension {
+		AuthorizeCall::new()
+	}
+}
+
 #[derive_impl(pallet_balances::config_preludes::TestDefaultConfig)]
 impl pallet_balances::Config for Test {
 	type AccountStore = System;
@@ -67,6 +113,7 @@ impl pallet_balances::Config for Test {
 }
 
 parameter_types! {
+	pub MockGameChainLocation: Location = Location::new(1, [Parachain(1000)]);
 	pub const ScarcityHoldReason: RuntimeHoldReason =
 		RuntimeHoldReason::Scarcity(pallet_scarcity::HoldReason::StorageDeposit);
 }
@@ -164,6 +211,14 @@ impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId32> for MockBenchmarkHelp
 	fn prepare_contract(_owner: &AccountId32) -> H160 {
 		H160::repeat_byte(1)
 	}
+
+	fn set_unix_time(secs: u64) {
+		MockNow::set(secs);
+	}
+
+	fn open_game_chain_channel(_max_message_size: u32) {
+		// Nothing in this crate removes a tree, so the pallet sends no deletion message.
+	}
 }
 
 impl indiv_pallet_nft_claims::Config for Test {
@@ -176,6 +231,16 @@ impl indiv_pallet_nft_claims::Config for Test {
 	type Nfts = Scarcity;
 	type CollectionSelector = MockSelector;
 	type MaxProofNodes = ConstU32<16>;
+	// No tree reaches this mock, so the bitmap this sizes is never written.
+	type MaxCreditsPerAwardBlock = ConstU32<12>;
+	type UnixTime = MockUnixTime;
+	type TreeTtl = ConstU64<{ 30 * 24 * 60 * 60 }>;
+	type MaxQueuedTreeDeletions = ConstU32<8>;
+	type MaxTreeDeletionsPerMessage = ConstU32<4>;
+	// Nothing in this crate removes a tree, so the pallet sends no deletion.
+	type XcmRouter = ();
+	type GameChainLocation = MockGameChainLocation;
+	type GameChainPalletIndex = ConstU8<42>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockBenchmarkHelper;
 }

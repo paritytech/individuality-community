@@ -2282,3 +2282,410 @@ fn player_process_step1_defers_players_that_do_not_fit_the_block_awards() {
 		assert_eq!(committed_leaf_count(), 12);
 	});
 }
+
+mod root_removal {
+	use super::*;
+	use frame_support::pallet_prelude::{
+		InvalidTransaction, TransactionSource, TransactionValidityError,
+	};
+	use indiv_support::credit_trees::{expiry_deadline, oldest_expiry, ExpiryTimestamp};
+
+	/// The wall-clock time the first recorded root commits to. It is well above zero, so a test
+	/// can name a timestamp before it.
+	const TIMESTAMP: u32 = 1_000_000;
+
+	/// The wall-clock time the root of `block` commits to. One timestamp per root, so a sweep
+	/// takes the roots in block order.
+	fn timestamp_of(block: u64) -> u32 {
+		TIMESTAMP.saturating_add(block as u32)
+	}
+
+	/// The first second at which the root of `block` is past its TTL.
+	fn due_at(block: u64) -> u64 {
+		expiry_deadline(timestamp_of(block), NftCredits::root_ttl())
+	}
+
+	fn set_now(secs: u64) {
+		MOCK_UNIX_TIME.with(|now| *now.borrow_mut() = Duration::from_secs(secs));
+	}
+
+	/// The timestamp the next sweep starts at.
+	fn oldest_filed() -> Option<u32> {
+		oldest_expiry::<RootExpiries<Test>, u64>()
+	}
+
+	fn credit_events() -> Vec<Event<Test>> {
+		recorded_events()
+			.into_iter()
+			.filter_map(|event| match event {
+				RuntimeEvent::NftCredits(event) => Some(event),
+				_ => None,
+			})
+			.collect()
+	}
+
+	/// Records a root under each of `blocks`, as `build_credit_tree` does once a block has awarded.
+	/// Each root commits to a timestamp of its own, as the roots of two blocks do.
+	///
+	/// This also moves the block number off zero. `frame_system` drops the events of block zero,
+	/// and every removal path here reports an event.
+	fn record_roots(blocks: &[u64]) {
+		System::set_block_number(1);
+		for block in blocks {
+			record_root_at(*block, timestamp_of(*block));
+		}
+	}
+
+	/// Records the root of `block` under `timestamp`, which several roots can share.
+	fn record_root_at(block: u64, timestamp: u32) {
+		NftClaimCreditRoots::<Test>::insert(
+			block,
+			NftClaimCreditTree {
+				game_index: 7,
+				root: CreditProofNode([block as u8; 32]),
+				leaf_count: 1,
+				timestamp,
+			},
+		);
+		crate::Pallet::<Test>::note_root_expiry(block, timestamp);
+	}
+
+	fn sweep(oldest: u32) -> frame_support::dispatch::DispatchResultWithPostInfo {
+		NftCredits::sweep_expired_roots(
+			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+			oldest,
+			1,
+		)
+	}
+
+	#[test]
+	fn a_recorded_root_is_filed_under_its_timestamp() {
+		new_test_ext().execute_with(|| {
+			record_roots(&[10]);
+
+			assert!(RootExpiries::<Test>::contains_key(
+				ExpiryTimestamp::from(timestamp_of(10)),
+				10
+			));
+			assert_eq!(oldest_filed(), Some(timestamp_of(10)));
+		});
+	}
+
+	#[test]
+	fn the_claims_chain_deletes_the_roots_it_is_finished_with() {
+		new_test_ext().execute_with(|| {
+			record_roots(&[10, 11]);
+
+			assert_ok!(NftCredits::receive_tree_deletions(
+				claims_chain_origin(),
+				bounded_vec![10, 11]
+			));
+
+			assert!(!NftClaimCreditRoots::<Test>::contains_key(10));
+			assert!(!NftClaimCreditRoots::<Test>::contains_key(11));
+			assert_eq!(RootExpiries::<Test>::iter().count(), 0);
+			assert!(credit_events().contains(&Event::CreditRootsDeleted { named: 2, count: 2 }));
+		});
+	}
+
+	#[test]
+	fn deleting_a_root_that_is_already_gone_is_a_no_op() {
+		new_test_ext().execute_with(|| {
+			record_roots(&[10]);
+
+			// Two deletions of one block, as a resend or a race with the local TTL produces.
+			assert_ok!(NftCredits::receive_tree_deletions(claims_chain_origin(), bounded_vec![10]));
+			System::reset_events();
+			assert_ok!(NftCredits::receive_tree_deletions(
+				claims_chain_origin(),
+				bounded_vec![10, 99]
+			));
+
+			assert!(credit_events().contains(&Event::CreditRootsDeleted { named: 2, count: 0 }));
+		});
+	}
+
+	#[test]
+	fn only_the_claims_chain_can_delete_a_root() {
+		new_test_ext().execute_with(|| {
+			record_roots(&[10]);
+
+			assert_noop!(
+				NftCredits::receive_tree_deletions(RuntimeOrigin::signed(ALICE), bounded_vec![10]),
+				sp_runtime::DispatchError::BadOrigin
+			);
+			assert_noop!(
+				NftCredits::receive_tree_deletions(RuntimeOrigin::root(), bounded_vec![10]),
+				sp_runtime::DispatchError::BadOrigin
+			);
+
+			assert!(NftClaimCreditRoots::<Test>::contains_key(10));
+		});
+	}
+
+	#[test]
+	fn a_sweep_removes_the_due_roots() {
+		new_test_ext().execute_with(|| {
+			record_roots(&[10]);
+			set_now(due_at(10));
+
+			assert_ok!(sweep(timestamp_of(10)));
+
+			assert_eq!(NftClaimCreditRoots::<Test>::iter().count(), 0);
+			assert_eq!(oldest_filed(), None);
+			assert!(credit_events().contains(&Event::CreditRootsExpired { count: 1 }));
+		});
+	}
+
+	#[test]
+	fn a_sweep_stops_at_the_first_root_that_is_not_due() {
+		new_test_ext().execute_with(|| {
+			// Block 11's root is timestamped one second after block 10's, so its TTL runs out one
+			// second later as well.
+			record_roots(&[10, 11]);
+			set_now(due_at(10));
+
+			let post = sweep(timestamp_of(10)).expect("the sweep goes through");
+
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::sweep_expired_roots(1)));
+			assert!(!NftClaimCreditRoots::<Test>::contains_key(10));
+			assert!(
+				NftClaimCreditRoots::<Test>::contains_key(11),
+				"the root that is not due stays"
+			);
+			assert_eq!(oldest_filed(), Some(timestamp_of(11)));
+			assert!(credit_events().contains(&Event::CreditRootsExpired { count: 1 }));
+		});
+	}
+
+	#[test]
+	fn more_due_roots_than_one_sweep_removes_take_several() {
+		new_test_ext().execute_with(|| {
+			// Three roots against a `MaxRootsPerSweep` of two.
+			record_roots(&[10, 11, 12]);
+			set_now(due_at(12));
+
+			let post = sweep(timestamp_of(10)).expect("the first sweep goes through");
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::sweep_expired_roots(2)));
+			assert_eq!(NftClaimCreditRoots::<Test>::iter().count(), 1);
+			assert_eq!(oldest_filed(), Some(timestamp_of(12)), "the sweep is up to the third root");
+
+			let post = sweep(timestamp_of(12)).expect("the second sweep goes through");
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::sweep_expired_roots(1)));
+			assert_eq!(NftClaimCreditRoots::<Test>::iter().count(), 0);
+			assert_eq!(oldest_filed(), None);
+		});
+	}
+
+	#[test]
+	fn roots_sharing_a_timestamp_are_swept_under_it_until_it_is_empty() {
+		new_test_ext().execute_with(|| {
+			// Three roots of one timestamp against a `MaxRootsPerSweep` of two, as two blocks of
+			// one second give.
+			System::set_block_number(1);
+			for block in [10, 11, 12] {
+				record_root_at(block, TIMESTAMP);
+			}
+			set_now(expiry_deadline(TIMESTAMP, NftCredits::root_ttl()));
+
+			assert_ok!(sweep(TIMESTAMP));
+			assert_eq!(
+				oldest_filed(),
+				Some(TIMESTAMP),
+				"the timestamp the sweep is on still holds a root",
+			);
+
+			assert_ok!(sweep(TIMESTAMP));
+			assert_eq!(NftClaimCreditRoots::<Test>::iter().count(), 0);
+			assert_eq!(oldest_filed(), None);
+		});
+	}
+
+	#[test]
+	fn the_offchain_worker_submits_one_sweep_per_block() {
+		new_test_ext().execute_with(|| {
+			record_roots(&[10, 11, 12]);
+			set_now(due_at(10));
+			clear_pool();
+
+			crate::Pallet::<Test>::submit_root_expiry_sweep(5);
+			crate::Pallet::<Test>::submit_root_expiry_sweep(6);
+
+			// The discriminator is the submitting block, so the sweeps of two blocks differ while
+			// no sweep has been included. `oldest` alone cannot tell them apart, and a repeated
+			// encoding gives a hash the pool has banned.
+			assert_eq!(
+				submitted_calls(),
+				vec![
+					RuntimeCall::NftCredits(Call::sweep_expired_roots {
+						oldest: timestamp_of(10),
+						discriminator: 5
+					}),
+					RuntimeCall::NftCredits(Call::sweep_expired_roots {
+						oldest: timestamp_of(10),
+						discriminator: 6
+					}),
+				]
+			);
+		});
+	}
+
+	#[test]
+	fn a_sweep_is_authorized_only_for_the_oldest_filed_timestamp() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_roots(
+					TransactionSource::Local,
+					&timestamp_of(10)
+				),
+				Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(
+					AuthorizeInvalidity::NothingToSweep as u8
+				))),
+				"nothing is filed",
+			);
+
+			record_roots(&[10, 11]);
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_roots(
+					TransactionSource::Local,
+					&timestamp_of(10)
+				),
+				Err(InvalidTransaction::Future.into()),
+				"the oldest root's TTL has not run out",
+			);
+
+			set_now(due_at(10));
+			assert!(crate::Pallet::<Test>::authorize_sweep_expired_roots(
+				TransactionSource::Local,
+				&timestamp_of(10)
+			)
+			.is_ok());
+
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_roots(
+					TransactionSource::External,
+					&timestamp_of(10)
+				),
+				Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(
+					AuthorizeInvalidity::TransactionNotLocal as u8
+				))),
+			);
+
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_roots(
+					TransactionSource::Local,
+					&timestamp_of(11)
+				),
+				Err(InvalidTransaction::Future.into()),
+				"a timestamp the sweep has not reached",
+			);
+
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_roots(
+					TransactionSource::Local,
+					&(timestamp_of(10) - 1)
+				),
+				Err(InvalidTransaction::Stale.into()),
+				"a timestamp the sweep is past",
+			);
+		});
+	}
+
+	#[test]
+	fn the_local_ttl_outlives_the_claims_chains_deadline() {
+		new_test_ext().execute_with(|| {
+			// The ordering `root_ttl` gives, stated as the property it holds: a root is still here
+			// at the moment the claims chain gives up on the tree built from it.
+			let claims_deadline = expiry_deadline(TIMESTAMP, ClaimsChainTreeTtl::get());
+			let local_deadline = expiry_deadline(TIMESTAMP, NftCredits::root_ttl());
+
+			assert!(claims_deadline < local_deadline);
+		});
+	}
+}
+
+mod migration {
+	use super::*;
+	use crate::migration::MigrateV0ToV1;
+	use frame_support::traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion};
+	use indiv_support::credit_trees::{expiry_deadline, oldest_expiry, ExpiryTimestamp};
+
+	/// The wall-clock time the first migrated root commits to.
+	const TIMESTAMP: u32 = 1_000_000;
+
+	/// Records the root of `block` the way a chain running the old code left it: the root alone,
+	/// with no expiry entry.
+	fn record_root_without_an_expiry(block: u64, timestamp: u32) {
+		NftClaimCreditRoots::<Test>::insert(
+			block,
+			NftClaimCreditTree {
+				game_index: 7,
+				root: CreditProofNode([block as u8; 32]),
+				leaf_count: 1,
+				timestamp,
+			},
+		);
+	}
+
+	#[test]
+	fn the_migration_files_every_root_under_its_timestamp() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<NftCredits>();
+			let late = 3 * TIMESTAMP;
+			let early = TIMESTAMP;
+			record_root_without_an_expiry(10, late);
+			record_root_without_an_expiry(11, early);
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert!(RootExpiries::<Test>::contains_key(ExpiryTimestamp::from(late), 10));
+			assert!(RootExpiries::<Test>::contains_key(ExpiryTimestamp::from(early), 11));
+			// The sweep starts at the oldest root, whichever was filed last.
+			assert_eq!(oldest_expiry::<RootExpiries<Test>, u64>(), Some(early));
+			assert_eq!(NftCredits::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn a_migrated_root_is_swept_like_a_recorded_one() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			StorageVersion::new(0).put::<NftCredits>();
+			record_root_without_an_expiry(10, TIMESTAMP);
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			MOCK_UNIX_TIME.with(|now| {
+				*now.borrow_mut() =
+					Duration::from_secs(expiry_deadline(TIMESTAMP, NftCredits::root_ttl()))
+			});
+			assert_ok!(NftCredits::sweep_expired_roots(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				TIMESTAMP,
+				1
+			));
+
+			assert_eq!(NftClaimCreditRoots::<Test>::get(10), None);
+			assert_eq!(RootExpiries::<Test>::iter().count(), 0);
+		});
+	}
+
+	#[test]
+	fn the_version_gate_keeps_the_migration_from_running_twice() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<NftCredits>();
+			record_root_without_an_expiry(10, TIMESTAMP);
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			// A root of the shape the migration files, recorded after it ran. Only a second run
+			// files this one, and the version gate is what stops that.
+			let later = TIMESTAMP + 1;
+			record_root_without_an_expiry(11, later);
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert!(
+				!RootExpiries::<Test>::contains_key(ExpiryTimestamp::from(later), 11),
+				"the version gate must keep the migration from running twice"
+			);
+		});
+	}
+}
