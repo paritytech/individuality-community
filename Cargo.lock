@@ -4952,9 +4952,9 @@ dependencies = [
  "frame-benchmarking",
  "frame-support 48.0.0",
  "frame-system 48.0.0",
+ "indiv-pallet-scarcity",
  "indiv-support",
  "log",
- "pallet-scarcity",
  "parity-scale-codec",
  "scale-info",
  "sp-api 43.0.0",
@@ -5165,6 +5165,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "indiv-pallet-scarcity"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support 48.0.0",
+ "frame-system 48.0.0",
+ "indiv-support",
+ "log",
+ "pallet-balances",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-api 43.0.0",
+ "sp-io 48.0.0",
+ "sp-runtime 48.0.0",
+]
+
+[[package]]
 name = "indiv-pallet-score"
 version = "0.1.0"
 dependencies = [
@@ -5200,13 +5217,13 @@ dependencies = [
  "frame-support 48.0.0",
  "frame-system 48.0.0",
  "indiv-pallet-nft-claims",
+ "indiv-pallet-scarcity",
  "indiv-precompile-fixtures",
  "indiv-precompile-scarcity",
  "indiv-precompile-support",
  "indiv-support",
  "pallet-balances",
  "pallet-revive",
- "pallet-scarcity",
  "parity-scale-codec",
  "scale-info",
  "sp-io 48.0.0",
@@ -5242,11 +5259,11 @@ version = "0.1.0"
 dependencies = [
  "frame-support 48.0.0",
  "frame-system 48.0.0",
+ "indiv-pallet-scarcity",
  "indiv-precompile-fixtures",
  "indiv-precompile-support",
  "pallet-balances",
  "pallet-revive",
- "pallet-scarcity",
  "parity-scale-codec",
  "scale-info",
  "sp-io 48.0.0",
@@ -5922,6 +5939,7 @@ dependencies = [
  "indiv-pallet-nft-claims",
  "indiv-pallet-origin-restriction",
  "indiv-pallet-pgas",
+ "indiv-pallet-scarcity",
  "indiv-precompile-nft-claims",
  "indiv-precompile-personhood",
  "indiv-precompile-scarcity",
@@ -5962,7 +5980,6 @@ dependencies = [
  "pallet-referenda",
  "pallet-revive",
  "pallet-revive-fixtures",
- "pallet-scarcity",
  "pallet-scheduler",
  "pallet-session",
  "pallet-staking",
@@ -7165,23 +7182,6 @@ dependencies = [
  "parity-scale-codec",
  "polkavm-derive 0.30.0",
  "scale-info",
-]
-
-[[package]]
-name = "pallet-scarcity"
-version = "0.1.0"
-dependencies = [
- "frame-benchmarking",
- "frame-support 48.0.0",
- "frame-system 48.0.0",
- "indiv-support",
- "log",
- "pallet-balances",
- "parity-scale-codec",
- "scale-info",
- "sp-api 43.0.0",
- "sp-io 48.0.0",
- "sp-runtime 48.0.0",
 ]
 
 [[package]]

@@ -1097,7 +1097,7 @@ parameter_types! {
 	pub const ScarcityDepositBase: Balance = system_para_deposit(1, 0);
 	pub const ScarcityDepositPerByte: Balance = system_para_deposit(0, 1);
 	pub const ScarcityHoldReason: RuntimeHoldReason =
-		RuntimeHoldReason::Scarcity(pallet_scarcity::HoldReason::StorageDeposit);
+		RuntimeHoldReason::Scarcity(indiv_pallet_scarcity::HoldReason::StorageDeposit);
 }
 
 /// Storage price shared by every Scarcity deposit converter: a per-record base plus a
@@ -1105,9 +1105,9 @@ parameter_types! {
 pub type ScarcityStoragePrice =
 	LinearStoragePrice<ScarcityDepositBase, ScarcityDepositPerByte, Balance>;
 
-impl pallet_scarcity::Config for Runtime {
+impl indiv_pallet_scarcity::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = weights::pallet_scarcity::WeightInfo<Runtime>;
+	type WeightInfo = weights::indiv_pallet_scarcity::WeightInfo<Runtime>;
 	type UnixTime = Timestamp;
 	type Balance = Balance;
 	// The pallet aggregates exact deposit sums per collection; the consideration ticket
@@ -2097,7 +2097,7 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 	fn select(
 		owner: AccountId,
 		contract: sp_core::H160,
-		collection: pallet_scarcity::CollectionId,
+		collection: indiv_pallet_scarcity::CollectionId,
 		entropy: indiv_support::credit_trees::NftClaimCredit,
 	) -> Result<indiv_pallet_nft_claims::Selection, indiv_pallet_nft_claims::SelectionError> {
 		let cr = Self::call(owner, contract, minter_call_data(collection, entropy));
@@ -2131,7 +2131,7 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 
 /// ABI-encode `mint(uint32 collection, bytes32 entropy)`.
 fn minter_call_data(
-	collection: pallet_scarcity::CollectionId,
+	collection: indiv_pallet_scarcity::CollectionId,
 	entropy: indiv_support::credit_trees::NftClaimCredit,
 ) -> Vec<u8> {
 	let mut data = Vec::with_capacity(68);
@@ -2143,7 +2143,7 @@ fn minter_call_data(
 }
 
 /// ABI-decode one canonical `uint32` word, which is the only return a minter may give.
-fn decode_minter_item(data: &[u8]) -> Option<pallet_scarcity::ItemIndex> {
+fn decode_minter_item(data: &[u8]) -> Option<indiv_pallet_scarcity::ItemIndex> {
 	if data.len() != 32 || data[..28] != [0u8; 28] {
 		return None;
 	}
@@ -2176,18 +2176,18 @@ pub struct NftClaimsBenchmarkHelper;
 impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId> for NftClaimsBenchmarkHelper {
 	fn prepare_collection(
 		owner: &AccountId,
-		collection: pallet_scarcity::CollectionId,
-		item: pallet_scarcity::ItemIndex,
+		collection: indiv_pallet_scarcity::CollectionId,
+		item: indiv_pallet_scarcity::ItemIndex,
 	) {
 		use frame_support::traits::fungible::Mutate;
 
 		let owner = owner.clone();
 		let _ = Balances::set_balance(&owner, ExistentialDeposit::get().saturating_mul(1_000_000));
 
-		while pallet_scarcity::NextCollectionId::<Runtime>::get() <= collection {
+		while indiv_pallet_scarcity::NextCollectionId::<Runtime>::get() <= collection {
 			Scarcity::do_create_collection(owner.clone()).expect("collection is created; qed");
 		}
-		while pallet_scarcity::Collections::<Runtime>::get(collection)
+		while indiv_pallet_scarcity::Collections::<Runtime>::get(collection)
 			.expect("the collection was just created; qed")
 			.next_item_index <=
 			item
@@ -2195,7 +2195,7 @@ impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId> for NftClaimsBenchmarkH
 			Scarcity::do_define_item(
 				owner.clone(),
 				collection,
-				pallet_scarcity::Transferability::Transferable,
+				indiv_pallet_scarcity::Transferability::Transferable,
 				alloc::vec::Vec::new(),
 			)
 			.expect("item is defined; qed");
@@ -2678,7 +2678,7 @@ construct_runtime!(
 		AssetConversion: pallet_asset_conversion = 55,
 		AssetsFreezer: pallet_assets_freezer::<Instance1> = 56,
 		AssetsHolder: pallet_assets_holder::<Instance1> = 57,
-		Scarcity: pallet_scarcity = 58,
+		Scarcity: indiv_pallet_scarcity = 58,
 
 		// OpenGov stuff
 		Treasury: pallet_treasury = 60,
@@ -2735,7 +2735,7 @@ pub type TxExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 		// Origin modifiers
 		(
 			(),
-			pallet_scarcity::extension::AsScarcity<Runtime>,
+			indiv_pallet_scarcity::extension::AsScarcity<Runtime>,
 			frame_system::AuthorizeCall<Runtime>,
 			indiv_pallet_pgas::AsPgas<Runtime>,
 			indiv_pallet_dotns_gateway::AsDotnsGateway<Runtime>,
@@ -2771,7 +2771,7 @@ impl EthExtra for EthExtraImpl {
 		(
 			(
 				(),
-				pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
+				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
 				frame_system::AuthorizeCall::<Runtime>::new(),
 				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
 				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
@@ -2810,7 +2810,7 @@ where
 		TxExtension::from((
 			(
 				(),
-				pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
+				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
 				frame_system::AuthorizeCall::<Runtime>::new(),
 				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
 				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
@@ -2854,7 +2854,7 @@ pub mod migrations {
 		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
 		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
-		pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 	);
 
@@ -2970,7 +2970,7 @@ mod benches {
 		[pallet_migrations, MultiBlockMigrations]
 		[pallet_multisig, Multisig]
 		[pallet_nfts, Nfts]
-		[pallet_scarcity, Scarcity]
+		[indiv_pallet_scarcity, Scarcity]
 		[pallet_preimage, Preimage]
 		[pallet_proxy, Proxy]
 		[pallet_scheduler, Scheduler]
@@ -3747,12 +3747,12 @@ pallet_revive::impl_runtime_apis_plus_revive_traits! {
 		}
 	}
 
-	impl pallet_scarcity::runtime_api::ScarcityApi<Block> for Runtime {
+	impl indiv_pallet_scarcity::runtime_api::ScarcityApi<Block> for Runtime {
 		fn metadata_batch(
-			queries: Vec<pallet_scarcity::runtime_api::MetadataQuery>,
+			queries: Vec<indiv_pallet_scarcity::runtime_api::MetadataQuery>,
 		) -> Result<
-			Vec<pallet_scarcity::runtime_api::MetadataLayers>,
-			pallet_scarcity::runtime_api::BatchError,
+			Vec<indiv_pallet_scarcity::runtime_api::MetadataLayers>,
+			indiv_pallet_scarcity::runtime_api::BatchError,
 		> {
 			Scarcity::metadata_batch(queries)
 		}
@@ -4111,8 +4111,11 @@ mod tests {
 		TxExtension::from((
 			(
 				(),
-				pallet_scarcity::extension::AsScarcity::<Runtime>::new(Some(
-					pallet_scarcity::extension::AsScarcityInfo::AsNft { instance: 0, state_nonce },
+				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(Some(
+					indiv_pallet_scarcity::extension::AsScarcityInfo::AsNft {
+						instance: 0,
+						state_nonce,
+					},
 				)),
 				frame_system::AuthorizeCall::<Runtime>::new(),
 				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
@@ -4145,9 +4148,9 @@ mod tests {
 		ext.execute_with(|| {
 			frame_system::Pallet::<Runtime>::set_block_number(1);
 			pallet_timestamp::Pallet::<Runtime>::set_timestamp(1_000);
-			pallet_scarcity::NftsByOwner::<Runtime>::insert(
+			indiv_pallet_scarcity::NftsByOwner::<Runtime>::insert(
 				&from,
-				pallet_scarcity::Nft {
+				indiv_pallet_scarcity::Nft {
 					instance: 0,
 					collection: 0,
 					item: 0,
@@ -4156,18 +4159,18 @@ mod tests {
 					state_nonce,
 				},
 			);
-			pallet_scarcity::Instances::<Runtime>::insert(0, &from);
+			indiv_pallet_scarcity::Instances::<Runtime>::insert(0, &from);
 			// The holder transfer resolves its item's transferability, so the definition the
 			// instance names has to exist as it would on a chain that minted it.
-			pallet_scarcity::ItemDefs::<Runtime>::insert(
+			indiv_pallet_scarcity::ItemDefs::<Runtime>::insert(
 				0,
 				0,
-				pallet_scarcity::ItemDefinition {
+				indiv_pallet_scarcity::ItemDefinition {
 					supply: 1,
 					live_supply: 1,
 					metadata_count: 0,
 					deposit: 0,
-					transferability: pallet_scarcity::Transferability::Transferable,
+					transferability: indiv_pallet_scarcity::Transferability::Transferable,
 				},
 			);
 		});
@@ -4188,7 +4191,7 @@ mod tests {
 			assert!(Balances::free_balance(&from).is_zero());
 			assert_eq!(frame_system::Pallet::<Runtime>::account_nonce(&from), 0);
 
-			let call = RuntimeCall::Scarcity(pallet_scarcity::Call::<Runtime>::transfer {
+			let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer {
 				to: to.clone(),
 			});
 			let info = call.get_dispatch_info();
@@ -4202,9 +4205,9 @@ mod tests {
 			assert!(matches!(result, Ok(Ok(_))), "transaction failed: {result:?}");
 
 			assert!(Balances::free_balance(&from).is_zero());
-			assert!(!pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&from));
+			assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&from));
 			assert_eq!(
-				pallet_scarcity::NftsByOwner::<Runtime>::get(&to).map(|nft| nft.state_nonce),
+				indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&to).map(|nft| nft.state_nonce),
 				Some(1),
 			);
 		});
@@ -4221,7 +4224,7 @@ mod tests {
 		let (mut ext, from) = scarcity_purse_test_state(u64::MAX);
 		ext.execute_with(|| {
 			let to = AccountId::from([2u8; 32]);
-			let call = RuntimeCall::Scarcity(pallet_scarcity::Call::<Runtime>::transfer {
+			let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer {
 				to: to.clone(),
 			});
 			let info = call.get_dispatch_info();
@@ -4236,11 +4239,12 @@ mod tests {
 
 			assert!(Balances::free_balance(&from).is_zero());
 			assert_eq!(
-				pallet_scarcity::NftsByOwner::<Runtime>::get(&from).map(|nft| nft.state_nonce),
+				indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&from)
+					.map(|nft| nft.state_nonce),
 				Some(u64::MAX),
 			);
-			assert!(!pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&to));
-			assert!(pallet_scarcity::Locked::<Runtime>::contains_key(&from));
+			assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&to));
+			assert!(indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&from));
 		});
 	}
 }

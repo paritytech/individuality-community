@@ -9,7 +9,7 @@ Individuality is a Cargo workspace of [Polkadot SDK](https://github.com/parityte
 | `pallets/` | The custom FRAME pallets that implement personhood, games, rewards, and asset integration. |
 | `runtimes/` | The parachain runtimes that wire the pallets together (see below). |
 | `support/` | `indiv-support` — shared traits, types, and genesis helpers used across the SDK. |
-| `precompiles/` | `personhood` — a `pallet-revive` precompile exposing personhood logic to contracts; `scarcity` — precompiles exposing `pallet-scarcity` collections as ERC-721 contracts; `nft-claims` — the claim-minter precompile. |
+| `precompiles/` | `personhood` — a `pallet-revive` precompile exposing personhood logic to contracts; `scarcity` — precompiles exposing `indiv-pallet-scarcity` collections as ERC-721 contracts; `nft-claims` — the claim-minter precompile. |
 | `integration-tests/` | End-to-end tests spanning multiple pallets. |
 
 ### Precompile address indices

@@ -21,8 +21,8 @@ pragma solidity ^0.8.30;
 /// @dev A Scarcity collection accepts deposit-free claim minting only after its owner registers
 /// it with an item selection. The mutators dispatch as the caller, so only the collection's
 /// current Scarcity owner can register or withdraw it. This surface is separate from the Scarcity
-/// precompile because `pallet-scarcity` is a standalone base layer and not every runtime that has
-/// it also has `pallet-nft-claims`.
+/// precompile because `indiv-pallet-scarcity` is a standalone base layer and not every runtime
+/// that has it also has `pallet-nft-claims`.
 ///
 /// Two conditions apply to every function and are not repeated below: native value attached to a
 /// call reverts, and a delegate call reverts.

@@ -45,8 +45,8 @@
 //! to. The signer pays the transaction fee, in PGAS as any other call, so a failing claim always
 //! costs its submitter.
 //!
-//! The NFT itself is a `pallet-scarcity` instance, minted with no storage deposit: the credit is
-//! what bounds the state a claim creates, since the game chain awards a credit once and
+//! The NFT itself is an `indiv-pallet-scarcity` instance, minted with no storage deposit: the
+//! credit is what bounds the state a claim creates, since the game chain awards a credit once and
 //! [`ClaimedCredits`] spends it once. Scarcity purse keys hold one NFT each and take no
 //! destination consent, so the call names the key to mint to rather than minting to the
 //! claimant's own account.
@@ -113,6 +113,9 @@ use frame_support::{
 	traits::{EnsureOrigin, EnsureOriginWithArg, Get},
 	weights::Weight,
 };
+use indiv_pallet_scarcity::{
+	CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit,
+};
 use indiv_support::{
 	credit_trees::{
 		credit_leaf, AwardBlock, CreditProofNode, NftClaimCredit, NftClaimCreditLeaf,
@@ -121,7 +124,6 @@ use indiv_support::{
 	identity::AccountOrPerson,
 	weight_budget::OcwWeightBudget,
 };
-use pallet_scarcity::{CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit};
 use sp_core::{H160, H256};
 use sp_runtime::{traits::BlakeTwo256, DispatchError};
 
@@ -231,7 +233,7 @@ pub mod pallet {
 			Success = AccountOrPerson<Self::AccountId>,
 		>;
 
-		/// The NFTs a claim mints, which is `pallet-scarcity`.
+		/// The NFTs a claim mints, which is `indiv-pallet-scarcity`.
 		///
 		/// Minting is deposit-free: the credit is what bounds the state a claim creates, since a
 		/// credit is awarded once by the game chain and this pallet spends it once. The inspect
@@ -548,7 +550,7 @@ pub mod pallet {
 		/// Registration is the owner's opt-in to deposit-free supply growth: without it no claim
 		/// can mint into the collection. Withdrawing stops further claims and spends nothing
 		/// already claimed. Deleting the collection clears its registration through
-		/// [`pallet_scarcity::OnCollectionDeleted`], so an unknown collection can be neither
+		/// [`indiv_pallet_scarcity::OnCollectionDeleted`], so an unknown collection can be neither
 		/// registered nor withdrawn. A contract selection is validated through
 		/// [`CollectionSelector::validate`], so an address with no code fails here rather than on
 		/// the first claim.
@@ -661,7 +663,7 @@ pub mod pallet {
 			}
 
 			// Registration requires a live collection and deletion clears it through
-			// `pallet_scarcity::OnCollectionDeleted`, so an entry naming a collection that no
+			// `indiv_pallet_scarcity::OnCollectionDeleted`, so an entry naming a collection that no
 			// longer exists means the runtime did not wire that hook to `ClearCollectionMinter`.
 			// The registered owner is deliberately not compared against the current one: an
 			// ownership handover leaves the registration stale on purpose, and claims reject it.
@@ -837,10 +839,10 @@ impl<T: Config> Pallet<T> {
 
 /// Clears a collection's minter registration when Scarcity deletes the collection, so no
 /// registration outlives the collection it names. The runtime wires this into
-/// [`pallet_scarcity::Config::OnCollectionDeleted`].
+/// [`indiv_pallet_scarcity::Config::OnCollectionDeleted`].
 pub struct ClearCollectionMinter<T>(core::marker::PhantomData<T>);
 
-impl<T: Config> pallet_scarcity::OnCollectionDeleted for ClearCollectionMinter<T> {
+impl<T: Config> indiv_pallet_scarcity::OnCollectionDeleted for ClearCollectionMinter<T> {
 	fn on_collection_deleted(collection: CollectionId) {
 		CollectionMinters::<T>::remove(collection);
 	}
