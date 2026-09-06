@@ -22,11 +22,9 @@ jobs:
           - name: next-people-paseo
             package: next-people-paseo-runtime
             path: runtimes/next-people-paseo
-            build-opts: "--features on-chain-release-build"
           - name: next-asset-hub-paseo
             package: next-asset-hub-paseo-runtime
             path: runtimes/next-asset-hub-paseo
-            build-opts: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -57,8 +55,6 @@ jobs:
 
       - name: Build ${{ matrix.name }} runtime
         id: srtool_build
-        env:
-          BUILD_OPTS: ${{ matrix.build-opts }}
         uses: chevdor/srtool-actions@v0.9.2
         with:
           chain: ${{ matrix.name }}

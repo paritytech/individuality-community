@@ -21,8 +21,8 @@ use crate::{
 		ExternalAssetLocation, FungibleExternalAsset, GameAirdropSource, PlayDepositDefault,
 		COINAGE_ASSET_UNIT,
 	},
-	Address, Balances, Executive, Runtime, RuntimeCall, TxExtensionOtherVersions, TxExtensionV0,
-	TxExtensionV1, UncheckedExtrinsic, *,
+	Address, Balances, Executive, Runtime, RuntimeCall, TxExtensionOtherVersions, TxExtensionV1,
+	UncheckedExtrinsic, *,
 };
 use codec::Encode;
 use cumulus_primitives_core::relay_chain::BlockNumber as RelayBlockNumber;
@@ -85,7 +85,6 @@ mod score_game_invitation_flow;
 mod score_game_person_flow;
 mod statement_allowance;
 mod transaction_era;
-mod tx_extension_pipeline;
 mod tx_payment_external_asset;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
@@ -977,16 +976,6 @@ fn exec_signed_as_alias_with_account(who: &sr25519::Pair, call: RuntimeCall) {
 }
 
 fn build_signed_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsic {
-	build_signed_ext_at_version(who, call, INDIVIDUALITY_EXTENSION_VERSION)
-}
-
-/// Builds a V1-shaped transaction, but signs the supplied implication version. This deliberately
-/// exposes the signed version boundary for compatibility tests: the wire preamble remains V1.
-fn build_signed_ext_at_version(
-	who: &sr25519::Pair,
-	call: RuntimeCall,
-	implication_version: u8,
-) -> UncheckedExtrinsic {
 	let mut tx_ext = base_tx_ext(call.clone());
 
 	let who_account = pair_to_account_id(who);
@@ -1024,7 +1013,7 @@ fn build_signed_ext_at_version(
 		);
 
 		let msg = {
-			let implication_base = (implication_version, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
@@ -1457,14 +1446,7 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 			TRANSACTION_POOL.with_borrow_mut(|pool| std::mem::take(&mut pool.write().transactions))
 		};
 		for tx in transactions {
-			let tx: UncheckedExtrinsic = Decode::decode(&mut &tx[..]).unwrap();
-			assert!(
-				matches!(
-					&tx.preamble,
-					generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(_))
-				),
-				"runtime-created authorized OCW transactions must select V1"
-			);
+			let tx = Decode::decode(&mut &tx[..]).unwrap();
 			Executive::apply_extrinsic(tx)
 				.expect("transaction is valid")
 				.expect("dispatch succeeds");

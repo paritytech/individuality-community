@@ -17,9 +17,7 @@ FMT_TOOLCHAIN="+nightly-${RUST_NIGHTLY_VERSION}"
 
 # Step 1: Format checks
 cargo $FMT_TOOLCHAIN fmt --all --check
-# Local Zombienet setup keeps third-party source and generated manifests under ignored `.tools`
-# directories. Restrict Taplo to repository files so those caches do not break project checks.
-git ls-files -z -- '*.toml' | xargs -0 taplo format --check --diff --config ./.config/taplo.toml
+taplo format --check --diff --config ./.config/taplo.toml
 zepter run check
 
 # Skip WASM build for local checks — substrate-wasm-builder respects this env

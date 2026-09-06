@@ -53,47 +53,7 @@ just test-runtime-upgrade
 
 Both chains are covered; run one on its own with `pnpm run test:runtime-upgrade:paseo-to-next-people-paseo`
 or `pnpm run test:runtime-upgrade:paseo-to-next-asset-hub-paseo`. Each needs the matching runtime built
-first. The release workflow enables metadata hashing for People. Asset Hub's production release build
-keeps its existing feature selection; the E2E build action creates a separate metadata-hash-enabled
-Asset Hub artifact for the enabled-mode compatibility case.
-The suite also starts a local fork RPC for each chain and uses `@polkadot/api` to prove that a
-pre-upgrade transaction is rejected while a freshly signed standard V4 transfer succeeds without
-registering any Individuality extensions. It obtains V16 call bytes from PAPI, constructs a General/V1
-extrinsic with the repository adapter and executes those exact bytes through the upgraded runtime.
-
-After a transaction-extension pipeline upgrade, regenerate the descriptors before running either
-upgrade suite:
-
-```bash
-pnpm --dir e2e descriptors:update
-pnpm --dir e2e typecheck
-pnpm --dir e2e lint
-pnpm --dir e2e test:runtime-upgrade
-```
-
-## Transaction client transition
-
-The upgraded Paseo runtimes expose two transaction-extension pipelines. Pipeline version, extrinsic
-format version, metadata version and runtime transaction version are separate values.
-
-- Standard wallet transfers remain legacy V4 signed transactions, but now use the frozen standard
-  V0 extension pipeline. Clients must fetch the post-upgrade metadata and rebuild and re-sign every
-  transaction. A pre-upgrade signature is not valid after the runtime upgrade.
-- Individuality transactions use General/V1 transactions. Rebuild their proof and signature data
-  against V1; do not submit the old bespoke V0 bytes or register them as a fallback extension.
-- People V0 and V1 include `CheckMetadataHash`. Encode its mode and, when enabled, its metadata-hash
-  signing data. Ordinary test transactions use disabled mode.
-- Refresh PAPI descriptors and metadata before submission. Tooling that previously constructed the
-  bespoke Individuality V0 pipeline must select V1 after activation.
-- PAPI 3.1.0 is the minimum pinned version because the descriptor workflow must consume V16 metadata.
-  Its stock transaction creator selects V0. Use the repository's `createAssetHubV1Extrinsic` or
-  `createPeopleV1Extrinsic` adapter for the
-  corresponding V1 General preamble and `VerifyMultiSignature` implication; do not use PAPI's default
-  signer and assume it produced V1. The adapters are deliberately runtime-specific: Individuality
-  clients must still supply their own authorization proofs and downstream extension values.
-
-This repository only provides the runtime and compatibility coverage. Updating downstream wallets,
-applications and public networks remains a rollout dependency.
+in release mode first (`cargo build --release -p next-people-paseo-runtime`, `-p next-asset-hub-paseo-runtime`).
 
 Optional environment variables:
 
@@ -107,7 +67,6 @@ Optional environment variables:
 - `NEXT_ASSET_HUB_PASEO_UPGRADE_DB=.cache/nextAssetHubPaseo.runtime-upgrade.sqlite`
 - `NEXT_ASSET_HUB_PASEO_UPGRADE_RUNTIME_LOG_LEVEL=0`
 - `NEXT_ASSET_HUB_PASEO_RUNTIME_WASM=target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm`
-- `NEXT_ASSET_HUB_PASEO_METADATA_HASH_RUNTIME_WASM=target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime_metadata_hash.wasm`
 
 ## Zombienet + init-state suite
 

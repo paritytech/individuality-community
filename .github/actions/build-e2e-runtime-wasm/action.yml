@@ -50,18 +50,7 @@ runs:
         shared-key: individuality-cache-e2e-runtime-wasm
 
     - name: Build E2E runtime WASM artifacts
-      run: |
-        cargo build --release -p next-people-paseo-runtime --features on-chain-release-build --locked
-        grep -hEo 'RUNTIME_METADATA_HASH="0x[0-9a-f]{64}"' \
-          "$(ls -t target/release/build/next-people-paseo-runtime-*/output | head -1)" | cut -d'"' -f2 \
-          > target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime_metadata_hash.txt
-        cargo build --release -p next-asset-hub-paseo-runtime --features on-chain-release-build --locked
-        cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm \
-          target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime_metadata_hash.wasm
-        grep -hEo 'RUNTIME_METADATA_HASH="0x[0-9a-f]{64}"' \
-          "$(ls -t target/release/build/next-asset-hub-paseo-runtime-*/output | head -1)" | cut -d'"' -f2 \
-          > target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime_metadata_hash.txt
-        cargo build --release -p next-asset-hub-paseo-runtime --locked
+      run: cargo build --release -p next-people-paseo-runtime -p next-asset-hub-paseo-runtime --locked
       shell: bash
 
     - name: Stage E2E runtime WASM artifacts
@@ -69,14 +58,8 @@ runs:
         mkdir -p "${{ inputs.artifact-dir }}"
         cp target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.wasm \
           "${{ inputs.artifact-dir }}/next_people_paseo_runtime.wasm"
-        cp target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime_metadata_hash.txt \
-          "${{ inputs.artifact-dir }}/next_people_paseo_runtime_metadata_hash.txt"
         cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime.wasm \
           "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime.wasm"
-        cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime_metadata_hash.wasm \
-          "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime_metadata_hash.wasm"
-        cp target/release/wbuild/next-asset-hub-paseo-runtime/next_asset_hub_paseo_runtime_metadata_hash.txt \
-          "${{ inputs.artifact-dir }}/next_asset_hub_paseo_runtime_metadata_hash.txt"
       shell: bash
 
     - name: Upload E2E runtime WASM artifacts
