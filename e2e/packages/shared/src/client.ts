@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createClient, Enum } from "polkadot-api";
+import { createClient } from "polkadot-api";
 import { getWsProvider } from "polkadot-api/ws";
 
 import { readFileSync } from "node:fs";
@@ -82,22 +82,6 @@ export const ASSET_HUB_RPC =
   process.env.RPC_ASSET_HUB ??
   localConfigEnv.RPC_ASSET_HUB ??
   "ws://localhost:10020";
-
-/**
- * The People runtime has many custom signed extensions (`AsPerson`, `AsCoinage`, …),
- * but they're each `Option<…>` that encode to `None` on their own, so only
- * `VerifyMultiSignature` needs an explicit value. PAPI can't auto-default it
- * because the payload is a non-trivial enum. `Disabled` (variant 0) means a
- * normal single-signature origin.
- *
- * Only pass this on People: Asset Hub's pipeline has no such extension.
- *
- * Pass as `signAndSubmit(signer, { customSignedExtensions })`.
- * (Unused by the read-only health test; kept here for the signing suites.)
- */
-export const customSignedExtensions = {
-  VerifyMultiSignature: { value: Enum("Disabled") },
-};
 
 /** Connect to the People chain and return the API plus the raw client. */
 export function connectPeople() {

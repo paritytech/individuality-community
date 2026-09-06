@@ -16,3 +16,4 @@
 
 export * from "./client.ts";
 export * from "./constants.ts";
+export * from "./paseo_v1.ts";
