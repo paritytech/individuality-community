@@ -21,8 +21,8 @@ use crate::{
 		ExternalAssetLocation, FungibleExternalAsset, GameAirdropSource, PlayDepositDefault,
 		COINAGE_ASSET_UNIT,
 	},
-	Address, Balances, Executive, Runtime, RuntimeCall, TransactionExtension, UncheckedExtrinsic,
-	*,
+	Address, Balances, Executive, Runtime, RuntimeCall, TxExtensionOtherVersions, TxExtensionV0,
+	TxExtensionV1, UncheckedExtrinsic, *,
 };
 use codec::Encode;
 use cumulus_primitives_core::relay_chain::BlockNumber as RelayBlockNumber;
@@ -85,6 +85,7 @@ mod score_game_invitation_flow;
 mod score_game_person_flow;
 mod statement_allowance;
 mod transaction_era;
+mod tx_extension_pipeline;
 mod tx_payment_external_asset;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
@@ -350,12 +351,17 @@ fn exec_unsigned(call: RuntimeCall) {
 		.expect("dispatch succeeds");
 }
 
-fn finalize_uxt(call: RuntimeCall, tx_ext: TransactionExtension) -> UncheckedExtrinsic {
-	UncheckedExtrinsic::new_transaction(call, tx_ext)
+fn finalize_uxt(call: RuntimeCall, tx_ext: TxExtensionV1) -> UncheckedExtrinsic {
+	UncheckedExtrinsic::from_parts(
+		call,
+		generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(
+			TxExtensionOtherVersions::new(tx_ext),
+		)),
+	)
 }
 
 // Some basic transaction extension to be modified as needed.
-fn base_tx_ext(_call: RuntimeCall) -> TransactionExtension {
+fn base_tx_ext(_call: RuntimeCall) -> TxExtensionV1 {
 	(
 		(
 			(),
@@ -383,6 +389,7 @@ fn base_tx_ext(_call: RuntimeCall) -> TransactionExtension {
 			Runtime,
 			pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
 		>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None)),
+		frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 	)
 		.into()
 }
@@ -423,10 +430,11 @@ fn build_as_alias_with_proof_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -493,10 +501,11 @@ fn build_notification_registration_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -558,10 +567,11 @@ fn build_notification_for_collection_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -654,10 +664,11 @@ fn build_set_personal_id_account_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -719,10 +730,11 @@ fn build_signed_as_personal_id_ext(who: &sr25519::Pair, call: RuntimeCall) -> Un
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -788,9 +800,10 @@ fn build_signed_as_alias_with_account_revised_ext(
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let inherited_implication =
@@ -851,10 +864,11 @@ fn build_signed_as_alias_with_account_revised_ext(
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
@@ -930,10 +944,11 @@ fn build_signed_as_alias_with_account_ext(
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
@@ -962,6 +977,16 @@ fn exec_signed_as_alias_with_account(who: &sr25519::Pair, call: RuntimeCall) {
 }
 
 fn build_signed_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsic {
+	build_signed_ext_at_version(who, call, INDIVIDUALITY_EXTENSION_VERSION)
+}
+
+/// Builds a V1-shaped transaction, but signs the supplied implication version. This deliberately
+/// exposes the signed version boundary for compatibility tests: the wire preamble remains V1.
+fn build_signed_ext_at_version(
+	who: &sr25519::Pair,
+	call: RuntimeCall,
+	implication_version: u8,
+) -> UncheckedExtrinsic {
 	let mut tx_ext = base_tx_ext(call.clone());
 
 	let who_account = pair_to_account_id(who);
@@ -995,10 +1020,11 @@ fn build_signed_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsi
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (implication_version, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
@@ -1080,10 +1106,11 @@ fn build_signed_game_invited_ext(
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
@@ -1137,10 +1164,11 @@ fn build_as_lite_alias_with_proof_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -1209,10 +1237,11 @@ fn build_people_lite_auth_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -1264,10 +1293,11 @@ fn build_signed_as_participant_ext(who: &sr25519::Pair, call: RuntimeCall) -> Un
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -1336,10 +1366,11 @@ fn build_as_coin_ext(who_pair: &sr25519::Pair, call: RuntimeCall) -> UncheckedEx
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -1426,7 +1457,14 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 			TRANSACTION_POOL.with_borrow_mut(|pool| std::mem::take(&mut pool.write().transactions))
 		};
 		for tx in transactions {
-			let tx = Decode::decode(&mut &tx[..]).unwrap();
+			let tx: UncheckedExtrinsic = Decode::decode(&mut &tx[..]).unwrap();
+			assert!(
+				matches!(
+					&tx.preamble,
+					generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(_))
+				),
+				"runtime-created authorized OCW transactions must select V1"
+			);
 			Executive::apply_extrinsic(tx)
 				.expect("transaction is valid")
 				.expect("dispatch succeeds");

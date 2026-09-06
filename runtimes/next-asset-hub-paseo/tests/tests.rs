@@ -933,7 +933,7 @@ fn governance_authorize_upgrade_works() {
 }
 
 mod dap {
-	use codec::Encode;
+	use codec::{Decode, Encode};
 	use frame_support::{
 		assert_ok,
 		traits::{
@@ -943,14 +943,18 @@ mod dap {
 		weights::Weight,
 	};
 	use next_asset_hub_paseo_runtime::{
-		AllPalletsWithoutSystem, Balances, EthExtraImpl, Executive, ExistentialDeposit, Runtime,
-		RuntimeCall, RuntimeOrigin, SessionKeys, System, TxExtension, UncheckedExtrinsic,
+		AllPalletsWithoutSystem, Balances, Executive, ExistentialDeposit, Runtime, RuntimeCall,
+		RuntimeOrigin, SessionKeys, System, TxExtensionV0, UncheckedExtrinsic,
 	};
-	use pallet_revive::evm::runtime::EthExtra;
+	use pallet_revive::{
+		evm::{Account as EthereumAccount, GenericTransaction},
+		RUNTIME_PALLETS_ADDR,
+	};
 	use parachains_common::{AccountId, AuraId};
 	use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
+	use sp_core::U256;
 	use sp_keyring::Sr25519Keyring;
-	use sp_runtime::MultiSignature;
+	use sp_runtime::{generic, MultiSignature};
 
 	use asset_test_utils::ExtBuilder;
 
@@ -961,9 +965,19 @@ mod dap {
 	fn construct_extrinsic(sender: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
 		let account_id = AccountId::from(sender.public());
 		let nonce = frame_system::Pallet::<Runtime>::account(&account_id).nonce;
-		// `EthExtra::get_eth_extension` returns the same Substrate-side `TxExtension` we sign over,
-		// constructed with the right defaults for nonce/tip and skipping the PGAS branch.
-		let tx_ext: TxExtension = EthExtraImpl::get_eth_extension(nonce, 0);
+		let tx_ext = TxExtensionV0::from((
+			frame_system::AuthorizeCall::<Runtime>::new(),
+			frame_system::CheckNonZeroSender::<Runtime>::new(),
+			frame_system::CheckSpecVersion::<Runtime>::new(),
+			frame_system::CheckTxVersion::<Runtime>::new(),
+			frame_system::CheckGenesis::<Runtime>::new(),
+			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
+			frame_system::CheckNonce::<Runtime>::from(nonce),
+			frame_system::CheckWeight::<Runtime>::new(),
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
+			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
+			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
+		));
 		let payload =
 			sp_runtime::generic::SignedPayload::new(call.clone(), tx_ext.clone()).unwrap();
 		let signature = payload.using_encoded(|e| sender.sign(e));
@@ -1006,7 +1020,10 @@ mod dap {
 
 				let call = RuntimeCall::System(frame_system::Call::remark { remark: vec![] });
 				let xt = construct_extrinsic(Sr25519Keyring::Alice, call);
-				assert_ok!(Executive::apply_extrinsic(xt).unwrap());
+				let decoded = UncheckedExtrinsic::decode(&mut &xt.encode()[..])
+					.expect("the standard V0 signed extrinsic decodes");
+				assert!(matches!(decoded.0.preamble, generic::Preamble::Signed(..)));
+				assert_ok!(Executive::apply_extrinsic(decoded).unwrap());
 
 				let alice_after = <Balances as Inspect<AccountId>>::balance(&alice);
 				let fee_paid = alice_before - alice_after;
@@ -1022,6 +1039,80 @@ mod dap {
 
 				assert_eq!(buffer_after, buffer_before + fee_paid);
 				assert_eq!(issuance_before, issuance_after);
+			});
+	}
+
+	#[test]
+	fn signed_ethereum_transaction_uses_v0_and_the_recovered_origin() {
+		let ethereum = EthereumAccount::default();
+		let account = ethereum.substrate_account();
+		let buffer = pallet_dap::Pallet::<Runtime>::buffer_account();
+		let staging = pallet_dap::Pallet::<Runtime>::staging_account();
+		let ed = ExistentialDeposit::get();
+
+		ExtBuilder::<Runtime>::default()
+			.with_collators(vec![AccountId::from(ALICE)])
+			.with_session_keys(vec![(
+				AccountId::from(ALICE),
+				AccountId::from(ALICE),
+				SessionKeys { aura: AuraId::from(sp_core::sr25519::Public::from_raw(ALICE)) },
+			)])
+			.with_balances(vec![
+				(AccountId::from(ALICE), 100 * ed),
+				(account.clone(), 100 * ed),
+				(buffer, ed),
+				(staging, ed),
+			])
+			.with_para_id(ASSET_HUB_ID.into())
+			.build()
+			.execute_with(|| {
+				let nonce_before = System::account_nonce(&account);
+				let remark = RuntimeCall::System(frame_system::Call::remark {
+					remark: b"signed ethereum transaction".to_vec(),
+				});
+				let mut transaction = GenericTransaction {
+					from: Some(ethereum.address()),
+					chain_id: Some(U256::from(420_420_417u64)),
+					nonce: Some(nonce_before.into()),
+					to: Some(RUNTIME_PALLETS_ADDR),
+					input: remark.encode().into(),
+					..Default::default()
+				};
+				let dry_run = frame_support::storage::with_transaction(|| {
+					frame_support::storage::TransactionOutcome::Rollback(Ok::<
+						_,
+						sp_runtime::DispatchError,
+					>(
+						next_asset_hub_paseo_runtime::Revive::dry_run_eth_transact(
+							transaction.clone(),
+							Default::default(),
+						),
+					))
+				})
+				.expect("rolling back the estimate succeeds")
+				.expect("the runtime pallet call can be estimated");
+				transaction.gas = Some(dry_run.eth_gas);
+				transaction.gas_price = Some(next_asset_hub_paseo_runtime::Revive::evm_base_fee());
+				let signed = ethereum.sign_transaction(
+					transaction.try_into_unsigned().expect("the transaction is signable"),
+				);
+				let xt: UncheckedExtrinsic = generic::UncheckedExtrinsic::new_bare(
+					RuntimeCall::Revive(pallet_revive::Call::eth_transact {
+						payload: signed.signed_payload().clone(),
+					}),
+				)
+				.into();
+
+				let balance_before = <Balances as Inspect<AccountId>>::balance(&account);
+				let decoded = UncheckedExtrinsic::decode(&mut &xt.encode()[..])
+					.expect("the signed Ethereum payload outer extrinsic decodes");
+				assert!(matches!(decoded.0.preamble, generic::Preamble::Bare(_)));
+				assert_ok!(Executive::apply_extrinsic(decoded).unwrap());
+				assert_eq!(System::account_nonce(&account), nonce_before + 1);
+				assert!(
+					<Balances as Inspect<AccountId>>::balance(&account) < balance_before,
+					"the recovered Ethereum account pays the ordinary fee"
+				);
 			});
 	}
 
@@ -1072,26 +1163,26 @@ mod dap {
 }
 
 mod pgas_fees {
-	use codec::Encode;
+	use codec::{Compact, Decode, Encode};
 	use frame_support::{
 		assert_ok,
 		dispatch::GetDispatchInfo,
 		traits::{
 			fungible::Inspect as FungibleInspect,
 			fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
-			SignedTransactionBuilder,
 		},
 	};
 	use next_asset_hub_paseo_runtime::{
-		Assets, Balances, Executive, ExistentialDeposit, NftClaims, PgasAssetId, PgasMinBalance,
-		Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, Scarcity, SessionKeys, System,
-		TxExtension, UncheckedExtrinsic,
+		Address, Assets, Balances, Executive, ExistentialDeposit, NftClaims, PgasAssetId,
+		PgasMinBalance, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, Scarcity, SessionKeys,
+		System, TxExtensionOtherVersions, TxExtensionV0, TxExtensionV1, UncheckedExtrinsic,
 	};
 	use parachains_common::{AccountId, AuraId};
 	use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
 	use sp_keyring::Sr25519Keyring;
 	use sp_runtime::{
 		generic,
+		traits::TransactionExtension,
 		transaction_validity::{InvalidTransaction, TransactionValidityError},
 		MultiSignature,
 	};
@@ -1101,14 +1192,23 @@ mod pgas_fees {
 	use super::ALICE;
 
 	/// Builds a signed extrinsic whose `ChargePGAS` has the PGAS path enabled. The `dap` module's
-	/// helper cannot be reused: it goes through `EthExtraImpl::get_eth_extension`, which
-	/// constructs `ChargePGAS` with `new_skip_pgas`.
+	/// helper cannot be reused: it intentionally creates a legacy V0 signed transaction with
+	/// ordinary asset payment rather than a V1 `ChargePGAS` transaction.
 	fn construct_extrinsic(sender: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
+		construct_extrinsic_with_tip(sender, call, 0)
+	}
+
+	fn construct_extrinsic_with_tip(
+		sender: Sr25519Keyring,
+		call: RuntimeCall,
+		tip: u128,
+	) -> UncheckedExtrinsic {
 		let account_id = AccountId::from(sender.public());
 		let nonce = frame_system::Pallet::<Runtime>::account(&account_id).nonce;
-		let tx_ext = TxExtension::from((
+		let mut tx_ext = TxExtensionV1::from((
 			(
 				(),
+				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
 				pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
 				frame_system::AuthorizeCall::<Runtime>::new(),
 				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
@@ -1126,19 +1226,167 @@ mod pgas_fees {
 				Runtime,
 				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
 			>::from(pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
-				0, None,
+				tip, None,
 			)),
 			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
 		));
-		let payload = generic::SignedPayload::new(call.clone(), tx_ext.clone()).unwrap();
-		let signature = payload.using_encoded(|e| sender.sign(e));
-		UncheckedExtrinsic::new_signed_transaction(
-			call,
-			account_id.into(),
-			MultiSignature::Sr25519(signature),
-			tx_ext,
+		let rest_ext = (
+			(
+				tx_ext.0 .0 .2.clone(),
+				tx_ext.0 .0 .3.clone(),
+				tx_ext.0 .0 .4.clone(),
+				tx_ext.0 .0 .5.clone(),
+			),
+			tx_ext.0 .1.clone(),
+			tx_ext.0 .2.clone(),
+			tx_ext.0 .3.clone(),
+			tx_ext.0 .4.clone(),
+			tx_ext.0 .5.clone(),
+			tx_ext.0 .6.clone(),
+			tx_ext.0 .7.clone(),
+			tx_ext.0 .8.clone(),
+			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
+			tx_ext.0 .11.clone(),
+		);
+		let message = (
+			next_asset_hub_paseo_runtime::INDIVIDUALITY_EXTENSION_VERSION,
+			&call,
+			&rest_ext,
+			&rest_ext.implicit().unwrap(),
 		)
+			.using_encoded(sp_io::hashing::blake2_256);
+		tx_ext.0 .0 .1 = pallet_verify_signature::VerifySignature::<Runtime>::new_with_signature(
+			MultiSignature::Sr25519(sender.sign(&message)),
+			account_id,
+		);
+		generic::UncheckedExtrinsic::<
+			Address,
+			RuntimeCall,
+			MultiSignature,
+			TxExtensionV0,
+			TxExtensionOtherVersions,
+		>::from_parts(
+			call,
+			generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(
+				TxExtensionOtherVersions::new(tx_ext),
+			)),
+		)
+		.into()
+	}
+
+	#[test]
+	fn general_v1_signature_is_encoded_and_rejects_call_tampering_and_replay() {
+		let alice = AccountId::from(ALICE);
+		let bob = AccountId::from(Sr25519Keyring::Bob.public());
+		let endowment = 100 * ExistentialDeposit::get();
+
+		ExtBuilder::<Runtime>::default()
+			.with_collators(vec![alice.clone()])
+			.with_session_keys(vec![(
+				alice.clone(),
+				alice,
+				SessionKeys { aura: AuraId::from(sp_core::sr25519::Public::from_raw(ALICE)) },
+			)])
+			.with_balances(vec![
+				(bob.clone(), endowment),
+				(pallet_dap::Pallet::<Runtime>::staging_account(), ExistentialDeposit::get()),
+			])
+			.with_para_id(ASSET_HUB_ID.into())
+			.build()
+			.execute_with(|| {
+				let call = RuntimeCall::System(frame_system::Call::remark_with_event {
+					remark: b"original".to_vec(),
+				});
+				let encoded = construct_extrinsic(Sr25519Keyring::Bob, call).encode();
+				let mut unsupported_version = encoded.clone();
+				let mut input = &unsupported_version[..];
+				Compact::<u32>::decode(&mut input)
+					.expect("an extrinsic has a compact length prefix");
+				let preamble_offset = unsupported_version.len() - input.len();
+				assert_eq!(
+					unsupported_version[preamble_offset + 1],
+					next_asset_hub_paseo_runtime::INDIVIDUALITY_EXTENSION_VERSION
+				);
+				unsupported_version[preamble_offset + 1] = 2;
+				assert!(
+					UncheckedExtrinsic::decode(&mut &unsupported_version[..]).is_err(),
+					"only the advertised V0 and V1 pipelines are decodable"
+				);
+				let decoded = UncheckedExtrinsic::decode(&mut &encoded[..])
+					.expect("a V1 general transaction decodes using the real runtime type");
+				assert!(matches!(
+					decoded.0.preamble,
+					generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(_))
+				));
+
+				let mut tampered = decoded.clone();
+				tampered.0.function = RuntimeCall::System(frame_system::Call::remark_with_event {
+					remark: b"tampered".to_vec(),
+				});
+				tampered.0.encoded_call = None;
+				assert!(
+					Executive::apply_extrinsic(tampered).is_err(),
+					"VerifySignature must cover the V1 call"
+				);
+				let mut tampered_tip = decoded.clone();
+				let generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(other)) =
+					&mut tampered_tip.0.preamble
+				else {
+					unreachable!("the decoded transaction was asserted to be V1 above")
+				};
+				other.extension.0 .9 = pallet_pgas_allowance::ChargePGAS::<
+					Runtime,
+					pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
+				>::from(
+					pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
+						1, None,
+					),
+				);
+				assert!(
+					Executive::apply_extrinsic(tampered_tip).is_err(),
+					"VerifySignature must cover the signed V1 payment tip"
+				);
+
+				assert_ok!(Executive::apply_extrinsic(decoded.clone()).unwrap());
+				assert_eq!(frame_system::Pallet::<Runtime>::account_nonce(&bob), 1);
+				assert!(
+					Executive::apply_extrinsic(decoded).is_err(),
+					"a consumed V1 transaction must fail nonce validation when replayed"
+				);
+			});
+	}
+
+	#[test]
+	fn general_v1_signature_allows_the_payment_tip_it_signed() {
+		let alice = AccountId::from(ALICE);
+		let bob = AccountId::from(Sr25519Keyring::Bob.public());
+		let endowment = 100 * ExistentialDeposit::get();
+
+		ExtBuilder::<Runtime>::default()
+			.with_collators(vec![alice.clone()])
+			.with_session_keys(vec![(
+				alice.clone(),
+				alice,
+				SessionKeys { aura: AuraId::from(sp_core::sr25519::Public::from_raw(ALICE)) },
+			)])
+			.with_balances(vec![
+				(bob.clone(), endowment),
+				(pallet_dap::Pallet::<Runtime>::staging_account(), ExistentialDeposit::get()),
+			])
+			.with_para_id(ASSET_HUB_ID.into())
+			.build()
+			.execute_with(|| {
+				let signed = construct_extrinsic_with_tip(
+					Sr25519Keyring::Bob,
+					RuntimeCall::System(frame_system::Call::remark_with_event {
+						remark: b"signed payment tip".to_vec(),
+					}),
+					1,
+				);
+				assert_ok!(Executive::apply_extrinsic(signed).unwrap());
+			});
 	}
 
 	#[test]
@@ -1468,18 +1716,36 @@ mod external_asset_teleport {
 /// The transaction pipeline is what decides whether a call can reach dispatch unpaid, so its shape
 /// is an invariant of this chain, not an implementation detail.
 mod tx_extension_pipeline {
-	use next_asset_hub_paseo_runtime::{RuntimeCall, TxExtension};
+	use asset_test_utils::ExtBuilder;
+	use codec::Decode;
+	use next_asset_hub_paseo_runtime::{Runtime, RuntimeCall, TxExtensionV0, TxExtensionV1};
 	use sp_runtime::traits::TransactionExtension;
 
 	/// Every extension of the pipeline, in the order it runs.
 	///
-	/// The four ahead of `RestrictOrigins` are the ones that replace the origin, and everything
+	/// The five ahead of `RestrictOrigins` are the ones that replace the origin, and everything
 	/// that charges the transaction runs after it. An extension that installs an origin the
 	/// payment extensions do not charge therefore needs an allowance in
 	/// `pallet-origin-restriction` to bound it, which is why an addition anywhere in this list is
 	/// a deliberate change rather than an implementation detail.
-	const PIPELINE: [&str; 17] = [
+	const V0_PIPELINE: [&str; 12] = [
+		"AuthorizeCall",
+		"CheckNonZeroSender",
+		"CheckSpecVersion",
+		"CheckTxVersion",
+		"CheckGenesis",
+		"CheckMortality",
+		"CheckNonce",
+		"CheckWeight",
+		"ChargeAssetTxPayment",
+		"CheckMetadataHash",
+		"EthSetOrigin",
+		"StorageWeightReclaim",
+	];
+
+	const V1_PIPELINE: [&str; 18] = [
 		"UnitTransactionExtension",
+		"VerifyMultiSignature",
 		"AsScarcity",
 		"AuthorizeCall",
 		"AsPgas",
@@ -1499,13 +1765,196 @@ mod tx_extension_pipeline {
 	];
 
 	#[test]
-	fn the_pipeline_is_the_expected_one() {
-		let identifiers = <TxExtension as TransactionExtension<RuntimeCall>>::metadata()
+	fn the_pipelines_are_the_expected_ones() {
+		let v0 = <TxExtensionV0 as TransactionExtension<RuntimeCall>>::metadata()
 			.into_iter()
 			.map(|meta| meta.identifier)
 			.collect::<Vec<_>>();
+		assert_eq!(v0, V0_PIPELINE);
 
-		assert_eq!(identifiers, PIPELINE);
+		let v1 = <TxExtensionV1 as TransactionExtension<RuntimeCall>>::metadata()
+			.into_iter()
+			.map(|meta| meta.identifier)
+			.collect::<Vec<_>>();
+		assert_eq!(v1, V1_PIPELINE);
+	}
+
+	#[test]
+	fn runtime_metadata_advertises_the_frozen_v0_and_individuality_v1_pipelines() {
+		ExtBuilder::<Runtime>::default().build().execute_with(|| {
+			let v15 = Runtime::metadata_at_version(15).expect("V15 metadata is supported");
+			let v15 = frame_metadata::RuntimeMetadataPrefixed::decode(&mut &v15[..])
+				.expect("the runtime API returns decodable V15 metadata");
+			let frame_metadata::RuntimeMetadata::V15(v15) = v15.1 else {
+				panic!("metadata_at_version(15) must return V15 metadata")
+			};
+			let v15_identifiers = v15
+				.extrinsic
+				.signed_extensions
+				.iter()
+				.map(|extension| extension.identifier.as_str())
+				.collect::<Vec<_>>();
+			assert_eq!(v15_identifiers, V0_PIPELINE);
+
+			let v16 = Runtime::metadata_at_version(16).expect("V16 metadata is supported");
+			let v16 = frame_metadata::RuntimeMetadataPrefixed::decode(&mut &v16[..])
+				.expect("the runtime API returns decodable V16 metadata");
+			let frame_metadata::RuntimeMetadata::V16(v16) = v16.1 else {
+				panic!("metadata_at_version(16) must return V16 metadata")
+			};
+			let pipelines = v16
+				.extrinsic
+				.transaction_extensions_by_version
+				.iter()
+				.map(|(version, references)| {
+					let identifiers = references
+						.iter()
+						.map(|codec::Compact(index)| {
+							v16.extrinsic.transaction_extensions[*index as usize]
+								.identifier
+								.as_str()
+						})
+						.collect::<Vec<_>>();
+					(*version, identifiers)
+				})
+				.collect::<Vec<_>>();
+			assert_eq!(
+				pipelines,
+				vec![
+					(0, V0_PIPELINE.to_vec()),
+					(
+						next_asset_hub_paseo_runtime::INDIVIDUALITY_EXTENSION_VERSION,
+						V1_PIPELINE.to_vec()
+					)
+				]
+			);
+		});
+	}
+}
+
+/// Runtime-created members-subscriber retries must retain their local/in-block authorization
+/// checks while selecting the Individuality V1 pipeline.
+mod authorized_ocw_v1 {
+	use asset_test_utils::ExtBuilder;
+	use codec::{Decode, Encode};
+	use frame_support::assert_ok;
+	use frame_system::offchain::CreateAuthorizedTransaction;
+	use indiv_pallet_members_subscriber::{
+		types::{RingCollectionState, SubscriptionStatus},
+		RingCollectionStates, Subscription,
+	};
+	use next_asset_hub_paseo_runtime::{
+		Executive, Runtime, RuntimeCall, TxExtensionOtherVersions, TxExtensionV0,
+		UncheckedExtrinsic, INDIVIDUALITY_EXTENSION_VERSION,
+	};
+	use sp_runtime::{generic, traits::PipelineVersion, BoundedVec};
+
+	fn due_replay_missing_roots_call() -> RuntimeCall {
+		let identifier = *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER;
+		RuntimeCall::MembersSubscriber(
+			indiv_pallet_members_subscriber::Call::replay_missing_roots {
+				identifier,
+				indices: BoundedVec::try_from(vec![0])
+					.expect("one index is within the runtime bound"),
+			},
+		)
+	}
+
+	fn set_due_replay_missing_root() {
+		let identifier = *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER;
+		let mut state = RingCollectionState::default();
+		state
+			.missing_indices
+			.try_insert(0, 0)
+			.expect("one missing root is within the runtime bound");
+		RingCollectionStates::<Runtime>::insert(identifier, state);
+		Subscription::<Runtime>::put(SubscriptionStatus::Active { initialized_at_sequence: 0 });
+		pallet_timestamp::Now::<Runtime>::put(61_000u64);
+	}
+
+	/// Creates the frozen V0 `AuthorizeCall` pipeline without a V4 signature. This exercises
+	/// General/V0's authorised-origin path rather than the inert authoriser on an ordinary
+	/// transfer.
+	fn authorized_v0(call: RuntimeCall) -> UncheckedExtrinsic {
+		let extension = TxExtensionV0::from((
+			frame_system::AuthorizeCall::<Runtime>::new(),
+			frame_system::CheckNonZeroSender::<Runtime>::new(),
+			frame_system::CheckSpecVersion::<Runtime>::new(),
+			frame_system::CheckTxVersion::<Runtime>::new(),
+			frame_system::CheckGenesis::<Runtime>::new(),
+			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
+			frame_system::CheckNonce::<Runtime>::from(0),
+			frame_system::CheckWeight::<Runtime>::new(),
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
+			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
+			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
+		));
+		generic::UncheckedExtrinsic::<
+			next_asset_hub_paseo_runtime::Address,
+			RuntimeCall,
+			sp_runtime::MultiSignature,
+			TxExtensionV0,
+			TxExtensionOtherVersions,
+		>::from_parts(
+			call,
+			generic::Preamble::General(sp_runtime::traits::ExtensionVariant::V0(extension)),
+		)
+		.into()
+	}
+
+	#[test]
+	fn due_authorized_replay_is_decoded_and_applied_as_v1() {
+		ExtBuilder::<Runtime>::default().build().execute_with(|| {
+			let identifier = *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER;
+			set_due_replay_missing_root();
+			let call = due_replay_missing_roots_call();
+			let encoded = <Runtime as CreateAuthorizedTransaction<RuntimeCall>>::
+				create_authorized_transaction(call)
+			.encode();
+			let decoded = UncheckedExtrinsic::decode(&mut &encoded[..])
+				.expect("the runtime-created authorized transaction decodes");
+			match &decoded.0.preamble {
+				generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(other)) => {
+					assert_eq!(other.version(), INDIVIDUALITY_EXTENSION_VERSION);
+					let _: &TxExtensionOtherVersions = other;
+				},
+				preamble => panic!("authorized OCW transaction must select V1, got {preamble:?}"),
+			}
+
+			assert_ok!(Executive::apply_extrinsic(decoded).unwrap());
+			assert_eq!(
+				RingCollectionStates::<Runtime>::get(identifier).missing_indices.get(&0),
+				Some(&1),
+				"the due authorized call dispatches and records its replay attempt"
+			);
+		});
+	}
+
+	#[test]
+	fn general_v0_authorized_call_dispatches_only_while_its_preconditions_hold() {
+		ExtBuilder::<Runtime>::default().build().execute_with(|| {
+			let identifier = *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER;
+			set_due_replay_missing_root();
+			let encoded = authorized_v0(due_replay_missing_roots_call()).encode();
+			let decoded = UncheckedExtrinsic::decode(&mut &encoded[..])
+				.expect("a V0 authorised transaction decodes using the real runtime type");
+			assert!(matches!(
+				decoded.0.preamble,
+				generic::Preamble::General(sp_runtime::traits::ExtensionVariant::V0(_))
+			));
+			assert_ok!(Executive::apply_extrinsic(decoded).unwrap());
+			assert_eq!(
+				RingCollectionStates::<Runtime>::get(identifier).missing_indices.get(&0),
+				Some(&1)
+			);
+			RingCollectionStates::<Runtime>::mutate(identifier, |state| {
+				state.missing_indices.remove(&0);
+			});
+			assert!(
+				Executive::apply_extrinsic(authorized_v0(due_replay_missing_roots_call())).is_err(),
+				"V0 AuthorizeCall must not bypass the replay preconditions"
+			);
+		});
 	}
 }
 
