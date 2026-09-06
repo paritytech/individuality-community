@@ -97,7 +97,7 @@ use sp_runtime::{
 		IdentityLookup, Verify,
 	},
 	transaction_validity::{TransactionSource, TransactionValidity},
-	ApplyExtrinsicResult, FixedU128, Perbill, Permill,
+	ApplyExtrinsicResult, FixedU128, MultiSignature, MultiSigner, Perbill, Permill,
 };
 use system_parachains_constants::async_backing::MINUTES;
 use xcm::latest::prelude::*;
@@ -194,7 +194,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_version: 3_002_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
-	transaction_version: 21,
+	transaction_version: 22,
 	system_version: 1,
 };
 
@@ -553,6 +553,30 @@ impl pallet_utility::Config for Runtime {
 	type RuntimeCall = RuntimeCall;
 	type PalletsOrigin = OriginCaller;
 	type WeightInfo = weights::pallet_utility::WeightInfo<Runtime>;
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct VerifySignatureBenchmarkHelper;
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_verify_signature::BenchmarkHelper<MultiSignature, AccountId>
+	for VerifySignatureBenchmarkHelper
+{
+	fn create_signature(_entropy: &[u8], msg: &[u8]) -> (MultiSignature, AccountId) {
+		use sp_io::crypto::{sr25519_generate, sr25519_sign};
+		use sp_runtime::traits::IdentifyAccount;
+		let public = sr25519_generate(0.into(), None);
+		let who_account: AccountId = MultiSigner::Sr25519(public).into_account();
+		let signature = MultiSignature::Sr25519(sr25519_sign(0.into(), &public, msg).unwrap());
+		(signature, who_account)
+	}
+}
+
+impl pallet_verify_signature::Config for Runtime {
+	type Signature = MultiSignature;
+	type AccountIdentifier = MultiSigner;
+	type WeightInfo = weights::pallet_verify_signature::WeightInfo<Runtime>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = VerifySignatureBenchmarkHelper;
 }
 
 parameter_types! {
@@ -2715,6 +2739,7 @@ construct_runtime!(
 		Revive: pallet_revive = 100,
 		DotnsGateway: indiv_pallet_dotns_gateway = 152,
 		OriginRestriction: indiv_pallet_origin_restriction = 153,
+		VerifySignature: pallet_verify_signature = 155,
 		Sudo: pallet_sudo::{Pallet, Call, Storage, Event<T>, Config<T>} = 251,
 		PgasAllowance: pallet_pgas_allowance = 252,
 	}
@@ -2728,13 +2753,35 @@ pub type Block = generic::Block<Header, UncheckedExtrinsic>;
 pub type SignedBlock = generic::SignedBlock<Block>;
 /// BlockId type as expected by this runtime.
 pub type BlockId = generic::BlockId<Block>;
-/// The `TransactionExtension` to the basic transaction logic.
-pub type TxExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
+/// The Individuality transaction extension pipeline version.
+pub const INDIVIDUALITY_EXTENSION_VERSION: u8 = 1;
+
+/// The frozen standard transaction extension pipeline.
+pub type TxExtensionV0 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
+	Runtime,
+	(
+		frame_system::AuthorizeCall<Runtime>,
+		frame_system::CheckNonZeroSender<Runtime>,
+		frame_system::CheckSpecVersion<Runtime>,
+		frame_system::CheckTxVersion<Runtime>,
+		frame_system::CheckGenesis<Runtime>,
+		frame_system::CheckEra<Runtime>,
+		frame_system::CheckNonce<Runtime>,
+		frame_system::CheckWeight<Runtime>,
+		pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
+		frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
+		pallet_revive::evm::tx_extension::SetOrigin<Runtime>,
+	),
+>;
+
+/// The latest Individuality transaction extension pipeline.
+pub type TxExtensionV1 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	Runtime,
 	(
 		// Origin modifiers
 		(
 			(),
+			pallet_verify_signature::VerifySignature<Runtime>,
 			pallet_scarcity::extension::AsScarcity<Runtime>,
 			frame_system::AuthorizeCall<Runtime>,
 			indiv_pallet_pgas::AsPgas<Runtime>,
@@ -2758,25 +2805,22 @@ pub type TxExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	),
 >;
 
+/// The transaction extension pipelines a general transaction may select other than version 0.
+pub type TxExtensionOtherVersions =
+	sp_runtime::traits::PipelineAtVers<INDIVIDUALITY_EXTENSION_VERSION, TxExtensionV1>;
+
 /// Default extensions applied to Ethereum transactions.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct EthExtraImpl;
 
 impl EthExtra for EthExtraImpl {
 	type Config = Runtime;
-	type ExtensionV0 = TxExtension;
-	type ExtensionOtherVersions = sp_runtime::traits::InvalidVersion;
+	type ExtensionV0 = TxExtensionV0;
+	type ExtensionOtherVersions = TxExtensionOtherVersions;
 
 	fn get_eth_extension(nonce: u32, tip: Balance) -> Self::ExtensionV0 {
 		(
-			(
-				(),
-				pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
-				frame_system::AuthorizeCall::<Runtime>::new(),
-				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
-				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
-			),
-			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(true),
+			frame_system::AuthorizeCall::<Runtime>::new(),
 			frame_system::CheckNonZeroSender::<Runtime>::new(),
 			frame_system::CheckSpecVersion::<Runtime>::new(),
 			frame_system::CheckTxVersion::<Runtime>::new(),
@@ -2784,14 +2828,7 @@ impl EthExtra for EthExtraImpl {
 			frame_system::CheckMortality::from(generic::Era::Immortal),
 			frame_system::CheckNonce::<Runtime>::from(nonce),
 			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_pgas_allowance::ChargePGAS::<
-				Runtime,
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::new_skip_pgas(
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
-					tip, None,
-				),
-			),
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(tip, None),
 			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::new_from_eth_transaction(),
 		)
@@ -2799,7 +2836,7 @@ impl EthExtra for EthExtraImpl {
 	}
 }
 
-/// Builds a `TxExtension` carrying only authorization-related checks. Used by the
+/// Builds a `TxExtensionV1` carrying only authorization-related checks. Used by the
 /// members-subscriber offchain worker when submitting `replay_missing_roots` via
 /// `frame_system::AuthorizeCall`.
 impl<LocalCall> frame_system::offchain::CreateAuthorizedTransaction<LocalCall> for Runtime
@@ -2807,9 +2844,10 @@ where
 	RuntimeCall: From<LocalCall>,
 {
 	fn create_extension() -> Self::Extension {
-		TxExtension::from((
+		TxExtensionV1::from((
 			(
 				(),
+				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
 				pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
 				frame_system::AuthorizeCall::<Runtime>::new(),
 				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
@@ -2979,6 +3017,7 @@ mod benches {
 		[pallet_session, SessionBench::<Runtime>]
 		[pallet_uniques, Uniques]
 		[pallet_utility, Utility]
+		[pallet_verify_signature, VerifySignature]
 		[pallet_vesting, Vesting]
 		[pallet_timestamp, Timestamp]
 		[pallet_treasury, Treasury]
@@ -4107,10 +4146,11 @@ mod tests {
 		assert!(ProxyType::NonTransfer.is_superset(&ProxyType::ParaRegistration));
 	}
 
-	fn scarcity_tx_extension(nonce: u32, state_nonce: u64) -> TxExtension {
-		TxExtension::from((
+	fn scarcity_tx_extension(nonce: u32, state_nonce: u64) -> TxExtensionV1 {
+		TxExtensionV1::from((
 			(
 				(),
+				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
 				pallet_scarcity::extension::AsScarcity::<Runtime>::new(Some(
 					pallet_scarcity::extension::AsScarcityInfo::AsNft { instance: 0, state_nonce },
 				)),
@@ -4176,7 +4216,7 @@ mod tests {
 
 	/// An NFT-only purse key — no balance, no System account — can send a feeless transfer
 	/// through the full extension pipeline. This pins the security-critical ordering of
-	/// `AsScarcity` within `TxExtension`.
+	/// `AsScarcity` within `TxExtensionV1`.
 	#[test]
 	fn nft_only_purse_without_system_account_can_transfer() {
 		use frame_support::dispatch::GetDispatchInfo;
