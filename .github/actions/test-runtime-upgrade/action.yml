@@ -18,6 +18,10 @@ inputs:
     description: Path to the next-asset-hub paseo runtime WASM, relative to the repo root.
     required: false
     default: .artifacts/next_asset_hub_paseo_runtime.wasm
+  next-asset-hub-metadata-hash-runtime-wasm:
+    description: Path to the metadata-hash-enabled Asset Hub test WASM, relative to the repo root.
+    required: false
+    default: .artifacts/next_asset_hub_paseo_runtime_metadata_hash.wasm
 
 runs:
   using: composite
@@ -60,3 +64,4 @@ runs:
       shell: bash
       env:
         NEXT_ASSET_HUB_PASEO_RUNTIME_WASM: ${{ inputs.next-asset-hub-runtime-wasm }}
+        NEXT_ASSET_HUB_PASEO_METADATA_HASH_RUNTIME_WASM: ${{ inputs.next-asset-hub-metadata-hash-runtime-wasm }}
