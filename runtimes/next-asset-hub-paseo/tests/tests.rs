@@ -1787,18 +1787,18 @@ mod credit_tree_removal {
 
 	/// Creates the collection and item a claim mints into, and registers it for claims as its owner
 	/// does beforehand. Returns the collection's identifier.
-	fn prepare_collection() -> pallet_scarcity::CollectionId {
+	fn prepare_collection() -> indiv_pallet_scarcity::CollectionId {
 		use frame_support::traits::fungible::Mutate;
 		use indiv_pallet_nft_claims::ItemSelection;
 
 		let owner = AccountId::from([254u8; 32]);
 		Balances::set_balance(&owner, 1_000 * ExistentialDeposit::get());
-		let collection = pallet_scarcity::NextCollectionId::<Runtime>::get();
+		let collection = indiv_pallet_scarcity::NextCollectionId::<Runtime>::get();
 		assert_ok!(Scarcity::do_create_collection(owner.clone()));
 		assert_ok!(Scarcity::do_define_item(
 			owner.clone(),
 			collection,
-			pallet_scarcity::Transferability::Transferable,
+			indiv_pallet_scarcity::Transferability::Transferable,
 			Vec::new()
 		));
 		assert_ok!(NftClaims::set_collection_minter(
