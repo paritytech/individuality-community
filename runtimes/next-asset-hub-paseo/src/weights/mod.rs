@@ -22,6 +22,7 @@ pub mod extrinsic_weights;
 pub mod frame_system;
 pub mod frame_system_extensions;
 pub mod indiv_pallet_alias_accounts;
+pub mod indiv_pallet_assets_forwarder;
 pub mod indiv_pallet_dotns_gateway;
 pub mod indiv_pallet_members_subscriber;
 pub mod indiv_pallet_nft_claims;

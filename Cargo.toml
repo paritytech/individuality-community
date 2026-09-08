@@ -13,6 +13,7 @@ members = [
 	"integration-tests",
 	"pallets/airdrop",
 	"pallets/alias-accounts",
+	"pallets/assets-forwarder",
 	"pallets/chunks-manager",
 	"pallets/coinage",
 	"pallets/dotns-gateway",
@@ -132,6 +133,7 @@ getrandom = { version = "0.2", default-features = false }
 hex-literal = { version = "0.4.1" }
 indiv-pallet-airdrop = { path = "pallets/airdrop", default-features = false }
 indiv-pallet-alias-accounts = { path = "pallets/alias-accounts", default-features = false }
+indiv-pallet-assets-forwarder = { path = "pallets/assets-forwarder", default-features = false }
 indiv-pallet-chunks-manager = { path = "pallets/chunks-manager", default-features = false }
 indiv-pallet-coinage = { path = "pallets/coinage", default-features = false }
 indiv-pallet-dotns-gateway = { path = "pallets/dotns-gateway", default-features = false }
@@ -162,6 +164,7 @@ indiv-precompile-support = { path = "precompiles/support", default-features = fa
 indiv-support = { path = "support", default-features = false }
 log = { version = "0.4.22", default-features = false }
 merlin = { version = "3.0", default-features = false }
+next-people-paseo-runtime = { path = "runtimes/next-people-paseo", default-features = false }
 pallet-ah-ops = { version = "0.9.0", default-features = false }
 pallet-asset-conversion = { version = "31.0.0", default-features = false }
 pallet-asset-conversion-ops = { version = "0.17.0", default-features = false }

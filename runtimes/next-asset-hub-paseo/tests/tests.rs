@@ -1745,3 +1745,258 @@ mod members_subscriber_xcm_budget {
 		});
 	}
 }
+
+/// The forwarder is the only origin next-people-paseo accepts for force-creating assets, so the
+/// cross-chain contract (pallet index, destination, message content) and the exact amounts the
+/// caller pays are pinned here.
+mod assets_forwarder {
+	use super::{collator_session_keys, ExtBuilder};
+	use codec::{Decode, Encode};
+	use cumulus_primitives_core::{ParaId, XcmpMessageFormat, XcmpMessageSource};
+	use frame_support::{
+		assert_ok,
+		dispatch::GetDispatchInfo,
+		traits::{
+			fungible::{Inspect as FungibleInspect, InspectHold},
+			PalletInfoAccess, SignedTransactionBuilder,
+		},
+	};
+	use next_asset_hub_paseo_runtime::{
+		AssetForwardDeposit, Assets, AssetsForwarder, Balances, EthExtraImpl, Executive,
+		ParachainSystem, PriceForSiblingParachainDelivery, Runtime, RuntimeCall, RuntimeEvent,
+		RuntimeOrigin, System, TrustBackedAssetsInstance, TxExtension, UncheckedExtrinsic,
+	};
+	use next_people_paseo_runtime as people;
+	use pallet_revive::evm::runtime::EthExtra;
+	use parachains_common::{AccountId, Balance};
+	use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, PEOPLE_ID};
+	use polkadot_runtime_common::xcm_sender::PriceForMessageDelivery;
+	use sp_keyring::Sr25519Keyring;
+	use sp_runtime::{BuildStorage, MultiSignature};
+	use xcm::{latest::prelude::*, VersionedXcm};
+
+	const ASSET_ID: u32 = 9999;
+	const MIN_BALANCE: Balance = 5;
+
+	fn construct_extrinsic(sender: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
+		let account_id = AccountId::from(sender.public());
+		let nonce = frame_system::Pallet::<Runtime>::account(&account_id).nonce;
+		let tx_ext: TxExtension = EthExtraImpl::get_eth_extension(nonce, 0);
+		let payload =
+			sp_runtime::generic::SignedPayload::new(call.clone(), tx_ext.clone()).unwrap();
+		let signature = payload.using_encoded(|e| sender.sign(e));
+		UncheckedExtrinsic::new_signed_transaction(
+			call,
+			account_id.into(),
+			MultiSignature::Sr25519(signature),
+			tx_ext,
+		)
+	}
+
+	/// Opens the channel to People and creates the local asset with metadata as Alice.
+	fn create_local_asset(alice: &AccountId) {
+		ParachainSystem::open_outbound_hrmp_channel_for_benchmarks_or_tests(PEOPLE_ID.into());
+		assert_ok!(Assets::create(
+			RuntimeOrigin::signed(alice.clone()),
+			ASSET_ID.into(),
+			alice.clone().into(),
+			MIN_BALANCE
+		));
+		// Local metadata exists so the tests can pin that it is never forwarded.
+		assert_ok!(Assets::set_metadata(
+			RuntimeOrigin::signed(alice.clone()),
+			ASSET_ID.into(),
+			b"Token".to_vec(),
+			b"TOK".to_vec(),
+			12
+		));
+	}
+
+	/// Takes the single XCMP page sent to People and decodes it the way People's message queue
+	/// would, into a program of People runtime calls.
+	fn take_message_for_people() -> Xcm<people::RuntimeCall> {
+		let mut pages = next_asset_hub_paseo_runtime::XcmpQueue::take_outbound_messages(16, &[]);
+		assert_eq!(pages.len(), 1);
+		let (recipient, page) = pages.remove(0);
+		assert_eq!(recipient, ParaId::from(PEOPLE_ID));
+		let mut data = &page[..];
+		let format = XcmpMessageFormat::decode(&mut data).unwrap();
+		assert_eq!(format, XcmpMessageFormat::ConcatenatedVersionedXcm);
+		let versioned = VersionedXcm::<people::RuntimeCall>::decode(&mut data).unwrap();
+		assert!(data.is_empty(), "exactly one message was sent");
+		versioned.try_into().expect("message converts to the latest XCM version")
+	}
+
+	#[test]
+	fn forwarder_pallet_index_matches_people_contract() {
+		// next-people-paseo hardcodes this index in its `AssetsForwarderLocation` filter.
+		assert_eq!(<AssetsForwarder as PalletInfoAccess>::index(), 37);
+	}
+
+	#[test]
+	fn forward_asset_charges_exact_deposit_and_fees() {
+		let alice = AccountId::from(Sr25519Keyring::Alice.public());
+		// The fee sink accounts must exist for `OnUnbalanced` deposits to succeed.
+		let staging = pallet_dap::Pallet::<Runtime>::staging_account();
+		let ed = next_asset_hub_paseo_runtime::ExistentialDeposit::get();
+		ExtBuilder::<Runtime>::default()
+			.with_collators(collator_session_keys().collators())
+			.with_session_keys(collator_session_keys().session_keys())
+			.with_balances(vec![(alice.clone(), 1_000_000_000_000_000), (staging.clone(), ed)])
+			.with_para_id(ASSET_HUB_ID.into())
+			.with_safe_xcm_version(xcm::latest::VERSION)
+			.with_tracing()
+			.build()
+			.execute_with(|| {
+				create_local_asset(&alice);
+				let treasury = next_asset_hub_paseo_runtime::xcm_config::TreasuryAccount::get();
+				let total_before = <Balances as FungibleInspect<AccountId>>::total_balance(&alice);
+				let staging_before =
+					<Balances as FungibleInspect<AccountId>>::total_balance(&staging);
+				let treasury_before =
+					<Balances as FungibleInspect<AccountId>>::total_balance(&treasury);
+
+				let xt = construct_extrinsic(
+					Sr25519Keyring::Alice,
+					RuntimeCall::AssetsForwarder(
+						indiv_pallet_assets_forwarder::Call::forward_asset { id: ASSET_ID.into() },
+					),
+				);
+				let info = xt.get_dispatch_info();
+				let len = xt.encode().len() as u32;
+				assert_ok!(Executive::apply_extrinsic(xt).unwrap());
+
+				// The exact forward deposit is held, still part of Alice's total balance.
+				let hold_reason = indiv_pallet_assets_forwarder::HoldReason::<
+					TrustBackedAssetsInstance,
+				>::ForwardDeposit;
+				assert_eq!(
+					Balances::balance_on_hold(&hold_reason.into(), &alice),
+					AssetForwardDeposit::get()
+				);
+
+				// The delivery fee is the router's price for the exact message that was sent.
+				let message = take_message_for_people();
+				let unpriced: Xcm<()> =
+					Xcm(message.0.iter().cloned().map(|instruction| instruction.into()).collect());
+				let price = PriceForSiblingParachainDelivery::price_for_delivery(
+					PEOPLE_ID.into(),
+					&unpriced,
+				);
+				assert_eq!(price.len(), 1);
+				let price_asset = price.into_inner().remove(0);
+				assert_eq!(price_asset.id.0, Location::parent());
+				let Fungibility::Fungible(delivery_fee) = price_asset.fun else {
+					panic!("delivery fee is fungible");
+				};
+				assert!(delivery_fee > 0);
+
+				// The transaction fee is a function of the weight the runtime reports for the
+				// applied extrinsic, not the static estimate: `StorageWeightReclaim` reprices the
+				// extrinsic by the measured proof size. Feeding the reported weight back into the
+				// runtime's fee function must reproduce the charged amount exactly.
+				let reported_weight = System::events()
+					.iter()
+					.find_map(|record| match record.event {
+						RuntimeEvent::System(frame_system::Event::ExtrinsicSuccess {
+							ref dispatch_info,
+						}) => Some(dispatch_info.weight),
+						_ => None,
+					})
+					.expect("the extrinsic succeeded");
+				let base_extrinsic_weight = <Runtime as frame_system::Config>::BlockWeights::get()
+					.get(frame_support::dispatch::DispatchClass::Normal)
+					.base_extrinsic;
+				let actual_info = frame_support::dispatch::DispatchInfo {
+					call_weight: reported_weight.saturating_sub(base_extrinsic_weight),
+					extension_weight: frame_support::weights::Weight::zero(),
+					..info
+				};
+				let expected_tx_fee = pallet_transaction_payment::Pallet::<Runtime>::compute_fee(
+					len,
+					&actual_info,
+					0,
+				);
+
+				// Each fee lands in full in its own sink: the transaction fee in the DAP staging
+				// account, the delivery fee in the treasury account. The native-payment branch of
+				// `ChargeAssetTxPayment` emits no event, so the sinks are the observable proof.
+				let staging_after =
+					<Balances as FungibleInspect<AccountId>>::total_balance(&staging);
+				let treasury_after =
+					<Balances as FungibleInspect<AccountId>>::total_balance(&treasury);
+				assert_eq!(staging_after - staging_before, expected_tx_fee);
+				assert_eq!(treasury_after - treasury_before, delivery_fee);
+
+				// Everything Alice lost is exactly the transaction fee plus the delivery fee;
+				// the deposits (forward hold, asset and metadata reserves) stay in her balance.
+				let total_after = <Balances as FungibleInspect<AccountId>>::total_balance(&alice);
+				assert_eq!(total_before - total_after, expected_tx_fee + delivery_fee);
+			});
+	}
+
+	#[test]
+	fn forwarded_message_executes_on_people() {
+		let alice = AccountId::from(Sr25519Keyring::Alice.public());
+		// Asset Hub side: forward the asset and capture the real XCMP page.
+		let message = ExtBuilder::<Runtime>::default()
+			.with_collators(collator_session_keys().collators())
+			.with_session_keys(collator_session_keys().session_keys())
+			.with_balances(vec![(alice.clone(), 1_000_000_000_000_000)])
+			.with_para_id(ASSET_HUB_ID.into())
+			.with_safe_xcm_version(xcm::latest::VERSION)
+			.with_tracing()
+			.build()
+			.execute_with(|| {
+				create_local_asset(&alice);
+				assert_ok!(AssetsForwarder::forward_asset(
+					RuntimeOrigin::signed(alice.clone()),
+					ASSET_ID.into()
+				));
+				take_message_for_people()
+			});
+
+		// People side: execute those bytes through the real People executor.
+		let genesis = people::RuntimeGenesisConfig {
+			parachain_info: parachain_info::GenesisConfig {
+				parachain_id: PEOPLE_ID.into(),
+				..Default::default()
+			},
+			..Default::default()
+		};
+		let mut ext = sp_io::TestExternalities::new(genesis.build_storage().unwrap());
+		ext.execute_with(|| {
+			frame_system::Pallet::<people::Runtime>::set_block_number(1u32);
+			let mut hash = message.using_encoded(sp_io::hashing::blake2_256);
+			let outcome =
+				xcm_executor::XcmExecutor::<people::xcm_config::XcmConfig>::prepare_and_execute(
+					Location::new(1, [Parachain(ASSET_HUB_ID)]),
+					message,
+					&mut hash,
+					Weight::MAX,
+					Weight::zero(),
+				);
+			assert!(outcome.clone().ensure_complete().is_ok(), "{outcome:?}");
+
+			let remote_id = Location::new(
+				1,
+				[
+					Parachain(ASSET_HUB_ID),
+					PalletInstance(<Assets as PalletInfoAccess>::index() as u8),
+					GeneralIndex(ASSET_ID.into()),
+				],
+			);
+			let details = pallet_assets::Asset::<people::Runtime>::get(remote_id.clone())
+				.expect("asset was created on People");
+			assert_eq!(details.min_balance, MIN_BALANCE);
+			// `Assets::create` on Asset Hub always yields a non-sufficient asset.
+			assert!(!details.is_sufficient);
+
+			// The asset has metadata on Asset Hub, but the replica carries none.
+			let metadata = pallet_assets::Metadata::<people::Runtime>::get(remote_id);
+			assert!(metadata.name.is_empty());
+			assert!(metadata.symbol.is_empty());
+			assert_eq!(metadata.decimals, 0);
+		});
+	}
+}

@@ -1967,6 +1967,47 @@ impl frame_support::traits::EnsureOrigin<RuntimeOrigin> for EnsureNotifierSiblin
 	}
 }
 
+parameter_types! {
+	/// Deposit held from the caller for each forwarded asset. It backs the forwarder's storage
+	/// entry and prices junk forwards, since the replica on the People chain has no deposit.
+	pub const AssetForwardDeposit: Balance = UNITS;
+	/// Matches the `Assets` index in next-people-paseo `construct_runtime!`.
+	pub const PeopleAssetsPalletIndex: u8 = 14;
+}
+
+impl indiv_pallet_assets_forwarder::Config<TrustBackedAssetsInstance> for Runtime {
+	type RuntimeHoldReason = RuntimeHoldReason;
+	type Currency = Balances;
+	type ForwardDeposit = AssetForwardDeposit;
+	type ManagerOrigin = EnsureRoot<AccountId>;
+	type Destination = xcm_config::PeopleLocation;
+	type RemoteAssetsPalletIndex = PeopleAssetsPalletIndex;
+	type AssetsPalletLocation = xcm_config::TrustBackedAssetsPalletLocation;
+	type UniversalLocation = xcm_config::UniversalLocation;
+	type DestinationAccountOf = xcm_builder::HashedDescription<
+		AccountId,
+		xcm_builder::DescribeFamily<xcm_builder::DescribeAllTerminal>,
+	>;
+	type AssetIdToIndex = sp_runtime::traits::ConvertInto;
+	type OriginToLocation = xcm_config::LocalSignedOriginToLocation;
+	type XcmSender = xcm_config::XcmRouter;
+	type XcmExecutor = xcm_executor::XcmExecutor<xcm_config::XcmConfig>;
+	type WeightInfo = weights::indiv_pallet_assets_forwarder::WeightInfo<Runtime>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = AssetsForwarderBenchmarkHelper;
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct AssetsForwarderBenchmarkHelper;
+#[cfg(feature = "runtime-benchmarks")]
+impl indiv_pallet_assets_forwarder::benchmarking::BenchmarkHelper
+	for AssetsForwarderBenchmarkHelper
+{
+	fn open_destination_channel() {
+		ParachainSystem::open_outbound_hrmp_channel_for_benchmarks_or_tests(PEOPLE_ID.into());
+	}
+}
+
 /// Resolves the origin of an NFT claim to the identity the credit's leaf binds.
 ///
 /// The origin stays signed in both cases, since no transaction extension promotes it to an alias
@@ -2663,6 +2704,7 @@ construct_runtime!(
 		ToKusamaXcmRouter: pallet_xcm_bridge_hub_router::<Instance1> = 34,
 		MessageQueue: pallet_message_queue = 35,
 		SnowbridgeSystemFrontend: snowbridge_pallet_system_frontend = 36,
+		AssetsForwarder: indiv_pallet_assets_forwarder::<Instance1> = 37,
 
 		// Handy utilities.
 		Utility: pallet_utility = 40,
@@ -3004,6 +3046,7 @@ mod benches {
 
 		// Individuality
 		[indiv_pallet_alias_accounts, AliasAccounts]
+		[indiv_pallet_assets_forwarder, AssetsForwarder]
 		[indiv_pallet_dotns_gateway, DotnsGateway]
 		[indiv_pallet_members_subscriber, MembersSubscriber]
 		[indiv_pallet_nft_claims, NftClaims]
