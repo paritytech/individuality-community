@@ -1,5 +1,5 @@
 [package]
-name = "pallet-scarcity"
+name = "indiv-pallet-scarcity"
 description = "FRAME pallet for Scarcity NFTs: coinage-style purse-key ownership with feeless rest-time-prioritized transfers. Vendored from polkadot-sdk until released on crates.io."
 version.workspace = true
 authors.workspace = true

@@ -152,10 +152,10 @@ fn purse(byte: u8) -> (H160, AccountId32) {
 
 fn setup_collection(owner: &AccountId32) -> CollectionId {
 	map_account(owner);
-	pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone()).unwrap()
+	indiv_pallet_scarcity::Pallet::<Test>::do_create_collection(owner.clone()).unwrap()
 }
 
-fn setup_item(owner: &AccountId32, collection: CollectionId) -> pallet_scarcity::ItemIndex {
+fn setup_item(owner: &AccountId32, collection: CollectionId) -> indiv_pallet_scarcity::ItemIndex {
 	setup_item_as(owner, collection, Transferability::Transferable)
 }
 
@@ -163,8 +163,8 @@ fn setup_item_as(
 	owner: &AccountId32,
 	collection: CollectionId,
 	transferability: Transferability,
-) -> pallet_scarcity::ItemIndex {
-	pallet_scarcity::Pallet::<Test>::do_define_item(
+) -> indiv_pallet_scarcity::ItemIndex {
+	indiv_pallet_scarcity::Pallet::<Test>::do_define_item(
 		owner.clone(),
 		collection,
 		transferability,
@@ -217,7 +217,7 @@ fn erc721_reads_work() {
 			Some(value(b"DUCK"))
 		));
 		let (holder_address, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -301,7 +301,7 @@ fn token_uri_resolves_scopes() {
 			Some(value(b"ipfs://collection-default"))
 		));
 		let (_, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -378,7 +378,7 @@ fn item_metadata_is_read_from_the_instance_own_item() {
 			));
 		}
 		let (_, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item_b,
@@ -472,7 +472,7 @@ fn royalty_of(
 fn set_item_royalty_key(
 	owner: &AccountId32,
 	collection: CollectionId,
-	item: pallet_scarcity::ItemIndex,
+	item: indiv_pallet_scarcity::ItemIndex,
 	metadata_key: &[u8],
 	metadata_value: Option<&[u8]>,
 ) {
@@ -495,7 +495,7 @@ fn royalty_amount_floors_and_survives_zero_on_either_side() {
 		let collection = setup_collection(&alice);
 		let item = setup_item(&alice, collection);
 		let (receiver_address, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -545,7 +545,7 @@ fn royalty_item_scope_overrides_each_key_independently() {
 		let item = setup_item(&alice, collection);
 		let (collection_receiver, holder) = purse(0xBB);
 		let (item_receiver, _) = purse(0xCC);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -622,7 +622,7 @@ fn royalty_info_resolves_item_over_collection_scope() {
 		let other_item = setup_item(&alice, collection);
 		let (holder_address, holder) = purse(0xBB);
 		let (override_address, _) = purse(0xCC);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -630,7 +630,7 @@ fn royalty_info_resolves_item_over_collection_scope() {
 			alloc::vec![],
 		)
 		.unwrap();
-		let other_instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let other_instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			other_item,
@@ -675,7 +675,7 @@ fn royalty_info_tolerates_bad_terms_but_not_unknown_tokens() {
 		let collection = setup_collection(&alice);
 		let item = setup_item(&alice, collection);
 		let (receiver_address, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -780,7 +780,8 @@ fn contract_uri_reads_its_reserved_collection_key() {
 	new_test_ext().execute_with(|| {
 		let alice = id_to_account(1);
 		let collection = setup_collection(&alice);
-		let sibling = pallet_scarcity::Pallet::<Test>::do_create_collection(alice.clone()).unwrap();
+		let sibling =
+			indiv_pallet_scarcity::Pallet::<Test>::do_create_collection(alice.clone()).unwrap();
 		let target = collection_address(collection);
 
 		// A collection that has published nothing answers empty rather than reverting, so a
@@ -820,10 +821,10 @@ fn cross_collection_lookups_answer_unknown() {
 		let alice = id_to_account(1);
 		let collection_a = setup_collection(&alice);
 		let collection_b =
-			pallet_scarcity::Pallet::<Test>::do_create_collection(alice.clone()).unwrap();
+			indiv_pallet_scarcity::Pallet::<Test>::do_create_collection(alice.clone()).unwrap();
 		let item = setup_item(&alice, collection_b);
 		let (holder_address, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection_b,
 			item,
@@ -933,7 +934,7 @@ fn force_transfer_and_burn_work() {
 		let item = setup_item(&alice, collection);
 		let (from_address, from) = purse(0xBB);
 		let (to_address, to) = purse(0xCC);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -998,7 +999,7 @@ fn force_transfer_refuses_the_holders_own_address() {
 		// The mint registers the key, then funding and emptying it reaps the account and takes
 		// that registration with it.
 		let holder = id_to_account(9);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -1053,7 +1054,7 @@ fn minting_to_a_reaped_holders_address_lands_on_the_fallback_account() {
 		// it. Funding that key and emptying it again is what drops the hook's own entry.
 		let holder = id_to_account(9);
 		assert!(!frame_system::Account::<Test>::contains_key(&holder));
-		let held = pallet_scarcity::Pallet::<Test>::do_mint(
+		let held = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -1140,7 +1141,7 @@ fn approval_stubs_behave() {
 		let item = setup_item(&alice, collection);
 		let (holder_address, holder) = purse(0xBB);
 		let (other_address, _) = purse(0xCC);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -1219,11 +1220,11 @@ fn approval_stubs_behave() {
 fn mint_to_funded_purse(
 	owner: &AccountId32,
 	collection: CollectionId,
-	item: pallet_scarcity::ItemIndex,
+	item: indiv_pallet_scarcity::ItemIndex,
 	byte: u8,
 ) -> (H160, AccountId32, InstanceId) {
 	let (address, account) = purse(byte);
-	let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+	let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 		owner.clone(),
 		collection,
 		item,
@@ -1385,7 +1386,7 @@ fn safe_transfer_reaches_purses_but_not_code() {
 			with_code.into_array(),
 		));
 		assert_eq!(NftsByOwner::<Test>::get(&code_purse).unwrap().instance, instance);
-		assert_ok!(pallet_scarcity::Pallet::<Test>::do_transfer_by_holder(
+		assert_ok!(indiv_pallet_scarcity::Pallet::<Test>::do_transfer_by_holder(
 			&code_purse,
 			instance,
 			holder.clone()
@@ -1645,7 +1646,7 @@ fn define_item_maps_the_soulbound_flag() {
 				.abi_encode(),
 			);
 			let item = IScarcityCollection::defineItemCall::abi_decode_returns(&data).unwrap();
-			let definition = pallet_scarcity::ItemDefs::<Test>::get(collection, item)
+			let definition = indiv_pallet_scarcity::ItemDefs::<Test>::get(collection, item)
 				.expect("the call defined the item");
 			assert_eq!(definition.transferability, expected, "soulbound: {soulbound}");
 		}
@@ -1671,7 +1672,7 @@ fn define_item_via_precompile_works() {
 		);
 		let item = IScarcityCollection::defineItemCall::abi_decode_returns(&data).unwrap();
 		assert_eq!(item, 0);
-		assert!(pallet_scarcity::ItemDefs::<Test>::get(collection, item).is_some());
+		assert!(indiv_pallet_scarcity::ItemDefs::<Test>::get(collection, item).is_some());
 
 		let data = call_ok(
 			&alice,
@@ -1722,7 +1723,7 @@ fn force_ops_require_collection_owner() {
 		let item = setup_item(&alice, collection);
 		let (other_address, _) = purse(0xCC);
 		let (_, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -1756,7 +1757,7 @@ fn zero_destination_reverts() {
 		let collection = setup_collection(&alice);
 		let item = setup_item(&alice, collection);
 		let (_, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -1798,7 +1799,7 @@ fn mint_to_occupied_purse_reverts() {
 		let collection = setup_collection(&alice);
 		let item = setup_item(&alice, collection);
 		let (holder_address, holder) = purse(0xBB);
-		pallet_scarcity::Pallet::<Test>::do_mint(
+		indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -1923,7 +1924,7 @@ fn instance_info_reports_nft_fields() {
 		let (_, holder) = purse(0xBB);
 		let (_, later_holder) = purse(0xCC);
 		let minted_at = MockNow::get();
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -1963,7 +1964,7 @@ fn force_burn_refunds_unused_weight() {
 		let (_, light_holder) = purse(0xCC);
 		// The mock allows at most 3 instance metadata entries; the heavy instance carries
 		// the worst case, the light one none, so a refunded burn must consume less.
-		let heavy = pallet_scarcity::Pallet::<Test>::do_mint(
+		let heavy = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -1975,7 +1976,7 @@ fn force_burn_refunds_unused_weight() {
 			],
 		)
 		.unwrap();
-		let light = pallet_scarcity::Pallet::<Test>::do_mint(
+		let light = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -2079,7 +2080,7 @@ fn self_transfer_and_metadata_bound_revert() {
 		let collection = setup_collection(&alice);
 		let item = setup_item(&alice, collection);
 		let (holder_address, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -2157,7 +2158,7 @@ fn occupying_a_purse_key_makes_a_zero_balance_holder_addressable() {
 		let target = collection_address(collection);
 
 		let read = |holder: &AccountId32| {
-			let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+			let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 				alice.clone(),
 				collection,
 				item,
@@ -2252,7 +2253,7 @@ fn assert_rejects_value(caller: &AccountId32, address: H160, input: Vec<u8>, met
 /// guard that short-circuits before argument handling can pass anything.
 fn all_collection_calls(
 	token: U256,
-	item: pallet_scarcity::ItemIndex,
+	item: indiv_pallet_scarcity::ItemIndex,
 	held: Address,
 	empty: Address,
 ) -> Vec<IScarcityCollectionCalls> {
@@ -2420,7 +2421,7 @@ fn every_method_rejects_attached_value() {
 		let collection = setup_collection(&alice);
 		let item = setup_item(&alice, collection);
 		let (holder_address, holder) = purse(0xDD);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -2464,7 +2465,7 @@ fn reserved_metadata_values_must_be_utf8() {
 		let item = setup_item(&alice, collection);
 		let (_, holder) = purse(0xCC);
 		let target = collection_address(collection);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -2563,7 +2564,7 @@ fn a_reserved_value_written_natively_reads_lossily() {
 		let item = setup_item(&alice, collection);
 		let (_, holder) = purse(0xCC);
 		let target = collection_address(collection);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -2576,7 +2577,7 @@ fn a_reserved_value_written_natively_reads_lossily() {
 			CollectionMetadata::<Test>::insert(
 				collection,
 				key(reserved),
-				pallet_scarcity::MetadataEntry { value: value(&[0xff]), deposit: 0u64 },
+				indiv_pallet_scarcity::MetadataEntry { value: value(&[0xff]), deposit: 0u64 },
 			);
 		}
 
@@ -2730,7 +2731,7 @@ fn instance_metadata_set_and_remove_via_precompile() {
 		let collection = setup_collection(&alice);
 		let item = setup_item(&alice, collection);
 		let (_, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -2798,10 +2799,11 @@ fn instance_metadata_set_and_remove_via_precompile() {
 		assert!(!read_present());
 
 		// An instance of another collection must not be mutable through this address.
-		let other = pallet_scarcity::Pallet::<Test>::do_create_collection(alice.clone()).unwrap();
+		let other =
+			indiv_pallet_scarcity::Pallet::<Test>::do_create_collection(alice.clone()).unwrap();
 		let other_item = setup_item(&alice, other);
 		let (_, other_holder) = purse(0xCC);
-		let foreign = pallet_scarcity::Pallet::<Test>::do_mint(
+		let foreign = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			other,
 			other_item,
@@ -2832,7 +2834,7 @@ fn metadata_mutators_require_collection_owner() {
 		let collection = setup_collection(&alice);
 		let item = setup_item(&alice, collection);
 		let (_, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -3011,7 +3013,7 @@ fn delete_item_and_collection_via_precompile() {
 		let collection = setup_collection(&alice);
 		let item = setup_item(&alice, collection);
 		let (_, holder) = purse(0xBB);
-		let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
@@ -3069,7 +3071,7 @@ fn delete_item_and_collection_via_precompile() {
 			"item definitions must be deleted first",
 		);
 		call_ok(&alice, target, delete_item);
-		assert!(pallet_scarcity::ItemDefs::<Test>::get(collection, item).is_none());
+		assert!(indiv_pallet_scarcity::ItemDefs::<Test>::get(collection, item).is_none());
 
 		call_reverted_with(
 			&alice,
@@ -3166,19 +3168,20 @@ fn collection_owner_deposit_reports_aggregate() {
 /// Every pallet error variant the precompile can reach must map to a catchable revert.
 ///
 /// The mapping in `revert_scarcity` is a runtime list, so the compiler cannot flag a variant
-/// added to `pallet-scarcity` later. This test walks the variants from the error type's own
+/// added to `indiv-pallet-scarcity` later. This test walks the variants from the error type's own
 /// metadata and fails on any that starts trapping instead of reverting.
 #[test]
 fn mapped_scarcity_errors_are_exhaustive() {
 	// The ABI covers the pallet's whole owner surface, so every error variant is reachable.
 	const UNREACHABLE: [&str; 0] = [];
 
-	let pallet_index = match DispatchError::from(pallet_scarcity::Error::<Test>::NoPermission) {
+	let pallet_index = match DispatchError::from(indiv_pallet_scarcity::Error::<Test>::NoPermission)
+	{
 		DispatchError::Module(module) => module.index,
 		other => panic!("pallet errors are module errors, got {other:?}"),
 	};
 	let variants =
-		match <pallet_scarcity::Error<Test> as scale_info::TypeInfo>::type_info().type_def {
+		match <indiv_pallet_scarcity::Error<Test> as scale_info::TypeInfo>::type_info().type_def {
 			scale_info::TypeDef::Variant(def) => def.variants,
 			other => panic!("pallet errors are a variant type, got {other:?}"),
 		};
@@ -3382,7 +3385,7 @@ fn native_operations_emit_no_evm_log() {
 		));
 		assert_no_contract_event();
 
-		assert_ok!(pallet_scarcity::Pallet::<Test>::do_transfer_by_holder(
+		assert_ok!(indiv_pallet_scarcity::Pallet::<Test>::do_transfer_by_holder(
 			&to,
 			instance,
 			holder.clone()
@@ -3996,7 +3999,7 @@ mod evm_fixture {
 			));
 			let item = setup_item(&alice, collection);
 			let (holder_address, holder) = purse(0xCC);
-			let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+			let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 				alice.clone(),
 				collection,
 				item,
@@ -4041,7 +4044,7 @@ mod evm_fixture {
 			// Minting registers the destination key with the address mapper, so ownerOf and
 			// balanceOf agree about it.
 			let holder = id_to_account(9);
-			let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+			let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 				alice.clone(),
 				collection,
 				item,
@@ -4093,7 +4096,7 @@ mod evm_fixture {
 			let collection = setup_collection(&alice);
 			let item = setup_item(&alice, collection);
 			let holder = id_to_account(9);
-			let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+			let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 				alice.clone(),
 				collection,
 				item,
@@ -4113,7 +4116,7 @@ mod evm_fixture {
 			));
 
 			System::assert_has_event(RuntimeEvent::Scarcity(
-				pallet_scarcity::Event::ForceTransferred {
+				indiv_pallet_scarcity::Event::ForceTransferred {
 					instance,
 					collection,
 					from: holder,
@@ -4153,7 +4156,7 @@ mod evm_fixture {
 			let collection = setup_collection(&alice);
 			let item = setup_item(&alice, collection);
 			let holder = id_to_account(9);
-			let instance = pallet_scarcity::Pallet::<Test>::do_mint(
+			let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 				alice.clone(),
 				collection,
 				item,
