@@ -449,6 +449,9 @@ impl WeightInfo for MockWeightInfo {
 	fn shuffles_base() -> Weight {
 		Weight::from_parts(15, 15)
 	}
+	fn shuffle_step_capture_randomness() -> Weight {
+		Weight::from_parts(10, 10)
+	}
 	fn shuffle_step_insert(_n: u32) -> Weight {
 		Weight::from_parts(10, 10)
 	}
@@ -706,6 +709,48 @@ impl indiv_support::traits::MomentRandomness<u32> for MockAirdropRandomness {
 			*r = Some((value, moment));
 		});
 	}
+}
+
+parameter_types! {
+	/// The moment [`MockShuffleRandomness`] reports as the present.
+	pub storage ShuffleRandomnessMoment: u32 = 10;
+	/// The value [`MockShuffleRandomness`] serves, with the moment it became determinable.
+	pub storage ShuffleRandomnessValue: Option<([u8; 32], u32)> = None;
+}
+
+/// Shuffle randomness source, standing in for the relay chain block randomness the runtime
+/// wires in. Independent from [`MockAirdropRandomness`] so a test can hold one still while
+/// driving the other.
+pub struct MockShuffleRandomness;
+impl indiv_support::traits::MomentRandomness<u32> for MockShuffleRandomness {
+	fn randomness() -> Option<([u8; 32], u32)> {
+		ShuffleRandomnessValue::get()
+	}
+
+	fn current_moment() -> u32 {
+		ShuffleRandomnessMoment::get()
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn set_randomness(randomness: [u8; 32], moment: u32) {
+		ShuffleRandomnessValue::set(&Some((randomness, moment)));
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn set_current_moment(moment: u32) {
+		ShuffleRandomnessMoment::set(&moment);
+	}
+}
+
+/// Set the shuffle randomness to `randomness`, determinable by everybody since `moment`.
+pub fn set_shuffle_randomness(randomness: [u8; 32], moment: u32) {
+	ShuffleRandomnessValue::set(&Some((randomness, moment)));
+}
+
+/// Set the shuffle randomness to a value whose moment is past the current one, so the shuffle
+/// capture step sees a fresh value immediately.
+pub fn set_fresh_shuffle_randomness() {
+	set_shuffle_randomness([24u8; 32], ShuffleRandomnessMoment::get() + 1);
 }
 
 /// Advance the mock airdrop randomness by one block, so a draw awaiting entropy sees a
@@ -1187,6 +1232,10 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	ext.register_extension(OffchainDbExt::new(offchain.clone()));
 	ext.register_extension(OffchainWorkerExt::new(offchain));
 	ext.register_extension(TransactionPoolExt::new(pool));
+	// Shuffle randomness fresher than any registration close watermark, so the shuffle capture
+	// step succeeds on its first attempt. Tests covering the waiting behavior override it with a
+	// stale value.
+	ext.execute_with(set_fresh_shuffle_randomness);
 	// 100k active members yields a personhood threshold of 21 and absence grace ratio (1, 6).
 	ext.execute_with(|| {
 		indiv_pallet_members::ActiveMembers::<Test>::insert(
@@ -1612,6 +1661,7 @@ impl indiv_pallet_game::Config for Test {
 	type AirdropAssetBalance = u128;
 	type Airdrop = Airdrop;
 	type AirdropSource = AirdropSource;
+	type Randomness = MockShuffleRandomness;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = BenchHelper;
 }
