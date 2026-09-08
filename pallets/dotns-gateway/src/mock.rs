@@ -69,7 +69,8 @@ parameter_types! {
 	pub const SelfParaId: u32 = 1000;
 	pub const MaxMissingRootsPerCollection: u32 = 255;
 	pub const MaxDeletedRingsPerCollection: u32 = 100;
-	pub const MaxGapScanPerBatch: u32 = 32;
+	pub const MaxGapScanPerCall: u32 = 32;
+	pub const GapScanCooldownSeconds: u64 = 60;
 	pub const PurgePageSize: u32 = 100;
 	pub const MaxCollections: u32 = 10;
 	pub const ReplayCooldownSeconds: u64 = 60;
@@ -375,7 +376,8 @@ impl indiv_pallet_members_subscriber::Config for Test {
 	type SelfParaId = SelfParaId;
 	type MaxMissingRootsPerCollection = MaxMissingRootsPerCollection;
 	type MaxDeletedRingsPerCollection = MaxDeletedRingsPerCollection;
-	type MaxGapScanPerBatch = MaxGapScanPerBatch;
+	type MaxGapScanPerCall = MaxGapScanPerCall;
+	type GapScanCooldownSeconds = GapScanCooldownSeconds;
 	type PurgePageSize = PurgePageSize;
 	type MaxUpdatesPerBatch = MaxUpdatesPerBatch;
 	type EnsureNotifierOrigin = MockEnsureNotifierOrigin;

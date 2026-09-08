@@ -73,7 +73,8 @@ parameter_types! {
 	pub const SelfParaId: u32 = 1000;
 	pub const MaxMissingRootsPerCollection: u32 = 255;
 	pub const MaxDeletedRingsPerCollection: u32 = 100;
-	pub const MaxGapScanPerBatch: u32 = 32;
+	pub const MaxGapScanPerCall: u32 = 32;
+	pub const GapScanCooldownSeconds: u64 = 60;
 	pub const PurgePageSize: u32 = 100;
 	pub const MaxCollections: u32 = 10;
 	pub const ReplayCooldownSeconds: u64 = 60;
@@ -203,7 +204,8 @@ impl crate::Config for Test {
 	type SelfParaId = SelfParaId;
 	type MaxMissingRootsPerCollection = MaxMissingRootsPerCollection;
 	type MaxDeletedRingsPerCollection = MaxDeletedRingsPerCollection;
-	type MaxGapScanPerBatch = MaxGapScanPerBatch;
+	type MaxGapScanPerCall = MaxGapScanPerCall;
+	type GapScanCooldownSeconds = GapScanCooldownSeconds;
 	type PurgePageSize = PurgePageSize;
 	type MaxUpdatesPerBatch = MaxUpdatesPerBatch;
 	type EnsureNotifierOrigin = MockEnsureNotifierOrigin;
@@ -394,6 +396,17 @@ pub fn drain_ocw_transactions() {
 /// Returns the number of pending transactions in the OCW pool.
 pub fn pending_ocw_tx_count() -> usize {
 	TRANSACTION_POOL.with_borrow(|pool| pool.read().transactions.len())
+}
+
+/// Calls of the transactions pending in the OCW pool.
+pub fn pending_ocw_calls() -> Vec<RuntimeCall> {
+	TRANSACTION_POOL.with_borrow(|pool| {
+		pool.read()
+			.transactions
+			.iter()
+			.map(|tx| Extrinsic::decode(&mut &tx[..]).unwrap().function)
+			.collect()
+	})
 }
 
 /// Advances the chain by one block, triggering the offchain worker.
