@@ -385,7 +385,7 @@ fn every_method_rejects_attached_value() {
 fn mapped_nft_claims_errors_are_exhaustive() {
 	// The ABI covers only `set_collection_minter`; the claim and tree-delivery errors cannot
 	// surface through it.
-	const UNREACHABLE: [&str; 7] = [
+	const UNREACHABLE: [&str; 8] = [
 		"UnknownAwardBlock",
 		"LeafIndexOutOfBounds",
 		"AlreadyClaimed",
@@ -393,6 +393,7 @@ fn mapped_nft_claims_errors_are_exhaustive() {
 		"CollectionNotRegistered",
 		"CollectionOwnerChanged",
 		"NoItems",
+		"TreeDeletionXcmFailed",
 	];
 
 	let pallet_index = match DispatchError::from(NftClaimsError::<Test>::NotCollectionOwner) {

@@ -33,7 +33,7 @@ use frame_system::{
 use indiv_support::{
 	credit_trees::{
 		credit_leaf, AwardBlock, CreditProofNode, CreditTreeDelivery, NftClaimCredit,
-		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
+		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence, EXPIRY_BUCKET_SECONDS,
 	},
 	identity::AccountOrPerson,
 	traits::Alias,
@@ -158,8 +158,6 @@ impl EnsureOriginWithArg<RuntimeOrigin, ClaimantKind> for MockEnsureClaimant {
 parameter_types! {
 	pub const MaxTreesPerMessage: u32 = 4;
 	pub const MaxProofNodes: u32 = 16;
-	/// Wider than a byte, so the tests cover a bitmap of more than one byte.
-	pub storage MaxCreditsPerAwardBlock: u32 = 12;
 	/// The instances the mock minter has handed out, as `(collection, item, owner)` in mint order.
 	pub storage MintedInstances: Vec<(CollectionId, ItemIndex, u64)> = Vec::new();
 	/// The collections the mock backend holds, as `(collection, owner, next_item_index)`.
@@ -183,9 +181,10 @@ parameter_types! {
 	pub storage StatefulSelectorItem: ItemIndex = 0;
 	/// Whether the mock selector accepts a registered contract address as deployed code.
 	pub storage ContractValid: bool = true;
-	pub storage TreeTtl: u64 = 2 * 24 * 60 * 60;
+	/// A whole number of buckets, so a test states deadlines in whole days.
+	pub storage TreeTtl: u64 = 2 * EXPIRY_BUCKET_SECONDS as u64;
 	pub storage MaxQueuedTreeDeletions: u32 = 4;
-	/// Small, so a few trees outlast one sweep. It bounds the sweep as well as the message.
+	/// Small, so a test fills a bucket with a few trees. It bounds the sweep as well as the message.
 	pub storage MaxTreeDeletionsPerMessage: u32 = 2;
 	pub GameChainLocation: Location = Location::new(1, [Parachain(1000)]);
 	pub const GameChainPalletIndex: u8 = 42;
@@ -211,10 +210,10 @@ pub fn set_now(secs: u64) {
 	MOCK_UNIX_TIME.with_borrow_mut(|now| *now = Duration::from_secs(secs));
 }
 
-/// The first second at which a tree committed to at `timestamp` is past its deadline. A sweep that
-/// removes it needs the clock to read this.
-pub fn due_at(timestamp: u32) -> u64 {
-	indiv_support::credit_trees::expiry_deadline(timestamp, TreeTtl::get())
+/// The first second at which every tree of `bucket` is past its deadline. A sweep of that bucket
+/// needs the clock to read this.
+pub fn bucket_due_at(bucket: u32) -> u64 {
+	indiv_support::credit_trees::bucket_deadline(bucket, TreeTtl::get())
 }
 
 /// Captures the XCM messages the pallet sends to the game chain. A test makes it fail to drive the
@@ -452,7 +451,6 @@ impl pallet_nft_claims::Config for Test {
 	type Nfts = MockNfts;
 	type CollectionSelector = MockSelector;
 	type MaxProofNodes = MaxProofNodes;
-	type MaxCreditsPerAwardBlock = MaxCreditsPerAwardBlock;
 	type UnixTime = MockTime;
 	type TreeTtl = TreeTtl;
 	type MaxQueuedTreeDeletions = MaxQueuedTreeDeletions;
@@ -543,16 +541,6 @@ pub fn submitted_calls() -> Vec<RuntimeCall> {
 			})
 			.collect()
 	})
-}
-
-/// Whether the leaf at `leaf_index` of `block`'s tree is recorded as claimed.
-pub fn leaf_is_claimed(block: AwardBlock, leaf_index: u32) -> bool {
-	NftClaims::leaf_is_claimed(&crate::ClaimedLeaves::<Test>::get(block), leaf_index)
-}
-
-/// How many of `block`'s leaves are recorded as claimed.
-pub fn claimed_leaves(block: AwardBlock) -> u32 {
-	NftClaims::claimed_leaf_count(&crate::ClaimedLeaves::<Test>::get(block))
 }
 
 pub fn game_chain_origin() -> RuntimeOrigin {

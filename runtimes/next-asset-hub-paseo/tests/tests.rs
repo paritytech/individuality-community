@@ -1304,9 +1304,8 @@ mod pgas_fees {
 
 				assert_ok!(Executive::apply_extrinsic(xt).unwrap());
 
-				assert!(indiv_pallet_nft_claims::Pallet::<Runtime>::leaf_is_claimed(
-					&indiv_pallet_nft_claims::ClaimedLeaves::<Runtime>::get(1u32),
-					0
+				assert!(indiv_pallet_nft_claims::ClaimedCredits::<Runtime>::contains_key(
+					1u32, leaf
 				));
 				assert!(pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&mint_to));
 
@@ -1753,11 +1752,14 @@ mod credit_tree_removal {
 	use super::*;
 	use cumulus_primitives_core::XcmpMessageSource;
 	use frame_support::{pallet_prelude::TransactionSource, BoundedVec};
-	use indiv_pallet_nft_claims::{ClaimantKind, CreditTrees, PendingTreeDeletions, TreeExpiries};
+	use indiv_pallet_nft_claims::{
+		ClaimantKind, ClaimedCredits, CreditTrees, NextExpiryBucket, PendingTreeDeletions,
+		TreeExpiries,
+	};
 	use indiv_support::{
 		credit_trees::{
-			credit_leaf, expiry_deadline, oldest_expiry, AwardBlock, CreditProofNode,
-			CreditTreeDelivery, ExpiryTimestamp, NftClaimCreditTree,
+			bucket_deadline, credit_leaf, expiry_bucket, AwardBlock, CreditProofNode,
+			CreditTreeDelivery, NftClaimCreditTree,
 		},
 		identity::AccountOrPerson,
 	};
@@ -1772,9 +1774,14 @@ mod credit_tree_removal {
 	/// `due_at` derives the deadline from it.
 	const TIMESTAMP: u32 = 1_000_000;
 
-	/// The first second at which the delivered tree is past its deadline.
+	/// The bucket the delivered tree is swept in.
+	fn bucket() -> u32 {
+		expiry_bucket(TIMESTAMP)
+	}
+
+	/// The first second at which every tree of the delivered tree's bucket is past its deadline.
 	fn due_at() -> u64 {
-		expiry_deadline(TIMESTAMP, CreditTreeTtl::get())
+		bucket_deadline(bucket(), CreditTreeTtl::get())
 	}
 
 	fn game_chain_origin() -> RuntimeOrigin {
@@ -1883,7 +1890,8 @@ mod credit_tree_removal {
 			let claimant = AccountId::from([1u8; 32]);
 			let credit = [7u8; 32];
 			deliver_tree(&AccountOrPerson::Account(claimant.clone()), credit);
-			assert!(TreeExpiries::<Runtime>::contains_key(ExpiryTimestamp::from(TIMESTAMP), BLOCK));
+			assert!(TreeExpiries::<Runtime>::contains_key(bucket(), BLOCK));
+			let leaf = credit_leaf(&AccountOrPerson::Account(claimant.clone()), &credit);
 
 			assert_ok!(NftClaims::claim(
 				RuntimeOrigin::signed(claimant),
@@ -1901,12 +1909,11 @@ mod credit_tree_removal {
 				"the fully claimed tree is removed"
 			);
 			assert_eq!(PendingTreeDeletions::<Runtime>::get().to_vec(), vec![BLOCK]);
-			// The spent leaf and the expiry entry that gets it removed outlive the tree.
-			assert!(indiv_pallet_nft_claims::Pallet::<Runtime>::leaf_is_claimed(
-				&indiv_pallet_nft_claims::ClaimedLeaves::<Runtime>::get(BLOCK),
-				0
-			));
-			assert!(TreeExpiries::<Runtime>::contains_key(ExpiryTimestamp::from(TIMESTAMP), BLOCK));
+			// The spent leaf outlives the tree, so a replay that puts it back mints nothing.
+			assert!(ClaimedCredits::<Runtime>::contains_key(BLOCK, leaf));
+			// The removal takes the expiry entry with the tree, so no sweep reaches a block whose
+			// deletion is already queued.
+			assert!(!TreeExpiries::<Runtime>::contains_key(bucket(), BLOCK));
 		});
 	}
 
@@ -1915,29 +1922,30 @@ mod credit_tree_removal {
 		ext().execute_with(|| {
 			let claimant = AccountId::from([1u8; 32]);
 			deliver_tree(&AccountOrPerson::Account(claimant), [7u8; 32]);
-			assert_eq!(oldest_expiry::<TreeExpiries<Runtime>, AwardBlock>(), Some(TIMESTAMP));
+			assert_eq!(NextExpiryBucket::<Runtime>::get(), Some(bucket()));
 
-			// One second before the tree falls due, the pallet's own check rejects the sweep.
+			// One second before the bucket falls due, the pallet's own check rejects the sweep.
 			set_now(due_at() - 1);
-			assert!(NftClaims::authorize_sweep_expired_trees(TransactionSource::Local, &TIMESTAMP)
+			assert!(NftClaims::authorize_sweep_expired_trees(TransactionSource::Local, &bucket())
 				.is_err());
 
 			set_now(due_at());
-			assert!(NftClaims::authorize_sweep_expired_trees(TransactionSource::Local, &TIMESTAMP)
+			assert!(NftClaims::authorize_sweep_expired_trees(TransactionSource::Local, &bucket())
 				.is_ok());
 			assert_ok!(NftClaims::sweep_expired_trees(
 				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
-				TIMESTAMP,
+				bucket(),
 				1
 			));
 
 			assert!(!CreditTrees::<Runtime>::contains_key(BLOCK));
 			assert_eq!(PendingTreeDeletions::<Runtime>::get().to_vec(), vec![BLOCK]);
-			assert_eq!(oldest_expiry::<TreeExpiries<Runtime>, AwardBlock>(), None);
+			assert_eq!(TreeExpiries::<Runtime>::iter_prefix(bucket()).count(), 0);
 			assert!(System::events().iter().any(|record| matches!(
 				record.event,
 				RuntimeEvent::NftClaims(indiv_pallet_nft_claims::Event::CreditTreesExpired {
 					count,
+					..
 				}) if count == 1
 			)));
 		});
@@ -1952,7 +1960,7 @@ mod credit_tree_removal {
 			deliver_tree(&AccountOrPerson::Account(claimant), [7u8; 32]);
 
 			assert!(!CreditTrees::<Runtime>::contains_key(BLOCK));
-			assert_eq!(oldest_expiry::<TreeExpiries<Runtime>, AwardBlock>(), None);
+			assert_eq!(NextExpiryBucket::<Runtime>::get(), None);
 		});
 	}
 
@@ -1969,14 +1977,12 @@ mod credit_tree_removal {
 			set_now(due_at());
 			assert_ok!(NftClaims::sweep_expired_trees(
 				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
-				TIMESTAMP,
+				bucket(),
 				1
 			));
 
-			// The sweep queued the one tree delivered, so `BLOCK` is the front it left.
 			assert_ok!(NftClaims::send_tree_deletions(
 				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
-				BLOCK,
 				1
 			));
 			assert!(PendingTreeDeletions::<Runtime>::get().is_empty());

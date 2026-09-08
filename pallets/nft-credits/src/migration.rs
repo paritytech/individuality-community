@@ -64,11 +64,11 @@ pub mod v1 {
 		#[cfg(feature = "try-runtime")]
 		fn post_upgrade(_state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
 			use crate::RootExpiries;
-			use indiv_support::credit_trees::ExpiryTimestamp;
+			use indiv_support::credit_trees::expiry_bucket;
 
 			for (block, tree) in NftClaimCreditRoots::<T>::iter() {
 				ensure!(
-					RootExpiries::<T>::contains_key(ExpiryTimestamp::from(tree.timestamp), block),
+					RootExpiries::<T>::contains_key(expiry_bucket(tree.timestamp), block),
 					"a root has no expiry entry"
 				);
 			}
