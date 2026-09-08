@@ -53,7 +53,7 @@ Core pallets on the People chain include:
 On the companion Asset Hub:
 
 - `members-subscriber` — receives and stores ring roots from the People chain.
-- `nft-claims` — holds the game's NFT claim credit Merkle roots, received from the game pallet over XCM, and is where a claimant mints their NFT against one.
+- `nft-claims` — holds the game's NFT claim credit Merkle roots, received from the game pallet over XCM, and is where a claimant mints their NFT against one. A root is removed once every credit under it has been minted or its claim deadline has passed, and the game chain is told to drop its own copy.
 - `dotns-gateway` — gateway to dotNS smart contracts to include username/domain registration in personhood flow.
 
 The workspace contains further pallets — `alias-accounts`, `chunks-manager`, `honour`, `mob-rule`,
