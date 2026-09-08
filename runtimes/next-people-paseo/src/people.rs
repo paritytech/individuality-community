@@ -788,11 +788,11 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// already given up on and has a month of slack for a backlog. 64 per block clears a day in
 	// about 20 minutes.
 	type MaxRootsPerSweep = ConstU32<64>;
-	// Two orders of magnitude below `MaxRootsPerSweep`, though both sweep one bucket per call: a
+	// Two orders of magnitude below `MaxRootsPerSweep`, though both sweeps work the same way: a
 	// root is 56 bytes where a block's awards are read at `MaxCreditsPerBlock` of them, about
 	// 78 KB, so 32 removals already spend a third of the `Normal` proof budget. The pallet's
 	// `integrity_test` is what holds this to the block. Throughput is still ample: one call per
-	// block clears a day of award blocks in well under an hour even were every block to award.
+	// block clears a day of award blocks in about 45 minutes even were every block to award.
 	type MaxAwardBlocksPerSweep = ConstU32<32>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;

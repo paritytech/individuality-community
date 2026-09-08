@@ -47,7 +47,7 @@
 //!
 //! The NFT itself is a `pallet-scarcity` instance, minted with no storage deposit: the credit is
 //! what bounds the state a claim creates, since the game chain awards a credit once and
-//! [`ClaimedCredits`] spends it once. Scarcity purse keys hold one NFT each and take no
+//! [`ClaimedLeaves`] spends it once. Scarcity purse keys hold one NFT each and take no
 //! destination consent, so the call names the key to mint to rather than minting to the
 //! claimant's own account.
 //!
@@ -92,26 +92,32 @@
 //!
 //! ## Removing trees
 //!
-//! Two paths remove a tree. Both tell the game chain to drop its own copy, so neither chain keeps
-//! one entry per non-empty block for every game ever played.
+//! Two paths remove a tree. Both tell the game chain to drop its own copy, so the trees each chain
+//! holds will be able to process all open claims.
 //!
-//! - **Fully claimed.** [`ClaimedCounts`] reaches the tree's `leaf_count`. Every credit the tree
-//!   commits to has been minted, so no proof can be built against it again, and the claim that
-//!   completes it removes it.
-//! - **Expiry.** A tree that is not fully claimed outlives [`Config::TreeTtl`], counted from the
-//!   `timestamp` the game chain committed to. The TTL is therefore a claim deadline, and
-//!   [`Event::CreditTreesExpired`] reports that a bucket's unclaimed credits are unmintable from
-//!   then on.
+//! - **Fully claimed.** The set bits of [`ClaimedLeaves`] reach the tree's `leaf_count`. Every
+//!   credit the tree commits to has been minted, so no proof can be built against it again, and the
+//!   claim that completes it removes it.
+//! - **Expiry.** A tree that is not fully claimed outlives [`Config::TreeTtl`]. The TTL runs from
+//!   the award block's own wall-clock time, which the game chain records in the tree, not from the
+//!   time the tree arrived here. [`Pallet::claim`] does not check the TTL, so the sweep that
+//!   removes the tree is what ends claimability, and [`Event::CreditTreesExpired`] reports that
+//!   those unclaimed credits are unmintable from then on.
 //!
 //! [`Pallet::sweep_expired_trees`] performs the expiry, and this pallet's offchain worker submits
-//! it. [`TreeExpiries`] groups the trees by the bucket of wall-clock time their deadline falls in,
-//! so a sweep reads only the trees that are due. A delivery whose tree is already past its deadline
-//! is not stored at all: the game chain holds its root for longer, and anyone can call
+//! it. [`TreeExpiries`] files each tree under the timestamp its deadline runs from and iterates in
+//! that order, so a sweep reads only the trees that are due. A delivery whose tree is already past
+//! its deadline is not stored at all: the game chain holds its root for longer, and anyone can call
 //! `replay_credit_trees` there to deliver an expired tree again.
 //!
-//! [`ClaimedCredits`] outlives the tree it belongs to. A replay on the game chain can bring a
+//! [`ClaimedLeaves`] outlives the tree it belongs to. A replay on the game chain can bring a
 //! removed tree back, because anyone can call it and the root outlives this chain's copy. The spent
 //! leaves stop that tree from minting its credits a second time.
+//!
+//! One bitmap covers a whole award block, so the sweep drops it with a single removal. The expiry
+//! entry of a fully claimed tree therefore stays behind after the tree goes, and the sweep of that
+//! entry is what removes the bitmap. That is also the point where a replay stops mattering: a
+//! delivery past the deadline is refused, so nothing can spend those leaves again.
 //!
 //! The deletions owed to the game chain queue in [`PendingTreeDeletions`] and travel in a
 //! [`Pallet::send_tree_deletions`] message, which the offchain worker submits as well. A deletion
@@ -146,10 +152,9 @@ use frame_support::{
 use frame_system::offchain::CreateAuthorizedTransaction;
 use indiv_support::{
 	credit_trees::{
-		authorize_bucket_sweep, bucket_deadline, credit_leaf, drain_expiry_bucket, expiry_bucket,
-		note_expiry_bucket, AwardBlock, BucketState, BucketSweepTx, CreditProofNode, ExpiryBucket,
-		NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
-		EXPIRY_BUCKET_SECONDS,
+		authorize_expiry_sweep, credit_leaf, drain_due_expiries, expiry_deadline, oldest_expiry,
+		AwardBlock, CreditProofNode, ExpirySweepTx, ExpiryTimestamp, NftClaimCredit,
+		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
 	},
 	identity::AccountOrPerson,
 	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
@@ -162,7 +167,7 @@ use sp_runtime::{traits::BlakeTwo256, DispatchError, SaturatedConversion};
 use xcm::{
 	latest::{
 		Instruction::{Transact, UnpaidExecution},
-		Location, OriginKind, SendXcm, WeightLimit, Xcm,
+		Location, OriginKind, SendError, SendXcm, WeightLimit, Xcm,
 	},
 	prelude::send_xcm,
 };
@@ -173,7 +178,6 @@ use xcm::{
 /// The real figure comes from the relay chain's channel configuration, which is unknown at build
 /// time. Every HRMP channel between system parachains sits well above this, so a message that
 /// passes the check fits the channel.
-#[cfg(feature = "std")]
 const MIN_CHANNEL_MESSAGE_SIZE: usize = 4096;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-claims";
@@ -288,21 +292,20 @@ pub mod pallet {
 		/// How long, in seconds after the `timestamp` its tree commits to, a credit stays
 		/// claimable.
 		///
-		/// This is a claim deadline. The sweep removes the tree once it passes, and the credits
-		/// nobody minted are unmintable from then on. The game chain holds its own copy for
-		/// strictly longer, so its deletion only backstops a lost message from this chain. Set it
-		/// to at least one expiry bucket, otherwise a sweep applies a later deadline than the one
-		/// it names.
+		/// [`Pallet::claim`] does not check this, so a claim succeeds until a sweep removes the
+		/// tree, which happens in the first block past the deadline that includes a sweep.
 		#[pallet::constant]
 		type TreeTtl: Get<u64>;
 
 		/// The maximum number of award blocks that can wait for a deletion message in
 		/// [`PendingTreeDeletions`].
 		///
-		/// The offchain worker drains the queue every block, so this only covers an outage. A
-		/// deletion that does not fit is dropped, because the game chain's TTL, not this queue,
-		/// removes its copy. Set it at least as high as [`Config::MaxTreeDeletionsPerMessage`],
-		/// otherwise one sweep drops deletions of its own.
+		/// One message takes [`Config::MaxTreeDeletionsPerMessage`] blocks off the front, and the
+		/// offchain worker gets one message into the pool per block, so the queue holds what
+		/// claims and sweeps add above that rate. A deletion that does not fit is dropped,
+		/// because the game chain's TTL, not this queue, removes its copy. Set it at least as high
+		/// as [`Config::MaxTreeDeletionsPerMessage`], otherwise one sweep drops deletions of its
+		/// own.
 		#[pallet::constant]
 		type MaxQueuedTreeDeletions: Get<u32>;
 
@@ -311,7 +314,7 @@ pub mod pallet {
 		///
 		/// One bound serves both, so a sweep queues exactly one message's worth and those deletions
 		/// go out in the block after it. It also bounds the sweep's weight against the block, and
-		/// the offchain worker submits one sweep per block until the due buckets hold nothing.
+		/// the offchain worker submits one sweep per block until nothing is due.
 		/// The game pallet's own bound must be at least this large, otherwise the message fails
 		/// to decode there and its deletions never arrive.
 		#[pallet::constant]
@@ -371,6 +374,16 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxProofNodes: Get<u32>;
 
+		/// The most credits one award block commits to, which is the game chain's
+		/// `MaxCreditsPerBlock`.
+		///
+		/// [`ClaimedLeaves`] holds one bit per leaf, so this sizes that bitmap. A tree committing
+		/// to more leaves is not stored, because the leaves past the bitmap could be claimed
+		/// twice. Set it to the game chain's own bound, which a lower value makes large trees
+		/// undeliverable.
+		#[pallet::constant]
+		type MaxCreditsPerAwardBlock: Get<u32>;
+
 		/// Setup the claim benchmark needs from the NFT backend.
 		#[cfg(feature = "runtime-benchmarks")]
 		type BenchmarkHelper: BenchmarkHelper<Self::AccountId>;
@@ -397,25 +410,24 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type NextExpectedSequence<T: Config> = StorageValue<_, TreeSequence, ValueQuery>;
 
-	/// The leaves of an award block's tree that have been claimed.
-	/// A leaf commits to one claimant holding one credit, so it identifies the claim on its own.
-	/// Entries are kept for good: dropping one would let that credit mint a second NFT.
-	#[pallet::storage]
-	pub type ClaimedCredits<T: Config> = StorageDoubleMap<
-		_,
-		Twox64Concat,
-		AwardBlock,
-		Identity,
-		NftClaimCreditLeaf,
-		(),
-		OptionQuery,
-	>;
+	/// The byte length of one award block's [`ClaimedLeaves`] bitmap, one bit per leaf.
+	pub struct ClaimedLeafBytes<T>(core::marker::PhantomData<T>);
 
-	/// How many of an award block's leaves have been claimed.
-	/// Against the tree's `leaf_count`, this tells whether anything is left to claim.
-	/// Kept once the tree is gone, for the same reason as [`ClaimedCredits`].
+	impl<T: Config> Get<u32> for ClaimedLeafBytes<T> {
+		fn get() -> u32 {
+			T::MaxCreditsPerAwardBlock::get().div_ceil(8)
+		}
+	}
+
+	/// Which of an award block's leaves have been claimed, bit `leaf_index` per leaf, least
+	/// significant bit first.
+	///
+	/// A proof binds a leaf to its index, so the index names the claim as the leaf itself does.
+	/// The bitmap outlives the tree, because a replay on the game chain can deliver the tree again
+	/// until its deadline; the sweep of the block's expiry entry is what removes it.
 	#[pallet::storage]
-	pub type ClaimedCounts<T: Config> = StorageMap<_, Twox64Concat, AwardBlock, u32, ValueQuery>;
+	pub type ClaimedLeaves<T: Config> =
+		StorageMap<_, Twox64Concat, AwardBlock, BoundedVec<u8, ClaimedLeafBytes<T>>, ValueQuery>;
 
 	/// The collections whose owners accept claims, each bound to the registering owner and the
 	/// [`ItemSelection`] deciding the item. A collection with no entry cannot be claimed into.
@@ -423,25 +435,15 @@ pub mod pallet {
 	pub type CollectionMinters<T: Config> =
 		StorageMap<_, Twox64Concat, CollectionId, CollectionMinter<T::AccountId>, OptionQuery>;
 
-	/// The award blocks whose trees fall due in one bucket of wall-clock time.
+	/// Every award block a sweep still has to reach, filed under the timestamp its tree commits to.
 	///
-	/// A tree's bucket is `expiry_bucket(tree.timestamp)`. This orders the trees by deadline, which
-	/// [`CreditTrees`] does not. A bucket whose last timestamp is more than [`Config::TreeTtl`] old
-	/// holds expired trees only, so a sweep names them directly instead of reading every tree to
-	/// find the few that are due. Both removal paths remove a tree's entry with the tree.
+	/// The key is hashed with `Identity` and encoded big-endian, so the map iterates from the
+	/// oldest deadline to the newest, which [`CreditTrees`] does not. A sweep takes the trees that
+	/// are due and stops at the first that is not. Only a sweep removes an entry. A fully claimed
+	/// tree leaves its entry behind, and the sweep of that entry removes its bitmap.
 	#[pallet::storage]
 	pub type TreeExpiries<T: Config> =
-		StorageDoubleMap<_, Twox64Concat, ExpiryBucket, Twox64Concat, AwardBlock, (), OptionQuery>;
-
-	/// The oldest bucket of [`TreeExpiries`] that has not been swept.
-	///
-	/// `None` until the first tree is stored. A sweep would otherwise start at the UNIX epoch and
-	/// walk one bucket per call to reach the present. A tree that arrives in an earlier bucket
-	/// than any held so far lowers it, which an out-of-order delivery does. Such a tree cannot
-	/// belong to a bucket already swept, because that bucket was due in full and this chain
-	/// rejects a tree past its deadline.
-	#[pallet::storage]
-	pub type NextExpiryBucket<T: Config> = StorageValue<_, ExpiryBucket, OptionQuery>;
+		StorageDoubleMap<_, Identity, ExpiryTimestamp, Twox64Concat, AwardBlock, (), OptionQuery>;
 
 	/// The award blocks whose deletion the game chain has not been told about yet, in the order
 	/// this chain removed them.
@@ -484,13 +486,12 @@ pub mod pallet {
 		/// `collection`'s owner registered it for claims with `selection`, or withdrew it with
 		/// `None`.
 		CollectionMinterSet { collection: CollectionId, selection: Option<ItemSelection> },
-		/// `count` of `bucket`'s trees outlived [`Config::TreeTtl`], and this chain removed them
-		/// with credits left unclaimed. Nothing can mint those credits again, on this chain or
-		/// any other.
+		/// `count` trees outlived [`Config::TreeTtl`], and this chain removed them with credits
+		/// left unclaimed. Nothing can mint those credits again, on this chain or any other.
 		///
 		/// The blocks are not named here. The same trees travel in a deletion message, and the
 		/// [`Event::TreeDeletionsSent`] carrying them names every one.
-		CreditTreesExpired { bucket: ExpiryBucket, count: u32 },
+		CreditTreesExpired { count: u32 },
 		/// A tree arrived for `block` past its deadline, so this chain did not store it. Its
 		/// credits were already unmintable when the delivery arrived.
 		CreditTreeStale { block: AwardBlock },
@@ -499,12 +500,14 @@ pub mod pallet {
 		/// Delivery of the deletions to the game chain failed. The blocks stay queued, and the
 		/// next offchain worker cycle retries them.
 		TreeDeletionSendFailed,
-		/// [`PendingTreeDeletions`] is full, so this chain dropped `block`'s deletion. Delivery
-		/// has failed for [`Config::MaxQueuedTreeDeletions`] trees. The game chain removes its
-		/// own copy when its TTL runs out.
-		TreeDeletionDropped { block: AwardBlock },
-		/// The sweep emptied `bucket`. The next sweep looks at the bucket after it.
-		ExpiryBucketSwept { bucket: ExpiryBucket },
+		/// [`PendingTreeDeletions`] is full, so this chain dropped the deletions of `blocks`.
+		/// Delivery has failed for [`Config::MaxQueuedTreeDeletions`] trees. The game chain
+		/// removes its own copies when its TTL runs out.
+		TreeDeletionsDropped { blocks: BoundedVec<AwardBlock, T::MaxTreeDeletionsPerMessage> },
+		/// A tree arrived for `block` committing to more leaves than
+		/// [`Config::MaxCreditsPerAwardBlock`], so this chain did not store it. None of its
+		/// credits can be claimed here until that bound covers the game chain's own.
+		CreditTreeOversized { block: AwardBlock },
 	}
 
 	#[pallet::error]
@@ -532,8 +535,6 @@ pub mod pallet {
 		CollectionOwnerChanged,
 		/// The collection has no item definitions for [`ItemSelection::Random`] to draw from.
 		NoItems,
-		/// Sending the tree deletions to the game chain over XCM failed.
-		TreeDeletionXcmFailed,
 	}
 
 	/// Why an offchain worker's submission was rejected, reported to the caller as
@@ -541,7 +542,7 @@ pub mod pallet {
 	pub enum AuthorizeInvalidity {
 		/// Transaction source is not local or in block.
 		TransactionNotLocal = 210,
-		/// No tree has ever been stored, so there is no bucket to sweep.
+		/// No tree is filed for expiry, so there is nothing to sweep.
 		NothingToSweep = 211,
 		/// No tree deletion is waiting to be sent to the game chain.
 		NoQueuedTreeDeletions = 212,
@@ -592,11 +593,26 @@ pub mod pallet {
 					continue;
 				}
 
+				if update.tree.leaf_count > T::MaxCreditsPerAwardBlock::get() {
+					// `ClaimedLeaves` holds one bit per leaf up to this bound, so the leaves past
+					// it could never be spent and would mint again and again. The bound is the
+					// game chain's own, so a tree over it means the two runtimes disagree.
+					log::error!(
+						target: LOG_TARGET,
+						"Oversized credit tree for block {}: {} leaves against a bound of {}",
+						update.block,
+						update.tree.leaf_count,
+						T::MaxCreditsPerAwardBlock::get(),
+					);
+					Self::deposit_event(Event::CreditTreeOversized { block: update.block });
+					continue;
+				}
+
 				// Drop a tree past its deadline instead of storing it for a later sweep. The game
 				// chain holds its root for longer than this chain holds the tree, and anyone
 				// can call `replay_credit_trees` there, so storing it makes its credits
 				// mintable again until the sweep reaches them.
-				if Self::has_expired(update.tree.timestamp, now) {
+				if Self::tree_has_expired(update.tree.timestamp, now) {
 					Self::deposit_event(Event::CreditTreeStale { block: update.block });
 					continue;
 				}
@@ -617,7 +633,7 @@ pub mod pallet {
 					}
 				} else {
 					CreditTrees::<T>::insert(update.block, update.tree);
-					Self::note_expiry(update.block, update.tree.timestamp);
+					Self::note_tree_expiry(update.block, update.tree.timestamp);
 					stored = stored.saturating_add(1);
 				}
 			}
@@ -658,9 +674,9 @@ pub mod pallet {
 		/// The claim that spends the tree's last credit also removes the tree and queues its
 		/// deletion for the game chain, and the call is charged for that. The claims that came
 		/// before decide which claim that is, not the call's arguments, so a claim that leaves
-		/// credits behind is refunded down to [`WeightInfo::claim`]. The charge also reserves
-		/// [`CollectionSelector::max_weight`] whatever the collection's selection is, refunded down
-		/// to what the selection consumed, including on the error path.
+		/// credits behind is refunded down to a plain claim of the kind the call names. The charge
+		/// also reserves [`CollectionSelector::max_weight`] whatever the collection's selection is,
+		/// refunded down to what the selection consumed, including on the error path.
 		#[pallet::call_index(1)]
 		// Resolving a person claimant reads the signer's alias binding, which an account
 		// claimant does not, so the kind the call names picks the weight.
@@ -707,7 +723,7 @@ pub mod pallet {
 
 			let leaf = credit_leaf(&claimant, &credit);
 			ensure!(
-				!ClaimedCredits::<T>::contains_key(block, leaf),
+				!Self::leaf_is_claimed(&ClaimedLeaves::<T>::get(block), leaf_index),
 				Error::<T>::AlreadyClaimed.with_weight(base)
 			);
 
@@ -728,7 +744,8 @@ pub mod pallet {
 			// Spent before the selection so that a minter contract reentering with the same
 			// credit fails `AlreadyClaimed`. A failure anywhere below unwinds the whole
 			// dispatch, the bit included.
-			ClaimedCredits::<T>::insert(block, leaf, ());
+			Self::spend_leaf(block, leaf_index, tree.leaf_count)
+				.map_err(|()| Error::<T>::LeafIndexOutOfBounds.with_weight(base))?;
 
 			let selection = Self::select_item(collection, credit).map_err(|error| {
 				let error = error.into_claim_error::<T>();
@@ -742,10 +759,7 @@ pub mod pallet {
 			// Counted after the selection: a contract may reenter with another credit of the
 			// same block, and counting from a snapshot taken before it would drop that claim's
 			// bit.
-			let claimed = ClaimedCounts::<T>::mutate(block, |claimed| {
-				*claimed = claimed.saturating_add(1);
-				*claimed
-			});
+			let claimed = Self::claimed_leaf_count(&ClaimedLeaves::<T>::get(block));
 
 			Self::deposit_event(Event::CreditClaimed {
 				block,
@@ -770,7 +784,7 @@ pub mod pallet {
 			// game chain to drop its root. The spent leaves stay, because a replay there can
 			// deliver the tree again before the deletion arrives, and only those leaves keep its
 			// credits spent.
-			Self::remove_tree(block, tree.timestamp);
+			Self::remove_tree(block);
 			Self::deposit_event(Event::TreeFullyClaimed { block });
 
 			Ok(Some(
@@ -824,32 +838,32 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Removes the trees of the oldest bucket whose deadline has passed and queues their
-		/// deletion for the game chain.
+		/// Removes the trees whose deadline has passed, oldest first, and queues their deletion
+		/// for the game chain.
 		///
 		/// This pallet's offchain worker submits this authorized call. It is accepted from a local
 		/// or in-block source only, so no external submission reaches it.
 		///
-		/// `bucket` must be the bucket the sweep is up to, which makes a retry that raced a
-		/// successful sweep stale instead of a second pass. One call removes at most
-		/// [`Config::MaxTreeDeletionsPerMessage`] trees, and only a call that comes up short of
-		/// that moves the sweep to the next bucket, so a fuller bucket takes several blocks.
+		/// `oldest` must be the timestamp [`TreeExpiries`] holds its oldest entry under, which
+		/// makes a retry that raced a successful sweep stale instead of a second pass. One call
+		/// removes at most [`Config::MaxTreeDeletionsPerMessage`] trees, so clearing more trees
+		/// than that takes several blocks.
 		#[pallet::call_index(3)]
-		#[pallet::authorize(|source, bucket, _discriminator| {
-			Self::authorize_sweep_expired_trees(source, bucket)
+		#[pallet::authorize(|source, oldest, _discriminator| {
+			Self::authorize_sweep_expired_trees(source, oldest)
 		})]
 		#[pallet::weight(T::WeightInfo::sweep_expired_trees(T::MaxTreeDeletionsPerMessage::get()))]
 		#[pallet::weight_of_authorize(T::WeightInfo::authorize_sweep_expired_trees())]
 		pub fn sweep_expired_trees(
 			origin: OriginFor<T>,
-			bucket: ExpiryBucket,
-			// Per-window discriminator, which gives a stalled retry a fresh transaction hash once
-			// the window changes. See `indiv_support::offchain`.
+			_oldest: u32,
+			// The submitting block, which gives each block's sweep a transaction hash of its own.
+			// See `Pallet::submit_expiry_sweep`.
 			_discriminator: BlockNumberFor<T>,
 		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
 
-			Ok(Self::do_sweep_expired_trees(bucket))
+			Ok(Self::do_sweep_expired_trees())
 		}
 
 		/// Tells the game chain about the queued tree deletions that fit one XCM message.
@@ -857,17 +871,20 @@ pub mod pallet {
 		/// This pallet's offchain worker submits this authorized call. It is accepted from a local
 		/// or in-block source only, so no external submission reaches it.
 		///
-		/// No argument names the batch. The call sends whatever sits at the front of the queue, and
-		/// the pool holds one submission per front. A second call that lands anyway sends the
-		/// next batch, which needed sending, and the game chain treats a repeated deletion as a
-		/// no-op.
+		/// `front` must be the block at the front of [`PendingTreeDeletions`], which a successful
+		/// send replaces. A retry that raced that send is stale instead of a second send. The next
+		/// batch's send names a new front, so it carries a transaction hash of its own.
 		#[pallet::call_index(4)]
-		#[pallet::authorize(|source, _discriminator| Self::authorize_send_tree_deletions(source))]
+		#[pallet::authorize(|source, front, _discriminator| {
+			Self::authorize_send_tree_deletions(source, front)
+		})]
 		#[pallet::weight(T::WeightInfo::send_tree_deletions(T::MaxTreeDeletionsPerMessage::get()))]
 		#[pallet::weight_of_authorize(T::WeightInfo::authorize_send_tree_deletions())]
 		pub fn send_tree_deletions(
 			origin: OriginFor<T>,
-			// Per-window discriminator, as `sweep_expired_trees` carries.
+			_front: AwardBlock,
+			// Per-window discriminator. A stalled retry of one front gets a fresh transaction
+			// hash once the window changes. See `indiv_support::offchain`.
 			_discriminator: BlockNumberFor<T>,
 		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
@@ -883,6 +900,21 @@ pub mod pallet {
 			assert!(
 				T::MaxTreesPerMessage::get() > 0,
 				"MaxTreesPerMessage must be greater than zero"
+			);
+
+			// `ClaimedLeaves` sizes its bitmap from this, and the benchmarked trees take its
+			// base-two logarithm.
+			let max_credits = T::MaxCreditsPerAwardBlock::get();
+			assert!(max_credits > 0, "MaxCreditsPerAwardBlock must be greater than zero");
+
+			// A tree of `max_credits` leaves needs this many sibling hashes. A lower bound leaves
+			// the tail of a full award block unclaimable, because its proof does not decode.
+			let max_proof_nodes = max_credits.next_power_of_two().ilog2();
+			assert!(
+				T::MaxProofNodes::get() >= max_proof_nodes,
+				"MaxProofNodes ({}) is below the {max_proof_nodes} sibling hashes a tree of \
+				 {max_credits} leaves needs",
+				T::MaxProofNodes::get(),
 			);
 
 			// An XCM `Transact` or the transaction pool dispatches every call below. A worst case
@@ -943,49 +975,6 @@ pub mod pallet {
 				"a full deletion message is {message} bytes, more than the {MIN_CHANNEL_MESSAGE_SIZE} \
 				 bytes a channel is assumed to carry, so `MaxTreeDeletionsPerMessage` is too high",
 			);
-
-			let deletions = T::MaxTreeDeletionsPerMessage::get();
-			budget.assert_fits(
-				"sweep_expired_trees",
-				T::WeightInfo::sweep_expired_trees(deletions)
-					.saturating_add(T::WeightInfo::authorize_sweep_expired_trees()),
-			);
-			budget.assert_fits(
-				"send_tree_deletions",
-				T::WeightInfo::send_tree_deletions(deletions)
-					.saturating_add(T::WeightInfo::authorize_send_tree_deletions()),
-			);
-
-			// A bucket is a day wide, so a tree outlives its TTL by up to a day. A TTL below one
-			// bucket therefore names a deadline the sweep does not apply.
-			assert!(
-				T::TreeTtl::get() >= u64::from(EXPIRY_BUCKET_SECONDS),
-				"TreeTtl ({ttl}) is below the {EXPIRY_BUCKET_SECONDS}-second expiry bucket, so the \
-				 deadline it names is not the one a sweep applies",
-				ttl = T::TreeTtl::get(),
-			);
-
-			assert!(deletions > 0, "MaxTreeDeletionsPerMessage must be greater than zero");
-			// A sweep removes a message's worth of trees and queues one deletion for each. A
-			// narrower queue drops deletions of that sweep's own, and the game chain then waits
-			// out its own TTL for trees this chain has already removed.
-			assert!(
-				deletions <= T::MaxQueuedTreeDeletions::get(),
-				"MaxTreeDeletionsPerMessage ({deletions}) exceeds MaxQueuedTreeDeletions ({queue}), \
-				 so one sweep can drop its own deletions",
-				queue = T::MaxQueuedTreeDeletions::get(),
-			);
-
-			// The deletion message has to fit the channel to the game chain. That channel's real
-			// per-message room comes from the relay chain's configuration, which is unknown at
-			// build time, so the check uses a size no channel between system parachains sits
-			// below.
-			let message = Self::tree_deletion_message_size(deletions);
-			assert!(
-				message <= MIN_CHANNEL_MESSAGE_SIZE,
-				"a full deletion message is {message} bytes, more than the {MIN_CHANNEL_MESSAGE_SIZE} \
-				 bytes a channel is assumed to carry, so `MaxTreeDeletionsPerMessage` is too high",
-			);
 		}
 
 		fn offchain_worker(block_number: BlockNumberFor<T>) {
@@ -1001,52 +990,49 @@ pub mod pallet {
 
 	#[cfg(any(test, feature = "try-runtime"))]
 	impl<T: Config> Pallet<T> {
-		/// Check that the pallet's records agree with each other and with Scarcity: each block's
-		/// claimed count matches its claimed leaves, a block whose tree is still held has no more
-		/// claims than the tree has leaves, every held tree is filed under its expiry bucket, and
-		/// no registration outlives the collection it names.
+		/// Check that the pallet's records agree with each other and with Scarcity: a block whose
+		/// tree is still held has no more claimed leaves than the tree has leaves, every held tree
+		/// and every claimed-leaf bitmap is filed for expiry, and no registration outlives the
+		/// collection it names.
 		///
-		/// A claimed leaf outlives the tree it belongs to. A block with claims and no tree is
-		/// therefore the state a removed tree leaves behind, not an inconsistency.
+		/// A bitmap outlives the tree it belongs to. A block with claimed leaves and no tree is
+		/// therefore the state a fully claimed tree leaves behind, not an inconsistency, and its
+		/// expiry entry is what gets the bitmap removed at the deadline.
 		pub(crate) fn do_try_state() -> Result<(), sp_runtime::TryRuntimeError> {
-			use alloc::collections::BTreeMap;
+			use alloc::collections::BTreeSet;
 			use sp_runtime::TryRuntimeError;
 
-			let mut counted = BTreeMap::<AwardBlock, u32>::new();
-			for (block, _leaf, ()) in ClaimedCredits::<T>::iter() {
-				let count = counted.entry(block).or_default();
-				*count = count
-					.checked_add(1)
-					.ok_or(TryRuntimeError::Other("claimed leaf count overflowed"))?;
+			let filed =
+				TreeExpiries::<T>::iter().map(|(_, block, ())| block).collect::<BTreeSet<_>>();
+			for (block, bitmap) in ClaimedLeaves::<T>::iter() {
+				if let Some(tree) = CreditTrees::<T>::get(block) {
+					if Self::claimed_leaf_count(&bitmap) > tree.leaf_count {
+						return Err(TryRuntimeError::Other(
+							"a block has more claimed leaves than its tree has leaves",
+						));
+					}
+				}
+				// Only a sweep of an expiry entry removes a bitmap, so a bitmap with no entry is
+				// never removed.
+				if !filed.contains(&block) {
+					return Err(TryRuntimeError::Other("claimed leaves have no expiry entry"));
+				}
 			}
 
-			let stored = ClaimedCounts::<T>::iter().collect::<BTreeMap<_, _>>();
-			if stored != counted {
-				return Err(TryRuntimeError::Other(
-					"claimed counts do not match the claimed leaves",
-				));
-			}
-			for (block, count) in &stored {
+			// A held tree is filed under the timestamp it commits to, which is where a sweep
+			// finds it. The other direction does not hold: a fully claimed tree leaves its entry
+			// behind for its bitmap.
+			for (timestamp, block, ()) in TreeExpiries::<T>::iter() {
 				if let Some(tree) = CreditTrees::<T>::get(block) {
-					if *count > tree.leaf_count {
+					if tree.timestamp != timestamp.0 {
 						return Err(TryRuntimeError::Other(
-							"a block has more claims than its tree has leaves",
+							"tree is filed under the wrong timestamp",
 						));
 					}
 				}
 			}
-
-			// A held tree is filed under the bucket a sweep looks for it in, and a tree that is
-			// gone has no entry. Both directions hold, so neither removal path strands an entry.
-			for (bucket, block, ()) in TreeExpiries::<T>::iter() {
-				let tree = CreditTrees::<T>::get(block)
-					.ok_or(TryRuntimeError::Other("expiry entry has no tree"))?;
-				if expiry_bucket(tree.timestamp) != bucket {
-					return Err(TryRuntimeError::Other("tree is filed in the wrong bucket"));
-				}
-			}
 			for (block, tree) in CreditTrees::<T>::iter() {
-				if !TreeExpiries::<T>::contains_key(expiry_bucket(tree.timestamp), block) {
+				if !TreeExpiries::<T>::contains_key(ExpiryTimestamp::from(tree.timestamp), block) {
 					return Err(TryRuntimeError::Other("held tree has no expiry entry"));
 				}
 			}
@@ -1216,94 +1202,147 @@ pub mod pallet {
 			NextExpectedSequence::<T>::put(highest.saturating_add(1));
 		}
 
-		pub(crate) fn has_expired(timestamp: u32, now: u64) -> bool {
-			now >= u64::from(timestamp).saturating_add(T::TreeTtl::get())
+		/// Whether `now` has reached the deadline [`Config::TreeTtl`] puts on a tree committed to
+		/// at `tree_timestamp`. Both are seconds since the UNIX epoch.
+		pub(crate) fn tree_has_expired(tree_timestamp: u32, now: u64) -> bool {
+			now >= expiry_deadline(tree_timestamp, T::TreeTtl::get())
 		}
 
-		/// Files the tree of `block` under the bucket its deadline falls in, so a sweep finds it.
-		///
-		/// A tree that arrives out of order lowers [`NextExpiryBucket`], which
-		/// [`note_expiry_bucket`] does.
-		pub(crate) fn note_expiry(block: AwardBlock, timestamp: u32) {
-			let bucket = expiry_bucket(timestamp);
-			TreeExpiries::<T>::insert(bucket, block, ());
-			note_expiry_bucket::<NextExpiryBucket<T>>(bucket);
+		/// Files the tree of `block` under the timestamp it commits to, so a sweep finds it once
+		/// that timestamp is [`Config::TreeTtl`] old.
+		pub(crate) fn note_tree_expiry(block: AwardBlock, timestamp: u32) {
+			TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
 		}
 
-		/// Removes the tree of `block`, committed to at `timestamp`, and queues its deletion for
-		/// the game chain.
+		/// Whether `leaf_index` is set in `bitmap`, which holds one bit per leaf of an award
+		/// block's tree.
+		pub fn leaf_is_claimed(bitmap: &[u8], leaf_index: u32) -> bool {
+			let byte = (leaf_index / 8) as usize;
+			bitmap.get(byte).is_some_and(|bits| bits & (1u8 << (leaf_index % 8)) != 0)
+		}
+
+		/// How many leaves `bitmap` records as claimed.
+		pub(crate) fn claimed_leaf_count(bitmap: &[u8]) -> u32 {
+			bitmap.iter().map(|bits| bits.count_ones()).sum()
+		}
+
+		/// Sets the bit of `leaf_index` in `block`'s bitmap, widening it to `leaf_count` bits.
 		///
-		/// This leaves [`ClaimedCredits`] and [`ClaimedCounts`] in place. The game chain holds its
-		/// root for longer than this chain holds the tree, and anyone can replay the tree from
-		/// there, so only the spent leaves stop it from minting its credits twice.
-		fn remove_tree(block: AwardBlock, timestamp: u32) {
+		/// `leaf_index` must be below `leaf_count`, and `leaf_count` must be within
+		/// [`Config::MaxCreditsPerAwardBlock`], which [`Pallet::receive_credit_trees`] holds every
+		/// stored tree to. Both are checked here, so a bit outside the bitmap is an error rather
+		/// than a silent no-op.
+		fn spend_leaf(block: AwardBlock, leaf_index: u32, leaf_count: u32) -> Result<(), ()> {
+			if leaf_index >= leaf_count || leaf_count > T::MaxCreditsPerAwardBlock::get() {
+				return Err(());
+			}
+
+			let bytes = leaf_count.div_ceil(8) as usize;
+			let byte = (leaf_index / 8) as usize;
+			ClaimedLeaves::<T>::mutate(block, |bitmap| {
+				if bitmap.len() < bytes {
+					// `bytes` covers `MaxCreditsPerAwardBlock` bits at most, which is the bound.
+					let mut bits = core::mem::take(bitmap).into_inner();
+					bits.resize(bytes, 0);
+					*bitmap = BoundedVec::truncate_from(bits);
+				}
+				if let Some(bits) = bitmap.as_mut().get_mut(byte) {
+					*bits |= 1u8 << (leaf_index % 8);
+				}
+			});
+
+			Ok(())
+		}
+
+		/// Removes the tree of `block` and queues its deletion for the game chain.
+		///
+		/// The expiry entry stays, and so does [`ClaimedLeaves`]. The game chain holds its root
+		/// for longer than this chain holds the tree, and anyone can replay the tree from there,
+		/// so only the spent leaves stop it from minting its credits twice. The sweep of that
+		/// entry removes the bitmap once the deadline has passed.
+		fn remove_tree(block: AwardBlock) {
 			CreditTrees::<T>::remove(block);
-			TreeExpiries::<T>::remove(expiry_bucket(timestamp), block);
 			Self::queue_tree_deletions(&[block]);
 		}
 
 		/// Queues `blocks` for the next deletion message and drops the ones the queue has no room
-		/// for.
+		/// for. Pass at most [`Config::MaxTreeDeletionsPerMessage`] blocks, which is what the
+		/// dropped ones are reported in.
 		///
 		/// A dropped deletion leaves the game chain waiting for its own TTL. That TTL removes its
 		/// copy, so nothing on this chain needs repair.
 		pub(crate) fn queue_tree_deletions(blocks: &[AwardBlock]) {
-			PendingTreeDeletions::<T>::mutate(|queued| {
-				for block in blocks {
-					if queued.try_push(*block).is_err() {
-						log::error!(
-							target: LOG_TARGET,
-							"Tree deletion queue is full, the game chain has to expire block \
-							 {block} itself",
-						);
-						Self::deposit_event(Event::TreeDeletionDropped { block: *block });
-					}
-				}
+			if blocks.is_empty() {
+				return;
+			}
+
+			let dropped = PendingTreeDeletions::<T>::mutate(|queued| {
+				blocks
+					.iter()
+					.filter(|block| queued.try_push(**block).is_err())
+					.copied()
+					.collect::<Vec<_>>()
+			});
+			if dropped.is_empty() {
+				return;
+			}
+
+			log::error!(
+				target: LOG_TARGET,
+				"Tree deletion queue is full, the game chain has to expire blocks {dropped:?} \
+				 itself",
+			);
+			Self::deposit_event(Event::TreeDeletionsDropped {
+				blocks: BoundedVec::truncate_from(dropped),
 			});
 		}
 
-		/// Removes up to [`Config::MaxTreeDeletionsPerMessage`] of `bucket`'s trees, as
-		/// [`Pallet::sweep_expired_trees`] does once its origin is checked.
-		pub(crate) fn do_sweep_expired_trees(bucket: ExpiryBucket) -> PostDispatchInfo {
-			let (expired, state) = drain_expiry_bucket::<
-				TreeExpiries<T>,
-				NextExpiryBucket<T>,
-				AwardBlock,
-			>(bucket, T::MaxTreeDeletionsPerMessage::get());
+		/// Retires up to [`Config::MaxTreeDeletionsPerMessage`] blocks whose deadline has passed,
+		/// as [`Pallet::sweep_expired_trees`] does once its origin is checked.
+		///
+		/// A retired block's deadline has passed, so no replay delivers its tree again and its
+		/// bitmap goes. A block whose tree was fully claimed holds none here and had its deletion
+		/// queued then, so only the trees still held are expired and named to the game chain.
+		pub(crate) fn do_sweep_expired_trees() -> PostDispatchInfo {
+			let retired = drain_due_expiries::<TreeExpiries<T>, AwardBlock>(
+				T::TreeTtl::get(),
+				T::UnixTime::now().as_secs(),
+				T::MaxTreeDeletionsPerMessage::get(),
+			);
 
-			for block in &expired {
-				CreditTrees::<T>::remove(block);
+			let mut expired = Vec::with_capacity(retired.len());
+			for block in &retired {
+				ClaimedLeaves::<T>::remove(block);
+				if CreditTrees::<T>::take(block).is_some() {
+					expired.push(*block);
+				}
 			}
 			Self::queue_tree_deletions(&expired);
 
 			let count = expired.len() as u32;
 			if count > 0 {
-				Self::deposit_event(Event::CreditTreesExpired { bucket, count });
-			}
-			if state == BucketState::Emptied {
-				Self::deposit_event(Event::ExpiryBucketSwept { bucket });
+				Self::deposit_event(Event::CreditTreesExpired { count });
 			}
 
-			Some(T::WeightInfo::sweep_expired_trees(count)).into()
+			Some(T::WeightInfo::sweep_expired_trees(retired.len() as u32)).into()
 		}
 
 		/// Validates a [`Pallet::sweep_expired_trees`] transaction, as
-		/// [`authorize_bucket_sweep`] does, the deadline being the one [`Config::TreeTtl`] names.
+		/// [`authorize_expiry_sweep`] does, the deadline being the one [`Config::TreeTtl`] names.
 		pub fn authorize_sweep_expired_trees(
 			source: TransactionSource,
-			bucket: &ExpiryBucket,
+			oldest: &u32,
 		) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
-			authorize_bucket_sweep::<T>(
-				BucketSweepTx {
+			authorize_expiry_sweep::<T, TreeExpiries<T>, AwardBlock>(
+				ExpirySweepTx {
 					tag: "nft-claims:sweep-expired-trees",
 					not_local: AuthorizeInvalidity::TransactionNotLocal.into(),
 					nothing_to_sweep: AuthorizeInvalidity::NothingToSweep.into(),
 				},
 				source,
-				*bucket,
-				NextExpiryBucket::<T>::get(),
+				*oldest,
+				T::TreeTtl::get(),
 				T::UnixTime::now().as_secs(),
-				bucket_deadline(*bucket, T::TreeTtl::get()),
 			)
 		}
 
@@ -1343,22 +1382,32 @@ pub mod pallet {
 		/// Validates a [`Pallet::send_tree_deletions`] transaction.
 		///
 		/// This accepts local and in-block sources only, as
-		/// [`Pallet::authorize_sweep_expired_trees`] does. The tag is the block at the front of
-		/// the queue, which the call sends and a successful send replaces, so the pool holds one
-		/// submission per front instead of one per retry window.
+		/// [`Pallet::authorize_sweep_expired_trees`] does. `front` must equal the queue's first
+		/// block, which a successful send replaces, so a retry of a send that landed is `Stale`.
+		/// The queue holds the blocks in removal order, so a block that is still queued does not
+		/// compare as later than the front and no mismatch is `Future`.
 		pub fn authorize_send_tree_deletions(
 			source: TransactionSource,
+			front: &AwardBlock,
 		) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
 			if !matches!(source, TransactionSource::InBlock | TransactionSource::Local) {
 				return Err(AuthorizeInvalidity::TransactionNotLocal.into());
 			}
 
-			let Some(front) = PendingTreeDeletions::<T>::get().first().copied() else {
+			let Some(queued_front) = PendingTreeDeletions::<T>::get().first().copied() else {
 				return Err(AuthorizeInvalidity::NoQueuedTreeDeletions.into());
 			};
+			if *front != queued_front {
+				return Err(InvalidTransaction::Stale.into());
+			}
 
+			// The tag is the front, so the sends of two fronts do not share one. Only the current
+			// front authorizes, so one block holds at most one send.
 			let validity = ValidTransaction::with_tag_prefix("nft-claims:send-tree-deletions")
-				.and_provides(front)
+				.and_provides(queued_front)
+				// The block number rises with every retry window, so a retry outranks the attempt
+				// holding the same tag. The pool replaces that attempt only for a strictly higher
+				// priority.
 				.priority(tx_priority::BACKGROUND_PROGRESS.saturating_add(
 					frame_system::Pallet::<T>::block_number().saturated_into::<u64>(),
 				))
@@ -1370,9 +1419,11 @@ pub mod pallet {
 			Ok((validity, Weight::zero()))
 		}
 
+		/// Hands the game chain's deletion call to the router, reporting the router's own reason
+		/// for a refusal so a stalled channel can be told from an oversized message.
 		fn send_tree_deletion_message(
 			blocks: BoundedVec<AwardBlock, T::MaxTreeDeletionsPerMessage>,
-		) -> DispatchResult {
+		) -> Result<(), SendError> {
 			let call = (
 				T::GameChainPalletIndex::get(),
 				NftCreditsCall::<T>::ReceiveTreeDeletions { blocks },
@@ -1380,9 +1431,7 @@ pub mod pallet {
 				.encode();
 
 			send_xcm::<T::XcmRouter>(T::GameChainLocation::get(), Self::tree_deletion_xcm(call))
-				.map_err(|_| Error::<T>::TreeDeletionXcmFailed)?;
-
-			Ok(())
+				.map(|_| ())
 		}
 
 		fn tree_deletion_xcm(encoded_call: Vec<u8>) -> Xcm<()> {
@@ -1411,36 +1460,46 @@ pub mod pallet {
 			xcm::VersionedXcm::<()>::from(Self::tree_deletion_xcm(call)).encoded_size()
 		}
 
-		/// Submits a [`Pallet::sweep_expired_trees`] for the bucket the sweep is up to, if its
+		/// Submits a [`Pallet::sweep_expired_trees`] for the oldest filed timestamp, if its
 		/// deadline has passed.
 		///
 		/// This repeats the deadline check that `authorize` makes. Without it a chain with nothing
 		/// expired submits a transaction every block that the pool holds as `Future`.
 		pub(crate) fn submit_expiry_sweep(block_number: BlockNumberFor<T>) {
-			let Some(bucket) = NextExpiryBucket::<T>::get() else {
+			let Some(oldest) = oldest_expiry::<TreeExpiries<T>, AwardBlock>() else {
 				return;
 			};
-			if T::UnixTime::now().as_secs() < bucket_deadline(bucket, T::TreeTtl::get()) {
+			if T::UnixTime::now().as_secs() < expiry_deadline(oldest, T::TreeTtl::get()) {
 				return;
 			}
 
 			let call = Call::<T>::sweep_expired_trees {
-				bucket,
-				discriminator: block_number / RETRY_WINDOW.into(),
+				oldest,
+				// The submitting block, not the retry window `indiv_support::offchain` paces other
+				// calls by. Trees at one timestamp can outnumber one sweep's limit, which keeps
+				// `oldest` the same, so a window would allow one sweep per window: the pool bans
+				// the hash of the sweep it included, and the next attempt of that window repeats
+				// it. The `provides` tag keeps one attempt in the pool.
+				discriminator: block_number,
 			};
-			submit_authorized::<T, _>(call, block_number, "sweep_expired_trees", LOG_TARGET);
+			submit_authorized::<T, _>(call, "sweep_expired_trees", LOG_TARGET);
 		}
 
 		/// Submits a [`Pallet::send_tree_deletions`] for the queued deletions, if any.
 		pub(crate) fn submit_tree_deletions(block_number: BlockNumberFor<T>) {
-			if PendingTreeDeletions::<T>::decode_len().unwrap_or(0) == 0 {
+			let Some(front) = PendingTreeDeletions::<T>::get().first().copied() else {
 				return;
-			}
+			};
 
 			let call = Call::<T>::send_tree_deletions {
+				// A send replaces the front, so the next batch's send carries a hash of its own
+				// and reaches the pool in the following block instead of the next window. The
+				// sweep refills the queue as fast as the send drains it, so the send keeps that
+				// pace.
+				front,
 				discriminator: block_number / RETRY_WINDOW.into(),
 			};
-			submit_authorized::<T, _>(call, block_number, "send_tree_deletions", LOG_TARGET);
+			submit_authorized::<T, _>(call, "send_tree_deletions", LOG_TARGET);
 		}
 	}
 }

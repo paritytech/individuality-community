@@ -2164,6 +2164,10 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	// next-people-paseo, so a proof carries at most 11 sibling hashes. 16 covers 65536 leaves,
 	// leaving room for that bound to grow without stranding the tail of a tree.
 	type MaxProofNodes = ConstU32<16>;
+	// The game pallet's `MaxCreditsPerBlock`. `ClaimedLeaves` holds one bit per leaf, so a block
+	// costs 150 bytes there, and a tree over this bound is refused rather than stored with leaves
+	// this chain cannot spend.
+	type MaxCreditsPerAwardBlock = ConstU32<1200>;
 	type UnixTime = Timestamp;
 	type TreeTtl = CreditTreeTtl;
 	// Above `MaxTreeDeletionsPerMessage`, so one sweep drops no deletion of its own, and with room
@@ -2173,9 +2177,9 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	// At or below the game pallet's `MaxTreeDeletionsPerMessage`. A larger message fails to decode
 	// there, and that chain's own TTL then removes the roots its deletions named.
 	//
-	// One sweep removes this many trees as well. One People-chain block awards at most one tree, so
-	// a day holds 43200 of them at 2 seconds a block. 64 per block clears a day in about an hour of
-	// Asset Hub blocks and leaves the rest of each block to ordinary traffic.
+	// One sweep removes this many trees as well, once a block. One People-chain block awards at
+	// most one tree, so a day holds 43200 of them at 2 seconds a block, which 64 a block clears in
+	// about an hour of Asset Hub blocks. The rest of each block stays free for ordinary traffic.
 	type MaxTreeDeletionsPerMessage = ConstU32<64>;
 	type XcmRouter = crate::xcm_config::XcmRouter;
 	// The chain `EnsureGameChainOrigin` authenticates, and where the roots come from.
@@ -2198,8 +2202,9 @@ parameter_types! {
 	pub const CreditTreeTtl: u64 = 90 * 24 * 60 * 60;
 }
 
-/// Creates the collection and item the benchmarks mint into, which on a live chain their owner
-/// has set up beforehand.
+/// What the claims benchmarks cannot set up themselves: the collection and item a claim mints
+/// into, the minter contract, the clock, and the HRMP channel a deletion message goes out over.
+/// On a live chain a collection owner and the relay chain's configuration provide these.
 #[cfg(feature = "runtime-benchmarks")]
 pub struct NftClaimsBenchmarkHelper;
 #[cfg(feature = "runtime-benchmarks")]

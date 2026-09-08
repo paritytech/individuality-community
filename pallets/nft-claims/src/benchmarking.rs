@@ -19,8 +19,7 @@
 use super::*;
 use crate::{
 	pallet::{
-		ClaimedCounts, ClaimedCredits, CollectionMinters, NextExpectedSequence, NextExpiryBucket,
-		PendingTreeDeletions, TreeExpiries,
+		ClaimedLeaves, CollectionMinters, NextExpectedSequence, PendingTreeDeletions, TreeExpiries,
 	},
 	types::CreditTreeBatch,
 	BenchmarkHelper,
@@ -33,11 +32,7 @@ use frame_support::{
 	BoundedVec,
 };
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
-use indiv_support::credit_trees::{
-	bucket_deadline, credit_leaf, expiry_bucket, CreditTreeDelivery, ExpiryBucket,
-	EXPIRY_BUCKET_SECONDS,
-};
-use sp_runtime::traits::SaturatedConversion;
+use indiv_support::credit_trees::CreditTreeDelivery;
 
 /// The `i`-th distinct credit a benchmarked tree commits to.
 fn credit(i: u32) -> NftClaimCredit {
@@ -102,8 +97,8 @@ mod benches {
 	///
 	/// The component starts at one because a one-leaf tree has no such claim. Its first claim is
 	/// its last, and only a proof of no sibling hashes verifies against it. It stops at the
-	/// largest proof [`Config::MaxProofNodes`] admits, which is the deepest tree this chain
-	/// stores.
+	/// largest power of two within [`Config::MaxCreditsPerAwardBlock`], which is the biggest tree
+	/// this chain stores.
 	///
 	/// The claim is made under [`ClaimantKind::Account`], the kind whose origin check takes the
 	/// signing account as it stands.
@@ -112,7 +107,9 @@ mod benches {
 	/// weight stands for: a contract selection adds the runtime selector's metered weight on
 	/// top, reserved and refunded outside this function.
 	#[benchmark]
-	fn claim_account(n: Linear<1, { T::MaxProofNodes::get() }>) -> Result<(), BenchmarkError> {
+	fn claim_account(
+		n: Linear<1, { T::MaxCreditsPerAwardBlock::get().ilog2() }>,
+	) -> Result<(), BenchmarkError> {
 		let kind = ClaimantKind::Account;
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
 			claimable_tree::<T>(&kind, n)?;
@@ -130,7 +127,7 @@ mod benches {
 			mint_to,
 		);
 
-		assert_eq!(ClaimedCounts::<T>::get(BLOCK), 1);
+		assert_eq!(Pallet::<T>::claimed_leaf_count(&ClaimedLeaves::<T>::get(BLOCK)), 1);
 		assert!(CreditTrees::<T>::contains_key(BLOCK), "the tree still has credits to claim");
 
 		Ok(())
@@ -139,7 +136,9 @@ mod benches {
 	/// As `claim_account`, except that resolving [`ClaimantKind::Person`] has to look the signer's
 	/// alias up rather than take the account as it stands.
 	#[benchmark]
-	fn claim_person(n: Linear<1, { T::MaxProofNodes::get() }>) -> Result<(), BenchmarkError> {
+	fn claim_person(
+		n: Linear<1, { T::MaxCreditsPerAwardBlock::get().ilog2() }>,
+	) -> Result<(), BenchmarkError> {
 		let kind = ClaimantKind::Person;
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
 			claimable_tree::<T>(&kind, n)?;
@@ -157,7 +156,7 @@ mod benches {
 			mint_to,
 		);
 
-		assert_eq!(ClaimedCounts::<T>::get(BLOCK), 1);
+		assert_eq!(Pallet::<T>::claimed_leaf_count(&ClaimedLeaves::<T>::get(BLOCK)), 1);
 		assert!(CreditTrees::<T>::contains_key(BLOCK), "the tree still has credits to claim");
 
 		Ok(())
@@ -167,9 +166,11 @@ mod benches {
 	/// also removes the tree and queues the deletion the game chain is owed. The expiry entry and
 	/// the bitmap stay for the sweep to take.
 	#[benchmark]
-	fn claim_last_account(n: Linear<0, { T::MaxProofNodes::get() }>) -> Result<(), BenchmarkError> {
+	fn claim_last_account(
+		n: Linear<0, { T::MaxCreditsPerAwardBlock::get().ilog2() }>,
+	) -> Result<(), BenchmarkError> {
 		let kind = ClaimantKind::Account;
-		let (origin, claimant, credits, leaf_index, sibling_hashes) =
+		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
 			claimable_tree::<T>(&kind, n)?;
 		let mint_to: T::AccountId = account("purse", 0, 0);
 		// Every other leaf is spent, so this claim completes the tree.
@@ -188,10 +189,7 @@ mod benches {
 		);
 
 		assert!(!CreditTrees::<T>::contains_key(BLOCK), "the fully claimed tree is removed");
-		assert!(ClaimedCredits::<T>::contains_key(
-			BLOCK,
-			credit_leaf(&claimant, &credits[leaf_index as usize])
-		));
+		assert!(Pallet::<T>::leaf_is_claimed(&ClaimedLeaves::<T>::get(BLOCK), leaf_index));
 		assert_eq!(PendingTreeDeletions::<T>::get().to_vec(), alloc::vec![BLOCK]);
 
 		Ok(())
@@ -200,9 +198,11 @@ mod benches {
 	/// Worst case: as `claim_last_account`, except that resolving [`ClaimantKind::Person`] has to
 	/// look the signer's alias up rather than take the account as it stands.
 	#[benchmark]
-	fn claim_last_person(n: Linear<0, { T::MaxProofNodes::get() }>) -> Result<(), BenchmarkError> {
+	fn claim_last_person(
+		n: Linear<0, { T::MaxCreditsPerAwardBlock::get().ilog2() }>,
+	) -> Result<(), BenchmarkError> {
 		let kind = ClaimantKind::Person;
-		let (origin, claimant, credits, leaf_index, sibling_hashes) =
+		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
 			claimable_tree::<T>(&kind, n)?;
 		let mint_to: T::AccountId = account("purse", 0, 0);
 		// Every other leaf is spent, so this claim completes the tree.
@@ -221,10 +221,7 @@ mod benches {
 		);
 
 		assert!(!CreditTrees::<T>::contains_key(BLOCK), "the fully claimed tree is removed");
-		assert!(ClaimedCredits::<T>::contains_key(
-			BLOCK,
-			credit_leaf(&claimant, &credits[leaf_index as usize])
-		));
+		assert!(Pallet::<T>::leaf_is_claimed(&ClaimedLeaves::<T>::get(BLOCK), leaf_index));
 		assert_eq!(PendingTreeDeletions::<T>::get().to_vec(), alloc::vec![BLOCK]);
 
 		Ok(())
@@ -237,32 +234,36 @@ mod benches {
 	fn sweep_expired_trees(
 		n: Linear<0, { T::MaxTreeDeletionsPerMessage::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let bucket = fill_expiry_bucket::<T>(n);
+		fill_due_expiries::<T>(n);
 		let origin = RawOrigin::Authorized;
 
 		#[extrinsic_call]
-		_(origin, bucket, BlockNumberFor::<T>::from(0u32));
+		_(origin, FIRST_EXPIRY_TIMESTAMP, BlockNumberFor::<T>::from(0u32));
 
 		assert_eq!(PendingTreeDeletions::<T>::get().len(), n as usize);
-		assert_eq!(TreeExpiries::<T>::iter_prefix(bucket).count(), 0);
-		if n < T::MaxTreeDeletionsPerMessage::get() {
-			assert_eq!(NextExpiryBucket::<T>::get(), Some(bucket.saturating_add(1)));
-		}
+		// Only the tree that is not due is left, which is the one filed last.
+		assert_eq!(TreeExpiries::<T>::iter().count(), 1);
+		assert_eq!(
+			oldest_expiry::<TreeExpiries<T>, AwardBlock>(),
+			Some(FIRST_EXPIRY_TIMESTAMP.saturating_add(n))
+		);
 
 		Ok(())
 	}
 
-	/// Authorizing a sweep reads the watermark and the clock. Neither grows with any input, so the
-	/// benchmark only needs a bucket whose deadline has passed.
+	/// Authorizing a sweep reads the oldest entry and the clock. The map holds one sweep's worth
+	/// of entries, each under a key of its own, which is the state a sweep is submitted against.
 	#[benchmark]
 	fn authorize_sweep_expired_trees() -> Result<(), BenchmarkError> {
-		let bucket = fill_expiry_bucket::<T>(1);
-		T::BenchmarkHelper::set_unix_time(bucket_deadline(bucket, T::TreeTtl::get()));
+		fill_due_expiries::<T>(T::MaxTreeDeletionsPerMessage::get());
 
 		#[block]
 		{
-			Pallet::<T>::authorize_sweep_expired_trees(TransactionSource::Local, &bucket)
-				.expect("must authorize");
+			Pallet::<T>::authorize_sweep_expired_trees(
+				TransactionSource::Local,
+				&FIRST_EXPIRY_TIMESTAMP,
+			)
+			.expect("must authorize");
 		}
 
 		Ok(())
@@ -284,8 +285,9 @@ mod benches {
 		queue_deletions::<T>(n);
 		let origin = RawOrigin::Authorized;
 
+		// `queue_deletions` fills the queue from block zero, which is the front it leaves.
 		#[extrinsic_call]
-		_(origin, BlockNumberFor::<T>::from(0u32));
+		_(origin, 0, BlockNumberFor::<T>::from(0u32));
 
 		assert!(PendingTreeDeletions::<T>::get().is_empty(), "the message went out");
 
@@ -300,7 +302,7 @@ mod benches {
 
 		#[block]
 		{
-			Pallet::<T>::authorize_send_tree_deletions(TransactionSource::Local)
+			Pallet::<T>::authorize_send_tree_deletions(TransactionSource::Local, &0)
 				.expect("must authorize");
 		}
 
@@ -377,7 +379,7 @@ fn claimable_tree<T: Config>(
 		BLOCK,
 		NftClaimCreditTree { game_index: 1, root: proof.root.into(), leaf_count, timestamp },
 	);
-	Pallet::<T>::note_expiry(BLOCK, timestamp);
+	TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), BLOCK, ());
 
 	let sibling_hashes = BoundedVec::try_from(
 		proof.proof.into_iter().map(CreditProofNode::from).collect::<Vec<_>>(),
@@ -390,37 +392,42 @@ fn claimable_tree<T: Config>(
 /// The timestamp the first filed tree of a sweep benchmark commits to, which is what the sweep
 /// names. Each further tree adds a second to it, so every tree holds a key of its own. The value
 /// itself is arbitrary, because `fill_due_expiries` sets the clock from it.
-/// Files `n` trees under one expiry bucket and points the sweep's watermark at it. A sweep of a
-/// bucket that has fallen due starts from this state.
-fn fill_expiry_bucket<T: Config>(n: u32) -> ExpiryBucket {
-	// The first bucket past a whole TTL, so the clock can reach its deadline.
-	let bucket = expiry_bucket(T::TreeTtl::get().saturated_into::<u32>()).saturating_add(1);
-	let timestamp = bucket.saturating_mul(EXPIRY_BUCKET_SECONDS);
+const FIRST_EXPIRY_TIMESTAMP: u32 = 1_000_000;
 
-	for block in 0..n {
+/// Files `n` trees that are due, each under a timestamp of its own, plus one that is not.
+///
+/// One timestamp per tree is the worst case: every removal reads and writes a key of its own,
+/// where trees sharing a timestamp would share the map's first key. The clock ends at the deadline
+/// of the last due tree, so the tree filed after it is what stops the sweep.
+fn fill_due_expiries<T: Config>(n: u32) {
+	for block in 0..=n {
+		let timestamp = FIRST_EXPIRY_TIMESTAMP.saturating_add(block);
 		CreditTrees::<T>::insert(
 			block,
 			NftClaimCreditTree {
 				game_index: 1,
 				root: CreditProofNode([block as u8; 32]),
-				leaf_count: 1,
+				leaf_count: 2,
 				timestamp,
 			},
 		);
-		TreeExpiries::<T>::insert(bucket, block, ());
+		TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
+		// A partly claimed tree, so the sweep pays for removing a bitmap that is there.
+		ClaimedLeaves::<T>::insert(block, BoundedVec::truncate_from(alloc::vec![0b01u8]));
 	}
-	NextExpiryBucket::<T>::put(bucket);
-
-	bucket
+	let last_due = FIRST_EXPIRY_TIMESTAMP.saturating_add(n).saturating_sub(1);
+	T::BenchmarkHelper::set_unix_time(expiry_deadline(last_due, T::TreeTtl::get()));
 }
 
 /// Marks every leaf of [`BLOCK`]'s tree claimed except `leaf_index`, so the next claim of it
 /// completes the tree.
 fn spend_every_leaf_but<T: Config>(leaf_index: u32) {
 	let leaf_count = CreditTrees::<T>::get(BLOCK).expect("the tree is stored").leaf_count;
-	// The count is what decides the last claim, so it stands in for the leaves themselves.
-	ClaimedCounts::<T>::insert(BLOCK, leaf_count.saturating_sub(1));
-	let _ = leaf_index;
+	let mut bitmap = alloc::vec![0u8; leaf_count.div_ceil(8) as usize];
+	for index in (0..leaf_count).filter(|index| *index != leaf_index) {
+		bitmap[(index / 8) as usize] |= 1u8 << (index % 8);
+	}
+	ClaimedLeaves::<T>::insert(BLOCK, BoundedVec::truncate_from(bitmap));
 }
 
 fn queue_deletions<T: Config>(n: u32) {
