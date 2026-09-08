@@ -17,7 +17,7 @@
 
 //! Mock runtime for scarcity pallet tests.
 
-use crate as pallet_scarcity;
+use crate as indiv_pallet_scarcity;
 use frame_support::{
 	derive_impl, parameter_types,
 	traits::{
@@ -37,7 +37,7 @@ frame_support::construct_runtime!(
 	pub enum Test {
 		System: frame_system = 0,
 		Balances: pallet_balances = 1,
-		Scarcity: pallet_scarcity = 2,
+		Scarcity: indiv_pallet_scarcity = 2,
 	}
 );
 

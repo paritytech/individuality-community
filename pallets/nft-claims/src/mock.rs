@@ -30,6 +30,9 @@ use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateTransaction, CreateTransactionBase},
 	AuthorizeCall,
 };
+use indiv_pallet_scarcity::{
+	CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit,
+};
 use indiv_support::{
 	credit_trees::{
 		credit_leaf, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, NftClaimCredit,
@@ -38,7 +41,6 @@ use indiv_support::{
 	identity::AccountOrPerson,
 	traits::Alias,
 };
-use pallet_scarcity::{CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit};
 use sp_core::{
 	offchain::{
 		testing::{PoolState, TestTransactionPoolExt},
