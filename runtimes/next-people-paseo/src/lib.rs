@@ -243,6 +243,8 @@ pub type Migrations = (
 	pallet_collator_selection::migration::v2::MigrationToV2<Runtime>,
 	cumulus_pallet_xcmp_queue::migration::v6::MigrateV5ToV6<Runtime>,
 	cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)
