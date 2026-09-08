@@ -26,9 +26,7 @@ the `e2e/` directory; `just --list` shows every recipe with its one-line descrip
 - `packages/descriptors` generates `@polkadot-api/descriptors` from locally built runtime WASM.
 - `suites/initialization-tests` validates the bootstrapped local network state.
 - `tests/runtime-upgrade` forks Paseo People and Paseo Asset Hub with Chopsticks and injects a local
-  runtime build. The Asset Hub case also asserts that the upgraded chain leaves the alias fee
-  parameter (`Parameters::Parameters`, key `AliasAccounts(AliasFee)`) unset, so alias registration
-  stays closed until governance sets it.
+  runtime build.
 
 ## Prerequisites
 
@@ -56,6 +54,10 @@ just test-runtime-upgrade
 Both chains are covered; run one on its own with `pnpm run test:runtime-upgrade:paseo-to-next-people-paseo`
 or `pnpm run test:runtime-upgrade:paseo-to-next-asset-hub-paseo`. Each needs the matching runtime built
 in release mode first (`cargo build --release -p next-people-paseo-runtime`, `-p next-asset-hub-paseo-runtime`).
+
+The built runtime must have a higher `spec_version` than the deployed runtime. Executive runs the
+migrations only when the spec version changed. CI bumps it by one for its own build. If you run the
+suite locally, do the same before building, then restore `spec_version`.
 
 Optional environment variables:
 

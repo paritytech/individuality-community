@@ -24,8 +24,7 @@
 //! `frame_system::AuthorizeCall`, signed-account checks, and transaction payment:
 //!
 //! ```text
-//! AsScarcity -> AuthorizeCall -> ... -> CheckNonce -> ... ->
-//!     SkipCheckIfFeeless<ChargeAssetTxPayment>
+//! AsScarcity -> AuthorizeCall -> ... -> CheckNonce -> ... -> ChargeAssetTxPayment
 //! ```
 //!
 //! The account checks deliberately see a non-system origin and skip it, so an NFT-only purse needs
@@ -34,8 +33,9 @@
 //! the same state and applies a temporary backoff lock; once that lock expires, the same signed
 //! transaction can be submitted again. This is the same retry model as Coinage.
 //!
-//! Placing this extension after payment prevents
-//! `pallet_skip_feeless_payment::SkipCheckIfFeeless` from observing [`Origin::Nft`] and makes a
+//! Payment is what the ordering turns on: transaction payment reads the signer from a system
+//! origin, so it charges nothing once this extension has replaced one, and a purse-key call is
+//! free for that reason alone. An integrator placing this extension after payment instead makes a
 //! balance-less purse unable to transact.
 //!
 //! # Replay and mortality

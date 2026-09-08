@@ -73,7 +73,8 @@ use indiv_support::{
 	weight_budget::OcwWeightBudget,
 };
 use pallet_asset_conversion::{QuotePrice, Swap};
-use sp_core::{blake2_256, H256};
+use sp_core::H256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{
 	traits::{AccountIdConversion, CheckedAdd, CheckedMul, Convert, Zero},
 	ArithmeticError, SaturatedConversion, Saturating,
@@ -713,6 +714,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -738,6 +740,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -770,6 +773,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -795,6 +799,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -812,6 +817,34 @@ pub mod pallet {
 		AliasState,
 		OptionQuery,
 	>;
+
+	/// Number of aliases unloaded from each recycler ring.
+	///
+	/// Equals the number of [RecyclerAliasStates] entries of the ring in state
+	/// [`AliasState::Unloaded`], so `RingStatus::total` minus this value is the number of coins the
+	/// ring still holds. Absent for a ring that already had alias states when the count was
+	/// introduced, because recovering its number needs a scan; such a ring is never counted.
+	///
+	/// **WARNING**: Do not use this storage directly, use [`RecyclerManager`] type instead.
+	///
+	/// This storage item is managed by [`RecyclerManager`] and is part of a consistent set:
+	/// * [RecyclerCollectionCreated] - whether the collection exists for an instance and
+	///   denomination.
+	/// * [RecyclersLastRemovedRingIndex] - the last removed ring index for each instance and
+	///   denomination.
+	/// * [RecyclersCoinToRecycler] - the mapping from member key to the instance and denomination
+	///   it is in.
+	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
+	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
+	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
+	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
+	///   coins.
+	///
+	/// Ring members, pending members, and ring state are managed by [`Config::MemberService`].
+	#[pallet::storage]
+	pub type RecyclersUnloadedCount<T> =
+		StorageMap<_, Twox64Concat, (InstanceId, Denomination, RingIndex), u32, OptionQuery>;
 
 	/// Marks recycler rings that have deferred recycler dust pending removal.
 	///
@@ -831,6 +864,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -865,6 +899,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -1157,6 +1192,8 @@ pub mod pallet {
 		/// The maximum age a coin can have before it must be recycled.
 		///
 		/// At maximum age, the coin can no longer be transferred or split.
+		///
+		/// This parameter can be changed at any time.
 		type MaximumAge: Get<u16>;
 
 		/// The time period duration for unload tokens, in seconds.
@@ -1171,7 +1208,8 @@ pub mod pallet {
 		///
 		/// Use pallet view to fetch the corresponding number of unload tokens given the current
 		/// price for unload tokens.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type UnloadTokenAllowancePerTimePeriodForPeople: Get<NativeBalanceOf<Self>>;
 
 		/// The allowance of unload tokens that a lite person can use per time period, expressed in
@@ -1179,14 +1217,16 @@ pub mod pallet {
 		///
 		/// Use pallet's get_free_unload_token_info() to fetch the corresponding number of unload
 		/// tokens given the current price for unload tokens.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type UnloadTokenAllowancePerTimePeriodForLitePeople: Get<NativeBalanceOf<Self>>;
 
 		/// Hard upper bound on the number of free unload tokens per time period.
 		///
 		/// The effective free token limit is:
 		/// `min(allowance / current_fee, MaxFreeUnloadTokensPerTimePeriod)`.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type MaxFreeUnloadTokensPerTimePeriod: Get<u32>;
 
 		/// The expiration time for a recycler ring, in seconds, after it is full.
@@ -1683,6 +1723,27 @@ pub mod pallet {
 				Self::free_unload_token_limit_for_people(),
 				Self::free_unload_token_limit_for_lite_people(),
 			)
+		}
+
+		/// Returns the current value of [`Config::MaximumAge`].
+		pub fn get_maximum_age() -> u16 {
+			T::MaximumAge::get()
+		}
+
+		/// Returns the current value of [`Config::UnloadTokenAllowancePerTimePeriodForPeople`].
+		pub fn get_unload_token_allowance_per_time_period_for_people() -> NativeBalanceOf<T> {
+			T::UnloadTokenAllowancePerTimePeriodForPeople::get()
+		}
+
+		/// Returns the current value of
+		/// [`Config::UnloadTokenAllowancePerTimePeriodForLitePeople`].
+		pub fn get_unload_token_allowance_per_time_period_for_lite_people() -> NativeBalanceOf<T> {
+			T::UnloadTokenAllowancePerTimePeriodForLitePeople::get()
+		}
+
+		/// Returns the current value of [`Config::MaxFreeUnloadTokensPerTimePeriod`].
+		pub fn get_max_free_unload_tokens_per_time_period() -> u32 {
+			T::MaxFreeUnloadTokensPerTimePeriod::get()
 		}
 
 		/// Get the ring status for a recycler at a given ring index.
@@ -2674,6 +2735,13 @@ pub mod pallet {
 			};
 			ensure!(!aliases.is_empty(), Error::<T>::EmptyInputs);
 			ensure!(aliases.len().is_power_of_two(), Error::<T>::InvalidConsolidation);
+			let increment = aliases
+				.len()
+				.trailing_zeros()
+				.try_into()
+				.map_err(|_| Error::<T>::ConsolidationTooBig)?;
+			let new_value = value.checked_add(increment).ok_or(Error::<T>::ConsolidationTooBig)?;
+			ensure!(new_value <= T::MaximumExponent::get(), Error::<T>::ConsolidationTooBig);
 			RecyclerManager::<T>::unload(
 				instance_id,
 				value,
@@ -2684,13 +2752,6 @@ pub mod pallet {
 				&proven_msg,
 			)?;
 			Self::settle_load_deposits(instance_id, aliases.len() as u32);
-			let increment = aliases
-				.len()
-				.trailing_zeros()
-				.try_into()
-				.map_err(|_| Error::<T>::ConsolidationTooBig)?;
-			let new_value = value.checked_add(increment).ok_or(Error::<T>::ConsolidationTooBig)?;
-			ensure!(new_value <= T::MaximumExponent::get(), Error::<T>::ConsolidationTooBig);
 			let input_count = aliases.len() as u32;
 
 			// The destination has no coin, as verified during validation.

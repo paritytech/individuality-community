@@ -36,7 +36,7 @@ use indiv_support::{
 	tx_priority,
 };
 use scale_info::TypeInfo;
-use sp_core::twox_64;
+use sp_crypto_hashing::twox_64;
 use sp_runtime::{
 	traits::{DispatchInfoOf, Implication, TransactionExtension, ValidateResult, Verify},
 	transaction_validity::{InvalidTransaction, TransactionValidityError, ValidTransaction},

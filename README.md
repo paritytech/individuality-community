@@ -17,7 +17,7 @@
 > [!WARNING]
 > This code has not been fully audited and is experimental — it may contain bugs, vulnerabilities, or incomplete features. The runtimes under `runtimes/` are reference implementations, not turnkey production chains. Use at your own risk.
 
-Individuality is a standalone project built with the [Polkadot SDK](https://github.com/paritytech/polkadot-sdk) (FRAME): an in-development upgrade of the People chain, plus integration pallets that let other chains (e.g. Asset Hub) interoperate with it.
+Individuality is a standalone project built with the [Polkadot SDK](https://github.com/paritytech/polkadot-sdk) (FRAME): an in-development upgrade of the People chain, plus integration pallets that let other chains (e.g. Asset Hub) interoperate with it. Runtime releases follow the process in [RELEASE.md](./RELEASE.md).
 
 It is an infrastructure layer under active development (see [Security](#-security)), and is **not part of the official People chain**. We develop this layer only; anything built on top is owned by others and not associated in any form with Parity.
 

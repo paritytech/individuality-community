@@ -121,13 +121,16 @@ pub type RuntimeClock = Timestamp;
 pub type RuntimeClock = BenchmarkClock;
 
 // The `AccountContexts` type, which must implement `trait Contains` and return true only for the
-// contexts the runtime supports.
+// contexts the runtime supports. Every pallet configured with
+// `indiv_pallet_people::EnsurePersonalAliasInContext` needs its context here, otherwise no account
+// can be bound to an alias in that context and the pallet's person origin is unreachable.
 pub struct AccountContexts;
 impl frame_support::traits::Contains<Context> for AccountContexts {
 	fn contains(l: &Context) -> bool {
 		l == &indiv_pallet_mob_rule::MOB_CONTEXT ||
 			l == &indiv_pallet_score::Pallet::<Runtime>::score_context() ||
-			l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context()
+			l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context() ||
+			l == &indiv_pallet_people_airdrops::Pallet::<Runtime>::people_airdrops_context()
 	}
 }
 
@@ -672,6 +675,12 @@ pub struct NftCreditsBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
 impl indiv_pallet_nft_credits::benchmarking::BenchmarkHelper for NftCreditsBenchmarkHelper {
+	fn set_unix_time(secs: u64) {
+		// `pallet_timestamp` holds the clock in milliseconds, and its `set` is an inherent, so this
+		// writes the value straight to storage.
+		pallet_timestamp::Now::<Runtime>::put(secs.saturating_mul(1_000));
+	}
+
 	fn open_nft_claims_channel(max_message_size: u32) {
 		use cumulus_pallet_parachain_system::RelevantMessagingState;
 		use cumulus_primitives_core::relay_chain::AbridgedHrmpChannel;
@@ -709,9 +718,11 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	type ChannelInfo = ParachainSystem;
 	// One tree per block at most, and the offchain worker ships them every block, so the queue
 	// only fills while delivery to Asset Hub is down. Matched to `MaxRetainedCreditTrees`, which
-	// counts the same trees: the oldest tree still queued is then one whose awards are also still
-	// in state, so a delivery that outlasts the outage needs no proof rebuilt from events. Eight
-	// full messages drain it.
+	// counts the same trees: the oldest tree still queued is then one whose awards are ordinarily
+	// still in state, so a delivery that outlasts the outage needs no proof rebuilt from events. A
+	// `replay_credit_trees` during the outage breaks that, its tree being claimable on Asset Hub
+	// while the delivery is still queued here, so its last claim there has that chain ask for a
+	// deletion the queue entry then finds nothing to deliver. Eight full messages drain it.
 	//
 	// An entry is 12 bytes and the queue is read at the value's `MaxEncodedLen`, so
 	// `authorize_send_credit_trees` pays about 3 KB of the `Normal` proof budget for it. A tree
@@ -741,11 +752,55 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// It is also the state the chain carries for them: at most this many trees of the pallet's
 	// `AWARDS_PER_TREE` awards, an award being 65 bytes, so about 34 MB were every retained tree
 	// saturated. Trees run that full only while the chain awards faster than one tree a block, so
-	// the figure tracks the mints actually outstanding. A tree that drops out delays no mint, its
-	// root staying on chain, but its awards then have to come from the events naming its block.
+	// the figure tracks the mints actually outstanding. A tree that drops out delays no mint,
+	// because its root stays on chain until the claims chain is finished with it or the root TTL
+	// runs out. Its awards then have to come from the events naming its tree block.
 	type MaxRetainedCreditTrees = ConstU32<256>;
+	type EnsureClaimsChainOrigin = EnsureClaimsChainSibling;
+	// At least the claims pallet's `MaxTreeDeletionsPerMessage`. A larger message fails to decode
+	// here, and the root TTL then removes the roots its deletions named.
+	type MaxTreeDeletionsPerMessage = ConstU32<64>;
+	type ClaimsChainTreeTtl = ClaimsChainTreeTtl;
+	// One block records at most one root, so a day holds 43200 of them at 2 seconds a block, which
+	// 64 a block clears in about 20 minutes. The root TTL is the longer of the two, so a sweep only
+	// removes roots the claims chain has already given up on, with a month of slack for a backlog.
+	type MaxRootsPerSweep = ConstU32<64>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
+}
+
+parameter_types! {
+	/// The claims chain's `TreeTtl`, duplicated here. The root TTL this chain sweeps by is
+	/// `ROOT_TTL_GRACE` past it, so a root outlives the tree built from it.
+	///
+	/// Keep it in step with `CreditTreeTtl` in next-asset-hub-paseo. A value below the real one keeps
+	/// roots for less time than the claims chain gives a claimant, which strands credits inside their
+	/// deadline. A value above it keeps roots after the last credit has expired.
+	pub const ClaimsChainTreeTtl: u64 = 90 * 24 * 60 * 60;
+}
+
+/// Origin check for the parachain the credit trees are delivered to. Only that chain may name the
+/// roots this chain deletes.
+///
+/// Any origin that passes this check can strand a credit, so it accepts that one chain, not
+/// siblings in general.
+pub struct EnsureClaimsChainSibling;
+impl frame_support::traits::EnsureOrigin<RuntimeOrigin> for EnsureClaimsChainSibling {
+	type Success = ();
+
+	fn try_origin(o: RuntimeOrigin) -> Result<Self::Success, RuntimeOrigin> {
+		let claims_chain = <Runtime as indiv_pallet_nft_credits::Config>::NftClaimsParaId::get();
+		match o.clone().into() {
+			Ok(cumulus_pallet_xcm::Origin::SiblingParachain(id)) if id == claims_chain => Ok(()),
+			_ => Err(o),
+		}
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn try_successful_origin() -> Result<RuntimeOrigin, ()> {
+		let claims_chain = <Runtime as indiv_pallet_nft_credits::Config>::NftClaimsParaId::get();
+		Ok(cumulus_pallet_xcm::Origin::SiblingParachain(claims_chain).into())
+	}
 }
 
 parameter_types! {
@@ -787,8 +842,9 @@ impl indiv_pallet_honour::benchmarking::BenchmarkHelper<Runtime> for HonourBench
 		)
 		.expect("benchmark: people collection must be created");
 
-		let secret =
-			BandersnatchVrfVerifiable::new_secret(sp_core::twox_256(b"honour-bench-voter"));
+		let secret = BandersnatchVrfVerifiable::new_secret(sp_crypto_hashing::twox_256(
+			b"honour-bench-voter",
+		));
 		let member = BandersnatchVrfVerifiable::member_from_secret(&secret);
 
 		Members::add_members(indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER, vec![member])
@@ -1459,7 +1515,7 @@ impl indiv_pallet_coinage::BenchmarkHelper<Runtime> for CoinageBenchHelper {
 		let ring_exponent = <Runtime as indiv_pallet_people::Config>::RingExponent::get();
 		indiv_pallet_members::Pallet::<Runtime>::initialize_chunks(ring_exponent);
 
-		let entropy = sp_core::twox_256(b"people_for_coinage:42");
+		let entropy = sp_crypto_hashing::twox_256(b"people_for_coinage:42");
 		let secret = BandersnatchVrfVerifiable::new_secret(entropy);
 		let member = BandersnatchVrfVerifiable::member_from_secret(&secret);
 
@@ -1678,12 +1734,6 @@ impl indiv_pallet_members_notifier::Config for Runtime {
 
 parameter_types! {
 	pub ConstantWeight: Weight = Weight::from_parts(10_000, 0);
-}
-
-parameter_types! {
-	pub AssetHubSubscriptionWhitelist:
-		alloc::vec::Vec<indiv_pallet_members_notifier::GenesisWhitelistEntry> =
-			asset_hub_subscription_whitelist();
 }
 
 /// Pallet index of `MembersSubscriber` in next-asset-hub-paseo's `construct_runtime!`.

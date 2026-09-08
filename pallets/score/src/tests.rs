@@ -27,8 +27,8 @@ use frame_support::{
 };
 use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
 use indiv_support::traits::{
-	AppendOnlyMembers, ContextualAlias, RevisedContextualAlias, RingExponent, RingMode,
-	RingPosition,
+	AddOnlyPeopleTrait, AppendOnlyMembers, ContextualAlias, RevisedContextualAlias, RingExponent,
+	RingMode, RingPosition,
 };
 use sp_core::offchain::{
 	testing::{TestOffchainExt, TestTransactionPoolExt},
@@ -478,6 +478,50 @@ fn operate_payout_round_fails_if_no_round() {
 }
 
 #[test]
+fn operate_payout_round_recycles_hold_after_unexpected_error() {
+	new_test_ext().execute_with(|| {
+		let participant = 1;
+		let participant_key = AccountOrPerson::Account(participant);
+		let round_index = 0;
+		let amount_per_round = 100;
+		let pot = PalletScore::score_pot_id();
+		fund_score_pot(1_000);
+		PalletScore::onboard_for_recognition(&participant).unwrap();
+		RoundsPointsForParticipant::<Test>::insert(round_index, &participant_key, 1);
+		CurrentRoundPoints::<Test>::put(1);
+		assert_ok!(PalletScore::schedule_payout_rounds(
+			RuntimeOrigin::root(),
+			amount_per_round,
+			2,
+			1
+		));
+		assert_ok!(exec_authorized_tx(Call::transition_round { round_index }));
+		advance_to(1);
+		assert_ok!(exec_authorized_tx(Call::transition_round { round_index }));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), 200);
+
+		// Make the exact payout release fail after the storage layer has started.
+		RoundPayouts::<Test>::mutate(round_index, |round| {
+			round.as_mut().unwrap().point_price = 201;
+		});
+
+		let result = std::panic::catch_unwind(|| {
+			exec_authorized_tx(Call::operate_payout_round { round_index, limit: 1 })
+		});
+		#[cfg(debug_assertions)]
+		assert!(result.is_err());
+		#[cfg(not(debug_assertions))]
+		assert_ok!(result.unwrap());
+
+		assert!(RoundPayouts::<Test>::get(round_index).is_none());
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Payout.into(), &pot), amount_per_round);
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), 0);
+		assert_eq!(Participants::<Test>::get(&participant_key).unwrap().credit, 0);
+		assert_eq!(RoundsPointsForParticipant::<Test>::get(round_index, &participant_key), 1);
+	});
+}
+
+#[test]
 fn round_task_authorization_advertises_expected_validity() {
 	new_test_ext().execute_with(|| {
 		fund_score_pot(1_000);
@@ -884,6 +928,111 @@ fn redeem_credit_transfer_failure_preserves_credit_and_hold() {
 }
 
 #[test]
+fn offboard_releases_outstanding_credit() {
+	new_test_ext().execute_with(|| {
+		let user = 22;
+		let user_key = AccountOrPerson::Account(user);
+		let credit = 10;
+		let pot = PalletScore::score_pot_id();
+		PalletScore::onboard_for_recognition(&user).unwrap();
+		Participants::<Test>::mutate(&user_key, |participant| {
+			participant.as_mut().unwrap().credit = credit;
+		});
+		fund_score_pot(credit);
+		assert_ok!(Balances::hold(&HoldReason::Credit.into(), &pot, credit));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), credit);
+
+		assert_ok!(PalletScore::offboard(&user_key));
+
+		assert!(!Participants::<Test>::contains_key(&user_key));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), 0);
+	});
+}
+
+#[test]
+fn offboard_with_zero_credit_leaves_other_credit_hold_untouched() {
+	new_test_ext().execute_with(|| {
+		let offboarded = 22;
+		let credit_holder = 23;
+		let offboarded_key = AccountOrPerson::Account(offboarded);
+		let credit_holder_key = AccountOrPerson::Account(credit_holder);
+		let credit = 10;
+		let pot = PalletScore::score_pot_id();
+		PalletScore::onboard_for_recognition(&offboarded).unwrap();
+		PalletScore::onboard_for_recognition(&credit_holder).unwrap();
+		Participants::<Test>::mutate(&credit_holder_key, |participant| {
+			participant.as_mut().unwrap().credit = credit;
+		});
+		fund_score_pot(credit);
+		assert_ok!(Balances::hold(&HoldReason::Credit.into(), &pot, credit));
+
+		assert_ok!(PalletScore::offboard(&offboarded_key));
+
+		assert!(!Participants::<Test>::contains_key(&offboarded_key));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), credit);
+		assert_eq!(Participants::<Test>::get(&credit_holder_key).unwrap().credit, credit);
+	});
+}
+
+#[test]
+fn offboard_removes_participant_when_credit_hold_release_fails() {
+	new_test_ext().execute_with(|| {
+		let user = 22;
+		let user_key = AccountOrPerson::Account(user);
+		PalletScore::onboard_for_recognition(&user).unwrap();
+		Participants::<Test>::mutate(&user_key, |participant| {
+			participant.as_mut().unwrap().credit = 10;
+		});
+
+		assert_ok!(PalletScore::offboard(&user_key));
+
+		assert!(!Participants::<Test>::contains_key(&user_key));
+	});
+}
+
+#[test]
+fn payout_credit_hold_matches_remaining_participant_credit_after_offboard() {
+	new_test_ext().execute_with(|| {
+		let offboarded = 11u64;
+		let remaining = 12u64;
+		let offboarded_key = AccountOrPerson::Account(offboarded);
+		let remaining_key = AccountOrPerson::Account(remaining);
+		let pot = PalletScore::score_pot_id();
+		PalletScore::onboard_for_recognition(&offboarded).unwrap();
+		PalletScore::onboard_for_recognition(&remaining).unwrap();
+		RoundsPointsForParticipant::<Test>::insert(0, &offboarded_key, 10);
+		RoundsPointsForParticipant::<Test>::insert(0, &remaining_key, 20);
+		CurrentRoundPoints::<Test>::put(30);
+		fund_score_pot(1_000);
+
+		assert_ok!(PalletScore::schedule_payout_rounds(RuntimeOrigin::root(), 60, 1, 10));
+		assert_ok!(exec_authorized_tx(Call::transition_round {
+			round_index: CurrentRoundIndex::<Test>::get()
+		}));
+		advance_to(11);
+		assert_ok!(exec_authorized_tx(Call::transition_round {
+			round_index: CurrentRoundIndex::<Test>::get()
+		}));
+		assert_ok!(exec_authorized_tx(Call::operate_payout_round { round_index: 0, limit: 1_000 }));
+
+		let offboarded_credit = Participants::<Test>::get(&offboarded_key).unwrap().credit;
+		let remaining_credit = Participants::<Test>::get(&remaining_key).unwrap().credit;
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), 60);
+
+		assert_ok!(PalletScore::offboard(&offboarded_key));
+
+		assert!(!Participants::<Test>::contains_key(&offboarded_key));
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), remaining_credit);
+		assert_eq!(offboarded_credit + remaining_credit, 60);
+
+		let destination = 999u64;
+		assert_ok!(PalletScore::redeem_credit(RuntimeOrigin::signed(remaining), destination));
+		assert_eq!(Balances::balance(&destination), remaining_credit);
+		assert_eq!(Balances::balance_on_hold(&HoldReason::Credit.into(), &pot), 0);
+	});
+}
+
+#[test]
 fn payout_for_offboarded_participant_is_recycled() {
 	new_test_ext().execute_with(|| {
 		// 1. Fund the pot enough for this test:
@@ -901,7 +1050,7 @@ fn payout_for_offboarded_participant_is_recycled() {
 		CurrentRoundPoints::<Test>::put(30);
 
 		// 4. Offboard user A *before* the payout: remove from `Participants`.
-		PalletScore::offboard(&AccountOrPerson::Account(user_a));
+		assert_ok!(PalletScore::offboard(&AccountOrPerson::Account(user_a)));
 		assert!(!Participants::<Test>::contains_key(AccountOrPerson::Account(user_a)));
 
 		// 5. Schedule 1 round of 60; start and transition the round:
@@ -1567,6 +1716,127 @@ fn register_works_for_suspended_participant() {
 			PalletScore::register(RuntimeOrigin::signed(user), None),
 			Error::<Test>::Recognized
 		);
+	});
+}
+
+#[test]
+fn offboard_suspends_recognized_participant() {
+	new_test_ext().execute_with(|| {
+		// Create the people collection first
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+		advance_to(1);
+
+		let user = 11u64;
+		let who = AccountOrPerson::Account(user);
+
+		// Get to Recognized state.
+		PalletScore::onboard_for_recognition(&user).unwrap();
+		let (key, sk) = mock_key(user);
+		let proof = {
+			let mut msg = b"pop register using".to_vec();
+			msg.extend_from_slice(&user.encode()[..]);
+			Mock::sign(&sk, &msg[..]).unwrap()
+		};
+		Participants::<Test>::mutate(&who, |p| {
+			p.as_mut().unwrap().score = 21;
+			p.as_mut().unwrap().reached_personhood = true;
+		});
+		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), Some((key, proof))));
+
+		assert_ok!(PalletScore::offboard(&who));
+
+		assert!(!Participants::<Test>::contains_key(&who));
+		// The offboard suspended the person: their member key is suspended in the people ring.
+		assert_eq!(
+			indiv_pallet_members::Members::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, key),
+			Some(RingPosition::Suspended)
+		);
+		// The mutation session opened by the offboard is closed again.
+		assert!(
+			indiv_pallet_members::RingsState::<Test>::get(PEOPLE_MEMBER_IDENTIFIER).append_only()
+		);
+	});
+}
+
+#[test]
+fn offboard_fails_when_suspension_fails() {
+	new_test_ext().execute_with(|| {
+		let user = 11u64;
+		let who = AccountOrPerson::Account(user);
+
+		// A `Recognized` participant whose personal id does not belong to any person, so the
+		// suspension on offboard fails.
+		PalletScore::onboard_for_recognition(&user).unwrap();
+		Participants::<Test>::mutate(&who, |p| {
+			p.as_mut().unwrap().recognition = Recognized(404);
+		});
+
+		assert_noop!(PalletScore::offboard(&who), indiv_pallet_people::Error::<Test>::NotPerson);
+	});
+}
+
+/// A failed personhood suspension preserves the participant state and the next qualifying
+/// absence retries a suspension.
+#[test]
+fn set_attendance_retries_suspension_after_failure() {
+	new_test_ext().execute_with(|| {
+		// Create the people collection first
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+
+		let user = 11u64;
+		let who = AccountOrPerson::Account(user);
+
+		// A `Recognized` participant whose personal id does not belong to any person yet, so
+		// the suspension fails.
+		assert_ok!(PalletScore::onboard_for_recognition(&user));
+		Participants::<Test>::mutate(&who, |p| {
+			let p = p.as_mut().unwrap();
+			p.recognition = Recognized(0);
+			p.reached_personhood = true;
+			p.score = 21;
+		});
+
+		// No grace: any absence suspends.
+		let schedule: AbsenceGraceTiers = BoundedVec::try_from(vec![AbsenceGraceTier {
+			population_size_threshold: u32::MAX,
+			window: 0,
+			allowed_misses: 0,
+		}])
+		.unwrap();
+		assert_ok!(PalletScore::set_absence_grace_schedule(RuntimeOrigin::root(), schedule));
+
+		// First absence: the suspension fails, the participant stays recognised and keeps
+		// their personhood.
+		attend(&who, false);
+		let p = Participants::<Test>::get(&who).unwrap();
+		assert_eq!(p.recognition, Recognized(0));
+		assert!(p.reached_personhood);
+
+		// The person with that id now exists.
+		let id = People::reserve_new_id();
+		assert_eq!(id, 0);
+		let (key, _sk) = mock_key(user);
+		assert_ok!(People::recognize_personhood(id, Some(key)));
+
+		// The next absence retries the suspension, which now succeeds.
+		attend(&who, false);
+		let p = Participants::<Test>::get(&who).unwrap();
+		assert_eq!(p.recognition, Suspended(0));
+		assert!(!p.reached_personhood);
 	});
 }
 

@@ -27,7 +27,8 @@ use codec::Encode;
 use frame_support::{assert_noop, assert_ok};
 use frame_system::AuthorizeCall;
 use indiv_support::traits::{Alias, AppendOnlyMembers};
-use sp_core::{blake2_256, H256};
+use sp_core::H256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{
 	testing::UintAuthorityId,
 	transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidityError},

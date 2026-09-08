@@ -99,8 +99,9 @@
 //! Claiming happens on the claims chain, which never sees the credits themselves, only one root per
 //! block. A claimant proves their entitlement by presenting their credit with an inclusion proof:
 //! the sibling hashes that rehash the credit's leaf up to the root held for the credit's tree
-//! block. A proof verifies only against that one root, and only for the claimant its leaf
-//! binds in, so no one else's credit and no other block's root can be minted against it.
+//! block. The claims chain builds the leaf itself, from the credit presented and the claimant its
+//! origin authenticated. Presenting somebody else's credit builds a different leaf, which does not
+//! rehash to the stored root.
 //!
 //! A claimant does not have to rebuild the tree themselves. The runtime API in [`runtime_api`]
 //! serves the proof material:
@@ -109,9 +110,9 @@
 //!   tree blocks, against [`NftClaimCreditRoots`], so a claimant finds their roots by one lookup
 //!   instead of a scan.
 //! - `nft_claim_credit_proofs` returns, for one tree block and one claimant, the inclusion proof of
-//!   each credit the claimant holds there: credit, leaf, leaf index, leaf count, root and sibling
-//!   hashes, which is what the claims chain verifies. `nft_claim_credit_proof_from_awards` does the
-//!   same for a pruned block, from awards the caller supplies.
+//!   each credit the claimant holds there: the credit, its leaf index and the sibling hashes, which
+//!   is what the claims chain verifies. `nft_claim_credit_proof_from_awards` does the same for a
+//!   pruned block, from awards the caller supplies.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -119,6 +120,7 @@ extern crate alloc;
 
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
@@ -137,13 +139,11 @@ use core::marker::PhantomData;
 use cumulus_primitives_core::{GetChannelInfo, ParaId};
 use frame_support::{
 	defensive,
+	dispatch::PostDispatchInfo,
 	pallet_prelude::*,
-	traits::{Defensive, UnixTime},
+	traits::{Defensive, DefensiveOption, EnsureOrigin, UnixTime},
 };
-use frame_system::{
-	offchain::{CreateAuthorizedTransaction, SubmitTransaction},
-	pallet_prelude::*,
-};
+use frame_system::{offchain::CreateAuthorizedTransaction, pallet_prelude::*};
 use indiv_pallet_game::{
 	AttesterPosition, GameIdx, GroupsSetting, IndexToPlayer, PlayerToIndex, RoundIndex,
 };
@@ -152,10 +152,12 @@ use indiv_pallet_game::{
 use indiv_pallet_game::WeightInfo as GameWeightInfo;
 use indiv_support::{
 	credit_trees::{
-		AwardCredits, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, NftClaimCredit,
-		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
+		authorize_expiry_sweep, drain_due_expiries, expiry_deadline, oldest_expiry, AwardCredits,
+		CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpirySweepTx, ExpiryTimestamp,
+		NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence, ROOT_TTL_GRACE,
 	},
 	identity::AccountOrPerson,
+	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
 	tx_priority,
 	weight_budget::OcwWeightBudget,
 };
@@ -169,21 +171,6 @@ use xcm::{
 	prelude::send_xcm,
 	VersionedXcm,
 };
-
-/// Retry window, in blocks, for the offchain worker's [`Pallet::send_credit_trees`].
-/// Retries within one window are byte-identical, so the transaction pool deduplicates them.
-/// A new window changes the discriminator and thus the transaction hash, which escapes both that
-/// deduplication and the pool rotator's inclusion ban.
-const CREDIT_TREE_RETRY_WINDOW: u32 = 8;
-
-/// Finite longevity for [`Pallet::send_credit_trees`] so that a stranded retry self-evicts from the
-/// pool rather than lingering until it is mined against state it no longer matches.
-const CREDIT_TREE_TX_LONGEVITY: u64 = 64;
-
-/// Period, in blocks, at which a failing [`Pallet::send_credit_trees`] submission is warned about
-/// rather than logged at `debug`. A stalled delivery is otherwise only visible as a queue that
-/// stops draining.
-const CREDIT_TREE_STALL_WARN_PERIOD: u32 = 32;
 
 /// Bytes held back from the claims channel's per-message room for what the router adds to a credit
 /// tree message after the pallet has handed it over.
@@ -232,7 +219,11 @@ const LOG_TARGET: &str = "runtime::indiv-pallet-nft-credits";
 pub mod pallet {
 	use super::*;
 
+	/// The current storage version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(PhantomData<T>);
 
 	/// The credits are the game's own bookkeeping, so this pallet is configured on top of it and
@@ -332,6 +323,37 @@ pub mod pallet {
 		/// awards to.
 		#[pallet::constant]
 		type MaxCreditBlocksPerClaimant: Get<u32>;
+
+		/// Origin check for the XCM messages that name the roots to delete. It authenticates
+		/// [`Config::NftClaimsParaId`].
+		///
+		/// A claimant builds their proof against a root, so any origin that passes this check can
+		/// strand a credit. Accept that one chain, not siblings in general.
+		type EnsureClaimsChainOrigin: EnsureOrigin<Self::RuntimeOrigin>;
+
+		/// The maximum number of tree blocks accepted in one deletion message.
+		///
+		/// Set this at least as high as the claims pallet's `MaxTreeDeletionsPerMessage`. A message
+		/// above the bound fails to decode, and [`Pallet::root_ttl`] then removes the roots its
+		/// deletions named.
+		#[pallet::constant]
+		type MaxTreeDeletionsPerMessage: Get<u32>;
+
+		/// The claims chain's TTL for the trees this chain sends it, which is the deadline a
+		/// claimant is held to.
+		///
+		/// This duplicates a constant of another runtime, as [`Config::NftClaimsPalletIndex`] does.
+		/// [`Pallet::root_ttl`] derives from it, so keep it in step with the claims chain's
+		/// `TreeTtl`.
+		#[pallet::constant]
+		type ClaimsChainTreeTtl: Get<u64>;
+
+		/// Maximum number of roots one [`Pallet::sweep_expired_roots`] removes.
+		///
+		/// This bounds the call's weight against the block. The offchain worker submits one call
+		/// per block until nothing is due.
+		#[pallet::constant]
+		type MaxRootsPerSweep: Get<u32>;
 	}
 
 	/// A batch of credit trees as it is sent to the NFT claims chain.
@@ -483,6 +505,24 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type LastReplayTime<T: Config> = StorageValue<_, u64, OptionQuery>;
 
+	/// Every tree block whose root is still recorded, filed under the timestamp that root commits
+	/// to.
+	///
+	/// The key is hashed with `Identity` and encoded big-endian, so the map iterates from the
+	/// oldest deadline to the newest, which [`NftClaimCreditRoots`] does not. A sweep takes the
+	/// roots that are due and stops at the first that is not. Both removal paths remove a root's
+	/// entry with the root.
+	#[pallet::storage]
+	pub type RootExpiries<T: Config> = StorageDoubleMap<
+		_,
+		Identity,
+		ExpiryTimestamp,
+		Twox64Concat,
+		BlockNumberFor<T>,
+		(),
+		OptionQuery,
+	>;
+
 	/// The sequence number the next queued credit tree is delivered under.
 	///
 	/// Only a tree that made it into [`CreditTreeDeliveryQueue`] consumes one, so the sequence the
@@ -545,6 +585,19 @@ pub mod pallet {
 		/// `MaxQueuedCreditTrees` trees. Its credits stay unmintable until a
 		/// [`Pallet::replay_credit_trees`] names `block`.
 		CreditTreeDeliveryDropped { block: BlockNumberFor<T> },
+		/// The claims chain has finished with these roots, so this chain removed them too. `count`
+		/// of the `named` blocks held a root.
+		///
+		/// Every credit those roots committed to has been minted, or the claims chain's deadline
+		/// for them has passed. No proof can be built against them again.
+		CreditRootsDeleted { named: u32, count: u32 },
+		/// `count` roots outlived [`Pallet::root_ttl`] with the claims chain never asking for
+		/// their deletion, so this chain removed them. Its deadline for them passed first, so
+		/// nothing mintable is lost.
+		///
+		/// The blocks are not named. A root this sweep removes is one the claims chain gave up on
+		/// long before, so nothing is waiting on the removal.
+		CreditRootsExpired { count: u32 },
 	}
 
 	#[pallet::error]
@@ -578,6 +631,8 @@ pub mod pallet {
 		TransactionNotLocal = 200,
 		/// No credit tree is waiting to be delivered to the NFT claims chain.
 		NoQueuedCreditTrees = 201,
+		/// No root is filed for expiry, so there is nothing to sweep.
+		NothingToSweep = 202,
 	}
 
 	impl From<AuthorizeInvalidity> for TransactionValidityError {
@@ -600,6 +655,7 @@ pub mod pallet {
 
 		fn offchain_worker(block_number: BlockNumberFor<T>) {
 			Self::submit_credit_tree_delivery(block_number);
+			Self::submit_root_expiry_sweep(block_number);
 		}
 	}
 
@@ -662,6 +718,62 @@ pub mod pallet {
 			ensure_signed(origin)?;
 
 			Self::do_replay_credit_trees(blocks)
+		}
+
+		/// Removes the roots of `blocks`, which the claims chain is finished with.
+		///
+		/// Every credit those roots committed to has been minted, or the claims chain's deadline
+		/// for them has passed, so no proof can be built against them again. The call is
+		/// idempotent: it skips a block whose root is already gone without reporting it, because
+		/// [`Pallet::root_ttl`] can remove a root in the same window its deletion is in flight.
+		///
+		/// [`Config::MaxRetainedCreditTrees`] removes the awards, and its own ring removes a
+		/// claimant's [`NftClaimCreditBlocks`] entry. The index resolves against the roots, so a
+		/// block whose root is gone drops out of the answer by itself.
+		///
+		/// ## Origin
+		/// Requires the claims chain's XCM origin ([`Config::EnsureClaimsChainOrigin`]).
+		///
+		/// ## Parameters
+		/// - `blocks`: The tree blocks whose roots to remove.
+		#[pallet::call_index(20)]
+		#[pallet::weight(<T as Config>::WeightInfo::receive_tree_deletions(blocks.len() as u32))]
+		pub fn receive_tree_deletions(
+			origin: OriginFor<T>,
+			blocks: BoundedVec<BlockNumberFor<T>, T::MaxTreeDeletionsPerMessage>,
+		) -> DispatchResult {
+			T::EnsureClaimsChainOrigin::ensure_origin(origin)?;
+
+			Self::do_receive_tree_deletions(blocks);
+
+			Ok(())
+		}
+
+		/// Removes the roots whose [`Pallet::root_ttl`] has run out, oldest first.
+		///
+		/// This pallet's offchain worker submits this authorized call. It is accepted from a local
+		/// or in-block source only, so no external submission reaches it.
+		///
+		/// The claims chain's TTL is the shorter one, so the sweep only removes roots that chain
+		/// has already given up on and strands nothing mintable. `oldest` must be the timestamp
+		/// [`RootExpiries`] holds its oldest entry under, which makes a retry that raced a
+		/// successful sweep stale instead of a second pass.
+		#[pallet::authorize(|source, oldest, _discriminator| {
+			Self::authorize_sweep_expired_roots(source, oldest)
+		})]
+		#[pallet::call_index(21)]
+		#[pallet::weight(<T as Config>::WeightInfo::sweep_expired_roots(T::MaxRootsPerSweep::get()))]
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_sweep_expired_roots())]
+		pub fn sweep_expired_roots(
+			origin: OriginFor<T>,
+			_oldest: u32,
+			// The submitting block, which gives each block's sweep a transaction hash of its own.
+			// See `Pallet::submit_root_expiry_sweep`.
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+
+			Ok(Self::do_sweep_expired_roots())
 		}
 
 		/// Award an NFT claim credit to `claimant` outside of a game.
@@ -1014,6 +1126,7 @@ impl<T: Config> Pallet<T> {
 		let root = binary_merkle_tree::merkle_root::<BlakeTwo256, _>(leaves).into();
 		let credit_root = NftClaimCreditTree { game_index, root, leaf_count, timestamp };
 		NftClaimCreditRoots::<T>::insert(block, credit_root);
+		Self::note_root_expiry(block, timestamp);
 		Self::retain_credit_awards(block);
 		Self::deposit_event(Event::<T>::NftClaimCreditRootRecorded { block, credit_root });
 		Self::queue_credit_tree_delivery(block);
@@ -1076,10 +1189,13 @@ impl<T: Config> Pallet<T> {
 		let validity =
 			ValidTransaction::with_tag_prefix("game:send-credit-trees")
 				.and_provides(queued_sequence)
+				// The block number rises with every retry window, so a retry outranks the attempt
+				// holding the same tag. The pool replaces that attempt only for a strictly higher
+				// priority.
 				.priority(tx_priority::BACKGROUND_PROGRESS.saturating_add(
 					frame_system::Pallet::<T>::block_number().saturated_into::<u64>(),
 				))
-				.longevity(CREDIT_TREE_TX_LONGEVITY)
+				.longevity(TX_LONGEVITY)
 				.propagate(false)
 				.build()
 				.expect("tag prefix is not empty; qed");
@@ -1089,18 +1205,19 @@ impl<T: Config> Pallet<T> {
 
 	/// Reads the credit tree of every block in `blocks`, dropping the blocks that have none.
 	///
-	/// A sequenced block without a tree is inconsistent state, not user error: nothing removes
-	/// a tree while its delivery is outstanding. It is logged and reported with
-	/// [`Event::CreditTreeDeliverySkipped`], because its sequence is spent either way.
-	/// A block from [`Pallet::replay_credit_trees`] carries no sequence and is only logged,
-	/// since there a block without a tree is the caller's own choice of argument.
+	/// A sequenced block without a tree reports [`Event::CreditTreeDeliverySkipped`], because its
+	/// sequence is spent and no replay recovers it. This happens when a root is removed before its
+	/// delivery goes out: a replay hands the claims chain a tree that is still queued here, a claim
+	/// mints its last credit, and the claims chain then asks this chain to delete a root it still
+	/// owes a delivery for. A block from [`Pallet::replay_credit_trees`] carries no sequence and is
+	/// only logged, because there the caller chose the block.
 	fn resolve_credit_trees(
 		blocks: impl Iterator<Item = (Option<TreeSequence>, BlockNumberFor<T>)>,
 	) -> Vec<CreditTreeDelivery> {
 		blocks
 			.filter_map(|(sequence, block)| {
 				let Some(tree) = NftClaimCreditRoots::<T>::get(block) else {
-					log::error!(
+					log::warn!(
 						target: LOG_TARGET,
 						"No credit tree for block {block:?}, skipping its delivery",
 					);
@@ -1207,11 +1324,7 @@ impl<T: Config> Pallet<T> {
 
 	/// Submits a [`Pallet::send_credit_trees`] transaction for the queued trees, if any.
 	///
-	/// Runs every block, so a delivery that failed is retried on the next one. Submission
-	/// failures are expected: within a retry window every attempt is byte-identical and the
-	/// transaction pool deduplicates them. A streak of them is not, so every
-	/// [`CREDIT_TREE_STALL_WARN_PERIOD`] blocks the failure is warned about instead, a stalled
-	/// delivery being otherwise visible only as a queue that stops draining.
+	/// Runs every block, so a delivery that failed is retried on the next one.
 	pub(crate) fn submit_credit_tree_delivery(block_number: BlockNumberFor<T>) {
 		let Some((first_sequence, _)) = CreditTreeDeliveryQueue::<T>::get().first().copied() else {
 			return;
@@ -1219,26 +1332,10 @@ impl<T: Config> Pallet<T> {
 
 		let call = Call::<T>::send_credit_trees {
 			first_sequence,
-			discriminator: block_number / CREDIT_TREE_RETRY_WINDOW.into(),
+			discriminator: block_number / RETRY_WINDOW.into(),
 		};
-		let tx =
-			<T as CreateAuthorizedTransaction<Call<T>>>::create_authorized_transaction(call.into());
-		if SubmitTransaction::<T, Call<T>>::submit_transaction(tx).is_ok() {
-			return;
-		}
 
-		if (block_number % CREDIT_TREE_STALL_WARN_PERIOD.into()).is_zero() {
-			log::warn!(
-				target: LOG_TARGET,
-				"offchain worker: `send_credit_trees` repeatedly rejected by the \
-				 transaction pool, possible stall",
-			);
-		} else {
-			log::debug!(
-				target: LOG_TARGET,
-				"offchain worker: failed to submit `send_credit_trees`",
-			);
-		}
+		submit_authorized::<T, _>(call, "send_credit_trees", LOG_TARGET);
 	}
 
 	/// Note `block` as the newest tree block whose [`NftClaimCreditAwards`] are retained,
@@ -1298,6 +1395,10 @@ impl<T: Config> Pallet<T> {
 	/// Exposed through the runtime API rather than as a call: nothing is written, and a whole
 	/// block's awards in an extrinsic's proof would be paid for by every other extrinsic in
 	/// the block.
+	///
+	/// A call with at least one proof derives the leaves and builds the block's tree once.
+	/// [`AWARDS_PER_TREE`] bounds the tree hash count, regardless of the proof count. Each proof
+	/// adds only its own sibling hashes.
 	pub fn nft_claim_credit_proofs(
 		tree_block: BlockNumberFor<T>,
 		claimant: &AccountOrPerson<T::AccountId>,
@@ -1311,15 +1412,18 @@ impl<T: Config> Pallet<T> {
 			return Err(NftClaimCreditProofError::AwardsPruned);
 		}
 
-		let leaves = Self::nft_claim_credit_leaves(&awards);
-		awards
+		let claimed = awards
 			.iter()
 			.enumerate()
 			.filter(|(_, award)| &award.claimant == claimant)
-			.map(|(leaf_index, award)| {
-				Self::credit_proof(&recorded, &leaves, award.credit, leaf_index as u32)
-			})
-			.collect::<Result<Vec<_>, _>>()
+			.map(|(leaf_index, award)| (leaf_index as u32, award.credit))
+			.collect::<Vec<_>>();
+		if claimed.is_empty() {
+			return Ok(Vec::new());
+		}
+
+		let leaves = Self::nft_claim_credit_leaves(&awards);
+		Self::credit_proofs(&recorded, &leaves, &claimed)
 	}
 
 	/// Build the inclusion proof of the credit at `leaf_index` against the
@@ -1352,37 +1456,90 @@ impl<T: Config> Pallet<T> {
 			.credit;
 
 		let leaves = Self::nft_claim_credit_leaves(&awards);
-		Self::credit_proof(&recorded, &leaves, credit, leaf_index)
+		Self::credit_proofs(&recorded, &leaves, &[(leaf_index, credit)])?
+			.into_iter()
+			.next()
+			.defensive_ok_or(NftClaimCreditProofError::LeafIndexOutOfBounds)
 	}
 
-	/// The inclusion proof of `leaf_index` in `leaves`, checked against `recorded`.
+	/// The inclusion proofs of `claimed` in `leaves`, checked against `recorded`.
 	///
-	/// `leaves` must be the block's complete leaf set in award order; the root check is what
-	/// establishes that it is.
-	fn credit_proof(
+	/// `claimed` pairs a leaf index with the credit that leaf commits to, and the proofs come
+	/// back in that order. `leaves` must be the block's complete leaf set in award order; the
+	/// root check is what establishes that it is. One tree serves every index.
+	fn credit_proofs(
 		recorded: &NftClaimCreditTree,
 		leaves: &[NftClaimCreditLeaf],
-		credit: NftClaimCredit,
-		leaf_index: u32,
-	) -> Result<NftClaimCreditProof, NftClaimCreditProofError> {
-		if leaf_index >= recorded.leaf_count {
-			return Err(NftClaimCreditProofError::LeafIndexOutOfBounds);
-		}
+		claimed: &[(u32, NftClaimCredit)],
+	) -> Result<Vec<NftClaimCreditProof>, NftClaimCreditProofError> {
+		let claimed = claimed
+			.iter()
+			.map(|(leaf_index, credit)| {
+				if (*leaf_index as usize) < leaves.len() {
+					Ok((*leaf_index, *credit))
+				} else {
+					Err(NftClaimCreditProofError::LeafIndexOutOfBounds)
+				}
+			})
+			.collect::<Result<Vec<_>, _>>()?;
 
-		let proof =
-			binary_merkle_tree::merkle_proof::<BlakeTwo256, _, _>(leaves.to_vec(), leaf_index);
-		if CreditProofNode::from(proof.root) != recorded.root {
+		let (root, proofs) =
+			Self::credit_tree_proofs(leaves, claimed.iter().map(|(leaf_index, _)| *leaf_index));
+		if root != recorded.root {
 			return Err(NftClaimCreditProofError::RootMismatch);
 		}
 
-		Ok(NftClaimCreditProof {
-			root: recorded.root,
-			credit,
-			leaf: proof.leaf,
-			leaf_index,
-			leaf_count: recorded.leaf_count,
-			proof: proof.proof.into_iter().map(CreditProofNode::from).collect::<Vec<_>>(),
-		})
+		Ok(claimed
+			.into_iter()
+			.zip(proofs)
+			.map(|((leaf_index, credit), proof)| NftClaimCreditProof { credit, leaf_index, proof })
+			.collect::<Vec<_>>())
+	}
+
+	/// The root of the tree over `leaves` and, for each index in `leaf_indices`, the sibling
+	/// hashes that rehash its leaf up to that root, bottom layer first.
+	///
+	/// One pass over the layers serves every index at once. The layout is the one
+	/// [`binary_merkle_tree`] builds and the claim chain's `verify_proof` rehashes along: a
+	/// layer is hashed in pairs, a trailing odd node moves up unchanged, and the last node left
+	/// is the root. An empty leaf set gives the zero root, as `merkle_root` does.
+	fn credit_tree_proofs(
+		leaves: &[NftClaimCreditLeaf],
+		leaf_indices: impl Iterator<Item = u32>,
+	) -> (CreditProofNode, Vec<Vec<CreditProofNode>>) {
+		let mut layer = leaves
+			.iter()
+			.map(|leaf| sp_io::hashing::blake2_256(leaf.as_ref()))
+			.collect::<Vec<_>>();
+		let mut positions = leaf_indices.collect::<Vec<_>>();
+		let mut proofs = vec![Vec::new(); positions.len()];
+
+		while layer.len() > 1 {
+			for (proof, position) in proofs.iter_mut().zip(&positions) {
+				// A trailing odd node is alone in its pair, so it contributes no sibling.
+				if let Some(sibling) = layer.get((position ^ 1) as usize) {
+					proof.push(CreditProofNode(*sibling));
+				}
+			}
+
+			layer = layer
+				.chunks(2)
+				.map(|pair| match pair {
+					[left, right] => {
+						let mut buf = [0u8; 64];
+						buf[..32].copy_from_slice(left);
+						buf[32..].copy_from_slice(right);
+						sp_io::hashing::blake2_256(&buf)
+					},
+					_ => pair.first().copied().unwrap_or_default(),
+				})
+				.collect::<Vec<_>>();
+			for position in &mut positions {
+				*position /= 2;
+			}
+		}
+
+		(CreditProofNode(layer.first().copied().unwrap_or_default()), proofs)
 	}
 
 	/// The NFT claim credit roots `claimant` has at least one credit under, in ascending
@@ -1567,6 +1724,127 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
+	/// How long, in seconds after the `timestamp` it commits to, a root is kept.
+	///
+	/// [`Config::ClaimsChainTreeTtl`] plus [`ROOT_TTL_GRACE`], so it always exceeds the claims
+	/// chain's deadline. This chain holds the awards a claimant builds a proof from, and a root
+	/// removed before that deadline strands a credit that is still mintable. As the longer of the
+	/// two TTLs it backstops a deletion message that never arrived.
+	pub fn root_ttl() -> u64 {
+		T::ClaimsChainTreeTtl::get().saturating_add(ROOT_TTL_GRACE)
+	}
+
+	/// Files the root of `block` under the timestamp it commits to, so a sweep finds it once that
+	/// timestamp is [`Pallet::root_ttl`] old.
+	pub(crate) fn note_root_expiry(block: BlockNumberFor<T>, timestamp: u32) {
+		RootExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
+	}
+
+	/// Records `tree` as `block`'s root, for a runtime's own tests, which write the roots they
+	/// start from to storage instead of awarding them.
+	///
+	/// This makes both writes a recorded root needs. A root with no expiry entry is one no sweep
+	/// finds, and a caller cannot produce that state through this function.
+	#[cfg(feature = "std")]
+	pub fn record_credit_root_for_tests(block: BlockNumberFor<T>, tree: NftClaimCreditTree) {
+		NftClaimCreditRoots::<T>::insert(block, tree);
+		Self::note_root_expiry(block, tree.timestamp);
+	}
+
+	/// Removes the root of `block` and its expiry entry.
+	///
+	/// The timestamp comes from the root, so this removes the entry that was filed under it. A
+	/// block with no root leaves both maps unchanged and returns `false`.
+	fn remove_credit_root(block: BlockNumberFor<T>) -> bool {
+		let Some(tree) = NftClaimCreditRoots::<T>::take(block) else {
+			return false;
+		};
+		RootExpiries::<T>::remove(ExpiryTimestamp::from(tree.timestamp), block);
+		true
+	}
+
+	/// Removes the roots of `blocks`, as [`Pallet::receive_tree_deletions`] does once its origin is
+	/// checked.
+	pub(crate) fn do_receive_tree_deletions(
+		blocks: BoundedVec<BlockNumberFor<T>, T::MaxTreeDeletionsPerMessage>,
+	) {
+		let named = blocks.len() as u32;
+		let mut count = 0u32;
+		for block in &blocks {
+			if Self::remove_credit_root(*block) {
+				count = count.saturating_add(1);
+			}
+		}
+
+		Self::deposit_event(Event::<T>::CreditRootsDeleted { named, count });
+	}
+
+	/// Removes up to [`Config::MaxRootsPerSweep`] roots whose TTL has run out, as
+	/// [`Pallet::sweep_expired_roots`] does once its origin is checked.
+	pub(crate) fn do_sweep_expired_roots() -> PostDispatchInfo {
+		let expired = drain_due_expiries::<RootExpiries<T>, BlockNumberFor<T>>(
+			Self::root_ttl(),
+			T::UnixTime::now().as_secs(),
+			T::MaxRootsPerSweep::get(),
+		);
+
+		for block in &expired {
+			NftClaimCreditRoots::<T>::remove(block);
+		}
+
+		let count = expired.len() as u32;
+		if count > 0 {
+			Self::deposit_event(Event::<T>::CreditRootsExpired { count });
+		}
+
+		Some(<T as Config>::WeightInfo::sweep_expired_roots(count)).into()
+	}
+
+	/// Validates a [`Pallet::sweep_expired_roots`] transaction, as [`authorize_expiry_sweep`] does,
+	/// the deadline being the one [`Pallet::root_ttl`] names.
+	pub fn authorize_sweep_expired_roots(
+		source: TransactionSource,
+		oldest: &u32,
+	) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
+		authorize_expiry_sweep::<T, RootExpiries<T>, BlockNumberFor<T>>(
+			ExpirySweepTx {
+				tag: "game:sweep-expired-roots",
+				not_local: AuthorizeInvalidity::TransactionNotLocal.into(),
+				nothing_to_sweep: AuthorizeInvalidity::NothingToSweep.into(),
+			},
+			source,
+			*oldest,
+			Self::root_ttl(),
+			T::UnixTime::now().as_secs(),
+		)
+	}
+
+	/// Submits a [`Pallet::sweep_expired_roots`] for the oldest filed timestamp, if its TTL has
+	/// run out.
+	///
+	/// This repeats the TTL check that `authorize` makes. Without it a chain with nothing expired
+	/// submits a transaction every block that the pool holds as `Future`.
+	pub(crate) fn submit_root_expiry_sweep(block_number: BlockNumberFor<T>) {
+		let Some(oldest) = oldest_expiry::<RootExpiries<T>, BlockNumberFor<T>>() else {
+			return;
+		};
+		if T::UnixTime::now().as_secs() < expiry_deadline(oldest, Self::root_ttl()) {
+			return;
+		}
+
+		let call = Call::<T>::sweep_expired_roots {
+			oldest,
+			// The submitting block, not the retry window `indiv_support::offchain` paces other
+			// calls by. Roots at one timestamp can outnumber one sweep's limit, which keeps
+			// `oldest` the same, so a window would allow one sweep per window: the pool bans the
+			// hash of the sweep it included, and the next attempt of that window repeats it. The
+			// `provides` tag keeps one attempt in the pool.
+			discriminator: block_number,
+		};
+
+		submit_authorized::<T, _>(call, "sweep_expired_roots", LOG_TARGET);
+	}
+
 	/// Awards `claimant` the credit `attester` would earn them in `round` of `game_index`, as
 	/// [`Pallet::testnet_grant_nft_claim_credit`] does once its origin is checked.
 	#[cfg(feature = "testnet")]
@@ -1710,6 +1988,25 @@ impl<T: Config> Pallet<T> {
 			"MaxRetainedCreditTrees ({retained}) must be >= MaxQueuedCreditTrees ({queued})",
 			retained = T::MaxRetainedCreditTrees::get(),
 			queued = T::MaxQueuedCreditTrees::get(),
+		);
+
+		assert!(T::MaxRootsPerSweep::get() > 0, "MaxRootsPerSweep must be greater than zero");
+		assert!(
+			T::MaxTreeDeletionsPerMessage::get() > 0,
+			"MaxTreeDeletionsPerMessage must be greater than zero",
+		);
+
+		// An XCM message dispatches one call and the transaction pool the other. A worst case above
+		// the per-extrinsic limit never executes, which loses a message's deletions and stops the
+		// sweep from removing roots.
+		budget.assert_fits(
+			"receive_tree_deletions",
+			<T as Config>::WeightInfo::receive_tree_deletions(T::MaxTreeDeletionsPerMessage::get()),
+		);
+		budget.assert_fits(
+			"sweep_expired_roots",
+			<T as Config>::WeightInfo::sweep_expired_roots(T::MaxRootsPerSweep::get())
+				.saturating_add(<T as Config>::WeightInfo::authorize_sweep_expired_roots()),
 		);
 	}
 }

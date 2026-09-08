@@ -34,7 +34,7 @@ use frame_support::{
 		AccountTouch as _, Defensive as _,
 	},
 };
-use sp_core::blake2_256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{
 	traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, TrailingZeroInput, Zero},
 	ArithmeticError, SaturatedConversion,

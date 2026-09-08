@@ -299,10 +299,6 @@ mod benchmarks {
 	/// `do_transfer_by_holder` has no extrinsic of its own: the fee-less `transfer` covers
 	/// purse-signed holders, and this entry exists for paid callers such as a contract
 	/// environment, which charge this weight themselves.
-	///
-	/// `weights.rs` carries no `transfer_by_holder` entry yet. It is generated from this
-	/// benchmark by the same rig that produced the rest of that file, and the first caller
-	/// that needs the weight brings the regenerated numbers with it.
 	#[benchmark]
 	fn transfer_by_holder() -> Result<(), BenchmarkError> {
 		let owner: T::AccountId = whitelisted_caller();

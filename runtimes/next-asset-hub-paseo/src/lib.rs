@@ -75,7 +75,7 @@ use assets_common::{
 };
 use core::cmp::Ordering;
 use cumulus_pallet_parachain_system::{RelayNumberMonotonicallyIncreases, RelaychainDataProvider};
-use cumulus_primitives_core::{AggregateMessageOrigin, ParaId};
+use cumulus_primitives_core::{AggregateMessageOrigin, ParaId, VerifySchedulingSignature};
 use frame_support::traits::EnsureOrigin;
 use governance::{pallet_custom_origins, GeneralAdmin, StakingAdmin, Treasurer, TreasurySpender};
 use indiv_precompile_nft_claims::NftClaimsMinter;
@@ -191,7 +191,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 2_000_039,
+	spec_version: 3_002_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 21,
@@ -851,6 +851,7 @@ impl cumulus_pallet_parachain_system::Config for Runtime {
 	type ConsensusHook = ConsensusHook;
 	type WeightInfo = weights::cumulus_pallet_parachain_system::WeightInfo<Runtime>;
 	type RelayParentOffset = ConstU32<RELAY_PARENT_OFFSET>;
+	type SchedulingSignatureVerifier = ();
 }
 
 type ConsensusHook = cumulus_pallet_aura_ext::FixedVelocityConsensusHook<
@@ -1106,7 +1107,7 @@ pub type ScarcityStoragePrice =
 
 impl pallet_scarcity::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = pallet_scarcity::weights::SubstrateWeight<Runtime>;
+	type WeightInfo = weights::pallet_scarcity::WeightInfo<Runtime>;
 	type UnixTime = Timestamp;
 	type Balance = Balance;
 	// The pallet aggregates exact deposit sums per collection; the consideration ticket
@@ -1134,7 +1135,12 @@ impl pallet_scarcity::Config for Runtime {
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
 	// A purse key needs no account, so `AutoMapper` never sees one. Registering it at mint time
 	// is what lets the ERC-721 view resolve its address back to the key.
+	#[cfg(not(feature = "runtime-benchmarks"))]
 	type OnPurseOccupied = indiv_precompile_scarcity::MapPurseKey<Runtime>;
+	// Every entry that occupies a key adds `on_purse_occupied_weight()` on its own, so a
+	// benchmark that ran the real handler would charge it twice.
+	#[cfg(feature = "runtime-benchmarks")]
+	type OnPurseOccupied = ();
 	// The collections are exposed as ERC-721 contracts, whose `name`, `symbol` and `tokenURI`
 	// are `string`. Held here so the rule covers the extrinsics too, not only the precompile.
 	type MetadataPolicy = indiv_precompile_scarcity::Erc721MetadataPolicy<Runtime>;
@@ -1575,9 +1581,9 @@ mod bandersnatch_bench {
 const DOTNS_PERSON_REGISTRATION_ALLOWANCE_MAX: Balance = MILLICENTS;
 /// Recover enough so that if a call to the name registration fails, another one can be retried in
 /// about 30 minutes. The 50 CENTS number is based on napkin math I did looking at the weight of the
-/// call.
+/// call. The rate is per relay chain block, the block number the pallet measures recovery with.
 const DOTNS_PERSON_REGISTRATION_ALLOWANCE_RECOVERY: Balance =
-	50 * CENTS / ((30 * MINUTES) as Balance);
+	50 * CENTS / ((30 * RC_MINUTES) as Balance);
 
 #[derive(
 	Clone,
@@ -1654,6 +1660,7 @@ impl indiv_pallet_origin_restriction::BenchmarkHelper<OriginCaller, RuntimeCall>
 
 impl indiv_pallet_origin_restriction::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_origin_restriction::WeightInfo<Runtime>;
+	type BlockNumberProvider = RelaychainDataProvider<Runtime>;
 	type RestrictedEntity = RestrictedEntity;
 	type OperationAllowedOneTimeExcess = OperationAllowedOneTimeExcess;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -2157,12 +2164,47 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	// carries at most 11 sibling hashes. 16 covers 65536 leaves, leaving room for that constant to
 	// grow without stranding the tail of a tree.
 	type MaxProofNodes = ConstU32<16>;
+	// The game pallet's `AWARDS_PER_TREE`, which is the most leaves one tree carries.
+	// `ClaimedLeaves` holds one bit per leaf, so a tree costs 256 bytes there, and a tree over this
+	// bound is refused rather than stored with leaves this chain cannot spend.
+	type MaxCreditsPerTree = ConstU32<2048>;
+	type UnixTime = Timestamp;
+	type TreeTtl = CreditTreeTtl;
+	// Above `MaxTreeDeletionsPerMessage`, so one sweep drops no deletion of its own, and with room
+	// for the trees fully claimed in the meantime. A deletion is four bytes, so the whole
+	// queue costs under a kilobyte of the proof budget.
+	type MaxQueuedTreeDeletions = ConstU32<128>;
+	// At or below the game pallet's `MaxTreeDeletionsPerMessage`. A larger message fails to decode
+	// there, and that chain's own TTL then removes the roots its deletions named.
+	//
+	// One sweep removes this many trees as well, once a block. One People-chain block awards at
+	// most one tree, so a day holds 43200 of them at 2 seconds a block, which 64 a block clears in
+	// about an hour of Asset Hub blocks. The rest of each block stays free for ordinary traffic.
+	type MaxTreeDeletionsPerMessage = ConstU32<64>;
+	type XcmRouter = crate::xcm_config::XcmRouter;
+	// The chain `EnsureGameChainOrigin` authenticates, and where the roots come from.
+	type GameChainLocation = crate::xcm_config::PeopleLocation;
+	// Matches the `NftCredits` index in next-people-paseo's `construct_runtime!`.
+	type GameChainPalletIndex = ConstU8<57>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftClaimsBenchmarkHelper;
 }
 
-/// Creates the collection and item the benchmarks mint into, which on a live chain their owner
-/// has set up beforehand.
+parameter_types! {
+	/// How long a credit stays claimable, counted from the People-chain block that awarded it.
+	///
+	/// This is the claim deadline. The sweep removes a tree past it, and nothing can mint that tree's
+	/// unclaimed credits again. Three months covers a player who mints a season's worth of games at
+	/// once, and keeps Asset Hub from holding a tree per non-empty block for the chain's lifetime.
+	///
+	/// next-people-paseo keeps a copy of this constant and derives the TTL for its own roots from it,
+	/// so a root outlives the tree built from it.
+	pub const CreditTreeTtl: u64 = 90 * 24 * 60 * 60;
+}
+
+/// What the claims benchmarks cannot set up themselves: the collection and item a claim mints
+/// into, the minter contract, the clock, and the HRMP channel a deletion message goes out over.
+/// On a live chain a collection owner and the relay chain's configuration provide these.
 #[cfg(feature = "runtime-benchmarks")]
 pub struct NftClaimsBenchmarkHelper;
 #[cfg(feature = "runtime-benchmarks")]
@@ -2205,6 +2247,39 @@ impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId> for NftClaimsBenchmarkH
 		)
 		.expect("benchmark minter contract is deployed; qed")
 		.address
+	}
+
+	fn set_unix_time(secs: u64) {
+		// `pallet_timestamp` holds the clock in milliseconds, and its `set` is an inherent, so this
+		// writes the value straight to storage.
+		pallet_timestamp::Now::<Runtime>::put(secs.saturating_mul(1_000));
+	}
+
+	fn open_game_chain_channel(max_message_size: u32) {
+		use cumulus_pallet_parachain_system::RelevantMessagingState;
+		use cumulus_primitives_core::relay_chain::AbridgedHrmpChannel;
+
+		let channel = AbridgedHrmpChannel {
+			max_capacity: 1000,
+			max_total_size: 1_000_000,
+			max_message_size,
+			msg_count: 0,
+			total_size: 0,
+			mqc_head: None,
+		};
+		let game_chain = ParaId::from(PEOPLE_ID);
+		let mut messaging_state = RelevantMessagingState::<Runtime>::get().unwrap_or(
+			cumulus_pallet_parachain_system::relay_state_snapshot::MessagingStateSnapshot {
+				dmq_mqc_head: Default::default(),
+				relay_dispatch_queue_remaining_capacity: Default::default(),
+				ingress_channels: Vec::new(),
+				egress_channels: Vec::new(),
+			},
+		);
+		messaging_state.egress_channels.retain(|(id, _)| *id != game_chain);
+		messaging_state.egress_channels.push((game_chain, channel));
+		messaging_state.egress_channels.sort_by_key(|(id, _)| *id);
+		RelevantMessagingState::<Runtime>::put(messaging_state);
 	}
 }
 
@@ -2514,6 +2589,8 @@ impl indiv_pallet_pgas::Config for Runtime {
 	type MaxClaimsPerPeriodPerPerson = ConstU32<100>;
 	type MaxClaimsPerPeriodPerLitePerson = ConstU32<40>;
 	type MaxPgasClaimRecordCleanupPerCall = ConstU32<20>;
+	// Enough for setting an alias account
+	type MaxPgasClaimsPerBatch = ConstU32<5>;
 	type PgasAdmin = PgasAdmin;
 	type PgasMinBalance = PgasMinBalance;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -2562,11 +2639,11 @@ impl indiv_pallet_pgas::benchmarking::BenchmarkHelper<Runtime> for PgasBenchHelp
 	}
 
 	/// Seed a single-member Bandersnatch ring at `(identifier, ring_index)` in members-subscriber
-	/// storage and return a real ring-VRF proof for that ring against `context` + `message`.
+	/// storage and return a real ring-VRF proof for that ring against `contexts` + `message`.
 	fn seed_and_create_proof(
 		identifier: &indiv_support::traits::Identifier,
 		ring_index: indiv_support::traits::RingIndex,
-		context: &indiv_support::traits::Context,
+		contexts: &[indiv_support::traits::Context],
 		message: &[u8],
 	) -> indiv_pallet_pgas::ProofOf<Runtime> {
 		use indiv_support::{
@@ -2607,8 +2684,10 @@ impl indiv_pallet_pgas::benchmarking::BenchmarkHelper<Runtime> for PgasBenchHelp
 		);
 
 		let commitment = Crypto::open(domain, &member, core::iter::once(member)).expect("open");
-		let (proof, _alias) =
-			Crypto::create(commitment, &secret, &context[..], message).expect("create proof");
+		let context_slices = contexts.iter().map(|c| &c[..]).collect::<alloc::vec::Vec<_>>();
+		let (proof, _aliases) =
+			Crypto::create_multi_context(commitment, &secret, &context_slices, message)
+				.expect("create proof");
 		proof
 	}
 }
@@ -2840,9 +2919,12 @@ pub mod migrations {
 			pallet_session::migrations::v1::InitOffenceSeverity<Runtime>,
 		>,
 		cumulus_pallet_aura_ext::migration::MigrateV0ToV1<Runtime>,
+		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
 		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
 		pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
 	);
 
 	/// Migrations/checks that do not need to be versioned and can run on every update.
@@ -3461,6 +3543,16 @@ pallet_revive::impl_runtime_apis_plus_revive_traits! {
 	impl cumulus_primitives_core::RelayParentOffsetApi<Block> for Runtime {
 		fn relay_parent_offset() -> u32 {
 			RELAY_PARENT_OFFSET
+		}
+
+		fn max_claim_queue_offset() -> u8 {
+			cumulus_pallet_parachain_system::Pallet::<Runtime>::max_claim_queue_offset()
+		}
+	}
+
+	impl cumulus_primitives_core::SchedulingV3EnabledApi<Block> for Runtime {
+		fn scheduling_v3_enabled() -> bool {
+			<Runtime as cumulus_pallet_parachain_system::Config>::SchedulingSignatureVerifier::V3_SCHEDULING_ENABLED
 		}
 	}
 

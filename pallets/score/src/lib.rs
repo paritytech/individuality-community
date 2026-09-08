@@ -842,12 +842,12 @@ pub mod pallet {
 					Ok(())
 				},
 				Err(e) => {
-					defensive!("Unexpected error in this round, set the round finished.");
 					log::error!(
 						target: LOG_TARGET,
 						"Unexpected error in operate_payout_round: round: {round_index:?}, error: {e:?}."
 					);
-					RoundPayouts::<T>::remove(round_index);
+					Self::recycle_round_payout(round_index);
+					defensive!("Unexpected error in this round, set the round finished.");
 					Ok(())
 				},
 			}
@@ -1106,12 +1106,42 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Offboard a participant, e.g. voluntarily leaves or is kicked out for inactivity.
-		pub fn offboard(who: &AccountOrPerson<T::AccountId>) {
+		/// Offboard a participant, suspend recognised people and release unclaimed credit to the
+		/// pot.
+		///
+		/// The participant forfeits their credit when their record is removed. Suspension failures
+		/// return an error, while a failed credit release is logged and does not retain a stale
+		/// entry.
+		pub fn offboard(who: &AccountOrPerson<T::AccountId>) -> DispatchResult {
+			let maybe_recognition = Participants::<T>::get(who).map(|p| p.recognition);
+			if let Some(Recognized(id)) = maybe_recognition {
+				with_storage_layer::<_, DispatchError, _>(|| {
+					T::People::start_people_set_mutation_session()?;
+					T::People::suspend_personhood(&[id])?;
+					T::People::end_people_set_mutation_session()
+				})?;
+			}
+			if let Some(score) = Participants::<T>::take(who) {
+				if !score.credit.is_zero() {
+					let pot = Self::score_pot_id();
+					match T::Currency::release(
+						&HoldReason::Credit.into(),
+						&pot,
+						score.credit,
+						Precision::Exact,
+					) {
+						Ok(released) => defensive_assert!(released == score.credit),
+						Err(error) => log::error!(
+							target: LOG_TARGET,
+							"Failed to release credit hold while offboarding participant: {error:?}."
+						),
+					}
+				}
+			}
 			if let AccountOrPerson::Account(account) = who {
 				frame_system::Pallet::<T>::dec_sufficients(account);
 			}
-			Participants::<T>::remove(who);
+			Ok(())
 		}
 
 		/// Start a new attendance report session.
@@ -1155,6 +1185,9 @@ pub mod pallet {
 		/// `last_attended_game` is pinned to `game_index`; when `false`, `last_attended_game`
 		/// is left unchanged so it continues to point at the participant's most recent
 		/// actual attendance.
+		///
+		/// When suspending a `Recognized` participant fails in [`Config::People`], the
+		/// participant stays recognised.
 		///
 		/// Must be called within attendance report session. Attendance report session is started
 		/// and ended with `start_attendance_report_session` and `end_attendance_report_session`.
@@ -1203,7 +1236,7 @@ pub mod pallet {
 			let acquire_personhood =
 				!score.reached_personhood && score.score >= personhood_threshold;
 
-			let suspend_personhood = !attended &&
+			let mut suspend_personhood = !attended &&
 				score.reached_personhood &&
 				match score.recognition {
 					// Participants never lose personhood once they are externally recognised or
@@ -1224,6 +1257,25 @@ pub mod pallet {
 						window == 0 || misses > allowed_misses || score.score < personhood_threshold,
 				};
 
+			// A `Recognized` participant is suspended in `Config::People` first. With a valid
+			// state, it will not fail but, if it fails however, the participant stays recognised
+			// and keeps their personhood until the next attendance where, if they are absent, the
+			// suspension is retried.
+			if suspend_personhood {
+				if let Recognized(id) = score.recognition {
+					if T::People::suspend_personhood(&[id]).is_ok() {
+						score.recognition = Suspended(id);
+					} else {
+						log::error!(
+							target: LOG_TARGET,
+							"failed to suspend person {id}, the suspension is retried at the \
+							next qualifying absence"
+						);
+						suspend_personhood = false;
+					}
+				}
+			}
+
 			if acquire_personhood {
 				score.reached_personhood = true;
 			} else if suspend_personhood {
@@ -1233,16 +1285,6 @@ pub mod pallet {
 			score.has_ever_reached_personhood |= score.reached_personhood;
 
 			score.cashed_out = false;
-
-			match score.recognition {
-				Recognized(id) =>
-					if suspend_personhood {
-						let _ = T::People::suspend_personhood(&[id])
-							.defensive_proof("indiv-pallet-score: failed to suspend person");
-						score.recognition = Suspended(id);
-					},
-				NotRecognized | Suspended(_) | ExternallyRecognized => (),
-			}
 
 			Participants::<T>::insert(who, &score);
 
@@ -1392,6 +1434,30 @@ pub mod pallet {
 				CurrentRoundPoints::<T>::put(new_round_points);
 			} else {
 				log::warn!(target: LOG_TARGET, "indiv-pallet-score: round points overflowed");
+			}
+		}
+
+		/// Remove a payout round and release its remaining payout hold to the pot.
+		///
+		/// A caller can run this after a reverted storage layer. The round is removed if the
+		/// release fails because no other path can release the hold of a started round.
+		pub(crate) fn recycle_round_payout(round_index: RoundIndex) {
+			let Some(round) = RoundPayouts::<T>::take(round_index) else { return };
+			if round.remaining_balance.is_zero() {
+				return
+			}
+
+			let pot = Self::score_pot_id();
+			if let Err(error) = T::Currency::release(
+				&HoldReason::Payout.into(),
+				&pot,
+				round.remaining_balance,
+				Precision::BestEffort,
+			) {
+				log::error!(
+					target: LOG_TARGET,
+					"Failed to recycle the payout hold of round {round_index:?}: {error:?}."
+				);
 			}
 		}
 

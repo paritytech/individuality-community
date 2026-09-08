@@ -334,7 +334,7 @@ fn generate_alias_proof<T: Config>(
 
 	#[cfg(feature = "benchmark-proof-cache-regenerate")]
 	{
-		let cache_key = sp_core::hashing::blake2_256(&(&member, all_members, msg).encode());
+		let cache_key = sp_crypto_hashing::blake2_256(&(&member, all_members, msg).encode());
 		let encoded_proof = proof.encode();
 		emit_cache_entry(&cache_key, &encoded_proof, &alias);
 	}
@@ -457,6 +457,25 @@ fn setup_multi_recyclers<T: Config>(
 	(inputs, sign_data, total_asset_amount)
 }
 
+/// Returns the first denomination from `start` that covers the unload fee and minimum balance.
+/// This keeps `FromOutput` benchmarks valid after deducting the fee. Call after `common_setup`.
+fn denomination_covering_unload_fee<T: Config>(start: Denomination) -> Denomination {
+	let fee = Pallet::<T>::quote_paid_unload_token_fee_in_asset(INSTANCE_ID)
+		.expect("fee should be available after setup");
+	let required = fee.saturating_add(T::Fungibles::minimum_balance(asset_id::<T>()));
+	let mut value = start;
+	while Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value).unwrap_or_default() <
+		required
+	{
+		assert!(
+			value < T::MaximumExponent::get(),
+			"no denomination up to the maximum exponent covers the unload fee and minimum balance"
+		);
+		value = value.saturating_add(1);
+	}
+	value
+}
+
 #[benchmarks(
 	where
 		<T as frame_system::Config>::RuntimeCall: From<Call<T>> +
@@ -486,22 +505,11 @@ mod benches {
 		// both the fee and the destination's minimum balance, otherwise the `n = 1` sample would
 		// fail (the remainder transfer drops below the existential deposit) and get skipped,
 		// leaving too few points to fit a slope.
-		let mut value = T::MinimumExponent::get();
-		if mode == UnloadFeeBenchMode::FromOutput {
-			let fee = Pallet::<T>::quote_paid_unload_token_fee_in_asset(INSTANCE_ID)
-				.expect("fee should be available after setup");
-			let required = fee.saturating_add(T::Fungibles::minimum_balance(asset_id::<T>()));
-			while Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value)
-				.unwrap_or_default() <
-				required
-			{
-				assert!(
-					value < T::MaximumExponent::get(),
-					"no denomination up to the maximum exponent covers the unload fee and minimum balance"
-				);
-				value = value.saturating_add(1);
-			}
-		}
+		let value = match mode {
+			UnloadFeeBenchMode::FromOutput =>
+				denomination_covering_unload_fee::<T>(T::MinimumExponent::get()),
+			UnloadFeeBenchMode::Prepaid => T::MinimumExponent::get(),
+		};
 		let (index, revision, members) = setup_built_recycler::<T>(value, n, 0);
 		let asset_amount = Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value)
 			.expect("denomination should be in range");
@@ -574,7 +582,7 @@ mod benches {
 		);
 
 		let proven_msg =
-			sp_core::hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
+			sp_crypto_hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
 		let members_only: Vec<MemberOf<T>> =
 			members.iter().map(|(_, member)| member.clone()).collect();
 		let bounded_proofs: BoundedProofsOf<T> = members[..n as usize]
@@ -601,7 +609,7 @@ mod benches {
 		T::BenchmarkHelper::fund_account(&caller, total_asset_amount.saturating_mul(10u32.into()));
 
 		let proven_msg =
-			sp_core::hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
+			sp_crypto_hashing::blake2_256(&(INSTANCE_ID, &inputs, &dest, &caller).encode());
 		let mut alias_proofs = Vec::new();
 		for (secret, actual_ring_members) in &sign_data {
 			let (proof, _) = generate_alias_proof::<T>(secret, actual_ring_members, &proven_msg);
@@ -1552,6 +1560,9 @@ mod benches {
 				AliasState::Unloaded,
 			);
 		}
+		// Keep the counter in step with the entries written above; `clean_unchecked` compares the
+		// two.
+		RecyclersUnloadedCount::<T>::insert((INSTANCE_ID, value, ring_index), m);
 
 		// Advance time past expiration
 		let status = T::MemberService::ring_status(&identifier, 0).expect("ring exists");
@@ -3753,7 +3764,7 @@ mod benches {
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
 		let inherited_implication = ((0u8, &runtime_call), (), ());
-		let proven_msg = sp_core::hashing::blake2_256(&inherited_implication.encode());
+		let proven_msg = sp_crypto_hashing::blake2_256(&inherited_implication.encode());
 
 		// Generate alias proof with proven_msg
 		let (alias_proof, _) = generate_alias_proof::<T>(secret, &members_only, &proven_msg);
@@ -3762,7 +3773,7 @@ mod benches {
 
 		// Create a people proof with intent message (alias_proofs ++ inherited_implication)
 		let context = pallet::free_unload_token_context(period, counter);
-		let intent_msg = sp_core::hashing::blake2_256(
+		let intent_msg = sp_crypto_hashing::blake2_256(
 			&[alias_proofs.encode(), inherited_implication.encode()].concat(),
 		);
 		let proof = T::BenchmarkHelper::create_people_proof(&context, &intent_msg, alias);
@@ -3821,7 +3832,7 @@ mod benches {
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
 		let inherited_implication = ((0u8, &runtime_call), (), ());
-		let proven_msg = sp_core::hashing::blake2_256(&inherited_implication.encode());
+		let proven_msg = sp_crypto_hashing::blake2_256(&inherited_implication.encode());
 
 		// Generate alias proof with proven_msg
 		let (alias_proof, _) = generate_alias_proof::<T>(secret, &members_only, &proven_msg);
@@ -3830,7 +3841,7 @@ mod benches {
 
 		// Create a lite people proof with intent message (alias_proofs ++ inherited_implication)
 		let context = pallet::free_unload_token_context(period, counter);
-		let intent_msg = sp_core::hashing::blake2_256(
+		let intent_msg = sp_crypto_hashing::blake2_256(
 			&[alias_proofs.encode(), inherited_implication.encode()].concat(),
 		);
 		let proof = T::BenchmarkHelper::create_lite_people_proof(&context, &intent_msg, alias);
@@ -3894,7 +3905,7 @@ mod benches {
 
 		let runtime_call: <T as frame_system::Config>::RuntimeCall = call.clone().into();
 		let inherited_implication = ((0u8, &runtime_call), (), ());
-		let proven_msg = sp_core::hashing::blake2_256(&inherited_implication.encode());
+		let proven_msg = sp_crypto_hashing::blake2_256(&inherited_implication.encode());
 
 		// Generate alias proof with proven_msg
 		let (alias_proof, _) =
@@ -3903,7 +3914,7 @@ mod benches {
 			vec![alias_proof].try_into().unwrap();
 
 		// Generate paid token proof with intent message (alias_proofs ++ inherited_implication)
-		let intent_msg = sp_core::hashing::blake2_256(
+		let intent_msg = sp_crypto_hashing::blake2_256(
 			&[alias_proofs.encode(), inherited_implication.encode()].concat(),
 		);
 		let (paid_secret, _) = &paid_members[0];
@@ -3954,8 +3965,8 @@ mod benches {
 	fn as_unload_token_from_output_tx_ext() -> Result<(), BenchmarkError> {
 		common_setup::<T>();
 
-		// Setup recycler with a denomination large enough for the penalty fee.
-		let value = T::MinimumExponentForOutputUnloadFee::get();
+		let value =
+			denomination_covering_unload_fee::<T>(T::MinimumExponentForOutputUnloadFee::get());
 
 		let (index, revision, members) = setup_built_recycler::<T>(value, 1, 0);
 
@@ -3988,7 +3999,7 @@ mod benches {
 		// implication.
 		let retry_counter = 0u8;
 		let intent_msg = (&other_proofs, retry_counter, &inherited_implication)
-			.using_encoded(sp_core::hashing::blake2_256);
+			.using_encoded(sp_crypto_hashing::blake2_256);
 		let (first_alias_proof, _) = generate_alias_proof::<T>(secret, &members_only, &intent_msg);
 		let alias_proofs: BoundedVec<ProofOf<T>, T::MaxConsolidation> =
 			vec![first_alias_proof].try_into().unwrap();

@@ -62,7 +62,8 @@ use indiv_support::{
 	utils::BigEndianU256,
 	weight_budget::OcwWeightBudget,
 };
-use sp_core::{blake2_256, hexdisplay::HexDisplay};
+use sp_core::hexdisplay::HexDisplay;
+use sp_crypto_hashing::blake2_256;
 
 #[frame_support::pallet]
 pub mod pallet {

@@ -3,6 +3,8 @@
 Bash scripts that initialize blockchain state across the Paseo stack (People, AssetHub, Bulletin, Relay). Each script is **self-contained** (works standalone) and **guarded against re-runs** (it skips extrinsics that already took effect, since resubmitting them would fail). They follow a defined execution order, with some steps depending on earlier ones (noted in their headers).
 
 They only configure chains that are **already running**, so make sure the configured endpoints are reachable.
+For a reproducible local Relay + People + Asset Hub network, follow the
+[Zombienet harness runbook](../../e2e/zombienet/README.md).
 
 ## Quick Start
 
@@ -14,7 +16,7 @@ ENV=local   ./00-requirements.sh
 ENV=local   ./start.sh
 
 # Run a single script
-ENV=local   ./08-setup-people-collection.sh
+ENV=local   ./08a-setup-people-collection.sh
 ```
 
 ## Environments
@@ -36,12 +38,12 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 | **01b-c** | HRMP channel setup (People<->AssetHub, People<->Bulletin) |
 | **01d** | Funds sudo, attestation, attestation proxy, faucet, and asset owner accounts on AssetHub by teleporting native PAS from People |
 | **02** | Adds sudo proxy delegation on People |
-| **03a-f** | XTRNL: create, pool, AssetHub metadata, People metadata, conversion rate, Coinage underlying asset |
+| **03a-g** | XTRNL: create, AssetHub pool, AssetHub metadata, People metadata, conversion rate, Coinage instance, People pool |
 | **04a-b** | USDT/USDC: create on AssetHub with metadata, pool, and liquidity; create as foreign assets on People with metadata |
 | **05a-c** | Stablecoin faucet: acquire USDT/USDC for the owner on AssetHub, fund the People faucet with USDT/USDC via XCM, fund the AssetHub faucet with USDT/USDC by swapping PAS |
 | **06a-c** | PGAS: create, pool, alias fee |
 | **07** | Adds ZK chunks on People |
-| **08** | Creates the people collection on People |
+| **08a-b** | Creates the people and people-lite collections on People |
 | **09** | Overrides onboarding size for the people and people-lite collections on People |
 | **10** | Subscribes AssetHub to ring root updates from People for the people and people-lite collections |
 | **11** | Adds Proof of Ink design families from snapshot |

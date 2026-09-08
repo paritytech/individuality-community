@@ -18,12 +18,14 @@ pub use super::*;
 
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{
-		fungible::HoldConsideration, ConstU32, ConstU64, Currency, LinearStoragePrice, UnixTime,
-	},
+	traits::{fungible::HoldConsideration, ConstU32, ConstU64, LinearStoragePrice},
 };
-use pallet_revive::precompiles::AddressMapper;
+use indiv_precompile_support::test_helpers::{
+	map_account as map_account_shared, precompile_address,
+};
 use sp_runtime::{traits::Identity, AccountId32, BuildStorage};
+
+pub use indiv_precompile_support::test_helpers::{id_to_account, MockNow, MockUnixTime};
 
 type Block = frame_system::mocking::MockBlock<Test>;
 
@@ -57,18 +59,6 @@ impl frame_system::Config for Test {
 impl pallet_balances::Config for Test {
 	type AccountStore = System;
 	type MaxFreezes = frame_support::traits::VariantCountOf<RuntimeFreezeReason>;
-}
-
-parameter_types! {
-	pub static MockNow: u64 = 0;
-}
-
-/// Test-controlled Unix time source.
-pub struct MockUnixTime;
-impl UnixTime for MockUnixTime {
-	fn now() -> core::time::Duration {
-		core::time::Duration::from_secs(MockNow::get())
-	}
 }
 
 parameter_types! {
@@ -115,29 +105,19 @@ impl pallet_revive::Config for Test {
 
 /// The per-collection precompile address of `collection` under [`COLLECTION_PREFIX`].
 pub fn collection_address(collection: CollectionId) -> H160 {
-	let mut address = [0u8; 20];
+	let mut address = precompile_address::<ScarcityCollection<Test, COLLECTION_PREFIX>>().0;
 	address[0..4].copy_from_slice(&collection.to_be_bytes());
-	address[16..18].copy_from_slice(&COLLECTION_PREFIX.to_be_bytes());
 	H160(address)
 }
 
 /// The factory precompile's fixed address under [`FACTORY_INDEX`].
 pub fn factory_address() -> H160 {
-	let mut address = [0u8; 20];
-	address[16..18].copy_from_slice(&FACTORY_INDEX.to_be_bytes());
-	H160(address)
+	precompile_address::<ScarcityFactory<Test, FACTORY_INDEX>>()
 }
 
-/// Fund `account` and register its H160↔AccountId32 mapping with `pallet-revive`.
+/// Fund `account` and register its H160-to-AccountId32 mapping with `pallet-revive`.
 pub fn map_account(account: &AccountId32) {
-	Balances::make_free_balance_be(account, u64::MAX / 2);
-	let _ = <Test as pallet_revive::Config>::AddressMapper::map(account);
-}
-
-pub fn id_to_account(id: u64) -> AccountId32 {
-	let mut bytes = [0u8; 32];
-	bytes[..8].copy_from_slice(&id.to_le_bytes());
-	AccountId32::new(bytes)
+	map_account_shared::<Test>(account)
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {

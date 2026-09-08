@@ -68,7 +68,8 @@ use indiv_support::{
 	utils::BigEndianU64,
 	weight_budget::OcwWeightBudget,
 };
-use sp_core::{blake2_256, hexdisplay::HexDisplay, sr25519};
+use sp_core::{hexdisplay::HexDisplay, sr25519};
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{
 	traits::{AccountIdConversion, TryConvert},
 	Saturating,

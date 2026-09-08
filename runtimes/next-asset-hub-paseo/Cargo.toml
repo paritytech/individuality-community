@@ -500,6 +500,12 @@ std = [
 	"xcm/std",
 ]
 
+# Build the ring VRF suite with the RFC-163 EC host functions instead of the default
+# in-runtime arkworks code. A runtime built with this only runs on validators that
+# expose those host functions (executor param `EccRfc163`). Weights in this repository
+# are measured against the default in-runtime backend.
+ec-crypto-hostcalls = ["indiv-support/ec-crypto-hostcalls"]
+
 # Enable metadata hash generation at compile time for the `CheckMetadataHash` extension.
 metadata-hash = ["substrate-wasm-builder?/metadata-hash"]
 

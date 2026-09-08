@@ -106,6 +106,8 @@ mod benchmarks {
 			signed_at,
 		);
 
+		assert_eq!(crate::AccountNames::<T>::iter().count(), 1);
+
 		Ok(())
 	}
 
@@ -137,6 +139,7 @@ mod benchmarks {
 		register_name(origin, caller, label, link);
 
 		assert_eq!(AliasRegistration::<T>::iter().count(), 1);
+		assert_eq!(crate::AccountNames::<T>::iter().count(), 1);
 
 		Ok(())
 	}

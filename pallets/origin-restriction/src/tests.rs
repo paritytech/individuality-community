@@ -64,7 +64,7 @@ fn restricted_origin_works() {
 		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
 		let usage = Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap();
 		assert_eq!(usage.used, previous_used + CALL_WEIGHT + len);
-		assert_eq!(usage.at_block, 1);
+		assert_eq!(usage.at_block, RELAY_BLOCK_GENESIS + 1);
 
 		// A call with `Pays::No` => usage is refunded
 		previous_used = Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap().used;
@@ -110,7 +110,7 @@ fn restricted_origin_works() {
 
 		// Usage = (previous_used - recovered_amount) + (CALL_WEIGHT + len).
 		assert_eq!(current_usage.used, previous_used + CALL_WEIGHT + len - recovered_amount);
-		assert_eq!(current_usage.at_block, 3);
+		assert_eq!(current_usage.at_block, RELAY_BLOCK_GENESIS + 3);
 	});
 }
 
@@ -280,5 +280,48 @@ fn restrict_origin_extension_disabled_behavior() {
 			Usages::<Test>::iter().next().is_none(),
 			"Extension is disabled, so no usage should be tracked for non-restricted origins."
 		);
+	});
+}
+
+/// Usage recovers with the relay chain block number. Parachain blocks alone recover nothing.
+#[test]
+fn usage_recovers_with_relay_chain_blocks() {
+	new_test_ext().execute_with(|| {
+		advance_by(1);
+
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+		let used = Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap().used;
+		let relay_blocks_to_recover = used.div_ceil(ALLOWANCE_RECOVERY_PER_BLOCK);
+
+		// Parachain blocks on their own leave the usage untouched.
+		advance_para_by(relay_blocks_to_recover * 10);
+		assert_noop!(
+			OriginsRestriction::clean_usage(
+				frame_system::RawOrigin::Root.into(),
+				RuntimeRestrictedEntity::A
+			),
+			Error::<Test>::NotZero
+		);
+
+		// The same count of relay chain blocks recovers the whole usage.
+		advance_relay_by(relay_blocks_to_recover);
+		assert_ok!(OriginsRestriction::clean_usage(
+			frame_system::RawOrigin::Root.into(),
+			RuntimeRestrictedEntity::A
+		));
+	});
+}
+
+/// The usage is stamped with the relay chain block number, not the parachain one.
+#[test]
+fn usage_is_stamped_with_the_relay_chain_block_number() {
+	new_test_ext().execute_with(|| {
+		advance_by(1);
+		advance_relay_by(7);
+
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+
+		let usage = Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap();
+		assert_eq!(usage.at_block, RELAY_BLOCK_GENESIS + 8);
 	});
 }

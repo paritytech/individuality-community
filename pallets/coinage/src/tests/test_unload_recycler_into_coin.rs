@@ -258,7 +258,7 @@ fn alias_already_used_fail() {
 }
 
 #[test]
-fn duplicate_alias_in_single_tx_fails() {
+fn duplicate_alias_in_single_tx_fails_before_verifying_proofs() {
 	new_test_ext().execute_with(|| {
 		let (secrets, index, revision) = setup_recycler(0, 2, 0);
 		let repeated_secret = secrets[0].clone();
@@ -277,8 +277,9 @@ fn duplicate_alias_in_single_tx_fails() {
 			to: 1,
 		});
 
-		// Use the same proof source twice so both proofs are individually valid
-		// but map to the same alias within one transaction.
+		// The proof batch is invalid. `RecyclerAlreadyUnloaded` proves duplicate aliases are
+		// rejected before the batch verifier runs, which would otherwise return
+		// `InvalidAliasProof`.
 		let ext = build_unload_ext(
 			call,
 			0,
@@ -286,7 +287,7 @@ fn duplicate_alias_in_single_tx_fails() {
 			&[repeated_secret.clone(), repeated_secret],
 			0,
 			index,
-			false,
+			true,
 			None,
 		);
 
@@ -381,7 +382,9 @@ fn result_too_big_fail() {
 			to: 1,
 		});
 
-		let ext = build_unload_ext(call, 0, 0, &secrets, max_exp, index, false, None);
+		// The proof batch is invalid. `ConsolidationTooBig` proves the result is checked before the
+		// batch verifier runs, which would otherwise return `InvalidAliasProof`.
+		let ext = build_unload_ext(call, 0, 0, &secrets, max_exp, index, true, None);
 		let res = Executive::apply_extrinsic(ext);
 		assert_ok!(res.as_ref());
 		assert_err!(res.unwrap(), Error::<Test>::ConsolidationTooBig);

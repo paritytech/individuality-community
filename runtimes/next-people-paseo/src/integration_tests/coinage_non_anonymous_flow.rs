@@ -28,7 +28,7 @@ use indiv_pallet_coinage::{
 	UNLOADING_RECYCLER_CONTEXT,
 };
 use indiv_support::traits::Alias;
-use sp_core::blake2_256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::bounded_vec;
 
 /// Helper function to build the unload extrinsic using AsUnloadTokenFromOutput.

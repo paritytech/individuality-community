@@ -82,7 +82,7 @@ mod benches {
 		AbsenceGraceSchedule, AbsenceGraceTier, AbsenceGraceTiers, PersonhoodThresholdSchedule,
 		PersonhoodThresholdTier, MAX_PERSONHOOD_THRESHOLD_TIERS,
 	};
-	use indiv_support::traits::CountedMembers;
+	use indiv_support::traits::{AddOnlyPeopleTrait, CountedMembers, PersonalId};
 	use sp_core::Get;
 	use sp_runtime::{
 		traits::{
@@ -93,7 +93,26 @@ mod benches {
 
 	type Fungibles<T> = <T as indiv_pallet_airdrop::Config>::Fungibles;
 
+	type PeopleOf<T> = <T as indiv_pallet_score::Config>::People;
+
 	const DEFAULT_IDENTIFIER_KEY: CommunicationIdentifier = [42u8; 65];
+
+	/// Make `who` a `Recognized` participant backed by a real person in
+	/// [`indiv_pallet_score::Config::People`], so offboarding them exercises the personhood
+	/// suspension. The participant entry must already exist. Returns the personal id.
+	fn make_recognized_participant<T: Config>(
+		who: &AccountOrPerson<T::AccountId>,
+	) -> Result<PersonalId, BenchmarkError> {
+		PeopleOf::<T>::initialize_people_collection();
+		let id = PeopleOf::<T>::reserve_new_id();
+		let (key, _) = PeopleOf::<T>::mock_key(id);
+		PeopleOf::<T>::recognize_personhood(id, Some(key))?;
+		indiv_pallet_score::Participants::<T>::mutate(who, |p| {
+			p.as_mut().expect("participant entry exists").recognition =
+				indiv_pallet_score::Recognition::Recognized(id);
+		});
+		Ok(id)
+	}
 
 	/// Valid prize for benchmark schedules.
 	fn bench_airdrop_prize<T: Config>(
@@ -1651,6 +1670,10 @@ mod benches {
 			T::PlayerStatementLimit::get(),
 		);
 
+		// Worst case: the caller is a recognized participant, so the offboard also suspends
+		// their personhood.
+		let id = make_recognized_participant::<T>(&caller_aop)?;
+
 		let deposit = T::PlayDeposit::new(&caller, pallet::PlayDepositAmount::<T>::get())?;
 		let player: Player<<T as Config>::PlayDeposit> = Player {
 			first_game: 0,
@@ -1680,6 +1703,10 @@ mod benches {
 
 		// And the caller is not stored in the list of archived players
 		assert!(!ArchivedPlayers::<T>::contains_key(&caller_aop), "Player should not be archived");
+
+		// Resuming succeeds only for a suspended person, which proves the offboard suspended
+		// them.
+		assert_ok!(PeopleOf::<T>::recognize_personhood(id, None));
 
 		Ok(())
 	}
@@ -1776,6 +1803,10 @@ mod benches {
 
 		indiv_pallet_score::Pallet::<T>::onboard_for_recognition(&player_to_kickout)?;
 
+		// Worst case: the player is a recognized participant, so the kickout also suspends
+		// their personhood.
+		let id = make_recognized_participant::<T>(&player_aop)?;
+
 		ArchivedPlayers::<T>::insert(
 			&player_aop,
 			ArchivedPlayer::Kickable { archived_since: 0u32.into(), first_game: 0 },
@@ -1802,6 +1833,10 @@ mod benches {
 			!indiv_pallet_score::Participants::<T>::contains_key(&player_aop),
 			"Player should be offboarded from indiv_pallet_score"
 		);
+
+		// Resuming succeeds only for a suspended person, which proves the kickout suspended
+		// them.
+		assert_ok!(PeopleOf::<T>::recognize_personhood(id, None));
 
 		Ok(())
 	}

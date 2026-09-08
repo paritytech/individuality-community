@@ -40,10 +40,7 @@ where
 		input: &Self::Interface,
 		env: &mut impl Ext<T = Self::T>,
 	) -> Result<Vec<u8>, Error> {
-		frame_support::ensure!(
-			!env.is_delegate_call(),
-			pallet_revive::Error::<T>::PrecompileDelegateDenied
-		);
+		ensure_not_delegate(env)?;
 		ensure_no_value(env)?;
 		if env.is_read_only() {
 			return Err(Error::Error(pallet_revive::Error::<T>::StateChangeDenied.into()));

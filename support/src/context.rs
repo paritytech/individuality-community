@@ -84,7 +84,7 @@ pub fn build_product_context(
 	input.extend_from_slice(network_suffix);
 	input.push(b'/');
 	input.extend_from_slice(&suffix);
-	sp_core::blake2_256(&input)
+	sp_crypto_hashing::blake2_256(&input)
 }
 
 /// Context suffix allocations owned by the personhood product.
@@ -167,7 +167,7 @@ mod tests {
 
 	#[test]
 	fn index_magic_matches_rfc_derivation() {
-		assert_eq!(INDEX_MAGIC, sp_core::blake2_256(b"product-account-index")[..28]);
+		assert_eq!(INDEX_MAGIC, sp_crypto_hashing::blake2_256(b"product-account-index")[..28]);
 	}
 
 	#[test]
@@ -192,7 +192,7 @@ mod tests {
 
 		assert_eq!(
 			build_product_context(b"voting", b"dot", ProductContextSuffix::Index(0)),
-			sp_core::blake2_256(&expected_preimage),
+			sp_crypto_hashing::blake2_256(&expected_preimage),
 		);
 	}
 
@@ -213,7 +213,7 @@ mod tests {
 
 		assert_eq!(
 			build_product_context(b"voting", b"dot", ProductContextSuffix::Raw(raw)),
-			sp_core::blake2_256(&expected_preimage),
+			sp_crypto_hashing::blake2_256(&expected_preimage),
 		);
 	}
 
