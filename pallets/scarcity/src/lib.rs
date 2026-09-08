@@ -618,7 +618,9 @@ pub mod pallet {
 		StorageDeposit,
 	}
 
-	/// Version 1 added `transferability` to `ItemDefinition`.
+	/// The in-code storage version. Bump it when the layout of a storage item changes and ship
+	/// the change as a [`frame_support::migrations::VersionedMigration`] from the old to the new
+	/// version. Version 1 added `transferability` to `ItemDefinition`; see [`crate::migration`].
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
 	#[pallet::pallet]

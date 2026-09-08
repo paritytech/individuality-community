@@ -43,7 +43,13 @@ pub mod pallet {
 	use frame_support::{pallet_prelude::*, Twox64Concat};
 	use frame_system::pallet_prelude::*;
 
+	/// The in-code storage version. Bump it when the layout of a storage item changes and ship
+	/// the change as a [`frame_support::migrations::VersionedMigration`] from the old to the new
+	/// version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(0);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	/// The configuration of the pallet dummy DIM.

@@ -64,7 +64,13 @@ pub mod pallet {
 	use sp_runtime::traits::{BadOrigin, Dispatchable};
 	use verifiable::GenerateVerifiable;
 
+	/// The in-code storage version. Bump it when the layout of a storage item changes and ship
+	/// the change as a [`frame_support::migrations::VersionedMigration`] from the old to the new
+	/// version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(0);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::origin]

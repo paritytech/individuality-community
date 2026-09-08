@@ -80,8 +80,9 @@ pub mod pallet {
 
 	const LOG_TARGET: &str = "runtime::indiv-pallet-dotns-gateway";
 
-	/// The in-code storage version. Bump it and add a migration when the layout of a
-	/// storage item changes; see [`migration`].
+	/// The in-code storage version. Bump it when the layout of a storage item changes and ship
+	/// the change as a [`frame_support::migrations::VersionedMigration`] from the old to the new
+	/// version. See [`migration`] for the existing ones.
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
 	#[pallet::pallet]

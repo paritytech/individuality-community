@@ -32,7 +32,9 @@ pub type MigrateV0ToV1<T> = VersionedMigration<
 	<T as frame_system::Config>::DbWeight,
 >;
 
-pub mod v1 {
+/// Version-unchecked migration logic. Private, so a runtime can only run it through the version
+/// gate [`MigrateV0ToV1`].
+mod v1 {
 	use super::*;
 	use crate::BaseLabel;
 
