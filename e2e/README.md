@@ -55,6 +55,10 @@ Both chains are covered; run one on its own with `pnpm run test:runtime-upgrade:
 or `pnpm run test:runtime-upgrade:paseo-to-next-asset-hub-paseo`. Each needs the matching runtime built
 in release mode first (`cargo build --release -p next-people-paseo-runtime`, `-p next-asset-hub-paseo-runtime`).
 
+The built runtime must have a higher `spec_version` than the deployed runtime. Executive runs the
+migrations only when the spec version changed. CI bumps it by one for its own build. If you run the
+suite locally, do the same before building, then restore `spec_version`.
+
 Optional environment variables:
 
 - `NEXT_PEOPLE_PASEO_UPGRADE_ENDPOINT=wss://paseo-people-next-system-rpc.polkadot.io`
