@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Pallet-revive precompiles exposing `pallet-scarcity` collections as ERC-721 contracts.
+//! Pallet-revive precompiles exposing `indiv-pallet-scarcity` collections as ERC-721 contracts.
 //!
 //! Two precompiles share this crate:
 //!
@@ -30,7 +30,7 @@
 //!   allocates it.
 //!
 //! `transferFrom` and `safeTransferFrom` move a token on its holder's own authority, through
-//! `pallet-scarcity::do_transfer_by_holder`. The caller must be the holder: the pallet has no
+//! `indiv-pallet-scarcity::do_transfer_by_holder`. The caller must be the holder: the pallet has no
 //! approval mechanism to resolve a spender against, so `approve` and `setApprovalForAll` revert
 //! and their getters answer with the empty values (zero address and `false`) that keep
 //! read-driven indexers working. Only an eth-derived purse can be an EVM caller at all, so this
@@ -102,7 +102,7 @@
 //! and cannot be inverted. Runtimes register the accounts frame-system creates, but a purse key
 //! needs no `system::Account`, so a zero-balance holder would have no registration and would
 //! read as holding nothing. [`MapPurseKey`] closes that by registering every key an instance
-//! lands on, mints and both moves alike, and a runtime wires it through `pallet-scarcity`'s
+//! lands on, mints and both moves alike, and a runtime wires it through `indiv-pallet-scarcity`'s
 //! `OnPurseOccupied`. Registration also makes `ownerOf` invertible: an address derived from a
 //! registered key resolves back to that key, so a caller can pass a holder address to `mint`,
 //! `forceTransfer` or `nominateCollectionOwner` and reach the account it read. That holds for
@@ -123,7 +123,7 @@
 //! never created or was deleted; every selector on such an address reverts as an unknown
 //! collection, so no unallocated address answers as a live contract.
 //!
-//! Weights: state-changing calls charge the corresponding `pallet-scarcity` benchmark
+//! Weights: state-changing calls charge the corresponding `indiv-pallet-scarcity` benchmark
 //! weights. Read calls charge one database read per worst-case storage access, which
 //! over-charges pure computation but never under-charges; a crate benchmark can refine this
 //! later.
@@ -136,6 +136,11 @@ use alloc::vec::Vec;
 use core::{marker::PhantomData, num::NonZero};
 
 use frame_support::traits::Get;
+use indiv_pallet_scarcity::{
+	CollectionId, CollectionMetadata, Collections, Error as ScarcityError, InstanceId,
+	InstanceMetadata, Instances, ItemMetadata, MetadataKeyOf, MetadataValueOf, Nft, NftsByOwner,
+	Transferability,
+};
 use pallet_revive::{
 	precompiles::{
 		alloy::{
@@ -146,11 +151,6 @@ use pallet_revive::{
 		AddressMapper, AddressMatcher, Error, Ext, RuntimeCosts, H160, H256,
 	},
 	sp_runtime::{DispatchError, Weight},
-};
-use pallet_scarcity::{
-	CollectionId, CollectionMetadata, Collections, Error as ScarcityError, InstanceId,
-	InstanceMetadata, Instances, ItemMetadata, MetadataKeyOf, MetadataValueOf, Nft, NftsByOwner,
-	Transferability,
 };
 
 pub(crate) use indiv_precompile_support::{
@@ -250,8 +250,8 @@ pub const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range"
 /// Revert reason when a reserved metadata value is not valid UTF-8.
 pub const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8";
 
-/// Registers a purse key's address when a mint occupies it, for `pallet-scarcity`'s
-/// [`OnPurseOccupied`](pallet_scarcity::OnPurseOccupied) hook.
+/// Registers a purse key's address when a mint occupies it, for `indiv-pallet-scarcity`'s
+/// [`OnPurseOccupied`](indiv_pallet_scarcity::OnPurseOccupied) hook.
 ///
 /// `pallet-revive` registers addresses when `frame-system` creates an account, but a purse key
 /// needs no account: holders pay no deposits and can hold an instance at zero balance. Without
@@ -276,7 +276,7 @@ pub const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UT
 /// governs account-driven registration rather than this.
 pub struct MapPurseKey<T>(PhantomData<T>);
 
-impl<T> pallet_scarcity::OnPurseOccupied<T::AccountId> for MapPurseKey<T>
+impl<T> indiv_pallet_scarcity::OnPurseOccupied<T::AccountId> for MapPurseKey<T>
 where
 	T: pallet_revive::Config,
 {
@@ -300,7 +300,7 @@ fn collection_id_of(address: &[u8; 20]) -> CollectionId {
 	CollectionId::from_be_bytes(bytes)
 }
 
-/// Map the `pallet-scarcity` errors a caller can trigger to catchable reverts.
+/// Map the `indiv-pallet-scarcity` errors a caller can trigger to catchable reverts.
 ///
 /// Every error variant the pallet entries called from this crate can return is listed, so a
 /// caller never sees a trapped frame for a condition it could have handled. Adding a variant
@@ -308,7 +308,7 @@ fn collection_id_of(address: &[u8; 20]) -> CollectionId {
 /// in the tests fails instead.
 ///
 /// Anything else propagates as a plain error, which traps the frame rather than reverting.
-fn revert_scarcity<T: pallet_scarcity::Config>(e: DispatchError) -> Error {
+fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error {
 	let cases: [(ScarcityError<T>, &str); 20] = [
 		(ScarcityError::NoPermission, "caller is not the collection owner"),
 		(ScarcityError::UnknownCollection, ERR_UNKNOWN_COLLECTION),
@@ -362,7 +362,7 @@ const REF_TIME_PER_METADATA_BYTE: u64 = 1_000;
 ///
 /// `InstanceId`s are global, so an instance of another collection must answer as unknown on
 /// this collection's address.
-fn live_instance<T: pallet_scarcity::Config>(
+fn live_instance<T: indiv_pallet_scarcity::Config>(
 	collection: CollectionId,
 	token: &U256,
 ) -> Result<(T::AccountId, Nft), Error> {
@@ -376,21 +376,21 @@ fn live_instance<T: pallet_scarcity::Config>(
 }
 
 /// Convert one raw key to the pallet's bounded metadata key.
-fn bounded_key<T: pallet_scarcity::Config>(
+fn bounded_key<T: indiv_pallet_scarcity::Config>(
 	key: &alloy::primitives::Bytes,
 ) -> Result<MetadataKeyOf<T>, Error> {
 	MetadataKeyOf::<T>::try_from(key.to_vec()).map_err(|_| revert(ERR_KEY_TOO_LONG))
 }
 
 /// Convert one raw value to the pallet's bounded metadata value.
-fn bounded_value<T: pallet_scarcity::Config>(
+fn bounded_value<T: indiv_pallet_scarcity::Config>(
 	value: &alloy::primitives::Bytes,
 ) -> Result<MetadataValueOf<T>, Error> {
 	MetadataValueOf::<T>::try_from(value.to_vec()).map_err(|_| revert(ERR_VALUE_TOO_LONG))
 }
 
 /// Requires UTF-8 under the keys this precompile reads as Solidity `string`s, for
-/// `pallet-scarcity`'s [`ValidateMetadata`](pallet_scarcity::ValidateMetadata) policy.
+/// `indiv-pallet-scarcity`'s [`ValidateMetadata`](indiv_pallet_scarcity::ValidateMetadata) policy.
 ///
 /// The pallet stores opaque bytes and reserves no key, so nothing there would stop `name` being
 /// set to something no `string` can represent. Wiring this makes all four keys hold their type
@@ -401,9 +401,9 @@ fn bounded_value<T: pallet_scarcity::Config>(
 /// that leaves the policy at `()`, and nothing about entries written before it was wired.
 pub struct Erc721MetadataPolicy<T>(PhantomData<T>);
 
-impl<T, Key, Value> pallet_scarcity::ValidateMetadata<Key, Value> for Erc721MetadataPolicy<T>
+impl<T, Key, Value> indiv_pallet_scarcity::ValidateMetadata<Key, Value> for Erc721MetadataPolicy<T>
 where
-	T: pallet_scarcity::Config,
+	T: indiv_pallet_scarcity::Config,
 	Key: AsRef<[u8]>,
 	Value: AsRef<[u8]>,
 {
@@ -420,13 +420,13 @@ where
 	fn validate_weight(pairs: u32) -> Weight {
 		// One pass over a value bounded by `MaxValueLen`, touching no storage.
 		let per_value = REF_TIME_PER_METADATA_BYTE
-			.saturating_mul(<T as pallet_scarcity::Config>::MaxValueLen::get() as u64);
+			.saturating_mul(<T as indiv_pallet_scarcity::Config>::MaxValueLen::get() as u64);
 		Weight::from_parts(per_value.saturating_mul(pairs as u64), 0)
 	}
 }
 
 /// Convert parallel key and value arrays to the pallet's bounded metadata pairs.
-fn bounded_metadata<T: pallet_scarcity::Config>(
+fn bounded_metadata<T: indiv_pallet_scarcity::Config>(
 	keys: &[alloy::primitives::Bytes],
 	values: &[alloy::primitives::Bytes],
 ) -> Result<Vec<(MetadataKeyOf<T>, MetadataValueOf<T>)>, Error> {
