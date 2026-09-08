@@ -2951,6 +2951,7 @@ mod gap_scan {
 	use super::*;
 	use crate::{pallet::Call, weights::WeightInfo};
 	use frame_support::{dispatch::GetDispatchInfo, traits::Authorize};
+	use indiv_support::tx_priority;
 	use sp_runtime::transaction_validity::{
 		InvalidTransaction, TransactionSource, TransactionValidityError,
 	};
@@ -3318,20 +3319,20 @@ mod gap_scan {
 	}
 
 	#[test]
-	fn a_retry_outbids_its_stranded_predecessor() {
+	fn gap_scan_priority_rises_with_the_block_it_is_validated_in() {
 		new_test_ext().execute_with(|| {
 			setup_lagging_scan(100);
 			let call = gap_scan_call(PEOPLE);
 
 			System::set_block_number(1);
-			let first = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
+			let early = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
 
 			System::set_block_number(2);
-			let retry = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
+			let late = call.authorize(TransactionSource::InBlock).unwrap().unwrap().0;
 
-			// Sharing a tag, the retry is only accepted by the pool if it strictly outbids.
-			assert_eq!(first.provides, retry.provides);
-			assert!(retry.priority > first.priority);
+			// Retries share the stored-cursor tag, so the pool ranks them by priority alone.
+			assert_eq!(early.priority, tx_priority::BACKGROUND_PROGRESS + 1);
+			assert_eq!(late.priority, tx_priority::BACKGROUND_PROGRESS + 2);
 		});
 	}
 

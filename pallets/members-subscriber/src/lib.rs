@@ -81,8 +81,9 @@ pub mod pallet {
 
 	const LOG_TARGET: &str = "pallet-members-subscriber";
 
-	/// Number of blocks that an offchain worker transaction of this pallet stays valid in the
-	/// transaction pool.
+	/// Number of blocks that an offchain worker transaction stays valid in the
+	/// transaction pool. Must not be below `TX_RETRY_WINDOW`, so a transaction survives its
+	/// retry window.
 	const TX_LONGEVITY: u64 = 8;
 
 	/// Retry window, in blocks, for offchain-worker transactions.
@@ -90,6 +91,9 @@ pub mod pallet {
 	/// A window switch changes the discriminator and the transaction hash, so the retry passes
 	/// both pool deduplication and the rotator's ban on an already-included hash.
 	pub(crate) const TX_RETRY_WINDOW: u32 = 8;
+
+	// To enforce the values relation of these constants in the future.
+	const _: () = assert!(TX_LONGEVITY >= TX_RETRY_WINDOW as u64);
 
 	/// Number of blocks between repeated failure warnings for offchain-worker transactions,
 	/// so that an eventual transaction-pool stall is not logged at each block.
@@ -798,7 +802,7 @@ pub mod pallet {
 				.propagate(false)
 				.priority(Self::local_priority())
 				.into();
-			Ok((validity, T::WeightInfo::authorize_replay_missing_roots(indices.len() as u32)))
+			Ok((validity, Weight::zero()))
 		}
 
 		/// Validates a purge request.
@@ -829,7 +833,7 @@ pub mod pallet {
 				.propagate(false)
 				.priority(Self::local_priority())
 				.into();
-			Ok((validity, T::WeightInfo::authorize_purge_stale_ring_roots()))
+			Ok((validity, Weight::zero()))
 		}
 
 		/// Validates a gap scan request.
@@ -1236,8 +1240,8 @@ pub mod pallet {
 			// Some rest time after the last received batch is given to account
 			// for incoming batches that may contain indices considered as missing
 			// in the current state.
-			if now.saturating_sub(processing_state.last_batch_received_time) <
-				T::GapScanCooldownSeconds::get()
+			if now.saturating_sub(processing_state.last_batch_received_time)
+				< T::GapScanCooldownSeconds::get()
 			{
 				return;
 			}
@@ -1247,8 +1251,8 @@ pub mod pallet {
 					continue;
 				}
 
-				if state.missing_indices.len() as u32 >= T::MaxMissingRootsPerCollection::get() ||
-					state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get()
+				if state.missing_indices.len() as u32 >= T::MaxMissingRootsPerCollection::get()
+					|| state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get()
 				{
 					Self::warn_periodically(
 						block_number,

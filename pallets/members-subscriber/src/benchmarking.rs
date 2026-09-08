@@ -23,11 +23,12 @@ use crate::{
 		RingCollectionStates, RingRoots, Subscription,
 	},
 	types::{
-		Identifier, MembersOf, RingCollectionState, RingIndex, RingPurgeProgress, RingRootOp,
-		RingRootUpdate, RingRootUpdatesBatch, SubscriptionStatus,
+		Identifier, MembersOf, RingCollectionState, RingCommitmentRecord, RingIndex,
+		RingPurgeProgress, RingRootOp, RingRootUpdate, RingRootUpdatesBatch, SubscriptionStatus,
 	},
 };
 use alloc::collections::BTreeMap;
+use core::ops::Range;
 use frame_benchmarking::{v2::*, BenchmarkError};
 use frame_support::{
 	pallet_prelude::BoundedBTreeMap,
@@ -47,17 +48,12 @@ pub trait BenchmarkHelper<T: Config> {
 	fn mock_ring_root(seed: u32) -> MembersOf<T>;
 }
 
-/// Fills in a ring root record `RingRoot` with rings.
-fn fill_in_ring_roots<T: Config + BenchmarkHelper<T>>(
-	identifier: Identifier,
-	ring_index: RingIndex,
+/// Sliding window of ring roots filled to `MaxRecentRootsPerRing`.
+fn mock_ring_root_window<T: Config + BenchmarkHelper<T>>(
 	base_seed: u32,
-) {
-	use crate::types::RingCommitmentRecord;
-
-	let max_recent = T::MaxRecentRootsPerRing::get();
+) -> BoundedVec<RingCommitmentRecord<T>, T::MaxRecentRootsPerRing> {
 	let mut roots = BoundedVec::new();
-	for j in 0..max_recent {
+	for j in 0..T::MaxRecentRootsPerRing::get() {
 		roots
 			.try_push(RingCommitmentRecord {
 				root: T::mock_ring_root(base_seed.wrapping_add(j)),
@@ -67,7 +63,32 @@ fn fill_in_ring_roots<T: Config + BenchmarkHelper<T>>(
 			})
 			.expect("within MaxRecentRootsPerRing bound");
 	}
-	Pallet::<T>::set_current_ring_roots(&identifier, ring_index, roots);
+	roots
+}
+
+/// Fills in a ring root record `RingRoot` with rings.
+fn fill_in_ring_roots<T: Config + BenchmarkHelper<T>>(
+	identifier: Identifier,
+	ring_index: RingIndex,
+	base_seed: u32,
+) {
+	Pallet::<T>::set_current_ring_roots(
+		&identifier,
+		ring_index,
+		mock_ring_root_window::<T>(base_seed),
+	);
+}
+
+/// Stores one root window under every index in `indices`. `T::mock_ring_root` builds a real
+/// ring, so the window is built once and cloned across the keys.
+fn fill_in_ring_root_range<T: Config + BenchmarkHelper<T>>(
+	identifier: Identifier,
+	indices: Range<RingIndex>,
+) {
+	let roots = mock_ring_root_window::<T>(0);
+	for ring_index in indices {
+		Pallet::<T>::set_current_ring_roots(&identifier, ring_index, roots.clone());
+	}
 }
 
 /// Collection state with both bounded sets at capacity.
@@ -93,35 +114,35 @@ fn worst_case_collection_state<T: Config>(
 	}
 }
 
-/// Collection state that leaves `n` unexamined indices below the frontier, with both missing
-/// and deleted sets as large as the scan and the `authorize` accept.
-///
-/// `deleted_indices` sits one below capacity, because at capacity `authorize` rejects the call.
-/// `missing_indices` holds every entry the map can take while still fitting the `n` gaps the
-/// scan is about to record, so the last insert lands in a full-sized map. Both sets stay below
-/// the cursor and outside the scanned range, so every scanned index takes the full
-/// read-lookup-insert path.
-fn gap_scan_worst_case_state<T: Config>(
-	n: u32,
-) -> RingCollectionState<T::MaxMissingRootsPerCollection, T::MaxDeletedRingsPerCollection> {
+/// Seeds the collection state and the ring roots for a gap scan that leaves `n` unexamined
+/// indices below the frontier, and returns the cursor the scan resumes from.
+fn seed_gap_scan_worst_case<T: Config + BenchmarkHelper<T>>(n: u32) -> RingIndex {
 	let deleted = T::MaxDeletedRingsPerCollection::get().saturating_sub(1);
 	let missing = T::MaxMissingRootsPerCollection::get().saturating_sub(n);
-	let frontier = deleted.saturating_add(T::MaxMissingRootsPerCollection::get());
+	let present = T::MaxMissingRootsPerCollection::get();
+	let stored_from = deleted.saturating_add(missing);
+	let scan_from = stored_from.saturating_add(present);
 
-	RingCollectionState {
-		ring_count: 0,
-		next_ring_index: frontier,
-		next_scan_index: frontier.saturating_sub(n),
-		missing_indices: (deleted..deleted.saturating_add(missing))
-			.map(|i| (i, 0u32))
-			.collect::<BTreeMap<_, _>>()
-			.try_into()
-			.expect("missing count is at most the bound"),
-		deleted_indices: (0..deleted)
-			.collect::<BTreeSet<_>>()
-			.try_into()
-			.expect("one below the bound"),
-	}
+	RingCollectionStates::<T>::insert(
+		BENCH_IDENTIFIER,
+		RingCollectionState {
+			ring_count: present,
+			next_ring_index: scan_from.saturating_add(n),
+			next_scan_index: scan_from,
+			missing_indices: (deleted..stored_from)
+				.map(|i| (i, 0u32))
+				.collect::<BTreeMap<_, _>>()
+				.try_into()
+				.expect("missing count is at most the bound"),
+			deleted_indices: (0..deleted)
+				.collect::<BTreeSet<_>>()
+				.try_into()
+				.expect("one below the bound"),
+		},
+	);
+	fill_in_ring_root_range::<T>(BENCH_IDENTIFIER, stored_from..scan_from);
+
+	scan_from
 }
 
 /// Distinct collection identifier.
@@ -509,9 +530,7 @@ mod benches {
 		Subscription::<T>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
 		ProcessingState::<T>::mutate(|s| s.last_processed_sequence = 1);
 
-		let state = gap_scan_worst_case_state::<T>(n);
-		let scan_from = state.next_scan_index;
-		RingCollectionStates::<T>::insert(BENCH_IDENTIFIER, state);
+		let scan_from = seed_gap_scan_worst_case::<T>(n);
 
 		#[extrinsic_call]
 		_(SystemOrigin::Authorized, BENCH_IDENTIFIER, scan_from, BlockNumberFor::<T>::zero());
@@ -530,9 +549,7 @@ mod benches {
 
 		Subscription::<T>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
 
-		let state = gap_scan_worst_case_state::<T>(1);
-		let scan_from = state.next_scan_index;
-		RingCollectionStates::<T>::insert(BENCH_IDENTIFIER, state);
+		let scan_from = seed_gap_scan_worst_case::<T>(1);
 
 		let call = Call::<T>::detect_missing_rings {
 			identifier: BENCH_IDENTIFIER,
