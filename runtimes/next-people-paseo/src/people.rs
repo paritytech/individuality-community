@@ -1752,12 +1752,6 @@ parameter_types! {
 	pub ConstantWeight: Weight = Weight::from_parts(10_000, 0);
 }
 
-parameter_types! {
-	pub AssetHubSubscriptionWhitelist:
-		alloc::vec::Vec<indiv_pallet_members_notifier::GenesisWhitelistEntry> =
-			asset_hub_subscription_whitelist();
-}
-
 /// Pallet index of `MembersSubscriber` in next-asset-hub-paseo's `construct_runtime!`.
 pub const NEXT_ASSET_HUB_MEMBERS_SUBSCRIBER_INDEX: u8 = 97;
 
