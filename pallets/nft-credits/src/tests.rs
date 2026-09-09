@@ -2900,6 +2900,12 @@ mod private_claims {
 		}
 	}
 
+	/// Deliver the game's built outcome, which is what releases its cleanup.
+	fn deliver_outcome() {
+		assert_ok!(NftCredits::do_send_private_ring(GAME));
+		assert!(PrivateRingDeliveryQueue::<Test>::get().is_empty());
+	}
+
 	/// Register `player`, who must hold the credits the entry price costs.
 	fn register(player: &AccountId32, seed: u8) {
 		assert_ok!(NftCredits::register_private_claim_key(
@@ -3089,6 +3095,11 @@ mod private_claims {
 			}
 			close_registration_and_build();
 
+			// The ring is queued, so the cleanup that would remove the record delivery reads
+			// waits for the delivery.
+			assert!(!NftCredits::private_clean_up_due(GAME));
+			deliver_outcome();
+
 			assert!(NftCredits::private_clean_up_due(GAME));
 			// Four credits each are left over, the entry price having cost two of six.
 			assert_eq!(PrivateCreditBalances::<Test>::iter().count(), 4);
@@ -3104,9 +3115,106 @@ mod private_claims {
 				Event::<Test>::PrivateGameCleanedUp { game_index: GAME }.into(),
 			);
 
-			// The cleanup leaves the outcome alone, the claims chain still needing it.
-			assert_eq!(PrivateOutcomes::<Test>::iter().count(), 1);
+			// The delivery released the cleanup, so the outcome went with it and nothing is
+			// left to send.
+			assert_eq!(PrivateOutcomes::<Test>::iter().count(), 0);
 			assert!(!NftCredits::private_clean_up_due(GAME));
+		});
+	}
+
+	#[test]
+	fn the_offchain_worker_paces_the_repeating_steps_by_block() {
+		new_test_ext().execute_with(|| {
+			let players = play_private_game(1);
+			open_registration();
+			for (seed, player) in players.iter().enumerate() {
+				let AccountOrPerson::Account(account) = player else { unreachable!() };
+				register(account, seed as u8);
+			}
+			let ends = PrivateGames::<Test>::get(GAME).unwrap().registration_ends;
+			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
+			clear_pool();
+
+			// A build step pushes `PrivateKeysPerBuild` keys every time but the last, so two
+			// blocks' steps encode the same way but for the discriminator. Under a window the
+			// pool would ban the hash of the step it included and the next attempt would repeat
+			// it, holding the build to one step per window.
+			NftCredits::submit_private_ring_work(5);
+			NftCredits::submit_private_ring_work(6);
+			let to_include = NftCredits::private_ring_build_step(GAME).unwrap();
+			assert_eq!(
+				submitted_calls(),
+				vec![
+					RuntimeCall::NftCredits(Call::build_private_ring {
+						game_index: GAME,
+						to_include,
+						discriminator: 5
+					}),
+					RuntimeCall::NftCredits(Call::build_private_ring {
+						game_index: GAME,
+						to_include,
+						discriminator: 6
+					}),
+				]
+			);
+
+			// A cleanup step names the game and nothing else, so it is paced the same way. The
+			// delivery has to go first, which is what releases the cleanup.
+			close_registration_and_build();
+			deliver_outcome();
+			clear_pool();
+			NftCredits::submit_private_ring_work(7);
+			NftCredits::submit_private_ring_work(8);
+			assert_eq!(
+				submitted_calls(),
+				vec![
+					RuntimeCall::NftCredits(Call::clean_up_private_game {
+						game_index: GAME,
+						discriminator: 7
+					}),
+					RuntimeCall::NftCredits(Call::clean_up_private_game {
+						game_index: GAME,
+						discriminator: 8
+					}),
+				]
+			);
+		});
+	}
+
+	#[test]
+	fn a_queued_ring_holds_off_the_cleanup_that_would_strand_it() {
+		new_test_ext().execute_with(|| {
+			let players = play_private_game(1);
+			open_registration();
+			for (seed, player) in players.iter().enumerate() {
+				let AccountOrPerson::Account(account) = player else { unreachable!() };
+				register(account, seed as u8);
+			}
+			close_registration_and_build();
+			assert_eq!(PrivateRingDeliveryQueue::<Test>::get().to_vec(), vec![GAME]);
+
+			// The last cleanup step removes the record `do_send_private_ring` reads the slots
+			// from. Running it first would leave the queue with a front that can never be sent,
+			// and `authorize_send_private_ring` takes the front alone, so no later game's ring
+			// would be deliverable either.
+			assert_eq!(
+				NftCredits::authorize_clean_up_private_game(TransactionSource::Local, &GAME)
+					.map(|_| ()),
+				Err(AuthorizeInvalidity::NoPrivateGameToCleanUp.into()),
+			);
+			assert_noop!(
+				NftCredits::do_clean_up_private_game(GAME),
+				Error::<Test>::NoPrivateGameToCleanUp
+			);
+
+			// The delivery is what releases it.
+			deliver_outcome();
+			assert_ok!(NftCredits::authorize_clean_up_private_game(
+				TransactionSource::Local,
+				&GAME
+			));
+			assert_ok!(NftCredits::do_clean_up_private_game(GAME));
+			assert!(PrivateGames::<Test>::get(GAME).is_none());
 		});
 	}
 
@@ -3120,6 +3228,7 @@ mod private_claims {
 				register(account, seed as u8);
 			}
 			close_registration_and_build();
+			deliver_outcome();
 
 			let call = Call::<Test>::clean_up_private_game { game_index: GAME, discriminator: 0 };
 			let charged =

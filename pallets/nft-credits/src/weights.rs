@@ -298,13 +298,15 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().writes(2_u64))
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
 	}
+	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:0)
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)
 	fn authorize_clean_up_private_game() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1024`
 		//  Estimated: `4489`
 		// Minimum execution time: 10_000_000 picoseconds.
 		Weight::from_parts(10_000_000, 4489)
-			.saturating_add(T::DbWeight::get().reads(1_u64))
+			.saturating_add(T::DbWeight::get().reads(2_u64))
 	}
 }
 
@@ -533,12 +535,14 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().writes(2_u64))
 			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
 	}
+	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:0)
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)
 	fn authorize_clean_up_private_game() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1024`
 		//  Estimated: `4489`
 		// Minimum execution time: 10_000_000 picoseconds.
 		Weight::from_parts(10_000_000, 4489)
-			.saturating_add(RocksDbWeight::get().reads(1_u64))
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
 	}
 }

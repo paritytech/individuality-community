@@ -47,10 +47,11 @@ Status: experimental.
   names, that the alias is unspent and that the game's claim window is open; the dispatch spends
   the alias and mints.
 - `receive_private_rings` — receives a game's outcome over XCM: a ring, or an abandonment.
-- `close_private_ring(game_index)` — open call, made by anyone, once the game's claim window is
-  closed. Removes up to 32 spent aliases per call and the ring with the last of them, recording
-  the game in `ClosedPrivateGames`. It only reclaims space: a closed window takes no claim whether
-  the ring is still there or not.
+- `close_private_ring(game_index)` — authorized call submitted by the pallet's offchain worker,
+  once the game's claim window is closed. Local or in-block source only, as the tree sweep is.
+  Removes up to 32 spent aliases per call and the ring with the last of them, recording the game
+  in `ClosedPrivateGames`. It only reclaims space: a closed window takes no claim whether the ring
+  is still there or not, so it runs at the lowest priority tier.
 
 A claim carries no signed origin on purpose: the fee payer would be the strongest link a claim
 leaks, since two claims from one account are two claims by one member. What bounds the call instead

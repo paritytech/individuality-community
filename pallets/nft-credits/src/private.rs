@@ -256,6 +256,31 @@ impl<T: Config> Pallet<T> {
 		Some(outstanding.min(T::PrivateKeysPerBuild::get()))
 	}
 
+	/// The validity of one private claim job of `game_index`, which only this pallet's offchain
+	/// worker submits.
+	///
+	/// The tag is the job and the game, so every attempt at one of them shares it and the pool
+	/// keeps one. The block number breaks the tie inside `tier`, so a fresh attempt outranks the
+	/// one holding the tag: the pool replaces it only for a strictly higher priority.
+	fn private_job_validity(
+		tag: &'static str,
+		tier: TransactionPriority,
+		game_index: &GameIdx,
+	) -> ValidTransaction {
+		ValidTransaction::with_tag_prefix(tag)
+			.and_provides(game_index)
+			.priority(indiv_support::tx_priority::add_tie_break(
+				tier,
+				frame_system::Pallet::<T>::block_number().saturated_into::<u64>(),
+			))
+			.longevity(TX_LONGEVITY)
+			// Propagation is off because peers validate a gossiped transaction with a source of
+			// `External`, which these calls reject.
+			.propagate(false)
+			.build()
+			.expect("tag prefix is not empty; qed")
+	}
+
 	/// Validate a [`Pallet::build_private_ring`] submission.
 	pub(crate) fn authorize_build_private_ring(
 		source: TransactionSource,
@@ -272,14 +297,14 @@ impl<T: Config> Pallet<T> {
 			return Err(AuthorizeInvalidity::NoPrivateRingToBuild.into());
 		}
 
+		// A build step gates every private claim of the game, so it ranks as deferrable
+		// progress rather than cleanup.
 		Ok((
-			ValidTransaction {
-				priority: indiv_support::tx_priority::BACKGROUND_PROGRESS,
-				requires: Vec::new(),
-				provides: Vec::from([(b"nft-credits/build-private-ring", game_index).encode()]),
-				longevity: TX_LONGEVITY,
-				propagate: false,
-			},
+			Self::private_job_validity(
+				"nft-credits:build-private-ring",
+				indiv_support::tx_priority::BACKGROUND_PROGRESS,
+				game_index,
+			),
 			Weight::zero(),
 		))
 	}
@@ -418,20 +443,28 @@ impl<T: Config> Pallet<T> {
 			return Err(AuthorizeInvalidity::NoPrivateGameToCleanUp.into());
 		}
 
+		// The cleanup only frees storage, so it yields to every other transaction. The ring is
+		// delivered by then and no claim reads what it drops.
 		Ok((
-			ValidTransaction {
-				priority: indiv_support::tx_priority::BACKGROUND_PROGRESS,
-				requires: Vec::new(),
-				provides: Vec::from([(b"nft-credits/clean-up-private-game", game_index).encode()]),
-				longevity: TX_LONGEVITY,
-				propagate: false,
-			},
+			Self::private_job_validity(
+				"nft-credits:clean-up-private-game",
+				indiv_support::tx_priority::CLEANUP,
+				game_index,
+			),
 			Weight::zero(),
 		))
 	}
 
 	/// Whether `game_index` has registration state left to drop.
+	///
+	/// A game still queued for delivery owes none: the last step removes its record, and
+	/// [`Pallet::do_send_private_ring`] reads the slots from it. Cleaning up first would leave
+	/// the queue with a front that can never be sent, and no later ring is deliverable behind it.
 	pub(crate) fn private_clean_up_due(game_index: GameIdx) -> bool {
+		if PrivateRingDeliveryQueue::<T>::get().contains(&game_index) {
+			return false;
+		}
+
 		PrivateGames::<T>::get(game_index)
 			.is_some_and(|info| matches!(info.phase, PrivateGamePhase::CleaningUp))
 	}
@@ -440,7 +473,8 @@ impl<T: Config> Pallet<T> {
 	///
 	/// One call removes at most [`PRIVATE_CLEAN_UP_ITEMS`] entries, so a game is dropped over as
 	/// many calls as it takes. The game's record goes last, because it is what says the cleanup is
-	/// still owed. The ring outlives the cleanup and is removed once the claims chain has it.
+	/// still owed. The outcome is already delivered by then, its delivery being what releases the
+	/// cleanup, so nothing here reads it.
 	pub(crate) fn do_clean_up_private_game(game_index: GameIdx) -> Result<u32, DispatchError> {
 		ensure!(Self::private_clean_up_due(game_index), Error::<T>::NoPrivateGameToCleanUp);
 
@@ -488,8 +522,10 @@ impl<T: Config> Pallet<T> {
 	/// Queue the ring of `game_index` for delivery to the claims chain.
 	fn queue_private_ring_delivery(game_index: GameIdx) {
 		if PrivateRingDeliveryQueue::<T>::mutate(|queue| queue.try_push(game_index)).is_err() {
-			// The queue fills only after delivery failed for as many rings as it holds. A replay
-			// has to repair that.
+			// The queue fills only after delivery failed for as many rings as it holds. No call
+			// re-queues a dropped outcome, so the game's credits then mint on neither path: the
+			// claims chain refuses a public claim against a private game's tree and holds no ring
+			// to claim against.
 			log::error!(
 				target: LOG_TARGET,
 				"Private ring delivery queue full, ring for game {game_index} not queued",
@@ -511,14 +547,14 @@ impl<T: Config> Pallet<T> {
 			return Err(AuthorizeInvalidity::NoQueuedPrivateRings.into());
 		}
 
+		// The claims chain takes no claim of the game until the ring lands, so the delivery
+		// ranks as deferrable progress.
 		Ok((
-			ValidTransaction {
-				priority: indiv_support::tx_priority::BACKGROUND_PROGRESS,
-				requires: Vec::new(),
-				provides: Vec::from([(b"nft-credits/send-private-ring", game_index).encode()]),
-				longevity: TX_LONGEVITY,
-				propagate: false,
-			},
+			Self::private_job_validity(
+				"nft-credits:send-private-ring",
+				indiv_support::tx_priority::BACKGROUND_PROGRESS,
+				game_index,
+			),
 			Weight::zero(),
 		))
 	}
@@ -618,13 +654,19 @@ impl<T: Config> Pallet<T> {
 	/// before cleanup, because claims wait on the ring and on nothing the cleanup drops. One
 	/// ring fills a message, so only the front of the queue is delivered per block.
 	pub(crate) fn submit_private_ring_work(block_number: BlockNumberFor<T>) {
-		let discriminator = block_number / RETRY_WINDOW.into();
-
 		let mut cleanup = None;
 		for (game_index, _) in PrivateGames::<T>::iter() {
 			if let Some(to_include) = Self::private_ring_build_step(game_index) {
 				Self::submit_private_call(
-					Call::<T>::build_private_ring { game_index, to_include, discriminator },
+					Call::<T>::build_private_ring {
+						game_index,
+						to_include,
+						// The submitting block. A ring takes as many steps as its keys need, and
+						// every step but the last pushes `PrivateKeysPerBuild` keys, so the call
+						// encodes the same way each time. A window would leave the pool banning
+						// the hash of the step it included and the next attempt repeating it.
+						discriminator: block_number,
+					},
 					"build_private_ring",
 				);
 				return;
@@ -636,7 +678,12 @@ impl<T: Config> Pallet<T> {
 
 		if let Some(game_index) = PrivateRingDeliveryQueue::<T>::get().first().copied() {
 			Self::submit_private_call(
-				Call::<T>::send_private_ring { game_index, discriminator },
+				Call::<T>::send_private_ring {
+					game_index,
+					// The front changes once a ring is sent, so the window paces retries of one
+					// front alone.
+					discriminator: block_number / RETRY_WINDOW.into(),
+				},
 				"send_private_ring",
 			);
 			return;
@@ -644,7 +691,12 @@ impl<T: Config> Pallet<T> {
 
 		if let Some(game_index) = cleanup {
 			Self::submit_private_call(
-				Call::<T>::clean_up_private_game { game_index, discriminator },
+				Call::<T>::clean_up_private_game {
+					game_index,
+					// The submitting block, for the same reason as a build step: a cleanup takes
+					// several steps and `game_index` alone cannot tell them apart.
+					discriminator: block_number,
+				},
 				"clean_up_private_game",
 			);
 		}

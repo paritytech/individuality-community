@@ -315,6 +315,8 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
 	}
 	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)
+	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:0)
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)
 	fn authorize_clean_up_private_game() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1000`
@@ -322,6 +324,6 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		// Minimum execution time: 10_000_000 picoseconds.
 		Weight::from_parts(10_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 4489))
-			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().reads(2))
 	}
 }
