@@ -1529,31 +1529,6 @@ mod claim {
 	}
 
 	#[test]
-	fn try_state_catches_a_private_tree_index_that_disagrees_with_the_trees() {
-		new_test_ext().execute_with(|| {
-			use crate::PrivateGameTrees;
-
-			let awards = awards();
-			let mut private_tree = tree_of(BLOCK, &awards);
-			private_tree.private_slots = 1;
-			CreditTrees::<Test>::insert(BLOCK, private_tree);
-			TreeExpiries::<Test>::insert(ExpiryTimestamp::from(private_tree.timestamp), BLOCK, ());
-			PrivateGameTrees::<Test>::insert(private_tree.game_index, BLOCK, ());
-			assert_ok!(NftClaims::do_try_state());
-
-			// Without the entry the game's close never finds the tree, which then outlives the
-			// game it belongs to.
-			PrivateGameTrees::<Test>::remove(private_tree.game_index, BLOCK);
-			assert!(NftClaims::do_try_state().is_err());
-			PrivateGameTrees::<Test>::insert(private_tree.game_index, BLOCK, ());
-
-			// An entry naming no tree is the other way round: nothing removes it.
-			PrivateGameTrees::<Test>::insert(private_tree.game_index, BLOCK + 1, ());
-			assert!(NftClaims::do_try_state().is_err());
-		});
-	}
-
-	#[test]
 	fn a_claim_refunds_the_selector_reservation_to_the_branch_taken() {
 		use crate::weights::WeightInfo;
 		use frame_support::dispatch::GetDispatchInfo;
@@ -2012,13 +1987,12 @@ mod expiry {
 					tree: private_tree
 				}])
 			));
-			assert!(crate::PrivateGameTrees::<Test>::contains_key(private_tree.game_index, 10));
+			assert!(CreditTrees::<Test>::contains_key(10));
 
 			set_now(due_at(TIMESTAMP));
 			assert_ok!(sweep(TIMESTAMP));
 
 			assert!(!CreditTrees::<Test>::contains_key(10));
-			assert!(!crate::PrivateGameTrees::<Test>::contains_key(private_tree.game_index, 10));
 			System::assert_has_event(Event::CreditTreesExpired { count: 1 }.into());
 		});
 	}
@@ -2424,8 +2398,8 @@ mod private_claims {
 	use super::*;
 	use crate::{
 		AbandonedPrivateGames, AuthorizeInvalidity, ClosedPrivateGames, CollectionMinter,
-		CollectionMinters, Error, ItemSelection, PrivateClaimsThisBlock, PrivateGameTrees,
-		PrivateRingCloses, PrivateRings, SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
+		CollectionMinters, Error, ItemSelection, PrivateClaimsThisBlock, PrivateRingCloses,
+		PrivateRings, SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
 	};
 	use frame_support::traits::OnInitialize;
 	use indiv_pallet_scarcity::CollectionId;
@@ -3063,7 +3037,7 @@ mod private_claims {
 					.get_dispatch_info()
 					.call_weight;
 			let actual = post.actual_weight.expect("the call reports its weight");
-			assert_eq!(actual, MockWeightInfo::close_private_ring(2, 0));
+			assert_eq!(actual, MockWeightInfo::close_private_ring(2));
 			assert!(actual.all_lt(call_weight));
 
 			// Nothing is left to close, and a claim of the game is refused on the ring rather
@@ -3094,7 +3068,7 @@ mod private_claims {
 			let post = close().unwrap();
 			assert_eq!(
 				post.actual_weight,
-				Some(MockWeightInfo::close_private_ring(PRIVATE_CLOSE_ITEMS, 0)),
+				Some(MockWeightInfo::close_private_ring(PRIVATE_CLOSE_ITEMS)),
 				"a full budget refunds nothing",
 			);
 			assert_eq!(SpentPrivateClaims::<Test>::iter_prefix(GAME).count(), 1);
@@ -3143,118 +3117,30 @@ mod private_claims {
 	}
 
 	#[test]
-	fn the_trees_of_a_private_game_are_indexed_for_its_close() {
+	fn a_tree_is_refused_once_its_game_has_built_a_ring() {
 		new_test_ext().execute_with(|| {
+			// Delivered before the ring, so the game may still be abandoned and the tree may
+			// still take a public claim. It is stored and filed for expiry as any other.
 			store_private_tree(BLOCK);
+			assert!(CreditTrees::<Test>::contains_key(BLOCK));
 
-			// The tree is keyed by its award block, so the index is what the close finds it by.
-			assert!(PrivateGameTrees::<Test>::contains_key(GAME, BLOCK));
-
-			// A tree that names no slots is a public game's. Its own claims remove it, so it
-			// takes no index entry.
-			assert_ok!(NftClaims::receive_credit_trees(
-				game_chain_origin(),
-				batch(vec![update(0, 11)])
-			));
-			assert!(CreditTrees::<Test>::contains_key(11));
-			assert!(!PrivateGameTrees::<Test>::contains_key(GAME, 11));
-		});
-	}
-
-	#[test]
-	fn closing_removes_the_games_trees_and_queues_their_deletion() {
-		new_test_ext().execute_with(|| {
 			let keys = [member(1).1, member(2).1];
 			store_ring(1, &keys);
-			store_private_tree(BLOCK);
 			System::reset_events();
 
-			let closes_at = PrivateRings::<Test>::get(GAME).unwrap().closes_at;
-			System::set_block_number(closes_at);
-			let post = close().unwrap();
+			// With the ring held the game reaches no second outcome, so `claim` refuses this
+			// game's trees for good and a private claim proves against the ring. A tree arriving
+			// now would be state that only the sweep removes.
+			assert_ok!(NftClaims::receive_credit_trees(
+				game_chain_origin(),
+				batch(vec![private_update(BLOCK + 1)])
+			));
 
-			// The game's credits minted through its ring or not at all, so the tree is gone at
-			// the close rather than at its own deadline.
-			assert!(!CreditTrees::<Test>::contains_key(BLOCK));
-			assert!(!PrivateGameTrees::<Test>::contains_key(GAME, BLOCK));
-			assert_eq!(PendingTreeDeletions::<Test>::get().into_inner(), vec![BLOCK]);
-			assert_eq!(post.actual_weight, Some(MockWeightInfo::close_private_ring(0, 1)));
+			assert!(!CreditTrees::<Test>::contains_key(BLOCK + 1));
 			assert_eq!(
 				nft_claims_events(),
 				vec![
-					Event::PrivateGameTreesRemoved { game_index: GAME, count: 1 },
-					Event::PrivateRingClosed { game_index: GAME },
-				],
-				"the removal reports the close, not an expiry of unclaimed credits",
-			);
-
-			// The expiry entry stays behind, as it does for a fully claimed tree, and the sweep
-			// of it is what removes the bitmap.
-			assert!(TreeExpiries::<Test>::contains_key(
-				ExpiryTimestamp::from(1_000 + BLOCK),
-				BLOCK
-			));
-		});
-	}
-
-	#[test]
-	fn closing_keeps_the_ring_until_the_last_tree_is_removed() {
-		new_test_ext().execute_with(|| {
-			let keys = [member(1).1, member(2).1];
-			store_ring(1, &keys);
-			// One more tree than a step removes, the mock carrying two per deletion message.
-			for block in BLOCK..BLOCK + 3 {
-				store_private_tree(block);
-			}
-			let closes_at = PrivateRings::<Test>::get(GAME).unwrap().closes_at;
-			System::set_block_number(closes_at);
-
-			let post = close().unwrap();
-			assert_eq!(
-				post.actual_weight,
-				Some(MockWeightInfo::close_private_ring(0, 2)),
-				"a full budget refunds nothing",
-			);
-			assert_eq!(PrivateGameTrees::<Test>::iter_prefix(GAME).count(), 1);
-			assert_eq!(CreditTrees::<Test>::iter().count(), 1);
-			assert!(
-				PrivateRings::<Test>::contains_key(GAME),
-				"the ring says the removal is still owed",
-			);
-
-			assert_ok!(close());
-			assert_eq!(PrivateGameTrees::<Test>::iter_prefix(GAME).count(), 0);
-			assert_eq!(CreditTrees::<Test>::iter().count(), 0);
-			assert!(PrivateRings::<Test>::get(GAME).is_none());
-			assert_eq!(PendingTreeDeletions::<Test>::get().len(), 3);
-		});
-	}
-
-	#[test]
-	fn a_tree_of_a_closed_game_is_not_stored() {
-		new_test_ext().execute_with(|| {
-			let keys = [member(1).1, member(2).1];
-			store_ring(1, &keys);
-			let closes_at = PrivateRings::<Test>::get(GAME).unwrap().closes_at;
-			System::set_block_number(closes_at);
-			assert_ok!(close());
-			assert!(ClosedPrivateGames::<Test>::contains_key(GAME));
-			System::reset_events();
-
-			// A replay from the game chain, whose root outlives this chain's tree. The game's
-			// ring and its spent aliases are gone, so the tree would take a claim on neither
-			// path and nothing but the sweep would remove it.
-			assert_ok!(NftClaims::receive_credit_trees(
-				game_chain_origin(),
-				batch(vec![private_update(BLOCK)])
-			));
-
-			assert!(!CreditTrees::<Test>::contains_key(BLOCK));
-			assert!(!PrivateGameTrees::<Test>::contains_key(GAME, BLOCK));
-			assert_eq!(
-				nft_claims_events(),
-				vec![
-					Event::CreditTreePrivateGameClosed { block: BLOCK },
+					Event::CreditTreePrivateRingOutcome { block: BLOCK + 1 },
 					Event::CreditTreesReceived { count: 1, stored: 0 },
 				]
 			);
@@ -3263,9 +3149,57 @@ mod private_claims {
 			// game's and is stored as any other.
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
-				batch(vec![replay(BLOCK)])
+				batch(vec![update(0, BLOCK + 2)])
 			));
-			assert!(CreditTrees::<Test>::contains_key(BLOCK));
+			assert!(CreditTrees::<Test>::contains_key(BLOCK + 2));
+		});
+	}
+
+	#[test]
+	fn a_tree_of_a_closed_game_is_refused_and_a_stored_one_waits_for_the_sweep() {
+		new_test_ext().execute_with(|| {
+			// Stored before the ring arrived, so the close leaves it behind: no call reads it
+			// again and its own deadline is what removes it.
+			store_private_tree(BLOCK);
+			let keys = [member(1).1, member(2).1];
+			store_ring(1, &keys);
+			let closes_at = PrivateRings::<Test>::get(GAME).unwrap().closes_at;
+			System::set_block_number(closes_at);
+			let post = close().unwrap();
+			assert!(ClosedPrivateGames::<Test>::contains_key(GAME));
+
+			assert!(
+				CreditTrees::<Test>::contains_key(BLOCK),
+				"the close leaves the game's trees to the sweep",
+			);
+			assert!(
+				PendingTreeDeletions::<Test>::get().is_empty(),
+				"and queues no deletion of its own",
+			);
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::close_private_ring(0)));
+			assert_ok!(NftClaims::do_try_state());
+
+			// A replay from the game chain, whose root outlives this chain's tree. The game held
+			// a ring, so the tree is refused whether the ring is still there or not.
+			System::reset_events();
+			assert_ok!(NftClaims::receive_credit_trees(
+				game_chain_origin(),
+				batch(vec![private_update(BLOCK + 1)])
+			));
+			assert!(!CreditTrees::<Test>::contains_key(BLOCK + 1));
+			System::assert_has_event(
+				Event::CreditTreePrivateRingOutcome { block: BLOCK + 1 }.into(),
+			);
+
+			// The stored tree goes at its own deadline, counted as unclaimed credits.
+			set_now(due_at(1_000 + BLOCK));
+			assert_ok!(NftClaims::sweep_expired_trees(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				1_000 + BLOCK,
+				1
+			));
+			assert!(!CreditTrees::<Test>::contains_key(BLOCK));
+			System::assert_has_event(Event::CreditTreesExpired { count: 1 }.into());
 		});
 	}
 
@@ -3418,15 +3352,13 @@ mod private_claims {
 	}
 
 	#[test]
-	fn the_last_claim_of_an_abandoned_games_tree_clears_the_index() {
+	fn the_last_claim_of_an_abandoned_games_tree_removes_it() {
 		new_test_ext().execute_with(|| {
-			// The game built no ring, so its trees mint over the public path. They are indexed
-			// as every private game's trees are, and its close never runs to remove them.
+			// The game built no ring, so its trees mint over the public path.
 			let awards = vec![(AccountOrPerson::Account(ALICE), [1u8; 32])];
 			let mut private_tree = tree_of(BLOCK, &awards);
 			private_tree.private_slots = 2;
 			CreditTrees::<Test>::insert(BLOCK, private_tree);
-			PrivateGameTrees::<Test>::insert(GAME, BLOCK, ());
 			AbandonedPrivateGames::<Test>::insert(GAME, ());
 			add_collection(COLLECTION, COLLECTION_OWNER, 2);
 			CollectionMinters::<Test>::insert(
@@ -3445,10 +3377,8 @@ mod private_claims {
 				PURSE
 			));
 
-			// The claim took the tree's only leaf, so the tree goes with it and the index entry
-			// it left would name a tree nothing holds.
+			// The claim took the tree's only leaf, so the tree goes with it.
 			assert!(!CreditTrees::<Test>::contains_key(BLOCK));
-			assert!(!PrivateGameTrees::<Test>::contains_key(GAME, BLOCK));
 			System::assert_has_event(Event::TreeFullyClaimed { block: BLOCK }.into());
 		});
 	}

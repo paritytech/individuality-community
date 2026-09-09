@@ -564,8 +564,8 @@ impl pallet_nft_claims::WeightInfo for MockWeightInfo {
 		Weight::from_parts(70, 7)
 	}
 
-	fn close_private_ring(a: u32, t: u32) -> Weight {
-		Weight::from_parts(1_000 + 10 * a as u64 + 20 * t as u64, 100 + a as u64 + 2 * t as u64)
+	fn close_private_ring(n: u32) -> Weight {
+		Weight::from_parts(1_000 + 10 * n as u64, 100 + n as u64)
 	}
 
 	fn authorize_close_private_ring() -> Weight {

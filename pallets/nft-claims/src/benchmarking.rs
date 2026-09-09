@@ -20,7 +20,7 @@ use super::*;
 use crate::{
 	pallet::{
 		AbandonedPrivateGames, ClaimedLeaves, CollectionMinters, NextExpectedSequence,
-		PendingTreeDeletions, PrivateGameTrees, PrivateRingCloses, TreeExpiries,
+		PendingTreeDeletions, PrivateRingCloses, TreeExpiries,
 	},
 	types::CreditTreeBatch,
 	BenchmarkHelper,
@@ -49,8 +49,8 @@ fn credit(i: u32) -> NftClaimCredit {
 /// ahead of the stream.
 ///
 /// Every tree names a private game of its own, which is the dearest batch to store: a tree that
-/// names slots reads `ClosedPrivateGames` and writes `PrivateGameTrees`, and a game per tree gives
-/// each of those a key of its own.
+/// names slots reads the game's ring and its closure, and a game per tree gives each of those a
+/// key of its own.
 fn batch<T: Config>(n: u32) -> CreditTreeBatch<T> {
 	let mut trees = BoundedVec::new();
 	for i in 0..n {
@@ -431,18 +431,13 @@ mod benches {
 		Ok(())
 	}
 
-	/// Worst case for `a` aliases and `t` trees: both budgets are filled, so the ring stays and
-	/// the call refunds nothing.
+	/// Worst case: the whole per-call budget of aliases is removed, so the ring stays and the
+	/// call refunds nothing.
 	///
-	/// One key per alias and one award block per tree, because the entries removed are the cost
-	/// drivers: a fixed set of them would charge one write however many a real call makes. The
-	/// two do not interact, one being a removal per spent alias and the other a removal per tree
-	/// the game's award blocks hold, so they are separate components.
+	/// One key per alias, because the aliases removed are the cost driver: a fixed set of them
+	/// would charge one write however many a real call makes.
 	#[benchmark]
-	fn close_private_ring(
-		a: Linear<0, PRIVATE_CLOSE_ITEMS>,
-		t: Linear<0, { T::MaxTreeDeletionsPerMessage::get() }>,
-	) -> Result<(), BenchmarkError> {
+	fn close_private_ring(n: Linear<0, PRIVATE_CLOSE_ITEMS>) -> Result<(), BenchmarkError> {
 		let game_index = 1;
 		let caller: T::AccountId = account("caller", 0, 0);
 		let (root, _proof, _alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
@@ -464,23 +459,10 @@ mod benches {
 		// Filed as `receive_private_rings` files it, so the step that drops the ring pays for
 		// clearing the entry the offchain worker found it by.
 		PrivateRingCloses::<T>::insert(BigEndianU64(0), game_index, ());
-		for i in 0..a {
+		for i in 0..n {
 			let mut alias = [0u8; 32];
 			alias[..4].copy_from_slice(&i.to_le_bytes());
 			SpentPrivateClaims::<T>::insert(game_index, Alias::from(alias), ());
-		}
-		for block in 0..t {
-			CreditTrees::<T>::insert(
-				block,
-				NftClaimCreditTree {
-					game_index,
-					root: CreditProofNode([block as u8; 32]),
-					leaf_count: 1,
-					timestamp: 1_000,
-					private_slots: 1,
-				},
-			);
-			PrivateGameTrees::<T>::insert(game_index, block, ());
 		}
 
 		#[extrinsic_call]
@@ -489,14 +471,8 @@ mod benches {
 		assert_eq!(
 			SpentPrivateClaims::<T>::iter_prefix(game_index).count(),
 			0,
-			"one call removes the whole alias budget",
+			"one call removes the whole budget",
 		);
-		assert_eq!(
-			PrivateGameTrees::<T>::iter_prefix(game_index).count(),
-			0,
-			"one call removes the whole tree budget",
-		);
-		assert_eq!(PendingTreeDeletions::<T>::get().len(), t as usize);
 
 		Ok(())
 	}
@@ -613,10 +589,8 @@ fn claimable_tree<T: Config>(
 	);
 	TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), BLOCK, ());
 	// The tree is a private game's whose ring was abandoned. That is the dearer of the two shapes
-	// a claim takes: it reads `AbandonedPrivateGames`, which a tree of a public game does not,
-	// and the claim that removes the tree clears its `PrivateGameTrees` entry as well.
+	// a claim takes: it reads `AbandonedPrivateGames`, which a tree of a public game does not.
 	AbandonedPrivateGames::<T>::insert(game_index, ());
-	PrivateGameTrees::<T>::insert(game_index, BLOCK, ());
 
 	let sibling_hashes = BoundedVec::try_from(
 		proof.proof.into_iter().map(CreditProofNode::from).collect::<Vec<_>>(),
@@ -636,24 +610,19 @@ const FIRST_EXPIRY_TIMESTAMP: u32 = 1_000_000;
 /// One timestamp per tree is the worst case: every removal reads and writes a key of its own,
 /// where trees sharing a timestamp would share the map's first key. The clock ends at the deadline
 /// of the last due tree, so the tree filed after it is what stops the sweep.
-///
-/// Every tree names a private game of its own, so the sweep pays for clearing a
-/// `PrivateGameTrees` entry per tree, which a public game's tree does not have.
 fn fill_due_expiries<T: Config>(n: u32) {
 	for block in 0..=n {
 		let timestamp = FIRST_EXPIRY_TIMESTAMP.saturating_add(block);
-		let game_index = block.saturating_add(1);
 		CreditTrees::<T>::insert(
 			block,
 			NftClaimCreditTree {
-				game_index,
+				game_index: 1,
 				root: CreditProofNode([block as u8; 32]),
 				leaf_count: 2,
 				timestamp,
-				private_slots: 1,
+				private_slots: 0,
 			},
 		);
-		PrivateGameTrees::<T>::insert(game_index, block, ());
 		TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
 		// A partly claimed tree, so the sweep pays for removing a bitmap that is there.
 		ClaimedLeaves::<T>::insert(block, BoundedVec::truncate_from(alloc::vec![0b01u8]));

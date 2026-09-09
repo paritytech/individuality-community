@@ -93,12 +93,12 @@
 //! private game's credits mint on, and the credits their registration spent are not returned.
 //! `PrivateRingReceived` names both bounds, so a wallet knows them as soon as the ring lands.
 //!
-//! Once the window is closed, [`Pallet::close_private_ring`] drops the ring, the aliases spent
-//! against it and the game's credit trees. No claim can be made by then, so nothing is kept to
-//! stop one. This pallet's offchain worker submits the call, as it submits the tree sweep, so the
-//! state goes at the deadline rather than when somebody pays to reclaim it. The game is recorded
-//! in [`ClosedPrivateGames`], which refuses a later outcome for it and a later delivery of its
-//! trees: without the aliases the dropped ring's slots would mint again.
+//! Once the window is closed, [`Pallet::close_private_ring`] drops the ring and the aliases spent
+//! against it. No claim can be made by then, so nothing is kept to stop one. This pallet's offchain
+//! worker submits the call, as it submits the tree sweep, so the state goes at the deadline rather
+//! than when somebody pays to reclaim it. The game is recorded in [`ClosedPrivateGames`], which
+//! refuses a later outcome for it and a later delivery of its trees: without the aliases the
+//! dropped ring's slots would mint again.
 //!
 //! [`PrivateRingCloses`] files every held ring under the block it closes in and iterates in that
 //! order, so the worker finds the next game to close in one read.
@@ -144,25 +144,23 @@
 //!
 //! ## Removing trees
 //!
-//! Three paths remove a tree. All of them tell the game chain to drop its own copy, so the trees
-//! each chain holds will be able to process all open claims.
+//! Two paths remove a tree. Both tell the game chain to drop its own copy, so the trees each
+//! chain holds will be able to process all open claims.
 //!
 //! - **Fully claimed.** The set bits of [`ClaimedLeaves`] reach the tree's `leaf_count`. Every
 //!   credit the tree commits to has been minted, so no proof can be built against it again, and the
 //!   claim that completes it removes it.
-//! - **Private game closed.** A private game's claim window closes and its ring is dropped. A
-//!   private claim proves against the ring, never against a tree, and [`Pallet::claim`] refuses a
-//!   tree that names slots unless the game was abandoned. A game that built a ring reaches no
-//!   second outcome, so its trees are unclaimable from the moment the ring arrives.
-//!   [`PrivateGameTrees`] names them, and [`Pallet::close_private_ring`] removes them with the
-//!   ring.
-//! - **Expiry.** A tree that neither of those paths removed outlives [`Config::TreeTtl`]. The TTL
-//!   runs from the award block's own wall-clock time, which the game chain records in the tree, not
-//!   from the time the tree arrived here. [`Pallet::claim`] does not check the TTL, so the sweep
-//!   that removes the tree is what ends claimability, and [`Event::CreditTreesExpired`] reports
-//!   that those unclaimed credits are unmintable from then on. A private game's tree reaches the
-//!   sweep when the game was abandoned and its credits went unclaimed, or when no outcome arrived
-//!   at all and they were mintable on neither path.
+//! - **Expiry.** A tree the claims did not empty outlives [`Config::TreeTtl`]. The TTL runs from
+//!   the award block's own wall-clock time, which the game chain records in the tree, not from the
+//!   time the tree arrived here. [`Pallet::claim`] does not check the TTL, so the sweep that
+//!   removes the tree is what ends claimability, and [`Event::CreditTreesExpired`] reports that
+//!   those unclaimed credits are unmintable from then on.
+//!
+//! A private game's tree is unclaimable from the moment its ring arrives, because the game
+//! reaches no second outcome and [`Pallet::claim`] refuses a tree that names slots unless the game
+//! was abandoned. A delivery from then on is refused, so only a tree that arrived before the ring
+//! is stored, and the sweep is what removes it. Nothing waits on that removal: no call reads the
+//! tree again.
 //!
 //! [`Pallet::sweep_expired_trees`] performs the expiry, and this pallet's offchain worker submits
 //! it. [`TreeExpiries`] files each tree under the timestamp its deadline runs from and iterates in
@@ -179,9 +177,9 @@
 //! entry is what removes the bitmap. That is also the point where a replay stops mattering: a
 //! delivery past the deadline is refused, so nothing can spend those leaves again.
 //!
-//! A closed private game is the one case where a replay is refused before the deadline. Its
-//! redelivered tree is unclaimable, so storing it leaves state that only the sweep removes.
-//! [`Event::CreditTreePrivateGameClosed`] reports the refusal.
+//! A private game that built a ring is the one case where a delivery is refused before the
+//! deadline. Its tree is unclaimable, so storing it would leave state that only the sweep removes.
+//! [`Event::CreditTreePrivateRingOutcome`] reports the refusal.
 //!
 //! The deletions owed to the game chain queue in [`PendingTreeDeletions`] and travel in a
 //! [`Pallet::send_tree_deletions`] message, which the offchain worker submits as well. A deletion
@@ -271,9 +269,7 @@ const CLAIM_METADATA_PAIRS: u32 = 0;
 /// How many spent aliases one [`Pallet::close_private_ring`] call removes.
 ///
 /// A closed window's ring holds one alias per claim that was made, so the removal runs in bounded
-/// steps. It is a pallet constant because only the weight of one call depends on it. The trees the
-/// same call removes are bounded by [`Config::MaxTreeDeletionsPerMessage`] instead, one step
-/// queueing at most one deletion message's worth.
+/// steps. It is a pallet constant because only the weight of one call depends on it.
 pub const PRIVATE_CLOSE_ITEMS: u32 = 32;
 
 /// How many blocks a `claim_private` submission stays valid in the pool.
@@ -627,15 +623,6 @@ pub mod pallet {
 	pub type SpentPrivateClaims<T: Config> =
 		StorageDoubleMap<_, Twox64Concat, GameIdx, Identity, Alias, (), OptionQuery>;
 
-	/// The award blocks whose stored tree belongs to a private game, keyed by that game.
-	///
-	/// A tree carries its game but is keyed by its award block, so this is the only way to find a
-	/// game's trees when its window closes. Every removal of a tree that names slots removes its
-	/// entry too, so an entry always names a stored tree.
-	#[pallet::storage]
-	pub type PrivateGameTrees<T: Config> =
-		StorageDoubleMap<_, Twox64Concat, GameIdx, Twox64Concat, AwardBlock, (), OptionQuery>;
-
 	/// Every private game holding a ring, filed under the block its claim window closes in.
 	///
 	/// The key is hashed with `Identity` and encoded big-endian, so the map iterates from the
@@ -720,9 +707,9 @@ pub mod pallet {
 		/// `count` trees outlived [`Config::TreeTtl`], and this chain removed them with credits
 		/// left unclaimed. Nothing can mint those credits again, on this chain or any other.
 		///
-		/// A private game whose ring arrived has its trees removed at its close and reports
-		/// [`Event::PrivateGameTreesRemoved`] instead. A private game counted here was abandoned,
-		/// or reached no outcome at all, in which case no claimant could have minted its credits.
+		/// A private game's tree is counted here only if it was stored before the game's ring
+		/// arrived, a later delivery being refused. Its credits were mintable if the game was
+		/// abandoned, and mintable on neither path if it reached no outcome at all.
 		///
 		/// The blocks are not named here. The same trees travel in a deletion message, and the
 		/// [`Event::TreeDeletionsSent`] carrying them names every one.
@@ -761,17 +748,11 @@ pub mod pallet {
 		/// having closed. No claim of the game is taken from now on, and none was taken since
 		/// the window closed.
 		PrivateRingClosed { game_index: GameIdx },
-		/// `count` trees of `game_index` were removed as its claim window closed, and their
-		/// deletion was queued for the game chain. Their credits minted through the game's ring
-		/// or not at all: a public claim of them was never possible.
-		///
-		/// The blocks are not named here. The same trees travel in a deletion message, and the
-		/// [`Event::TreeDeletionsSent`] carrying them names every one.
-		PrivateGameTreesRemoved { game_index: GameIdx, count: u32 },
-		/// A tree arrived for `block` whose private game is closed, so this chain did not store
-		/// it. The game's ring and the aliases spent against it are gone, so the tree would take
-		/// a claim on neither path.
-		CreditTreePrivateGameClosed { block: AwardBlock },
+		/// A tree arrived for `block` whose private game had reached the ring outcome, so this
+		/// chain did not store it. Those credits mint through the ring or not at all, and the
+		/// tree would take no claim on either path. It is filed for no expiry, so no
+		/// [`Event::CreditTreesExpired`] ever counts it.
+		CreditTreePrivateRingOutcome { block: AwardBlock },
 		/// `game_index` built no ring, so its credits mint over the public path from now on.
 		/// `key_count` is how many claimants had registered for the ring it did not build.
 		PrivateGameAbandoned { game_index: GameIdx, key_count: u32 },
@@ -932,13 +913,17 @@ pub mod pallet {
 					continue;
 				}
 
-				// A closed private game built a ring, so `claim` refuses this tree for good and a
-				// private claim proves against the ring, which is gone. Storing it would leave
-				// state that only the sweep removes.
+				// A game that built a ring reaches no second outcome, so `claim` refuses this
+				// tree for good and a private claim proves against the ring, never against a
+				// tree. Storing it would leave state that nothing but the sweep removes. A closed
+				// game held a ring too, whatever it holds now.
 				if update.tree.private_slots != 0 &&
-					ClosedPrivateGames::<T>::contains_key(update.tree.game_index)
+					(PrivateRings::<T>::contains_key(update.tree.game_index) ||
+						ClosedPrivateGames::<T>::contains_key(update.tree.game_index))
 				{
-					Self::deposit_event(Event::CreditTreePrivateGameClosed { block: update.block });
+					Self::deposit_event(Event::CreditTreePrivateRingOutcome {
+						block: update.block,
+					});
 					continue;
 				}
 
@@ -959,11 +944,6 @@ pub mod pallet {
 				} else {
 					CreditTrees::<T>::insert(update.block, update.tree);
 					Self::note_tree_expiry(update.block, update.tree.timestamp);
-					if update.tree.private_slots != 0 {
-						// The close removes a game's trees, and the tree is keyed by its award
-						// block, so the game needs an index of its own to find them by.
-						PrivateGameTrees::<T>::insert(update.tree.game_index, update.block, ());
-					}
 					stored = stored.saturating_add(1);
 				}
 			}
@@ -1122,7 +1102,7 @@ pub mod pallet {
 			// game chain to drop its root. The spent leaves stay, because a replay there can
 			// deliver the tree again before the deletion arrives, and only those leaves keep its
 			// credits spent.
-			Self::remove_tree(block, &tree);
+			Self::remove_tree(block);
 			Self::deposit_event(Event::TreeFullyClaimed { block });
 
 			Ok(Some(
@@ -1340,14 +1320,13 @@ pub mod pallet {
 			Ok(Self::do_send_tree_deletions())
 		}
 
-		/// Drops a private game's ring, the aliases spent against it and its credit trees, once
-		/// its claim window is closed.
+		/// Drops a private game's ring and the aliases spent against it, once its claim window is
+		/// closed.
 		///
-		/// One call removes at most [`PRIVATE_CLOSE_ITEMS`] aliases and one deletion message's
-		/// worth of trees, and refunds the rest, so a game is dropped over as many calls as it
-		/// takes. The ring goes last, because it holds the window that says the removal is
-		/// allowed. Nothing removed here can gate a claim: a closed window takes none, and
-		/// [`Pallet::claim`] refuses a tree that names slots.
+		/// One call removes at most [`PRIVATE_CLOSE_ITEMS`] aliases and refunds the rest, so a
+		/// game is dropped over as many calls as it takes. The ring goes last, because it holds
+		/// the window that says the removal is allowed. Nothing removed here can gate a claim: a
+		/// closed window takes none. The game's trees are left to the expiry sweep.
 		///
 		/// This pallet's offchain worker submits this authorized call. It is accepted from a local
 		/// or in-block source only, so no external submission reaches it.
@@ -1361,10 +1340,7 @@ pub mod pallet {
 		#[pallet::authorize(|source, game_index, _discriminator| {
 			Self::authorize_close_private_ring(source, game_index)
 		})]
-		#[pallet::weight(T::WeightInfo::close_private_ring(
-			PRIVATE_CLOSE_ITEMS,
-			T::MaxTreeDeletionsPerMessage::get()
-		))]
+		#[pallet::weight(T::WeightInfo::close_private_ring(PRIVATE_CLOSE_ITEMS))]
 		#[pallet::weight_of_authorize(T::WeightInfo::authorize_close_private_ring())]
 		pub fn close_private_ring(
 			origin: OriginFor<T>,
@@ -1376,9 +1352,9 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
 
-			let (aliases, trees) = Self::do_close_private_ring(game_index)?;
+			let removed = Self::do_close_private_ring(game_index)?;
 
-			Ok(Some(T::WeightInfo::close_private_ring(aliases, trees)).into())
+			Ok(Some(T::WeightInfo::close_private_ring(removed)).into())
 		}
 	}
 
@@ -1508,7 +1484,7 @@ pub mod pallet {
 			// leaves the ring undroppable and the pool drops every step.
 			budget.assert_fits(
 				"close_private_ring",
-				T::WeightInfo::close_private_ring(PRIVATE_CLOSE_ITEMS, max_deletions_per_message)
+				T::WeightInfo::close_private_ring(PRIVATE_CLOSE_ITEMS)
 					.saturating_add(T::WeightInfo::authorize_close_private_ring()),
 			);
 		}
@@ -1529,9 +1505,8 @@ pub mod pallet {
 	impl<T: Config> Pallet<T> {
 		/// Check that the pallet's records agree with each other and with Scarcity: a block whose
 		/// tree is still held has no more claimed leaves than the tree has leaves, every held tree
-		/// and every claimed-leaf bitmap is filed for expiry, every held private tree is indexed
-		/// under its own game, every held ring is filed under the block it closes in, and no
-		/// registration outlives the collection it names.
+		/// and every claimed-leaf bitmap is filed for expiry, every held ring is filed under the
+		/// block it closes in, and no registration outlives the collection it names.
 		///
 		/// A bitmap outlives the tree it belongs to. A block with claimed leaves and no tree is
 		/// therefore the state a fully claimed tree leaves behind, not an inconsistency, and its
@@ -1594,9 +1569,6 @@ pub mod pallet {
 				if PrivateRings::<T>::contains_key(game_index) {
 					return Err(TryRuntimeError::Other("a closed private game still holds a ring"));
 				}
-				if PrivateGameTrees::<T>::iter_key_prefix(game_index).next().is_some() {
-					return Err(TryRuntimeError::Other("a closed private game still holds trees"));
-				}
 			}
 
 			// The offchain worker finds a game to close through this index, so a ring that is not
@@ -1618,27 +1590,6 @@ pub mod pallet {
 							"close index names another block than the ring closes in",
 						)),
 					Some(_) => {},
-				}
-			}
-
-			// The index is what the close finds a game's trees by, so an entry naming no tree
-			// leaves state nothing removes, and a private tree that is not indexed outlives its
-			// game's close.
-			for (game_index, block, ()) in PrivateGameTrees::<T>::iter() {
-				match CreditTrees::<T>::get(block) {
-					None => return Err(TryRuntimeError::Other("private tree index has no tree")),
-					Some(tree) if tree.private_slots == 0 || tree.game_index != game_index =>
-						return Err(TryRuntimeError::Other(
-							"private tree index names another game's tree",
-						)),
-					Some(_) => {},
-				}
-			}
-			for (block, tree) in CreditTrees::<T>::iter() {
-				if tree.private_slots != 0 &&
-					!PrivateGameTrees::<T>::contains_key(tree.game_index, block)
-				{
-					return Err(TryRuntimeError::Other("a private game's tree is not indexed"));
 				}
 			}
 
@@ -1838,36 +1789,17 @@ pub mod pallet {
 			}
 		}
 
-		/// The body of [`Pallet::close_private_ring`], returning the aliases and the trees it
-		/// removed.
+		/// The body of [`Pallet::close_private_ring`], returning the aliases it removed.
 		///
-		/// The trees go with the ring because a game that built one reaches no second outcome, so
-		/// [`Pallet::claim`] refuses them for good and a private claim never proves against a
-		/// tree. Their [`TreeExpiries`] entries stay, as they do for a fully claimed tree, and the
-		/// sweep of those entries removes the bitmaps.
-		fn do_close_private_ring(game_index: GameIdx) -> Result<(u32, u32), DispatchError> {
+		/// The game's trees are left to the expiry sweep. A tree the game awarded is unclaimable
+		/// from the moment its ring arrived, so nothing waits on its removal, and one that
+		/// arrives after the ring is not stored at all.
+		fn do_close_private_ring(game_index: GameIdx) -> Result<u32, DispatchError> {
 			let ring = PrivateRings::<T>::get(game_index).ok_or(Error::<T>::UnknownPrivateRing)?;
 			ensure!(
 				frame_system::Pallet::<T>::block_number() >= ring.closes_at,
 				Error::<T>::PrivateClaimWindowOpen
 			);
-
-			// One step removes a deletion message's worth of trees, so it queues no more than one
-			// send drains. A queue that is already full still drops them, and
-			// `queue_tree_deletions` reports that.
-			let tree_budget = T::MaxTreeDeletionsPerMessage::get();
-			let blocks = PrivateGameTrees::<T>::iter_key_prefix(game_index)
-				.take(tree_budget as usize)
-				.collect::<Vec<_>>();
-			let trees = blocks.len() as u32;
-			for block in &blocks {
-				PrivateGameTrees::<T>::remove(game_index, block);
-				CreditTrees::<T>::remove(block);
-			}
-			Self::queue_tree_deletions(&blocks);
-			if trees > 0 {
-				Self::deposit_event(Event::PrivateGameTreesRemoved { game_index, count: trees });
-			}
 
 			// The aliases are read before they are removed, rather than cleared by prefix, so
 			// that the count the refund is measured in is exact.
@@ -1879,16 +1811,16 @@ pub mod pallet {
 				SpentPrivateClaims::<T>::remove(game_index, alias);
 			}
 
-			// A step that spent a whole budget leaves the rest to the next one. The ring is what
-			// says the removal is still owed, so it goes with the last of them.
-			if removed < PRIVATE_CLOSE_ITEMS && trees < tree_budget {
+			// A step that spent its whole budget leaves the rest to the next one. The ring is
+			// what says the removal is still owed, so it goes with the last of them.
+			if removed < PRIVATE_CLOSE_ITEMS {
 				PrivateRings::<T>::remove(game_index);
 				PrivateRingCloses::<T>::remove(Self::close_key(ring.closes_at), game_index);
 				ClosedPrivateGames::<T>::insert(game_index, ());
 				Self::deposit_event(Event::PrivateRingClosed { game_index });
 			}
 
-			Ok((removed, trees))
+			Ok(removed)
 		}
 
 		/// Validates a [`Pallet::close_private_ring`] transaction.
@@ -2164,19 +2096,14 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Removes `tree`, the stored tree of `block`, and queues its deletion for the game chain.
+		/// Removes the tree of `block` and queues its deletion for the game chain.
 		///
 		/// The expiry entry stays, and so does [`ClaimedLeaves`]. The game chain holds its root
 		/// for longer than this chain holds the tree, and anyone can replay the tree from there,
 		/// so only the spent leaves stop it from minting its credits twice. The sweep of that
 		/// entry removes the bitmap once the deadline has passed.
-		fn remove_tree(block: AwardBlock, tree: &NftClaimCreditTree) {
+		fn remove_tree(block: AwardBlock) {
 			CreditTrees::<T>::remove(block);
-			if tree.private_slots != 0 {
-				// A claim reaches a private tree only when its game was abandoned, and such a
-				// game holds no ring for a close to remove the entry with.
-				PrivateGameTrees::<T>::remove(tree.game_index, block);
-			}
 			Self::queue_tree_deletions(&[block]);
 		}
 
@@ -2228,13 +2155,7 @@ pub mod pallet {
 			let mut expired = Vec::with_capacity(retired.len());
 			for block in &retired {
 				ClaimedLeaves::<T>::remove(block);
-				if let Some(tree) = CreditTrees::<T>::take(block) {
-					if tree.private_slots != 0 {
-						// A private game whose ring arrived has its trees removed at its close,
-						// so this game was abandoned or reached no outcome. No close and no claim
-						// removes the entry, so the sweep does.
-						PrivateGameTrees::<T>::remove(tree.game_index, block);
-					}
+				if CreditTrees::<T>::take(block).is_some() {
 					expired.push(*block);
 				}
 			}
