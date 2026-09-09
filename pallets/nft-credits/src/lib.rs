@@ -1435,19 +1435,19 @@ impl<T: Config> Pallet<T> {
 		// A finite longevity lets a stranded retry self-evict rather than linger. Propagation
 		// is off because peers validate gossiped transactions with a source of `External`,
 		// which this call rejects.
-		let validity =
-			ValidTransaction::with_tag_prefix("game:send-credit-trees")
-				.and_provides(queued_sequence)
-				// The block number rises with every retry window, so a retry outranks the attempt
-				// holding the same tag. The pool replaces that attempt only for a strictly higher
-				// priority.
-				.priority(tx_priority::BACKGROUND_PROGRESS.saturating_add(
-					frame_system::Pallet::<T>::block_number().saturated_into::<u64>(),
-				))
-				.longevity(TX_LONGEVITY)
-				.propagate(false)
-				.build()
-				.expect("tag prefix is not empty; qed");
+		let validity = ValidTransaction::with_tag_prefix("game:send-credit-trees")
+			.and_provides(queued_sequence)
+			// The block number rises with every retry window, so a retry outranks the attempt
+			// holding the same tag. The pool replaces that attempt only for a strictly higher
+			// priority.
+			.priority(tx_priority::add_tie_break(
+				tx_priority::BACKGROUND_PROGRESS,
+				frame_system::Pallet::<T>::block_number().saturated_into::<u64>(),
+			))
+			.longevity(TX_LONGEVITY)
+			.propagate(false)
+			.build()
+			.expect("tag prefix is not empty; qed");
 
 		Ok((validity, Weight::zero()))
 	}

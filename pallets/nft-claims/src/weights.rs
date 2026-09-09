@@ -67,7 +67,8 @@ pub trait WeightInfo {
 	fn receive_private_rings(n: u32, ) -> Weight;
 	fn claim_private() -> Weight;
 	fn authorize_claim_private() -> Weight;
-	fn close_private_ring(n: u32, ) -> Weight;
+	fn close_private_ring(a: u32, t: u32, ) -> Weight;
+	fn authorize_close_private_ring() -> Weight;
 }
 
 /// Weights for `indiv_pallet_nft_claims` using the Substrate node and recommended hardware.
@@ -320,6 +321,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
 	/// Storage: `NftClaims::PrivateRings` (r:1 w:1)
+	/// Storage: `NftClaims::PrivateRingCloses` (r:0 w:1)
 	/// The range of component `n` is `[1, 4]`.
 	fn receive_private_rings(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
@@ -330,7 +332,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			// Standard Error: 1_000_000
 			.saturating_add(Weight::from_parts(15_000_000, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
-			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 	}
 	/// Storage: `NftClaims::PrivateClaimsThisBlock` (r:0 w:1)
 	/// Storage: `NftClaims::SpentPrivateClaims` (r:0 w:1)
@@ -356,19 +358,37 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(3_u64))
 	}
 	/// Storage: `NftClaims::PrivateRings` (r:1 w:1)
+	/// Storage: `NftClaims::PrivateRingCloses` (r:0 w:1)
+	/// Storage: `NftClaims::PrivateGameTrees` (r:64 w:64)
+	/// Storage: `NftClaims::CreditTrees` (r:0 w:64)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
 	/// Storage: `NftClaims::SpentPrivateClaims` (r:0 w:32)
-	/// The range of component `n` is `[0, 32]`.
-	fn close_private_ring(n: u32, ) -> Weight {
+	/// The range of component `a` is `[0, 32]`.
+	/// The range of component `t` is `[0, 64]`.
+	fn close_private_ring(a: u32, t: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `70000`
 		//  Estimated: `140000`
 		// Minimum execution time: 10_000_000 picoseconds.
 		Weight::from_parts(10_000_000, 140000)
 			// Standard Error: 100_000
-			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(a.into()))
+			// Standard Error: 100_000
+			.saturating_add(Weight::from_parts(4_000_000, 0).saturating_mul(t.into()))
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(t.into())))
+			.saturating_add(T::DbWeight::get().writes(3_u64))
+			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(a.into())))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(t.into())))
+	}
+	/// Storage: `NftClaims::PrivateRings` (r:1 w:0)
+	fn authorize_close_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `70000`
+		//  Estimated: `140000`
+		// Minimum execution time: 5_000_000 picoseconds.
+		Weight::from_parts(5_000_000, 140000)
 			.saturating_add(T::DbWeight::get().reads(1_u64))
-			.saturating_add(T::DbWeight::get().writes(1_u64))
-			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
 	}
 }
 // For backwards compatibility and tests.
@@ -620,6 +640,7 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 	/// Storage: `NftClaims::PrivateRings` (r:1 w:1)
+	/// Storage: `NftClaims::PrivateRingCloses` (r:0 w:1)
 	/// The range of component `n` is `[1, 4]`.
 	fn receive_private_rings(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
@@ -630,7 +651,7 @@ impl WeightInfo for () {
 			// Standard Error: 1_000_000
 			.saturating_add(Weight::from_parts(15_000_000, 0).saturating_mul(n.into()))
 			.saturating_add(RocksDbWeight::get().reads((1_u64).saturating_mul(n.into())))
-			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
+			.saturating_add(RocksDbWeight::get().writes((2_u64).saturating_mul(n.into())))
 	}
 	/// Storage: `NftClaims::PrivateClaimsThisBlock` (r:0 w:1)
 	/// Storage: `NftClaims::SpentPrivateClaims` (r:0 w:1)
@@ -656,18 +677,36 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads(3_u64))
 	}
 	/// Storage: `NftClaims::PrivateRings` (r:1 w:1)
+	/// Storage: `NftClaims::PrivateRingCloses` (r:0 w:1)
+	/// Storage: `NftClaims::PrivateGameTrees` (r:64 w:64)
+	/// Storage: `NftClaims::CreditTrees` (r:0 w:64)
+	/// Storage: `NftClaims::PendingTreeDeletions` (r:1 w:1)
 	/// Storage: `NftClaims::SpentPrivateClaims` (r:0 w:32)
-	/// The range of component `n` is `[0, 32]`.
-	fn close_private_ring(n: u32, ) -> Weight {
+	/// The range of component `a` is `[0, 32]`.
+	/// The range of component `t` is `[0, 64]`.
+	fn close_private_ring(a: u32, t: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `70000`
 		//  Estimated: `140000`
 		// Minimum execution time: 10_000_000 picoseconds.
 		Weight::from_parts(10_000_000, 140000)
 			// Standard Error: 100_000
-			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(a.into()))
+			// Standard Error: 100_000
+			.saturating_add(Weight::from_parts(4_000_000, 0).saturating_mul(t.into()))
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+			.saturating_add(RocksDbWeight::get().reads((1_u64).saturating_mul(t.into())))
+			.saturating_add(RocksDbWeight::get().writes(3_u64))
+			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(a.into())))
+			.saturating_add(RocksDbWeight::get().writes((2_u64).saturating_mul(t.into())))
+	}
+	/// Storage: `NftClaims::PrivateRings` (r:1 w:0)
+	fn authorize_close_private_ring() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `70000`
+		//  Estimated: `140000`
+		// Minimum execution time: 5_000_000 picoseconds.
+		Weight::from_parts(5_000_000, 140000)
 			.saturating_add(RocksDbWeight::get().reads(1_u64))
-			.saturating_add(RocksDbWeight::get().writes(1_u64))
-			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
 	}
 }

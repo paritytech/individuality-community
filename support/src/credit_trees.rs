@@ -235,12 +235,15 @@ where
 	// The tag is the timestamp, so every sweep that starts at one timestamp shares it and the pool
 	// keeps one attempt. A submitter that sweeps one timestamp over successive blocks replaces its
 	// own pending attempt, so one block holds at most one sweep of it.
+	//
+	// A sweep only frees storage, so it yields to every other transaction. Nothing waits on it:
+	// the entries it removes are past their deadline and no call reads them again.
 	let validity = ValidTransaction::with_tag_prefix(tx.tag)
 		.and_provides(filed)
-		.priority(
-			tx_priority::BACKGROUND_PROGRESS
-				.saturating_add(frame_system::Pallet::<T>::block_number().saturated_into::<u64>()),
-		)
+		.priority(tx_priority::add_tie_break(
+			tx_priority::CLEANUP,
+			frame_system::Pallet::<T>::block_number().saturated_into::<u64>(),
+		))
 		.longevity(TX_LONGEVITY)
 		.propagate(false)
 		.build()
