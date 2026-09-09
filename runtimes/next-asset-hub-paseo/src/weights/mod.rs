@@ -27,6 +27,7 @@ pub mod indiv_pallet_members_subscriber;
 pub mod indiv_pallet_nft_claims;
 pub mod indiv_pallet_origin_restriction;
 pub mod indiv_pallet_pgas;
+pub mod indiv_pallet_scarcity;
 pub mod pallet_asset_conversion;
 pub mod pallet_asset_conversion_tx_payment;
 pub mod pallet_asset_rate;

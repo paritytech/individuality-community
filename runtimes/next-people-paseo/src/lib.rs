@@ -244,10 +244,7 @@ pub type Migrations = (
 	cumulus_pallet_xcmp_queue::migration::v6::MigrateV5ToV6<Runtime>,
 	cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
-	indiv_pallet_members_notifier::migration::SeedSubscriptionWhitelist<
-		Runtime,
-		people::AssetHubSubscriptionWhitelist,
-	>,
+	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)
@@ -279,7 +276,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 1_000_036,
+	spec_version: 3_002_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 5,
@@ -803,11 +800,11 @@ impl cumulus_pallet_weight_reclaim::Config for Runtime {
 
 // TODO(paritytech/individuality#1124): choose good value.
 const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_MAX: Balance = UNITS;
-const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = CENTS;
-const POI_CANDIDATE_RECOVERY: Balance = CENTS;
-const ACCOUNT_PARTICIPANT_RECOVERY: Balance = CENTS;
+const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = CENTS * 3;
+const POI_CANDIDATE_RECOVERY: Balance = CENTS * 3;
+const ACCOUNT_PARTICIPANT_RECOVERY: Balance = CENTS * 3;
 const LITE_PERSON_AND_ALIAS_ALLOWANCE_MAX: Balance = UNITS;
-const LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = MILLICENTS;
+const LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = MILLICENTS * 3;
 
 #[derive(
 	Clone,
@@ -937,6 +934,7 @@ impl indiv_pallet_origin_restriction::BenchmarkHelper<OriginCaller, RuntimeCall>
 
 impl indiv_pallet_origin_restriction::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_origin_restriction::WeightInfo<Runtime>;
+	type BlockNumberProvider = RelaychainDataProvider<Runtime>;
 	type RestrictedEntity = RestrictedEntity;
 	type OperationAllowedOneTimeExcess = OperationAllowedOneTimeExcess;
 	#[cfg(feature = "runtime-benchmarks")]

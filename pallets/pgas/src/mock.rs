@@ -31,8 +31,8 @@ use frame_system::{
 	AuthorizeCall,
 };
 use indiv_support::traits::{
-	Alias, Context, ContextualAlias, Identifier, MembershipProver, RevisedContextualAlias,
-	RevisionIndex, RingIndex, RingMembershipProof,
+	Alias, Context, ContextualAlias, Identifier, MembershipMultiProver, MembershipProver,
+	RevisedContextualAlias, RevisionIndex, RingIndex, RingMembershipProof,
 };
 use scale_info::TypeInfo;
 use sp_core::ConstU32;
@@ -185,21 +185,27 @@ pub struct TestMemberKey(pub u64);
 
 #[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, TypeInfo, DecodeWithMemTracking)]
 pub struct TestProof {
-	pub context: Vec<u8>,
+	pub contexts: Vec<Vec<u8>>,
 	pub member: TestMemberKey,
 	pub members: Vec<u64>,
 	pub message: Vec<u8>,
 }
 
 impl TestProof {
-	pub fn alias(&self) -> Alias {
+	/// Alias derivation shared by proof creation and validation.
+	fn alias_for(context: &[u8], member: &TestMemberKey) -> Alias {
 		// Seed alias with the context so different contexts yield different aliases;
 		// XOR the member id into the first byte so different members get distinct aliases.
 		let mut r = [0u8; 32];
-		let ctx_len = self.context.len().min(32);
-		r[..ctx_len].copy_from_slice(&self.context[..ctx_len]);
-		r[0] ^= self.member.0 as u8;
+		let ctx_len = context.len().min(32);
+		r[..ctx_len].copy_from_slice(&context[..ctx_len]);
+		r[0] ^= member.0 as u8;
 		r
+	}
+
+	/// One alias per proof context, in context order.
+	pub fn aliases(&self) -> Vec<Alias> {
+		self.contexts.iter().map(|c| Self::alias_for(c, &self.member)).collect()
 	}
 }
 
@@ -270,13 +276,17 @@ impl GenerateVerifiable for TestVerifiable {
 		contexts: &[&[u8]],
 		message: &[u8],
 	) -> Result<(Self::Proof, AliasVec), VerifiableError> {
-		if contexts.len() != 1 || &member != secret {
+		if &member != secret {
 			return Err(VerifiableError::NotInRing);
 		}
-		let proof =
-			TestProof { context: contexts[0].to_vec(), member, members, message: message.to_vec() };
-		let alias = proof.alias();
-		Ok((proof, core::iter::once(alias).collect()))
+		let proof = TestProof {
+			contexts: contexts.iter().map(|c| c.to_vec()).collect(),
+			member,
+			members,
+			message: message.to_vec(),
+		};
+		let aliases = proof.aliases().into_iter().collect();
+		Ok((proof, aliases))
 	}
 
 	fn validate_multi_context(
@@ -286,12 +296,10 @@ impl GenerateVerifiable for TestVerifiable {
 		contexts: &[&[u8]],
 		message: &[u8],
 	) -> Result<AliasVec, VerifiableError> {
-		if contexts.len() == 1 &&
-			proof.context == contexts[0] &&
-			proof.members[..] == members[..] &&
-			proof.message == message
-		{
-			Ok(core::iter::once(proof.alias()).collect())
+		let contexts_match = proof.contexts.len() == contexts.len() &&
+			proof.contexts.iter().zip(contexts).all(|(p, c)| p[..] == c[..]);
+		if contexts_match && proof.members[..] == members[..] && proof.message == message {
+			Ok(proof.aliases().into_iter().collect())
 		} else {
 			Err(VerifiableError::VerificationFailed)
 		}
@@ -401,7 +409,7 @@ impl MembershipProver for MockProver {
 		_revision: RevisionIndex,
 		_items: &[RingMembershipProof<<Self::Crypto as GenerateVerifiable>::Proof>],
 	) -> Result<Vec<ContextualAlias>, DispatchError> {
-		unimplemented!("pgas mock does not use batch verification")
+		unimplemented!("pgas mock does not use per-item batch verification")
 	}
 
 	fn ring_revision(identifier: &Identifier, ring_index: RingIndex) -> Option<RevisionIndex> {
@@ -439,6 +447,29 @@ impl MembershipProver for MockProver {
 	}
 }
 
+impl MembershipMultiProver for MockProver {
+	fn verify_membership_multi_context(
+		identifier: &Identifier,
+		proof: &<Self::Crypto as GenerateVerifiable>::Proof,
+		ring_index: RingIndex,
+		_revision: RevisionIndex,
+		contexts: &[Context],
+		msg: &[u8],
+	) -> Result<Vec<ContextualAlias>, DispatchError> {
+		let members = Self::members_for(identifier, ring_index)
+			.ok_or(DispatchError::Other("ring not registered"))?;
+		let context_slices = contexts.iter().map(|c| &c[..]).collect::<Vec<_>>();
+		let aliases =
+			TestVerifiable::validate_multi_context((), proof, &members, &context_slices, msg)
+				.map_err(|_| DispatchError::Other("invalid proof"))?;
+		Ok(aliases
+			.into_iter()
+			.zip(contexts.iter().copied())
+			.map(|(alias, context)| ContextualAlias { alias, context })
+			.collect())
+	}
+}
+
 // ---- Config + helpers ----------------------------------------------------------------------
 
 parameter_types! {
@@ -447,6 +478,7 @@ parameter_types! {
 	pub const MaxClaimsPerPeriodPerPerson: u32 = 4;
 	pub const MaxClaimsPerPeriodPerLitePerson: u32 = 2;
 	pub const MaxPgasClaimRecordCleanupPerCall: u32 = 3;
+	pub const MaxPgasClaimsPerBatch: u32 = 3;
 	pub PgasAdmin: AccountId32 = AccountId32::new([0xaa; 32]);
 	pub PgasMinBalance: u64 = 1;
 }
@@ -462,7 +494,7 @@ impl pallet_pgas::benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 	fn seed_and_create_proof(
 		identifier: &Identifier,
 		ring_index: RingIndex,
-		context: &Context,
+		contexts: &[Context],
 		message: &[u8],
 	) -> <TestVerifiable as GenerateVerifiable>::Proof {
 		// Deterministic test member — benchmarks want a fresh, reproducible setup.
@@ -472,8 +504,10 @@ impl pallet_pgas::benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 		let members = MockProver::ring_members(identifier, ring_index);
 		let commitment = TestVerifiable::open((), &member, members.into_iter().map(TestMemberKey))
 			.expect("commitment opens on test crypto");
-		let (proof, _) = TestVerifiable::create(commitment, &secret, context, message)
-			.expect("proof creation on test crypto is infallible");
+		let context_slices = contexts.iter().map(|c| &c[..]).collect::<Vec<_>>();
+		let (proof, _) =
+			TestVerifiable::create_multi_context(commitment, &secret, &context_slices, message)
+				.expect("proof creation on test crypto is infallible");
 		proof
 	}
 }
@@ -494,6 +528,7 @@ impl pallet_pgas::Config for Test {
 	type MaxClaimsPerPeriodPerPerson = MaxClaimsPerPeriodPerPerson;
 	type MaxClaimsPerPeriodPerLitePerson = MaxClaimsPerPeriodPerLitePerson;
 	type MaxPgasClaimRecordCleanupPerCall = MaxPgasClaimRecordCleanupPerCall;
+	type MaxPgasClaimsPerBatch = MaxPgasClaimsPerBatch;
 	type PgasAdmin = PgasAdmin;
 	type PgasMinBalance = PgasMinBalance;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -557,6 +592,52 @@ pub fn build_claim_tx(
 	let revision = MockProver::ring_revision(&collection.identifier(), ring_index).unwrap_or(0);
 
 	let tx_ext = pallet_pgas::AsPgas::<Test>::new(Some(pallet_pgas::AsPgasInfo::Claim {
+		proof,
+		ring_index,
+		revision,
+		collection,
+		day,
+	}));
+	(call, tx_ext)
+}
+
+/// Build a single multi-context proof (one context per slot) and an `AsPgas` extension for a
+/// batch claim by a single member.
+pub fn build_batch_claim_tx(
+	member_id: u64,
+	ring_index: RingIndex,
+	collection: pallet_pgas::PgasCollection,
+	slots: &[u32],
+	target: AccountId32,
+	day: u32,
+) -> (RuntimeCall, pallet_pgas::AsPgas<Test>) {
+	register_member(&collection.identifier(), ring_index, member_id);
+	let secret = TestVerifiable::new_secret({
+		let mut e = [0u8; 32];
+		e[..8].copy_from_slice(&member_id.to_le_bytes());
+		e
+	});
+	let member = TestVerifiable::member_from_secret(&secret);
+	let members = MockProver::ring_members(&collection.identifier(), ring_index);
+	let commitment = TestVerifiable::open((), &member, members.into_iter().map(TestMemberKey))
+		.expect("commitment should open");
+
+	let slot_indices: BoundedVec<u32, MaxPgasClaimsPerBatch> =
+		slots.to_vec().try_into().expect("test batch fits the bound");
+	let call = RuntimeCall::Pgas(pallet_pgas::Call::batch_claim_pgas { slot_indices, target });
+	let msg = proof_message_for(&call, 0);
+	let contexts = slots
+		.iter()
+		.map(|slot_index| pallet_pgas::Pallet::<Test>::build_gas_context(day, *slot_index))
+		.collect::<Vec<_>>();
+	let context_slices = contexts.iter().map(|c| &c[..]).collect::<Vec<_>>();
+	let (proof, _) =
+		TestVerifiable::create_multi_context(commitment, &secret, &context_slices, &msg)
+			.expect("proof should build");
+
+	let revision = MockProver::ring_revision(&collection.identifier(), ring_index).unwrap_or(0);
+
+	let tx_ext = pallet_pgas::AsPgas::<Test>::new(Some(pallet_pgas::AsPgasInfo::BatchClaim {
 		proof,
 		ring_index,
 		revision,

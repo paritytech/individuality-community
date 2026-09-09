@@ -51,6 +51,7 @@ use indiv_pallet_game::{GameIdx, GameTimes};
 use indiv_support::{
 	credit_trees::{PrivateClaimSlot, PrivateGameOutcome, PrivateRingDelivery},
 	identity::AccountOrPerson,
+	offchain::{RETRY_WINDOW, TX_LONGEVITY},
 };
 use sp_runtime::{traits::Zero, DispatchError, DispatchResult, SaturatedConversion};
 use verifiable::GenerateVerifiable;
@@ -276,7 +277,7 @@ impl<T: Config> Pallet<T> {
 				priority: indiv_support::tx_priority::BACKGROUND_PROGRESS,
 				requires: Vec::new(),
 				provides: Vec::from([(b"nft-credits/build-private-ring", game_index).encode()]),
-				longevity: crate::CREDIT_TREE_TX_LONGEVITY,
+				longevity: TX_LONGEVITY,
 				propagate: false,
 			},
 			Weight::zero(),
@@ -422,7 +423,7 @@ impl<T: Config> Pallet<T> {
 				priority: indiv_support::tx_priority::BACKGROUND_PROGRESS,
 				requires: Vec::new(),
 				provides: Vec::from([(b"nft-credits/clean-up-private-game", game_index).encode()]),
-				longevity: crate::CREDIT_TREE_TX_LONGEVITY,
+				longevity: TX_LONGEVITY,
 				propagate: false,
 			},
 			Weight::zero(),
@@ -515,7 +516,7 @@ impl<T: Config> Pallet<T> {
 				priority: indiv_support::tx_priority::BACKGROUND_PROGRESS,
 				requires: Vec::new(),
 				provides: Vec::from([(b"nft-credits/send-private-ring", game_index).encode()]),
-				longevity: crate::CREDIT_TREE_TX_LONGEVITY,
+				longevity: TX_LONGEVITY,
 				propagate: false,
 			},
 			Weight::zero(),
@@ -617,7 +618,7 @@ impl<T: Config> Pallet<T> {
 	/// before cleanup, because claims wait on the ring and on nothing the cleanup drops. One
 	/// ring fills a message, so only the front of the queue is delivered per block.
 	pub(crate) fn submit_private_ring_work(block_number: BlockNumberFor<T>) {
-		let discriminator = block_number / crate::CREDIT_TREE_RETRY_WINDOW.into();
+		let discriminator = block_number / RETRY_WINDOW.into();
 
 		let mut cleanup = None;
 		for (game_index, _) in PrivateGames::<T>::iter() {

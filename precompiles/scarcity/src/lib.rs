@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Pallet-revive precompiles exposing `pallet-scarcity` collections as ERC-721 contracts.
+//! Pallet-revive precompiles exposing `indiv-pallet-scarcity` collections as ERC-721 contracts.
 //!
 //! Two precompiles share this crate:
 //!
@@ -30,7 +30,7 @@
 //!   allocates it.
 //!
 //! `transferFrom` and `safeTransferFrom` move a token on its holder's own authority, through
-//! `pallet-scarcity::do_transfer_by_holder`. The caller must be the holder: the pallet has no
+//! `indiv-pallet-scarcity::do_transfer_by_holder`. The caller must be the holder: the pallet has no
 //! approval mechanism to resolve a spender against, so `approve` and `setApprovalForAll` revert
 //! and their getters answer with the empty values (zero address and `false`) that keep
 //! read-driven indexers working. Only an eth-derived purse can be an EVM caller at all, so this
@@ -66,10 +66,9 @@
 //! `name()`, `symbol()`, `tokenURI()`, ERC-7572 `contractURI()` and ERC-2981 `royaltyInfo()`
 //! read reserved metadata keys rather than dedicated pallet fields, so a collection opts into
 //! each by writing the key. A key that is unset, or set to something the method cannot use,
-//! answers with an empty value rather than reverting. Collections write these keys by hand and
-//! a reverting read is a heavier failure than a missing one: a marketplace that settles a sale
-//! through `royaltyInfo` would abort the sale over a mistyped royalty, which costs the seller
-//! far more than the royalty was worth.
+//! answers with an empty value rather than reverting. A reverting read is a heavier failure than
+//! a missing one: a marketplace that settles a sale through `royaltyInfo` would abort the sale
+//! over a mistyped royalty.
 //!
 //! ERC-165 claims the full ERC-721 interface, following the soulbound-token convention of
 //! compliant-but-reverting methods for the parts that revert. ERC-7572 defines no interface id,
@@ -83,9 +82,14 @@
 //! for them. Only this precompile announces: the pallet's metadata extrinsics change the same
 //! state without a log, as native moves do for `Transfer`, so a consumer that follows logs alone
 //! misses both.
-//! `tokenOfOwnerByIndex` is served for wallets that call it, but ERC-721 Enumerable is not claimed:
-//! that id also covers `totalSupply` and `tokenByIndex`, which need an instance counter the pallet
-//! does not keep.
+//!
+//! Two interfaces are served but not claimed, because an id covers every function of its
+//! interface. `tokenOfOwnerByIndex` answers for wallets that call it, while ERC-721 Enumerable's
+//! id also covers `totalSupply` and `tokenByIndex`, which need an instance counter the pallet does
+//! not keep. `owner()` answers under ERC-173's name, while that id also covers
+//! `transferOwnership`, which cannot exist here: a handover carries the collection's storage
+//! deposit, so the successor has to accept and fund it, which is why the handover is a nomination
+//! the successor claims.
 //!
 //! No function of either interface is payable, and both reject a call that attaches value
 //! before doing anything else. Accepting it would strand it: a precompile address has no code,
@@ -97,16 +101,21 @@
 //! is registered with `AddressMapper`: `to_address` of a native key is a truncated keccak hash
 //! and cannot be inverted. Runtimes register the accounts frame-system creates, but a purse key
 //! needs no `system::Account`, so a zero-balance holder would have no registration and would
-//! read as holding nothing. [`MapPurseKey`] closes that by registering the destination of every
-//! mint, and a runtime wires it through `pallet-scarcity`'s `OnPurseOccupied`.
+//! read as holding nothing. [`MapPurseKey`] closes that by registering every key an instance
+//! lands on, mints and both moves alike, and a runtime wires it through `indiv-pallet-scarcity`'s
+//! `OnPurseOccupied`. Registration also makes `ownerOf` invertible: an address derived from a
+//! registered key resolves back to that key, so a caller can pass a holder address to `mint`,
+//! `forceTransfer` or `nominateCollectionOwner` and reach the account it read. That holds for
+//! every live holder except one whose account was reaped, which is the case below.
 //!
-//! Two states can leave a holder unregistered, both deliberate. A move puts an instance on a
-//! key no mint touched: `transfer` is fee-less, so hooking it would let a token walk through
-//! unbounded fresh keys writing an unpaid entry per hop, and `force_transfer` is excluded with
-//! it so that the rule stays "mints register, moves do not". Reaping a holder's account removes
-//! its registration while the instance stays put. In either, `balanceOf` reads 0 unless that
-//! key happens to be registered for another reason, while `ownerOf` always reports the key's
-//! address, so `ownerOf` is the read to trust for ownership.
+//! Registration costs a permanent entry per key, on the fee-less transfer as well, so a token
+//! walking through fresh keys writes one unpaid entry per hop. The alternative is worse: an
+//! unregistered holder reads as holding nothing under `balanceOf`, and its address resolves to
+//! a different account, which silently misdirects any call that takes an address.
+//!
+//! Reaping a holder's account still removes its registration while the instance stays put. For
+//! that holder `balanceOf` reads 0 unless the key is registered for another reason, while
+//! `ownerOf` always reports the key's address, so `ownerOf` is the read to trust for ownership.
 //!
 //! `InstanceId`s are global across collections while every address names one collection, so
 //! every token lookup checks that the instance actually belongs to the address's collection
@@ -114,7 +123,7 @@
 //! never created or was deleted; every selector on such an address reverts as an unknown
 //! collection, so no unallocated address answers as a live contract.
 //!
-//! Weights: state-changing calls charge the corresponding `pallet-scarcity` benchmark
+//! Weights: state-changing calls charge the corresponding `indiv-pallet-scarcity` benchmark
 //! weights. Read calls charge one database read per worst-case storage access, which
 //! over-charges pure computation but never under-charges; a crate benchmark can refine this
 //! later.
@@ -127,21 +136,26 @@ use alloc::vec::Vec;
 use core::{marker::PhantomData, num::NonZero};
 
 use frame_support::traits::Get;
+use indiv_pallet_scarcity::{
+	CollectionId, CollectionMetadata, Collections, Error as ScarcityError, InstanceId,
+	InstanceMetadata, Instances, ItemMetadata, MetadataKeyOf, MetadataValueOf, Nft, NftsByOwner,
+	Transferability,
+};
 use pallet_revive::{
 	precompiles::{
 		alloy::{
 			self,
 			primitives::{Address, IntoLogData, U256},
-			sol_types::{Revert, SolCall},
+			sol_types::SolCall,
 		},
 		AddressMapper, AddressMatcher, Error, Ext, RuntimeCosts, H160, H256,
 	},
 	sp_runtime::{DispatchError, Weight},
 };
-use pallet_scarcity::{
-	CollectionId, CollectionMetadata, Collections, Error as ScarcityError, InstanceId,
-	InstanceMetadata, Instances, ItemMetadata, MetadataKeyOf, MetadataValueOf, Nft, NftsByOwner,
-	Transferability,
+
+pub(crate) use indiv_precompile_support::{
+	address_of, caller_account, charge_reads, ensure_no_value, ensure_not_delegate, revert,
+	PROOF_SIZE_PER_READ,
 };
 
 mod collection;
@@ -155,7 +169,9 @@ mod tests;
 pub use collection::ScarcityCollection;
 pub use factory::ScarcityFactory;
 
-alloy::sol!("sol/IScarcity.sol");
+alloy::sol!("sol/IScarcityCollection.sol");
+alloy::sol!("sol/IERC721Receiver.sol");
+alloy::sol!("sol/IScarcityFactory.sol");
 
 /// Reserved collection metadata key backing ERC-721 `name()`.
 pub const NAME_KEY: &[u8] = b"name";
@@ -178,9 +194,11 @@ pub const BASIS_POINTS_DENOMINATOR: u128 = 10_000;
 
 /// ERC-165 interface identifier of ERC-165 itself.
 pub const ERC165_INTERFACE_ID: [u8; 4] = [0x01, 0xff, 0xc9, 0xa7];
-/// ERC-165 interface identifier of the ERC-721 core interface.
+/// ERC-721 core interface id (`0x80ac58cd`), per EIP-721. The `interface_ids_match_openzeppelin`
+/// test checks it against the compiler's own `type(IERC721).interfaceId`.
 pub const ERC721_INTERFACE_ID: [u8; 4] = [0x80, 0xac, 0x58, 0xcd];
-/// ERC-165 interface identifier of the ERC-721 metadata extension.
+/// ERC-721 metadata extension interface id (`0x5b5e139f`), per EIP-721. The
+/// `interface_ids_match_openzeppelin` test checks it against `type(IERC721Metadata).interfaceId`.
 pub const ERC721_METADATA_INTERFACE_ID: [u8; 4] = [0x5b, 0x5e, 0x13, 0x9f];
 /// ERC-165 interface identifier of ERC-5192, the soulbound extension.
 pub const ERC5192_INTERFACE_ID: [u8; 4] = [0xb4, 0x5a, 0x3c, 0x0e];
@@ -192,31 +210,48 @@ pub const ERC2981_INTERFACE_ID: [u8; 4] = [0x2a, 0x55, 0x20, 0x5a];
 /// selector XOR the other identifiers here are.
 pub const ERC4906_INTERFACE_ID: [u8; 4] = [0x49, 0x06, 0x49, 0x06];
 
-const ERR_UNKNOWN_TOKEN: &str = "unknown token";
-const ERR_ZERO_DESTINATION: &str = "destination is the zero address";
-const ERR_ZERO_OWNER: &str = "balance query for the zero address";
-const ERR_INDEX_OUT_OF_RANGE: &str = "token index out of range for this owner";
-const ERR_ZERO_SUCCESSOR: &str = "successor is the zero address";
-const ERR_WRONG_HOLDER: &str = "transfer from the wrong holder";
-const ERR_NOT_HOLDER: &str =
+/// Revert reason when a token id names no live instance.
+pub const ERR_UNKNOWN_TOKEN: &str = "unknown token";
+/// Revert reason when a call targets the zero address as its destination.
+pub const ERR_ZERO_DESTINATION: &str = "destination is the zero address";
+/// Revert reason when a balance query targets the zero address.
+pub const ERR_ZERO_OWNER: &str = "balance query for the zero address";
+/// Revert reason when an owner-index query exceeds the holder's balance.
+pub const ERR_INDEX_OUT_OF_RANGE: &str = "token index out of range for this owner";
+/// Revert reason when an ownership nomination targets the zero address.
+pub const ERR_ZERO_SUCCESSOR: &str = "successor is the zero address";
+/// Revert reason when a transfer names a holder that does not hold the token.
+pub const ERR_WRONG_HOLDER: &str = "transfer from the wrong holder";
+/// Revert reason when a transfer's destination already holds the instance.
+pub const ERR_SELF_TRANSFER: &str = "destination already holds this instance";
+/// Revert reason when the caller is not the token's holder.
+pub const ERR_NOT_HOLDER: &str =
 	"caller does not hold this token: transfers on another holder's authority need approvals, \
 	 which are not supported yet";
-const ERR_CONTRACT_RECEIVER: &str =
+/// Revert reason when a safe transfer targets a code-carrying destination that cannot
+/// acknowledge receipt.
+pub const ERR_CONTRACT_RECEIVER: &str =
 	"safe transfer to a contract is not supported yet: the receiver callback is unavailable";
-const ERR_APPROVALS_UNSUPPORTED: &str =
+/// Revert reason when an approval call is attempted.
+pub const ERR_APPROVALS_UNSUPPORTED: &str =
 	"approvals are not supported yet: the purse model has no approval mechanism";
-const ERR_INVALID_CALLER: &str = "invalid caller";
-const ERR_KEY_TOO_LONG: &str = "metadata key too long";
-const ERR_VALUE_TOO_LONG: &str = "metadata value too long";
-const ERR_KEY_VALUE_MISMATCH: &str = "metadata keys and values differ in length";
-const ERR_UNKNOWN_COLLECTION: &str = "unknown collection";
-const ERR_UNKNOWN_ITEM: &str = "unknown item";
-const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range";
-const ERR_VALUE_NOT_ACCEPTED: &str = "this precompile does not accept value";
-const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8";
+/// Revert reason when a metadata key exceeds the allowed length.
+pub const ERR_KEY_TOO_LONG: &str = "metadata key too long";
+/// Revert reason when a metadata value exceeds the allowed length.
+pub const ERR_VALUE_TOO_LONG: &str = "metadata value too long";
+/// Revert reason when a metadata call passes a different number of keys and values.
+pub const ERR_KEY_VALUE_MISMATCH: &str = "metadata keys and values differ in length";
+/// Revert reason when no collection exists at the queried address.
+pub const ERR_UNKNOWN_COLLECTION: &str = "unknown collection";
+/// Revert reason when an item index names no definition.
+pub const ERR_UNKNOWN_ITEM: &str = "unknown item";
+/// Revert reason when a royalty amount exceeds the representable range.
+pub const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range";
+/// Revert reason when a reserved metadata value is not valid UTF-8.
+pub const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8";
 
-/// Registers a purse key's address when a mint occupies it, for `pallet-scarcity`'s
-/// [`OnPurseOccupied`](pallet_scarcity::OnPurseOccupied) hook.
+/// Registers a purse key's address when a mint occupies it, for `indiv-pallet-scarcity`'s
+/// [`OnPurseOccupied`](indiv_pallet_scarcity::OnPurseOccupied) hook.
 ///
 /// `pallet-revive` registers addresses when `frame-system` creates an account, but a purse key
 /// needs no account: holders pay no deposits and can hold an instance at zero balance. Without
@@ -227,22 +262,21 @@ const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8"
 /// the instance leaves it, and `AutoMapper` only unregisters keys that have an account to kill.
 /// This is deliberately weaker than `AutoMapper`, whose entries are reclaimed on reap, and is
 /// the cost of addressing a key the account system never sees. `map_no_deposit_unchecked`
-/// documents this outcome for exactly this case. Growth is one entry per mint that reaches a
-/// fresh key, and fees are its only lasting price: the instance deposit gates each mint but is
-/// refunded on burn, so mint-and-burn cycles accumulate entries against one recycled deposit.
-/// The claims path is bounded by its tree leaves, each claimable once.
+/// documents this outcome for exactly this case.
+///
+/// Growth is one entry per occupation that reaches a fresh key, over mints and both moves. A mint
+/// is gated by the instance deposit, which is refunded on burn, so mint-and-burn cycles
+/// accumulate entries against one recycled deposit; the claims path is bounded by its tree
+/// leaves, each claimable once. The holder move is gated by neither, because it is fee-less, so a
+/// token walking through fresh keys writes an unpaid entry at every hop. That is the price of the
+/// alternative: an unregistered holder reads as holding nothing under `balanceOf`, and its
+/// address resolves to a different account, so any call taking a holder address is misdirected.
 ///
 /// A runtime opts out by wiring `()`; this deliberately does not consult `AutoMap`, which
 /// governs account-driven registration rather than this.
-///
-/// Wired for mints only. `transfer` is fee-less, so hooking it would let a token walk through
-/// unbounded fresh keys writing an unpaid entry at every hop. `force_transfer` is paid and
-/// could carry the weight, but is excluded with it: a key that receives by either route reads
-/// as holding nothing, and splitting that behaviour by route would be harder to explain than
-/// the single rule that mints register and moves do not.
 pub struct MapPurseKey<T>(PhantomData<T>);
 
-impl<T> pallet_scarcity::OnPurseOccupied<T::AccountId> for MapPurseKey<T>
+impl<T> indiv_pallet_scarcity::OnPurseOccupied<T::AccountId> for MapPurseKey<T>
 where
 	T: pallet_revive::Config,
 {
@@ -251,7 +285,7 @@ where
 		let _ = <T as pallet_revive::Config>::AddressMapper::map_no_deposit_unchecked(purse);
 	}
 
-	fn on_mint_weight() -> Weight {
+	fn on_purse_occupied_weight() -> Weight {
 		// The mapped check reads one entry, and registering an unmapped key writes one.
 		// `DbWeight` carries only `ref_time`, so the proof both touches is priced here on the
 		// same estimate the crate's reads use.
@@ -266,11 +300,7 @@ fn collection_id_of(address: &[u8; 20]) -> CollectionId {
 	CollectionId::from_be_bytes(bytes)
 }
 
-fn revert(reason: &str) -> Error {
-	Error::Revert(Revert { reason: reason.into() })
-}
-
-/// Map the `pallet-scarcity` errors a caller can trigger to catchable reverts.
+/// Map the `indiv-pallet-scarcity` errors a caller can trigger to catchable reverts.
 ///
 /// Every error variant the pallet entries called from this crate can return is listed, so a
 /// caller never sees a trapped frame for a condition it could have handled. Adding a variant
@@ -278,14 +308,14 @@ fn revert(reason: &str) -> Error {
 /// in the tests fails instead.
 ///
 /// Anything else propagates as a plain error, which traps the frame rather than reverting.
-fn revert_scarcity<T: pallet_scarcity::Config>(e: DispatchError) -> Error {
+fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error {
 	let cases: [(ScarcityError<T>, &str); 20] = [
 		(ScarcityError::NoPermission, "caller is not the collection owner"),
 		(ScarcityError::UnknownCollection, ERR_UNKNOWN_COLLECTION),
 		(ScarcityError::UnknownItem, ERR_UNKNOWN_ITEM),
 		(ScarcityError::UnknownInstance, ERR_UNKNOWN_TOKEN),
 		(ScarcityError::AddressOccupied, "destination purse already holds an instance"),
-		(ScarcityError::SelfTransfer, "destination already holds this instance"),
+		(ScarcityError::SelfTransfer, ERR_SELF_TRANSFER),
 		(ScarcityError::Soulbound, "token is soulbound to its purse key"),
 		(ScarcityError::SupplyOverflow, "item supply exhausted"),
 		(ScarcityError::TooManyInstanceMetadata, "too many instance metadata entries"),
@@ -318,39 +348,9 @@ fn revert_scarcity<T: pallet_scarcity::Config>(e: DispatchError) -> Error {
 	}
 }
 
-/// Reject a call carrying native value.
-///
-/// Every function of both interfaces is ABI-`nonpayable`, so a caller attaching value has made
-/// a mistake, and the precompile has no way to make good on it: the address it would land on has
-/// no owner, no code and no withdrawal path.
-fn ensure_no_value<T: pallet_revive::Config>(env: &impl Ext<T = T>) -> Result<(), Error> {
-	if env.value_transferred().is_zero() {
-		return Ok(());
-	}
-	Err(revert(ERR_VALUE_NOT_ACCEPTED))
-}
-
-/// The signing account behind the EVM caller.
-fn caller_account<T: pallet_revive::Config>(
-	env: &mut impl Ext<T = T>,
-) -> Result<T::AccountId, Error> {
-	env.caller().account_id().cloned().map_err(|_| revert(ERR_INVALID_CALLER))
-}
-
 fn account_of<T: pallet_revive::Config>(address: &Address) -> T::AccountId {
 	<T as pallet_revive::Config>::AddressMapper::to_account_id(&H160(address.into_array()))
 }
-
-fn address_of<T: pallet_revive::Config>(account: &T::AccountId) -> Address {
-	Address::from(<T as pallet_revive::Config>::AddressMapper::to_address(account).0)
-}
-
-/// Proof size charged per storage read.
-///
-/// `DbWeight` carries only `ref_time`, but on a parachain every read also pulls trie nodes
-/// into the proof. Every value this crate reads is bounded far below this headroom; a crate
-/// benchmark can replace the estimate.
-const PROOF_SIZE_PER_READ: u64 = 4 * 1024;
 
 /// Ref time charged per metadata byte a policy validation scans.
 ///
@@ -358,21 +358,11 @@ const PROOF_SIZE_PER_READ: u64 = 4 * 1024;
 /// this is an estimate, replaceable by a crate benchmark.
 const REF_TIME_PER_METADATA_BYTE: u64 = 1_000;
 
-/// Charge `n` worst-case database reads before performing them.
-fn charge_reads<T: frame_system::Config + pallet_revive::Config>(
-	env: &mut impl Ext<T = T>,
-	n: u64,
-) -> Result<(), Error> {
-	let ref_time = <T as frame_system::Config>::DbWeight::get().reads(n).ref_time();
-	env.charge(Weight::from_parts(ref_time, n.saturating_mul(PROOF_SIZE_PER_READ)))?;
-	Ok(())
-}
-
 /// Look up a live instance and check it belongs to `collection`.
 ///
 /// `InstanceId`s are global, so an instance of another collection must answer as unknown on
 /// this collection's address.
-fn live_instance<T: pallet_scarcity::Config>(
+fn live_instance<T: indiv_pallet_scarcity::Config>(
 	collection: CollectionId,
 	token: &U256,
 ) -> Result<(T::AccountId, Nft), Error> {
@@ -386,21 +376,21 @@ fn live_instance<T: pallet_scarcity::Config>(
 }
 
 /// Convert one raw key to the pallet's bounded metadata key.
-fn bounded_key<T: pallet_scarcity::Config>(
+fn bounded_key<T: indiv_pallet_scarcity::Config>(
 	key: &alloy::primitives::Bytes,
 ) -> Result<MetadataKeyOf<T>, Error> {
 	MetadataKeyOf::<T>::try_from(key.to_vec()).map_err(|_| revert(ERR_KEY_TOO_LONG))
 }
 
 /// Convert one raw value to the pallet's bounded metadata value.
-fn bounded_value<T: pallet_scarcity::Config>(
+fn bounded_value<T: indiv_pallet_scarcity::Config>(
 	value: &alloy::primitives::Bytes,
 ) -> Result<MetadataValueOf<T>, Error> {
 	MetadataValueOf::<T>::try_from(value.to_vec()).map_err(|_| revert(ERR_VALUE_TOO_LONG))
 }
 
 /// Requires UTF-8 under the keys this precompile reads as Solidity `string`s, for
-/// `pallet-scarcity`'s [`ValidateMetadata`](pallet_scarcity::ValidateMetadata) policy.
+/// `indiv-pallet-scarcity`'s [`ValidateMetadata`](indiv_pallet_scarcity::ValidateMetadata) policy.
 ///
 /// The pallet stores opaque bytes and reserves no key, so nothing there would stop `name` being
 /// set to something no `string` can represent. Wiring this makes all four keys hold their type
@@ -411,9 +401,9 @@ fn bounded_value<T: pallet_scarcity::Config>(
 /// that leaves the policy at `()`, and nothing about entries written before it was wired.
 pub struct Erc721MetadataPolicy<T>(PhantomData<T>);
 
-impl<T, Key, Value> pallet_scarcity::ValidateMetadata<Key, Value> for Erc721MetadataPolicy<T>
+impl<T, Key, Value> indiv_pallet_scarcity::ValidateMetadata<Key, Value> for Erc721MetadataPolicy<T>
 where
-	T: pallet_scarcity::Config,
+	T: indiv_pallet_scarcity::Config,
 	Key: AsRef<[u8]>,
 	Value: AsRef<[u8]>,
 {
@@ -430,13 +420,13 @@ where
 	fn validate_weight(pairs: u32) -> Weight {
 		// One pass over a value bounded by `MaxValueLen`, touching no storage.
 		let per_value = REF_TIME_PER_METADATA_BYTE
-			.saturating_mul(<T as pallet_scarcity::Config>::MaxValueLen::get() as u64);
+			.saturating_mul(<T as indiv_pallet_scarcity::Config>::MaxValueLen::get() as u64);
 		Weight::from_parts(per_value.saturating_mul(pairs as u64), 0)
 	}
 }
 
 /// Convert parallel key and value arrays to the pallet's bounded metadata pairs.
-fn bounded_metadata<T: pallet_scarcity::Config>(
+fn bounded_metadata<T: indiv_pallet_scarcity::Config>(
 	keys: &[alloy::primitives::Bytes],
 	values: &[alloy::primitives::Bytes],
 ) -> Result<Vec<(MetadataKeyOf<T>, MetadataValueOf<T>)>, Error> {

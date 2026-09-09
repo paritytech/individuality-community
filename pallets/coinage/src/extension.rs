@@ -842,9 +842,12 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 				retry_counter,
 			} => {
 				if result.is_err() {
-					RecyclerAliasStates::<T>::insert(
-						(instance_id, fee_recycler_value, fee_recycler_index, first_alias),
-						AliasState::Locked(Self::failed_dispatch_lock_with_retries(retry_counter)),
+					RecyclerManager::<T>::mark_unloaded_alias_locked(
+						instance_id,
+						fee_recycler_value,
+						fee_recycler_index,
+						first_alias,
+						Self::failed_dispatch_lock_with_retries(retry_counter),
 					);
 				} else {
 					// The premark from `prepare` persists; emit the event only now that the

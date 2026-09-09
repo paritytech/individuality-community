@@ -972,9 +972,9 @@ pub mod pallet {
 			let mut keys = vec![];
 			for personal_id in suspensions {
 				let mut record = People::<T>::get(personal_id).ok_or(Error::<T>::NotPerson)?;
-				if let Some(account) = record.account {
-					AccountToPersonalId::<T>::remove(account);
-					record.account = None;
+				if let Some(account) = record.account.take() {
+					AccountToPersonalId::<T>::remove(&account);
+					frame_system::Pallet::<T>::dec_sufficients(&account);
 				}
 				People::<T>::insert(personal_id, &record);
 				keys.push(record.key);

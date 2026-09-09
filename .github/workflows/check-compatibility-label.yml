@@ -1,0 +1,66 @@
+# Ensure every pull request declares its compatibility level with exactly one `C<n>-` label.
+name: "Compatibility label"
+
+on:
+  pull_request:
+    types: ["opened", "reopened", "synchronize", "labeled", "unlabeled"]
+
+# The job reads the label names from the event payload. It needs no repository access.
+permissions: {}
+
+# cancel previous runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check compatibility label
+    runs-on: parity-ubuntu
+
+    steps:
+      # The label set comes from the event payload, so no checkout and no token are needed. The
+      # `labeled`/`unlabeled` triggers re-run the job with the updated payload, which refreshes the
+      # status check as soon as a maintainer fixes the labels.
+      - name: Check exactly one compatibility label is set
+        env:
+          # Pass the expressions through the environment. Interpolating them into `run` would
+          # splice a label name into the shell source.
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          compatibility=$(jq -c '[.[] | select(test("^C[0-9]+-"))]' <<<"$LABELS")
+          count=$(jq 'length' <<<"$compatibility")
+          names=$(jq -r 'join(", ")' <<<"$compatibility")
+
+          labels_url="https://github.com/$REPO/labels?q=C"
+
+          if [ "$count" -eq 1 ]; then
+            echo "Compatibility label: $names"
+            {
+              echo "### Compatibility label: \`$names\`"
+              echo
+              echo "See [the label list]($labels_url) for what it means."
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$count" -eq 0 ]; then
+            heading="Compatibility label missing"
+            message="This pull request has no compatibility label. Add exactly one of the \`C<n>-\` labels."
+          else
+            heading="Too many compatibility labels"
+            message="This pull request has $count compatibility labels ($names). Keep exactly one."
+          fi
+
+          echo "::error::$message"
+          {
+            echo "### $heading"
+            echo
+            echo "$message"
+            echo
+            echo "The compatibility labels and their meanings are listed on [the label page]($labels_url)."
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit 1

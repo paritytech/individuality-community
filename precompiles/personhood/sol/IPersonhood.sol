@@ -27,6 +27,14 @@ pragma solidity ^0.8.30;
 ///   IPersonhood personhood = IPersonhood(0x000000000000000000000000000000000a010000);
 ///   IPersonhood.PersonhoodInfo memory info = personhood.personhoodStatus(someAddress, bytes32("dotns"));
 ///   if (info.status == 2) { /* full person */ }
+///
+/// Two conditions apply to every function and are not repeated below: native value attached to a
+/// call reverts, and a delegate call reverts. Both functions are views, so a read-only frame
+/// serves them.
+/// @custom:reverts "this precompile does not accept value"
+/// @custom:reverts "illegal to call this pre-compile via delegate call"
+/// @dev pallet-revive owns the delegate-call reason (`PrecompileDelegateDenied`). Update it here
+///      if that wording changes upstream.
 /// @custom:security-contact admin@parity.io
 interface IPersonhood {
     /// @notice Personhood information for an account in a given context
