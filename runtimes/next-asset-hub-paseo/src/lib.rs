@@ -2219,8 +2219,8 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	// eight of them to private claims. A claim past the cap is rejected, and its sender retries
 	// in a later block.
 	type MaxPrivateClaimsPerBlock = ConstU32<8>;
-	// An hour, so every member's claims open in the same block and a wallet has time to see the
-	// ring and pick a moment inside the window. Claiming first says nothing about who claimed.
+	// Five minutes, so every member's claims open in the same block and a wallet has time to see
+	// the ring and pick a moment inside the window. Claiming first says nothing about who claimed.
 	type PrivateClaimDelay = PrivateClaimDelay;
 	// Thirty days to spread the game's claims over. It is the interval every claim of a game
 	// falls in: an open-ended one leaves a late claim with only the members who had not claimed
@@ -2242,7 +2242,7 @@ parameter_types! {
 	/// so a root outlives the tree built from it.
 	pub const CreditTreeTtl: u64 = 90 * 24 * 60 * 60;
 	/// Blocks between a private game's ring arriving and its claims opening.
-	pub const PrivateClaimDelay: BlockNumber = HOURS;
+	pub const PrivateClaimDelay: BlockNumber = 5 * MINUTES;
 	/// Blocks a private game's claim window stays open.
 	pub const PrivateClaimWindow: BlockNumber = 30 * DAYS;
 	/// The ring capacity the game chain builds its private claim rings at.

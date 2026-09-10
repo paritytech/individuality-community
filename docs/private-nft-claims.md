@@ -133,7 +133,7 @@ chain refuses an abandonment for a game holding a ring, and a ring for one alrea
 | `PrivateRingExponent` | both | `R2e10` — ring capacity, 767 keys |
 | `PrivateKeysPerBuild` | `pallet-nft-credits` | 8 — keys pushed per offchain-worker call |
 | `MaxPrivateClaimsPerBlock` | `pallet-nft-claims` | 8 — ring verifications per block |
-| `PrivateClaimDelay` | `pallet-nft-claims` | 1 hour — from a ring arriving to its claims opening |
+| `PrivateClaimDelay` | `pallet-nft-claims` | 5 minutes — from a ring arriving to its claims opening |
 | `PrivateClaimWindow` | `pallet-nft-claims` | 30 days — how long a game's claims are taken |
 
 `PrivateRingExponent` must match on both chains, and the trusted-setup chunks of that exponent must
