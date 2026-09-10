@@ -63,19 +63,17 @@
 //! alias of that context. The alias is the nullifier: one key yields one alias per slot, and
 //! [`SpentPrivateClaims`] spends each once.
 //!
-//! The same call carries the other outcome: a game that built no ring is recorded in
-//! [`AbandonedPrivateGames`], which reopens [`Pallet::claim`] for its trees. A game reaches one
-//! outcome only, and the one that arrives first is kept, so a credit cannot be minted on both
-//! paths.
+//! The same call carries the other outcome: a game that built no ring ends as
+//! [`PrivateGameEnd::Abandoned`] in [`PrivateGameEnds`], which reopens [`Pallet::claim`] for its
+//! trees. A game keeps the first outcome that arrives, so no credit mints on both paths.
 //!
-//! Every registrant holds the same slots, so every claim of a game hides in the same set. With a
-//! ring per claimant, the set a claim proves against would be a fact about its maker, and the
-//! claims of one claimant could be intersected down to the narrowest of them.
+//! Every registrant holds the same slots, so every claim of a game hides in the same set. One
+//! ring per claimant would make that set a fact about its maker, and the claims of one claimant
+//! could be intersected down to the narrowest of them.
 //!
-//! [`Pallet::claim_private`] is an authorized call. The proof authorizes it, so the transaction
-//! carries no signer and pays no fee; a fee payer would be an account that ties together the
-//! claims it funded. `authorize` runs the verification, and the dispatch spends the alias it
-//! matched.
+//! [`Pallet::claim_private`] is an authorized call: the proof authorizes it, so the transaction
+//! carries no signer and pays no fee, a fee payer being an account that ties together the claims
+//! it funded. `authorize` verifies, and the dispatch spends the alias it matched.
 //!
 //! A ring proof costs far more to verify than a Merkle path, so
 //! [`Config::MaxPrivateClaimsPerBlock`] bounds how many one block runs. A claim past the cap stays
@@ -89,19 +87,16 @@
 //! random from. Without it, claims trail off indefinitely and a late one has the members who had
 //! not claimed yet as its anonymity set, however large the ring is.
 //!
-//! A member who does not claim inside the window mints nothing. The ring is the only path a
+//! A member who does not claim inside the window mints nothing: the ring is the only path a
 //! private game's credits mint on, and the credits their registration spent are not returned.
 //! `PrivateRingReceived` names both bounds, so a wallet knows them as soon as the ring lands.
 //!
 //! Once the window is closed, [`Pallet::close_private_ring`] drops the ring and the aliases spent
-//! against it. No claim can be made by then, so nothing is kept to stop one. This pallet's offchain
-//! worker submits the call, as it submits the tree sweep, so the state goes at the deadline rather
-//! than when somebody pays to reclaim it. The game is recorded in [`ClosedPrivateGames`], which
-//! refuses a later outcome for it and a later delivery of its trees: without the aliases the
-//! dropped ring's slots would mint again.
-//!
-//! [`PrivateRingCloses`] files every held ring under the block it closes in and iterates in that
-//! order, so the worker finds the next game to close in one read.
+//! against it, no claim being possible by then. This pallet's offchain worker submits it, finding
+//! the next game to close from [`PrivateRingCloses`], which files every held ring under its
+//! closing block. The game ends as [`PrivateGameEnd::Closed`] in [`PrivateGameEnds`], which
+//! refuses a later outcome and a later delivery of its trees: without the aliases the dropped
+//! ring's slots would mint again.
 //!
 //! ## Collections and item selection
 //!
@@ -156,11 +151,11 @@
 //!   removes the tree is what ends claimability, and [`Event::CreditTreesExpired`] reports that
 //!   those unclaimed credits are unmintable from then on.
 //!
-//! A private game's tree is unclaimable from the moment its ring arrives, because the game
-//! reaches no second outcome and [`Pallet::claim`] refuses a tree that names slots unless the game
-//! was abandoned. A delivery from then on is refused, so only a tree that arrived before the ring
-//! is stored, and the sweep is what removes it. Nothing waits on that removal: no call reads the
-//! tree again.
+//! A private game's tree is unclaimable once its ring arrives: the game reaches no second
+//! outcome, and [`Pallet::claim`] refuses a tree that names slots unless the game was abandoned. A
+//! delivery from then on is refused, the one refusal this chain makes before a tree's deadline,
+//! and [`Event::CreditTreePrivateRingOutcome`] reports it. Only a tree that arrived before the
+//! ring is stored, and the sweep removes it.
 //!
 //! [`Pallet::sweep_expired_trees`] performs the expiry, and this pallet's offchain worker submits
 //! it. [`TreeExpiries`] files each tree under the timestamp its deadline runs from and iterates in
@@ -177,19 +172,14 @@
 //! entry is what removes the bitmap. That is also the point where a replay stops mattering: a
 //! delivery past the deadline is refused, so nothing can spend those leaves again.
 //!
-//! A private game that built a ring is the one case where a delivery is refused before the
-//! deadline. Its tree is unclaimable, so storing it would leave state that only the sweep removes.
-//! [`Event::CreditTreePrivateRingOutcome`] reports the refusal.
-//!
 //! The deletions owed to the game chain queue in [`PendingTreeDeletions`] and travel in a
 //! [`Pallet::send_tree_deletions`] message, which the offchain worker submits as well. A deletion
 //! is idempotent and carries no sequence number. The game chain's own TTL covers a deletion that is
 //! lost, or that the queue had no room for, so no repair call exists.
 //!
 //! [`Pallet::sweep_expired_trees`], [`Pallet::send_tree_deletions`] and
-//! [`Pallet::close_private_ring`] take a local or in-block transaction source only, so nobody can
-//! submit them from outside the node that authored them. [`Pallet::claim_private`] is the one
-//! authorized call of this pallet that any source may submit.
+//! [`Pallet::close_private_ring`] take a local or in-block source only, so no external submission
+//! reaches them. [`Pallet::claim_private`] is the one authorized call any source may submit.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -269,7 +259,9 @@ const CLAIM_METADATA_PAIRS: u32 = 0;
 /// How many spent aliases one [`Pallet::close_private_ring`] call removes.
 ///
 /// A closed window's ring holds one alias per claim that was made, so the removal runs in bounded
-/// steps. It is a pallet constant because only the weight of one call depends on it.
+/// steps. It is a pallet constant rather than a [`Config`] item because nothing off this chain
+/// has to agree on it, and an alias entry is a bare key, so the worst case stays far below the
+/// block.
 pub const PRIVATE_CLOSE_ITEMS: u32 = 32;
 
 /// How many blocks a `claim_private` submission stays valid in the pool.
@@ -603,15 +595,15 @@ pub mod pallet {
 	pub type PrivateRings<T: Config> =
 		StorageMap<_, Twox64Concat, GameIdx, PrivateRingOf<T>, OptionQuery>;
 
-	/// The private games that were abandoned, whose credits mint over the public path.
+	/// How each private game ended, keyed by game, for the games that reached an end.
 	///
-	/// The game chain builds no ring for a game too few claimants registered for, and none for a
-	/// game whose ring failed to build. It says so, and this is what reopens [`Pallet::claim`]
-	/// for the game's trees. No private claim of such a game exists, there being no ring to prove
-	/// against, so no credit mints twice.
+	/// [`PrivateGameEnd::Abandoned`] is what reopens [`Pallet::claim`] for a game's trees, the
+	/// game chain having built no ring for it. [`PrivateGameEnd::Closed`] is what stops a
+	/// redelivered ring reopening a game whose aliases went with it. A game reaches at most one
+	/// end and keeps it, so an entry is written once and never removed.
 	#[pallet::storage]
-	pub type AbandonedPrivateGames<T: Config> =
-		StorageMap<_, Twox64Concat, GameIdx, (), OptionQuery>;
+	pub type PrivateGameEnds<T: Config> =
+		StorageMap<_, Twox64Concat, GameIdx, PrivateGameEnd, OptionQuery>;
 
 	/// The aliases already spent in a game's private claims.
 	///
@@ -632,15 +624,6 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type PrivateRingCloses<T: Config> =
 		StorageDoubleMap<_, Identity, BigEndianU64, Twox64Concat, GameIdx, (), OptionQuery>;
-
-	/// The private games whose claim window is closed and whose ring is dropped.
-	///
-	/// It is what stops a redelivered ring reopening a game: the aliases spent against the
-	/// dropped ring are gone with it, so a second ring would mint every slot of the game again.
-	/// One marker per game replaces a whole ring and its aliases, so closing still reclaims the
-	/// space it costs.
-	#[pallet::storage]
-	pub type ClosedPrivateGames<T: Config> = StorageMap<_, Twox64Concat, GameIdx, (), OptionQuery>;
 
 	/// How many private claims the current block has executed, against
 	/// [`Config::MaxPrivateClaimsPerBlock`]. Reset at the start of every block.
@@ -919,7 +902,8 @@ pub mod pallet {
 				// game held a ring too, whatever it holds now.
 				if update.tree.private_slots != 0 &&
 					(PrivateRings::<T>::contains_key(update.tree.game_index) ||
-						ClosedPrivateGames::<T>::contains_key(update.tree.game_index))
+						PrivateGameEnds::<T>::get(update.tree.game_index) ==
+							Some(PrivateGameEnd::Closed))
 				{
 					Self::deposit_event(Event::CreditTreePrivateRingOutcome {
 						block: update.block,
@@ -1031,7 +1015,8 @@ pub mod pallet {
 			// mints here instead, its abandonment being what says so.
 			ensure!(
 				tree.private_slots == 0 ||
-					AbandonedPrivateGames::<T>::contains_key(tree.game_index),
+					PrivateGameEnds::<T>::get(tree.game_index) ==
+						Some(PrivateGameEnd::Abandoned),
 				Error::<T>::PrivateGame.with_weight(base)
 			);
 			ensure!(
@@ -1558,16 +1543,11 @@ pub mod pallet {
 				}
 			}
 
-			// A game reaches one outcome. An abandoned game never held a ring, so it has none to
-			// close, and a closed one is a game that did hold one.
-			for (game_index, ()) in ClosedPrivateGames::<T>::iter() {
-				if AbandonedPrivateGames::<T>::contains_key(game_index) {
-					return Err(TryRuntimeError::Other(
-						"a private game is both abandoned and closed",
-					));
-				}
+			// A game that ended holds no ring: a closed game's ring is dropped and an abandoned
+			// game never had one.
+			for (game_index, _end) in PrivateGameEnds::<T>::iter() {
 				if PrivateRings::<T>::contains_key(game_index) {
-					return Err(TryRuntimeError::Other("a closed private game still holds a ring"));
+					return Err(TryRuntimeError::Other("an ended private game still holds a ring"));
 				}
 			}
 
@@ -1716,10 +1696,9 @@ pub mod pallet {
 					}
 
 					// A closed game's spent aliases went with its ring, so a fresh window over
-					// the same keys would mint every slot of the game a second time.
-					if AbandonedPrivateGames::<T>::contains_key(update.game_index) ||
-						ClosedPrivateGames::<T>::contains_key(update.game_index)
-					{
+					// the same keys would mint every slot of the game a second time. An
+					// abandoned game mints over the public path instead.
+					if PrivateGameEnds::<T>::contains_key(update.game_index) {
 						Self::note_private_outcome_conflict(update.game_index);
 						return;
 					}
@@ -1767,20 +1746,25 @@ pub mod pallet {
 					}
 				},
 				PrivateGameOutcome::Abandoned { key_count } => {
-					if PrivateRings::<T>::contains_key(update.game_index) ||
-						ClosedPrivateGames::<T>::contains_key(update.game_index)
-					{
+					match PrivateGameEnds::<T>::get(update.game_index) {
+						// The game is abandoned already, so a redelivery repeats what
+						// state records.
+						Some(PrivateGameEnd::Abandoned) => return,
+						// A closed game held a ring, whatever was claimed against it.
+						Some(PrivateGameEnd::Closed) => {
+							Self::note_private_outcome_conflict(update.game_index);
+							return;
+						},
+						None => {},
+					}
+					if PrivateRings::<T>::contains_key(update.game_index) {
 						// Claims may already rest on the ring, and reopening the public path
-						// would mint a second NFT for every credit they spent. A closed game
-						// held a ring too, whatever was claimed against it.
+						// would mint a second NFT for every credit they spent.
 						Self::note_private_outcome_conflict(update.game_index);
 						return;
 					}
-					if AbandonedPrivateGames::<T>::contains_key(update.game_index) {
-						return;
-					}
 
-					AbandonedPrivateGames::<T>::insert(update.game_index, ());
+					PrivateGameEnds::<T>::insert(update.game_index, PrivateGameEnd::Abandoned);
 					Self::deposit_event(Event::PrivateGameAbandoned {
 						game_index: update.game_index,
 						key_count: *key_count,
@@ -1816,7 +1800,7 @@ pub mod pallet {
 			if removed < PRIVATE_CLOSE_ITEMS {
 				PrivateRings::<T>::remove(game_index);
 				PrivateRingCloses::<T>::remove(Self::close_key(ring.closes_at), game_index);
-				ClosedPrivateGames::<T>::insert(game_index, ());
+				PrivateGameEnds::<T>::insert(game_index, PrivateGameEnd::Closed);
 				Self::deposit_event(Event::PrivateRingClosed { game_index });
 			}
 

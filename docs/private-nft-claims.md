@@ -27,8 +27,10 @@ Status: experimental.
 5. **Claim.** A claimant submits `claim_private` on the claims chain, one per slot, inside the
    game's claim window.
 6. **Clean up.** `clean_up_private_game` removes the game's keys, registrations and unspent credits
-   on the game chain in bounded steps. `close_private_ring` does the same for the ring and its
-   spent aliases on the claims chain, once the window is closed.
+   on the game chain in bounded steps. It waits for step 4: its last step drops the record
+   `send_private_ring` reads the game's slots from, so cleaning up first would leave a queue front
+   that can never be sent. `close_private_ring` does the same for the ring and its spent aliases on
+   the claims chain, once the window is closed.
 
 ## Calls
 
@@ -47,11 +49,11 @@ Status: experimental.
   names, that the alias is unspent and that the game's claim window is open; the dispatch spends
   the alias and mints.
 - `receive_private_rings` — receives a game's outcome over XCM: a ring, or an abandonment.
-- `close_private_ring(game_index)` — authorized call submitted by the pallet's offchain worker,
-  once the game's claim window is closed. Local or in-block source only, as the tree sweep is.
+- `close_private_ring` — authorized call submitted by the pallet's offchain worker, once the
+  game's claim window is closed. Local or in-block source only, as the tree sweep is.
   Removes up to 32 spent aliases per call and the ring with the last of them, recording the game
-  in `ClosedPrivateGames`. It only reclaims space: a closed window takes no claim whether the ring
-  is still there or not, so it runs at the lowest priority tier.
+  as closed in `PrivateGameEnds`. It only reclaims space: a closed window takes no claim whether
+  the ring is still there or not, so it runs at the lowest priority tier.
 
 A claim carries no signed origin on purpose: the fee payer would be the strongest link a claim
 leaks, since two claims from one account are two claims by one member. What bounds the call instead
@@ -90,7 +92,7 @@ credits their registration spent are gone: the ring is the only path a private g
 on, and abandonment is decided long before the window opens. The reference window is a month for
 that reason.
 
-A closed game is recorded in `ClosedPrivateGames`, and any later outcome for it is a
+A closed game is recorded in `PrivateGameEnds`, and any later outcome for it is a
 `PrivateOutcomeConflict`. The aliases that stopped a slot minting twice were dropped with the ring,
 so a second ring over the same keys would mint every slot of the game again, and an abandonment
 would reopen the public path for credits that already minted privately.
@@ -112,7 +114,7 @@ An absolute floor on its own is a fixed number of keys to buy. A group that regi
 never claims with fills the anonymity set of one target, and sixteen keys in a game of hundreds
 buys the whole set. The share ties that price to the size of the game.
 
-The abandonment is delivered like a ring and recorded in `AbandonedPrivateGames`, which reopens
+The abandonment is delivered like a ring and recorded in `PrivateGameEnds`, which reopens
 `claim` for the game's credit trees, so every player mints publicly as they would have without the
 opt-in. Registrants lose only what the registration cost. No credit mints twice: a game is
 abandoned only when no ring exists, so no `claim_private` of it can have been made, and the claims

@@ -19,8 +19,8 @@
 use super::*;
 use crate::{
 	pallet::{
-		AbandonedPrivateGames, ClaimedLeaves, CollectionMinters, NextExpectedSequence,
-		PendingTreeDeletions, PrivateRingCloses, TreeExpiries,
+		ClaimedLeaves, CollectionMinters, NextExpectedSequence, PendingTreeDeletions,
+		PrivateGameEnds, PrivateRingCloses, TreeExpiries,
 	},
 	types::CreditTreeBatch,
 	BenchmarkHelper,
@@ -589,8 +589,8 @@ fn claimable_tree<T: Config>(
 	);
 	TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), BLOCK, ());
 	// The tree is a private game's whose ring was abandoned. That is the dearer of the two shapes
-	// a claim takes: it reads `AbandonedPrivateGames`, which a tree of a public game does not.
-	AbandonedPrivateGames::<T>::insert(game_index, ());
+	// a claim takes: it reads `PrivateGameEnds`, which a tree of a public game does not.
+	PrivateGameEnds::<T>::insert(game_index, PrivateGameEnd::Abandoned);
 
 	let sibling_hashes = BoundedVec::try_from(
 		proof.proof.into_iter().map(CreditProofNode::from).collect::<Vec<_>>(),

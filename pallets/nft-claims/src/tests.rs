@@ -2397,9 +2397,9 @@ mod migration {
 mod private_claims {
 	use super::*;
 	use crate::{
-		AbandonedPrivateGames, AuthorizeInvalidity, ClosedPrivateGames, CollectionMinter,
-		CollectionMinters, Error, ItemSelection, PrivateClaimsThisBlock, PrivateRingCloses,
-		PrivateRings, SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
+		AuthorizeInvalidity, CollectionMinter, CollectionMinters, Error, ItemSelection,
+		PrivateClaimsThisBlock, PrivateGameEnd, PrivateGameEnds, PrivateRingCloses, PrivateRings,
+		SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
 	};
 	use frame_support::traits::OnInitialize;
 	use indiv_pallet_scarcity::CollectionId;
@@ -2666,7 +2666,7 @@ mod private_claims {
 				private_ring_batch(vec![abandoned_delivery(GAME, 2, 2)])
 			));
 
-			assert!(AbandonedPrivateGames::<Test>::get(GAME).is_none());
+			assert!(PrivateGameEnds::<Test>::get(GAME).is_none());
 			assert!(PrivateRings::<Test>::get(GAME).is_some());
 			System::assert_has_event(Event::PrivateOutcomeConflict { game_index: GAME }.into());
 		});
@@ -2688,7 +2688,7 @@ mod private_claims {
 			));
 
 			assert!(PrivateRings::<Test>::get(GAME).is_none());
-			assert!(AbandonedPrivateGames::<Test>::get(GAME).is_some());
+			assert_eq!(PrivateGameEnds::<Test>::get(GAME), Some(PrivateGameEnd::Abandoned));
 			System::assert_has_event(Event::PrivateOutcomeConflict { game_index: GAME }.into());
 		});
 	}
@@ -3096,7 +3096,7 @@ mod private_claims {
 			System::set_block_number(closes_at);
 			NftClaims::on_initialize(closes_at);
 			assert_ok!(close());
-			assert!(ClosedPrivateGames::<Test>::contains_key(GAME));
+			assert_eq!(PrivateGameEnds::<Test>::get(GAME), Some(PrivateGameEnd::Closed));
 
 			// The same ring again. Its spent aliases went with it, so a fresh window over the
 			// same keys would mint every slot of the game a second time.
@@ -3112,7 +3112,7 @@ mod private_claims {
 				game_chain_origin(),
 				private_ring_batch(vec![abandoned_delivery(GAME, 1, 2)])
 			));
-			assert!(!AbandonedPrivateGames::<Test>::contains_key(GAME));
+			assert_eq!(PrivateGameEnds::<Test>::get(GAME), Some(PrivateGameEnd::Closed));
 		});
 	}
 
@@ -3166,7 +3166,7 @@ mod private_claims {
 			let closes_at = PrivateRings::<Test>::get(GAME).unwrap().closes_at;
 			System::set_block_number(closes_at);
 			let post = close().unwrap();
-			assert!(ClosedPrivateGames::<Test>::contains_key(GAME));
+			assert_eq!(PrivateGameEnds::<Test>::get(GAME), Some(PrivateGameEnd::Closed));
 
 			assert!(
 				CreditTrees::<Test>::contains_key(BLOCK),
@@ -3359,7 +3359,7 @@ mod private_claims {
 			let mut private_tree = tree_of(BLOCK, &awards);
 			private_tree.private_slots = 2;
 			CreditTrees::<Test>::insert(BLOCK, private_tree);
-			AbandonedPrivateGames::<Test>::insert(GAME, ());
+			PrivateGameEnds::<Test>::insert(GAME, PrivateGameEnd::Abandoned);
 			add_collection(COLLECTION, COLLECTION_OWNER, 2);
 			CollectionMinters::<Test>::insert(
 				COLLECTION,

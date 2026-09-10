@@ -112,3 +112,26 @@ pub struct PrivateRing<Members, BlockNumber> {
 	/// it pass mints nothing.
 	pub closes_at: BlockNumber,
 }
+
+/// How a private game ended, once no private claim of it can be made any more.
+///
+/// A game reaches at most one end and keeps it, so one entry holds both outcomes. A later
+/// delivery for the game is refused against it.
+#[derive(
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+	Debug,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+)]
+pub enum PrivateGameEnd {
+	/// The game chain built no ring, so the game's credits mint over the public path.
+	Abandoned,
+	/// The claim window closed and the ring is dropped with the aliases spent against it.
+	Closed,
+}
