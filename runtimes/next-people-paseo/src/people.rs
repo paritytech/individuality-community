@@ -769,9 +769,8 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// block clears in about 20 minutes. The root TTL is the longer of the two, so a sweep only
 	// removes roots the claims chain has given up on, with a month of slack for a backlog.
 	type MaxRootsPerSweep = ConstU32<64>;
-	// A block's awards are read at `MaxCreditsPerBlock` of them, about 78 KB, so 32 removals
-	// already spend a third of the `Normal` proof budget. One call per block still clears a day of
-	// award blocks in about 45 minutes were every block to award.
+	// The proof charges an entry the sweep removes at its maximum, `MaxCreditsPerBlock` awards,
+	// so the count has to stay low. A call per block still clears a day's award blocks in minutes.
 	type MaxAwardBlocksPerSweep = ConstU32<32>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
