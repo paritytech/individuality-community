@@ -1109,7 +1109,7 @@ mod pgas_fees {
 		let tx_ext = TxExtension::from((
 			(
 				(),
-				pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
+				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
 				frame_system::AuthorizeCall::<Runtime>::new(),
 				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
 				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
@@ -1254,7 +1254,7 @@ mod pgas_fees {
 				assert_ok!(Scarcity::do_define_item(
 					owner.clone(),
 					collection,
-					pallet_scarcity::Transferability::Transferable,
+					indiv_pallet_scarcity::Transferability::Transferable,
 					Vec::new()
 				));
 				assert_ok!(NftClaims::set_collection_minter(
@@ -1308,7 +1308,7 @@ mod pgas_fees {
 					&indiv_pallet_nft_claims::ClaimedLeaves::<Runtime>::get(1u32),
 					0
 				));
-				assert!(pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&mint_to));
+				assert!(indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&mint_to));
 
 				let paid = endowment - <Assets as FungiblesInspect<AccountId>>::balance(pgas, &bob);
 				assert!(paid > 0, "the claim's fee should have been taken in PGAS");
@@ -1787,18 +1787,18 @@ mod credit_tree_removal {
 
 	/// Creates the collection and item a claim mints into, and registers it for claims as its owner
 	/// does beforehand. Returns the collection's identifier.
-	fn prepare_collection() -> pallet_scarcity::CollectionId {
+	fn prepare_collection() -> indiv_pallet_scarcity::CollectionId {
 		use frame_support::traits::fungible::Mutate;
 		use indiv_pallet_nft_claims::ItemSelection;
 
 		let owner = AccountId::from([254u8; 32]);
 		Balances::set_balance(&owner, 1_000 * ExistentialDeposit::get());
-		let collection = pallet_scarcity::NextCollectionId::<Runtime>::get();
+		let collection = indiv_pallet_scarcity::NextCollectionId::<Runtime>::get();
 		assert_ok!(Scarcity::do_create_collection(owner.clone()));
 		assert_ok!(Scarcity::do_define_item(
 			owner.clone(),
 			collection,
-			pallet_scarcity::Transferability::Transferable,
+			indiv_pallet_scarcity::Transferability::Transferable,
 			Vec::new()
 		));
 		assert_ok!(NftClaims::set_collection_minter(
