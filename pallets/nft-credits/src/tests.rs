@@ -759,7 +759,7 @@ fn pruned_award_block_keeps_its_root_and_falls_back_to_the_events() {
 			NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded credits");
 		let claimant = awards[0].claimant.clone();
 
-		let due = expiry_deadline(credit_root.timestamp, NftCredits::award_ttl());
+		let due = expiry_deadline(credit_root.timestamp, AwardRetentionTtl::get());
 		MOCK_UNIX_TIME.with(|time| *time.borrow_mut() = core::time::Duration::from_secs(due));
 		assert_ok!(NftCredits::sweep_expired_awards(
 			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
@@ -2628,7 +2628,7 @@ mod award_removal {
 
 	/// The first second at which `block`'s awards are past their TTL.
 	fn due_at(block: u64) -> u64 {
-		expiry_deadline(timestamp_of(block), NftCredits::award_ttl())
+		expiry_deadline(timestamp_of(block), AwardRetentionTtl::get())
 	}
 
 	fn set_now(secs: u64) {
@@ -2637,7 +2637,7 @@ mod award_removal {
 
 	/// The timestamp the next award sweep starts at.
 	fn oldest_filed() -> Option<u32> {
-		oldest_expiry::<AwardExpiries<Test>, u64>()
+		oldest_expiry::<NftClaimCreditAwardExpiries<Test>, u64>()
 	}
 
 	fn credit_events() -> Vec<Event<Test>> {
@@ -2693,7 +2693,7 @@ mod award_removal {
 		new_test_ext().execute_with(|| {
 			record_award_blocks(&[10]);
 
-			assert!(AwardExpiries::<Test>::contains_key(
+			assert!(NftClaimCreditAwardExpiries::<Test>::contains_key(
 				ExpiryTimestamp::from(timestamp_of(10)),
 				10
 			));
@@ -2926,9 +2926,9 @@ mod migration {
 			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
 
 			let timestamp = ExpiryTimestamp::from(TIMESTAMP);
-			assert!(AwardExpiries::<Test>::contains_key(timestamp, 10));
+			assert!(NftClaimCreditAwardExpiries::<Test>::contains_key(timestamp, 10));
 			assert!(
-				!AwardExpiries::<Test>::contains_key(timestamp, 11),
+				!NftClaimCreditAwardExpiries::<Test>::contains_key(timestamp, 11),
 				"a block whose awards are gone is filed for its root alone",
 			);
 			assert!(
@@ -2949,7 +2949,7 @@ mod migration {
 
 			MOCK_UNIX_TIME.with(|now| {
 				*now.borrow_mut() =
-					Duration::from_secs(expiry_deadline(TIMESTAMP, NftCredits::award_ttl()))
+					Duration::from_secs(expiry_deadline(TIMESTAMP, AwardRetentionTtl::get()))
 			});
 			assert_ok!(NftCredits::sweep_expired_awards(
 				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
@@ -2958,7 +2958,7 @@ mod migration {
 			));
 
 			assert_eq!(NftClaimCreditAwards::<Test>::iter().count(), 0);
-			assert_eq!(AwardExpiries::<Test>::iter().count(), 0);
+			assert_eq!(NftClaimCreditAwardExpiries::<Test>::iter().count(), 0);
 			assert!(
 				NftClaimCreditRoots::<Test>::contains_key(10),
 				"the root outlives the awards it was built from",

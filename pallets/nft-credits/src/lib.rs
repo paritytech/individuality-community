@@ -55,7 +55,8 @@
 //!
 //! - From [`NftClaimCreditAwards`], for as long as [`Config::AwardRetentionTtl`] has not run out on
 //!   the award block's own wall-clock time. This is the intended path and needs nothing but chain
-//!   state.
+//!   state. The window is wall-clock rather than a count of award blocks because `report` is
+//!   fee-less, so a count would shrink the window as the chain got busier.
 //! - From the block's `NftClaimCreditAwarded` events, one per awarded credit, carrying the
 //!   claimant, the credit and the leaf index. This is the fallback once a block's awards have been
 //!   pruned.
@@ -265,23 +266,10 @@ pub mod pallet {
 		/// How long, in seconds, a block's [`NftClaimCreditAwards`] stay on chain past the block's
 		/// wall-clock time.
 		///
-		/// This is the window in which a claim can be proven from state alone, through
-		/// [`Pallet::nft_claim_credit_proofs`]. Once it runs out the awards are swept and a proof
-		/// has to be rebuilt from the block's `NftClaimCreditAwarded` events and passed to
-		/// [`Pallet::nft_claim_credit_proof_from_awards`], which needs an archive node or an
-		/// indexer that was already recording. The root outlives them by [`ROOT_TTL_GRACE`], so
-		/// expiry delays no mint that a claimant, or an indexer, kept the awards of.
-		///
-		/// Set this to the claims chain's own deadline, [`Config::ClaimsChainTreeTtl`]: awards
-		/// held past it prove claims that chain no longer accepts, and awards dropped before it
-		/// leave a mintable credit with no proof. The `integrity_test` holds it to
-		/// [`Pallet::root_ttl`] as an upper bound.
-		///
-		/// It is wall-clock rather than a count of award blocks because the rate credits are
-		/// awarded at is not this chain's to choose: `report` is fee-less, so a count buys a
-		/// window that shortens as the chain gets busier, which is when it is needed most. The
-		/// price is that the state it costs follows participation instead of a constant: 65 bytes
-		/// an award, times the credits a player earns over the window at the chain's game cadence.
+		/// Set it to the claims chain's own deadline, [`Config::ClaimsChainTreeTtl`]: awards held
+		/// past that prove claims the chain no longer accepts, and awards dropped before it leave
+		/// a mintable credit whose proof has to come from the block's events. The
+		/// `integrity_test` holds it to [`Pallet::root_ttl`] as an upper bound.
 		#[pallet::constant]
 		type AwardRetentionTtl: Get<u64>;
 
@@ -409,7 +397,7 @@ pub mod pallet {
 	/// the root over: `Pallet::award_nft_claim_credit` appends to it, and once the root is
 	/// recorded the entry stays as it is, so a claim can be proven from state alone. An entry is
 	/// removed once [`Config::AwardRetentionTtl`] has run out on the block's own wall-clock time,
-	/// by the sweep [`AwardExpiries`] files it for.
+	/// by the sweep [`NftClaimCreditAwardExpiries`] files it for.
 	///
 	/// The awards are kept rather than the leaves they hash to, because a mint needs the credit
 	/// itself: Asset Hub recomputes the leaf from the claimant and the credit the claimant
@@ -431,7 +419,7 @@ pub mod pallet {
 	/// removes the entries it reads: sharing one map would have whichever sweep came first take
 	/// the other's record with it.
 	#[pallet::storage]
-	pub type AwardExpiries<T: Config> = StorageDoubleMap<
+	pub type NftClaimCreditAwardExpiries<T: Config> = StorageDoubleMap<
 		_,
 		Identity,
 		ExpiryTimestamp,
@@ -754,17 +742,16 @@ pub mod pallet {
 			Ok(Self::do_sweep_expired_roots())
 		}
 
-		/// Removes the awards whose [`Pallet::award_ttl`] has run out, oldest first.
+		/// Removes the awards whose [`Config::AwardRetentionTtl`] has run out, oldest first.
 		///
 		/// This pallet's offchain worker submits this authorized call. It is accepted from a local
 		/// or in-block source only, so no external submission reaches it.
 		///
-		/// The roots of those blocks stay, running on the longer [`Pallet::root_ttl`], so a
-		/// claimant holding their own proof loses nothing. What is lost is the state path to a
-		/// proof they never fetched: it has to come from the block's `NftClaimCreditAwarded`
-		/// events instead. `oldest` must be the timestamp [`AwardExpiries`] holds its oldest entry
-		/// under, which makes a retry that raced a successful sweep stale instead of a second
-		/// pass.
+		/// The block's root stays, on the longer [`Pallet::root_ttl`], so nothing mintable is
+		/// stranded: a proof for a swept block comes from its `NftClaimCreditAwarded` events
+		/// instead. `oldest` must be the timestamp [`NftClaimCreditAwardExpiries`] holds its oldest
+		/// entry under, which makes a retry that raced a successful sweep stale instead of a
+		/// second pass.
 		#[pallet::authorize(|source, oldest, _discriminator| {
 			Self::authorize_sweep_expired_awards(source, oldest)
 		})]
@@ -1259,7 +1246,7 @@ impl<T: Config> Pallet<T> {
 	/// swept on different deadlines, the awards' TTL being the shorter, so they are filed in
 	/// separate maps.
 	pub(crate) fn note_award_expiry(block: BlockNumberFor<T>, timestamp: u32) {
-		AwardExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
+		NftClaimCreditAwardExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
 	}
 
 	/// The Merkle leaves `awards` commit to, in award order.
@@ -1622,15 +1609,6 @@ impl<T: Config> Pallet<T> {
 		T::ClaimsChainTreeTtl::get().saturating_add(ROOT_TTL_GRACE)
 	}
 
-	/// How long a block's awards stay on chain past the block's own wall-clock time.
-	///
-	/// Shorter than [`Pallet::root_ttl`], which the `integrity_test` holds it to: the awards are
-	/// the proof material for a root, so a root outliving them costs a claimant the state path to
-	/// their proof, while awards outliving their root would prove nothing.
-	pub fn award_ttl() -> u64 {
-		T::AwardRetentionTtl::get()
-	}
-
 	/// Files the root of `block` under the timestamp it commits to, so a sweep finds it once that
 	/// timestamp is [`Pallet::root_ttl`] old.
 	pub(crate) fn note_root_expiry(block: BlockNumberFor<T>, timestamp: u32) {
@@ -1703,8 +1681,8 @@ impl<T: Config> Pallet<T> {
 	/// The roots of those blocks stay: they run on the longer [`Pallet::root_ttl`], and a claimant
 	/// holding their own proof can still mint against one for as long as it does.
 	pub(crate) fn do_sweep_expired_awards() -> PostDispatchInfo {
-		let expired = drain_due_expiries::<AwardExpiries<T>, BlockNumberFor<T>>(
-			Self::award_ttl(),
+		let expired = drain_due_expiries::<NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>(
+			T::AwardRetentionTtl::get(),
 			T::UnixTime::now().as_secs(),
 			T::MaxAwardBlocksPerSweep::get(),
 		);
@@ -1768,12 +1746,12 @@ impl<T: Config> Pallet<T> {
 
 	/// Validates a [`Pallet::sweep_expired_awards`] transaction, as
 	/// [`Pallet::authorize_sweep_expired_roots`] does for roots, the deadline being the one
-	/// [`Pallet::award_ttl`] names.
+	/// [`Config::AwardRetentionTtl`] names.
 	pub fn authorize_sweep_expired_awards(
 		source: TransactionSource,
 		oldest: &u32,
 	) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
-		authorize_expiry_sweep::<T, AwardExpiries<T>, BlockNumberFor<T>>(
+		authorize_expiry_sweep::<T, NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>(
 			ExpirySweepTx {
 				tag: "game:sweep-expired-awards",
 				not_local: AuthorizeInvalidity::TransactionNotLocal.into(),
@@ -1781,7 +1759,7 @@ impl<T: Config> Pallet<T> {
 			},
 			source,
 			*oldest,
-			Self::award_ttl(),
+			T::AwardRetentionTtl::get(),
 			T::UnixTime::now().as_secs(),
 		)
 	}
@@ -1792,10 +1770,11 @@ impl<T: Config> Pallet<T> {
 	/// Repeats the `authorize` check for the reason [`Pallet::submit_root_expiry_sweep`] does, and
 	/// carries the block number for the reason that sweep does.
 	pub(crate) fn submit_award_expiry_sweep(block_number: BlockNumberFor<T>) {
-		let Some(oldest) = oldest_expiry::<AwardExpiries<T>, BlockNumberFor<T>>() else {
+		let Some(oldest) = oldest_expiry::<NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>()
+		else {
 			return;
 		};
-		if T::UnixTime::now().as_secs() < expiry_deadline(oldest, Self::award_ttl()) {
+		if T::UnixTime::now().as_secs() < expiry_deadline(oldest, T::AwardRetentionTtl::get()) {
 			return;
 		}
 
@@ -1967,15 +1946,18 @@ impl<T: Config> Pallet<T> {
 
 		// A window of no length retains no awards at all, leaving every claim to be rebuilt
 		// from events, which is the fallback rather than the intended path.
-		assert!(!Self::award_ttl().is_zero(), "`AwardRetentionTtl` must be greater than zero");
+		assert!(
+			!T::AwardRetentionTtl::get().is_zero(),
+			"`AwardRetentionTtl` must be greater than zero"
+		);
 
 		// The awards are what a proof against a root is built from, so a root outliving them
 		// costs a claimant the state path to their proof, while awards outliving their root
 		// would prove nothing. `ROOT_TTL_GRACE` is what leaves room between the two.
 		assert!(
-			Self::award_ttl() <= Self::root_ttl(),
+			T::AwardRetentionTtl::get() <= Self::root_ttl(),
 			"AwardRetentionTtl ({awards}) must be <= root_ttl ({roots})",
-			awards = Self::award_ttl(),
+			awards = T::AwardRetentionTtl::get(),
 			roots = Self::root_ttl(),
 		);
 

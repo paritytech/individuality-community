@@ -29,9 +29,9 @@ const LOG_TARGET: &str = "runtime::indiv-pallet-nft-credits::migration";
 /// runs from.
 ///
 /// A root recorded before this upgrade has no [`RootExpiries`](crate::RootExpiries) entry and its
-/// awards no [`AwardExpiries`](crate::AwardExpiries) one, so no sweep reads either and both stay
-/// on chain for good. The ring that used to bound the awards is dropped here, its blocks being
-/// filed for expiry instead.
+/// awards no [`NftClaimCreditAwardExpiries`](crate::NftClaimCreditAwardExpiries) one, so no sweep
+/// reads either and both stay on chain for good. The ring that used to bound the awards is dropped
+/// here, its blocks being filed for expiry instead.
 pub type MigrateV0ToV1<T> = VersionedMigration<
 	0,
 	1,
@@ -84,7 +84,7 @@ pub mod v1 {
 
 		#[cfg(feature = "try-runtime")]
 		fn post_upgrade(_state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
-			use crate::{AwardExpiries, RootExpiries};
+			use crate::{NftClaimCreditAwardExpiries, RootExpiries};
 			use indiv_support::credit_trees::ExpiryTimestamp;
 
 			for (block, tree) in NftClaimCreditRoots::<T>::iter() {
@@ -95,7 +95,7 @@ pub mod v1 {
 				);
 				ensure!(
 					NftClaimCreditAwards::<T>::decode_len(block).unwrap_or(0) == 0 ||
-						AwardExpiries::<T>::contains_key(timestamp, block),
+						NftClaimCreditAwardExpiries::<T>::contains_key(timestamp, block),
 					"an award block has no expiry entry"
 				);
 			}

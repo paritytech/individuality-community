@@ -218,8 +218,8 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 	}
 	/// Storage: `Timestamp::Now` (r:1 w:0)
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	/// Storage: `NftCredits::AwardExpiries` (r:32 w:32)
-	/// Proof: `NftCredits::AwardExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwardExpiries` (r:32 w:32)
+	/// Proof: `NftCredits::NftClaimCreditAwardExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::NftClaimCreditAwards` (r:0 w:32)
 	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(78014), added: 80489, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[0, 32]`.

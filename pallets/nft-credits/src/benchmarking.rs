@@ -81,7 +81,7 @@ mod benches {
 			NftClaimCreditRoots::<T>::get(block).expect("a root is recorded for the block");
 		assert_eq!(credit_root.leaf_count, n);
 		assert_eq!(NftClaimCreditAwards::<T>::decode_len(block).unwrap_or(0) as u32, n);
-		assert!(AwardExpiries::<T>::contains_key(
+		assert!(NftClaimCreditAwardExpiries::<T>::contains_key(
 			ExpiryTimestamp::from(credit_root.timestamp),
 			block
 		));
@@ -253,13 +253,17 @@ mod benches {
 
 		// Only the award block that is not due is left, which is the one filed last.
 		assert_eq!(NftClaimCreditAwards::<T>::iter().count(), 1);
-		assert_eq!(AwardExpiries::<T>::iter().count(), 1);
-		assert_eq!(oldest_expiry::<AwardExpiries<T>, BlockNumberFor<T>>(), Some(root_timestamp(n)));
+		assert_eq!(NftClaimCreditAwardExpiries::<T>::iter().count(), 1);
+		assert_eq!(
+			oldest_expiry::<NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>(),
+			Some(root_timestamp(n))
+		);
 
 		Ok(())
 	}
 
-	/// As `authorize_sweep_expired_roots`, against [`AwardExpiries`] and the shorter TTL.
+	/// As `authorize_sweep_expired_roots`, against [`NftClaimCreditAwardExpiries`] and the shorter
+	/// TTL.
 	#[benchmark]
 	fn authorize_sweep_expired_awards() -> Result<(), BenchmarkError> {
 		fill_due_award_expiries::<T>(T::MaxAwardBlocksPerSweep::get());
@@ -348,7 +352,7 @@ fn fill_due_award_expiries<T: Config>(n: u32) {
 	let last_due = FIRST_ROOT_TIMESTAMP.saturating_add(n).saturating_sub(1);
 	<T as Config>::BenchmarkHelper::set_unix_time(expiry_deadline(
 		last_due,
-		pallet::Pallet::<T>::award_ttl(),
+		T::AwardRetentionTtl::get(),
 	));
 }
 
