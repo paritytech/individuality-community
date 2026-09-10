@@ -81,7 +81,7 @@ fn create_collection(owner: &sp_runtime::AccountId32) {
 		Scarcity::do_define_item(
 			owner.clone(),
 			COLLECTION,
-			pallet_scarcity::Transferability::Transferable,
+			indiv_pallet_scarcity::Transferability::Transferable,
 			Vec::new()
 		)
 		.expect("item"),
@@ -165,7 +165,7 @@ fn a_deployed_contract_selects_the_minted_item() {
 			purse.clone()
 		));
 
-		let nft = pallet_scarcity::NftsByOwner::<Runtime>::get(&purse).expect("minted");
+		let nft = indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&purse).expect("minted");
 		assert_eq!((nft.collection, nft.item), (COLLECTION, 0));
 	});
 }
@@ -316,7 +316,7 @@ fn a_malformed_contract_return_fails_the_claim_and_random_recovers_it() {
 			purse.clone()
 		)
 		.is_err());
-		assert!(pallet_scarcity::NftsByOwner::<Runtime>::get(&purse).is_none());
+		assert!(indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&purse).is_none());
 
 		// The credit was not spent: the owner switches the collection to the random item and
 		// the same claim goes through.
@@ -335,7 +335,7 @@ fn a_malformed_contract_return_fails_the_claim_and_random_recovers_it() {
 			COLLECTION,
 			purse.clone()
 		));
-		assert!(pallet_scarcity::NftsByOwner::<Runtime>::get(&purse).is_some());
+		assert!(indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&purse).is_some());
 	});
 }
 
