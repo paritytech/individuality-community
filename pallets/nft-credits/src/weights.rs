@@ -62,6 +62,8 @@ pub trait WeightInfo {
 	fn receive_tree_deletions(n: u32, ) -> Weight;
 	fn sweep_expired_roots(n: u32, ) -> Weight;
 	fn authorize_sweep_expired_roots() -> Weight;
+	fn sweep_expired_awards(n: u32, ) -> Weight;
+	fn authorize_sweep_expired_awards() -> Weight;
 }
 
 /// Weights for `indiv_pallet_nft_credits` using the Substrate node and recommended hardware.
@@ -222,6 +224,38 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(12_615_000, 3481)
 			.saturating_add(T::DbWeight::get().reads(2_u64))
 	}
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwardExpiries` (r:32 w:32)
+	/// Proof: `NftCredits::NftClaimCreditAwardExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwards` (r:0 w:32)
+	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(78014), added: 80489, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[0, 32]`.
+	fn sweep_expired_awards(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `264 + n * (15 ±0)`
+		//  Estimated: `3575 + n * (82980 ±1)`
+		// Minimum execution time: 9_824_000 picoseconds.
+		Weight::from_parts(15_401_482, 3575)
+			// Standard Error: 4_700
+			.saturating_add(Weight::from_parts(5_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 82980).saturating_mul(n.into()))
+	}
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwardExpiries` (r:1 w:0)
+	/// Proof: `NftCredits::NftClaimCreditAwardExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
+	fn authorize_sweep_expired_awards() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `612`
+		//  Estimated: `3481`
+		// Minimum execution time: 11_578_000 picoseconds.
+		Weight::from_parts(12_615_000, 3481)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -374,6 +408,38 @@ impl WeightInfo for () {
 	/// Storage: `NftCredits::RootExpiries` (r:1 w:0)
 	/// Proof: `NftCredits::RootExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
 	fn authorize_sweep_expired_roots() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `612`
+		//  Estimated: `3481`
+		// Minimum execution time: 11_578_000 picoseconds.
+		Weight::from_parts(12_615_000, 3481)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+	}
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwardExpiries` (r:32 w:32)
+	/// Proof: `NftCredits::NftClaimCreditAwardExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwards` (r:0 w:32)
+	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(78014), added: 80489, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[0, 32]`.
+	fn sweep_expired_awards(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `264 + n * (15 ±0)`
+		//  Estimated: `3575 + n * (82980 ±1)`
+		// Minimum execution time: 9_824_000 picoseconds.
+		Weight::from_parts(15_401_482, 3575)
+			// Standard Error: 4_700
+			.saturating_add(Weight::from_parts(5_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+			.saturating_add(RocksDbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(RocksDbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 82980).saturating_mul(n.into()))
+	}
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwardExpiries` (r:1 w:0)
+	/// Proof: `NftCredits::NftClaimCreditAwardExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
+	fn authorize_sweep_expired_awards() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `612`
 		//  Estimated: `3481`

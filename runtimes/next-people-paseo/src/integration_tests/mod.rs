@@ -72,6 +72,10 @@ mod coinage_non_anonymous_flow;
 mod coinage_paid_flow;
 mod coinage_people_flow;
 mod coinage_token_allowance;
+// The benchmarking build widens `MaxGroupSize` and `MaxRounds` to fit the game's linear
+// regressions, which would size the index for a runtime that is never deployed.
+#[cfg(not(feature = "runtime-benchmarks"))]
+mod credit_index_window;
 mod credit_root_deletion;
 mod external_asset_teleport;
 mod lite_people_free_tx;

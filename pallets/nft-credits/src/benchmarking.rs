@@ -42,17 +42,16 @@ mod benches {
 	use super::*;
 
 	// The `on_initialize` path that records a block's root. `n` is the number of leaves the tree
-	// is built over, swept over the whole range one block can award: the hashing, the awards'
-	// contribution to the proof size, and the retained ring all scale with it.
+	// is built over, swept over the whole range one block can award: the hashing and the awards'
+	// contribution to the proof size both scale with it.
 	//
-	// The ring is set up full, so the run includes dropping the oldest award block, which is the
-	// worst case and the one every block pays for once the chain has been running.
+	// Filing the block for expiry is a fixed pair of writes whatever `n` is, the awards being
+	// removed by a sweep of their own rather than by this path.
 	#[benchmark]
 	fn build_credit_tree(
 		n: Linear<1, { T::MaxCreditsPerBlock::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let retained = T::MaxRetainedAwardBlocks::get();
-		frame_system::Pallet::<T>::set_block_number((retained + 10).into());
+		frame_system::Pallet::<T>::set_block_number(10u32.into());
 		let block = frame_system::Pallet::<T>::block_number();
 
 		let awards =
@@ -68,16 +67,6 @@ mod benches {
 			};
 		NftClaimCreditAwards::<T>::insert(block, awards(n));
 
-		// The block that drops out of the ring, holding a full set of awards to remove.
-		let dropped: BlockNumberFor<T> = 1u32.into();
-		NftClaimCreditAwards::<T>::insert(dropped, awards(T::MaxCreditsPerBlock::get()));
-		NftClaimCreditAwardBlocks::<T>::put(BoundedVec::<
-			BlockNumberFor<T>,
-			T::MaxRetainedAwardBlocks,
-		>::truncate_from(
-			(1..=retained).map(Into::into).collect::<Vec<_>>()
-		));
-
 		PendingNftClaimCreditRootInfo::<T>::put(NftClaimCreditRootInfo {
 			game_index: 7,
 			timestamp: 1_234,
@@ -92,7 +81,10 @@ mod benches {
 			NftClaimCreditRoots::<T>::get(block).expect("a root is recorded for the block");
 		assert_eq!(credit_root.leaf_count, n);
 		assert_eq!(NftClaimCreditAwards::<T>::decode_len(block).unwrap_or(0) as u32, n);
-		assert!(!NftClaimCreditAwards::<T>::contains_key(dropped));
+		assert!(NftClaimCreditAwardExpiries::<T>::contains_key(
+			ExpiryTimestamp::from(credit_root.timestamp),
+			block
+		));
 
 		Ok(())
 	}
@@ -244,6 +236,50 @@ mod benches {
 		Ok(())
 	}
 
+	/// Worst case for `n` removals: `n` award blocks are due, each under a timestamp of its own and
+	/// each holding a full block of awards, so the call pays one map key and one
+	/// `MaxCreditsPerBlock` entry per removal. That per-block size is what keeps
+	/// [`Config::MaxAwardBlocksPerSweep`] far below [`Config::MaxRootsPerSweep`]. An award block
+	/// that is not due follows them, which is the entry the sweep reads to stop.
+	#[benchmark]
+	fn sweep_expired_awards(
+		n: Linear<0, { T::MaxAwardBlocksPerSweep::get() }>,
+	) -> Result<(), BenchmarkError> {
+		fill_due_award_expiries::<T>(n);
+		let origin = RawOrigin::Authorized;
+
+		#[extrinsic_call]
+		_(origin, FIRST_ROOT_TIMESTAMP, BlockNumberFor::<T>::from(0u32));
+
+		// Only the award block that is not due is left, which is the one filed last.
+		assert_eq!(NftClaimCreditAwards::<T>::iter().count(), 1);
+		assert_eq!(NftClaimCreditAwardExpiries::<T>::iter().count(), 1);
+		assert_eq!(
+			oldest_expiry::<NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>(),
+			Some(root_timestamp(n))
+		);
+
+		Ok(())
+	}
+
+	/// As `authorize_sweep_expired_roots`, against [`NftClaimCreditAwardExpiries`] and the shorter
+	/// TTL.
+	#[benchmark]
+	fn authorize_sweep_expired_awards() -> Result<(), BenchmarkError> {
+		fill_due_award_expiries::<T>(T::MaxAwardBlocksPerSweep::get());
+
+		#[block]
+		{
+			pallet::Pallet::<T>::authorize_sweep_expired_awards(
+				TransactionSource::Local,
+				&FIRST_ROOT_TIMESTAMP,
+			)
+			.expect("must authorize");
+		}
+
+		Ok(())
+	}
+
 	// No `impl_benchmark_test_suite!`: a mock for this pallet is a mock of the whole game it sits
 	// on, which the game crate already has, so its tests are the ones that run these paths. The
 	// benchmarks themselves are exercised by `frame-omni-bencher` against the runtime.
@@ -291,6 +327,32 @@ fn fill_due_expiries<T: Config>(n: u32) {
 	<T as Config>::BenchmarkHelper::set_unix_time(expiry_deadline(
 		last_due,
 		pallet::Pallet::<T>::root_ttl(),
+	));
+}
+
+/// Files `n` award blocks that are due, plus one that is not, each under a timestamp of its own
+/// and each holding a full block of awards, and sets the clock to the deadline of the last due one.
+/// The award block filed after it is what stops the sweep.
+fn fill_due_award_expiries<T: Config>(n: u32) {
+	let full = (0..T::MaxCreditsPerBlock::get())
+		.map(|i| NftClaimCreditAward {
+			claimant: AccountOrPerson::Person(sp_io::hashing::blake2_256(&i.encode())),
+			credit: sp_io::hashing::blake2_256(&(i, b"credit").encode()),
+		})
+		.collect::<Vec<_>>();
+	let full =
+		BoundedVec::<NftClaimCreditAward<T::AccountId>, T::MaxCreditsPerBlock>::truncate_from(full);
+
+	for index in 0..=n {
+		let block = BlockNumberFor::<T>::from(index.saturating_add(1));
+		NftClaimCreditAwards::<T>::insert(block, full.clone());
+		pallet::Pallet::<T>::note_award_expiry(block, root_timestamp(index));
+	}
+
+	let last_due = FIRST_ROOT_TIMESTAMP.saturating_add(n).saturating_sub(1);
+	<T as Config>::BenchmarkHelper::set_unix_time(expiry_deadline(
+		last_due,
+		T::AwardRetentionTtl::get(),
 	));
 }
 

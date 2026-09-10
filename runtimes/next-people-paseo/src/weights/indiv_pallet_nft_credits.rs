@@ -216,4 +216,34 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 			.saturating_add(Weight::from_parts(0, 3481))
 			.saturating_add(T::DbWeight::get().reads(2))
 	}
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwardExpiries` (r:32 w:32)
+	/// Proof: `NftCredits::NftClaimCreditAwardExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwards` (r:0 w:32)
+	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(78014), added: 80489, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[0, 32]`.
+	fn sweep_expired_awards(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `264 + n * (15 ±0)`
+		//  Estimated: `3575 + n * (82980 ±1)`
+		// Minimum execution time: 9_915_000 picoseconds.
+		Weight::from_parts(15_394_529, 0)
+			.saturating_add(Weight::from_parts(0, 3575))
+			// Standard Error: 5_861
+			.saturating_add(Weight::from_parts(5_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(0, 82980).saturating_mul(n.into()))
+	}
+	fn authorize_sweep_expired_awards() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `612`
+		//  Estimated: `3481`
+		// Minimum execution time: 11_307_000 picoseconds.
+		Weight::from_parts(12_468_000, 0)
+			.saturating_add(Weight::from_parts(0, 3481))
+			.saturating_add(T::DbWeight::get().reads(2))
+	}
 }
