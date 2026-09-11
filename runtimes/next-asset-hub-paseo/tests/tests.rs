@@ -1288,6 +1288,7 @@ mod pgas_fees {
 						),
 						leaf_count: 1,
 						timestamp: 0,
+						private_slots: 0,
 					},
 				);
 
@@ -1822,6 +1823,7 @@ mod credit_tree_removal {
 			root: CreditProofNode(sp_io::hashing::blake2_256(&leaf.encode())),
 			leaf_count: 1,
 			timestamp: TIMESTAMP,
+			private_slots: 0,
 		};
 		assert_ok!(NftClaims::receive_credit_trees(
 			game_chain_origin(),

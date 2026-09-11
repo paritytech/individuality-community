@@ -144,7 +144,7 @@ use pallet_revive::evm::runtime::EthExtra;
 pub use system_parachains_constants::async_backing::SLOT_DURATION;
 use system_parachains_constants::{
 	async_backing::{
-		AVERAGE_ON_INITIALIZE_RATIO, HOURS, MAXIMUM_BLOCK_WEIGHT, NORMAL_DISPATCH_RATIO,
+		AVERAGE_ON_INITIALIZE_RATIO, DAYS, HOURS, MAXIMUM_BLOCK_WEIGHT, NORMAL_DISPATCH_RATIO,
 	},
 	paseo::{
 		consensus::{
@@ -1557,6 +1557,26 @@ mod bandersnatch_bench {
 		ring_setup(ring_exponent).0
 	}
 
+	/// A one-member ring and a proof of membership in it under `context`.
+	///
+	/// The private NFT claim benchmark needs both: storage holds the ring and the extrinsic
+	/// verifies the proof against it.
+	pub fn ring_and_proof(
+		ring_exponent: RingExponent,
+		context: &[u8; 32],
+		message: &[u8],
+	) -> (
+		<Crypto as GenerateVerifiable>::Members,
+		<Crypto as GenerateVerifiable>::Proof,
+		indiv_support::traits::Alias,
+	) {
+		let (members, member, secret, capacity) = ring_setup(ring_exponent);
+		let commitment = Crypto::open(capacity, &member, core::iter::once(member)).expect("open");
+		let (proof, alias) =
+			Crypto::create(commitment, &secret, context, message).expect("create proof");
+		(members, proof, alias)
+	}
+
 	pub fn create_proof(
 		ring_exponent: RingExponent,
 		message: &[u8],
@@ -2186,6 +2206,27 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	type GameChainLocation = crate::xcm_config::PeopleLocation;
 	// Matches the `NftCredits` index in next-people-paseo's `construct_runtime!`.
 	type GameChainPalletIndex = ConstU8<57>;
+	// The suite the game chain builds its private claim rings with, which is the personhood one.
+	type RingVrf = indiv_support::crypto::BandersnatchVrfVerifiable;
+	// Must match the game chain's `PrivateRingExponent`. A proof is verified against this
+	// configuration, so any other value rejects every private claim.
+	type PrivateRingExponent = PrivateClaimRingExponent;
+	type PrivateClaimNetworkSuffix = NetworkSuffix;
+	// The game chain sends one ring per message, a ring root being far larger than a Merkle root.
+	// The slack lets it batch them later without this chain being upgraded first.
+	type MaxPrivateRingsPerMessage = ConstU32<4>;
+	// A ring VRF verification costs about 250 ms of the block's compute, so a block gives at most
+	// eight of them to private claims. A claim past the cap is rejected, and its sender retries
+	// in a later block.
+	type MaxPrivateClaimsPerBlock = ConstU32<8>;
+	// Five minutes, so every member's claims open in the same block and a wallet has time to see
+	// the ring and pick a moment inside the window. Claiming first says nothing about who claimed.
+	type PrivateClaimDelay = PrivateClaimDelay;
+	// Thirty days to spread the game's claims over. It is the interval every claim of a game
+	// falls in: an open-ended one leaves a late claim with only the members who had not claimed
+	// yet as its anonymity set. A member who lets it pass mints nothing and does not get the
+	// registration price back, so it is wide enough that missing it takes a month of inaction.
+	type PrivateClaimWindow = PrivateClaimWindow;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftClaimsBenchmarkHelper;
 }
@@ -2200,6 +2241,13 @@ parameter_types! {
 	/// next-people-paseo keeps a copy of this constant and derives the TTL for its own roots from it,
 	/// so a root outlives the tree built from it.
 	pub const CreditTreeTtl: u64 = 90 * 24 * 60 * 60;
+	/// Blocks between a private game's ring arriving and its claims opening.
+	pub const PrivateClaimDelay: BlockNumber = 5 * MINUTES;
+	/// Blocks a private game's claim window stays open.
+	pub const PrivateClaimWindow: BlockNumber = 30 * DAYS;
+	/// The ring capacity the game chain builds its private claim rings at.
+	pub const PrivateClaimRingExponent: indiv_support::traits::RingExponent =
+		indiv_support::traits::RingExponent::R2e10;
 }
 
 /// What the claims benchmarks cannot set up themselves: the collection and item a claim mints
@@ -2208,7 +2256,12 @@ parameter_types! {
 #[cfg(feature = "runtime-benchmarks")]
 pub struct NftClaimsBenchmarkHelper;
 #[cfg(feature = "runtime-benchmarks")]
-impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId> for NftClaimsBenchmarkHelper {
+impl
+	indiv_pallet_nft_claims::BenchmarkHelper<
+		AccountId,
+		indiv_support::crypto::BandersnatchVrfVerifiable,
+	> for NftClaimsBenchmarkHelper
+{
 	fn prepare_collection(
 		owner: &AccountId,
 		collection: indiv_pallet_scarcity::CollectionId,
@@ -2280,6 +2333,17 @@ impl indiv_pallet_nft_claims::BenchmarkHelper<AccountId> for NftClaimsBenchmarkH
 		messaging_state.egress_channels.push((game_chain, channel));
 		messaging_state.egress_channels.sort_by_key(|(id, _)| *id);
 		RelevantMessagingState::<Runtime>::put(messaging_state);
+	}
+
+	fn private_ring_and_proof(
+		context: &[u8; 32],
+		message: &[u8],
+	) -> (
+		<indiv_support::crypto::BandersnatchVrfVerifiable as verifiable::GenerateVerifiable>::Members,
+		<indiv_support::crypto::BandersnatchVrfVerifiable as verifiable::GenerateVerifiable>::Proof,
+		indiv_support::traits::Alias,
+	){
+		bandersnatch_bench::ring_and_proof(PrivateClaimRingExponent::get(), context, message)
 	}
 }
 

@@ -20,6 +20,7 @@ indiv-precompile-support = { workspace = true }
 pallet-revive = { workspace = true }
 
 [dev-dependencies]
+verifiable = { workspace = true, features = ["mock", "prover"] }
 codec = { workspace = true, features = ["derive"] }
 indiv-precompile-fixtures = { workspace = true }
 indiv-precompile-scarcity = { workspace = true }
@@ -47,6 +48,7 @@ std = [
 	"scale-info/std",
 	"sp-io/std",
 	"sp-runtime/std",
+	"verifiable/std",
 	"xcm/std",
 ]
 runtime-benchmarks = [

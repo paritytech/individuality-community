@@ -4963,6 +4963,7 @@ dependencies = [
  "sp-io 48.0.0",
  "sp-runtime 48.0.0",
  "staging-xcm",
+ "verifiable",
 ]
 
 [[package]]
@@ -5231,6 +5232,7 @@ dependencies = [
  "sp-io 48.0.0",
  "sp-runtime 48.0.0",
  "staging-xcm",
+ "verifiable",
 ]
 
 [[package]]

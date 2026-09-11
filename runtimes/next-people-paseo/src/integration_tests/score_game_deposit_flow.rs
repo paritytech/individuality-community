@@ -37,6 +37,7 @@ fn configurable_play_deposit_is_held_refunded_and_future_only() {
 			rounds: 1,
 			max_group_size: 2,
 			airdrops: Default::default(),
+			private_claims: None,
 		};
 		Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]).unwrap();
 
@@ -183,6 +184,7 @@ fn deposit_player_flow() {
 				} else {
 					Default::default()
 				},
+				private_claims: None,
 			})
 			.collect::<Vec<_>>();
 		Game::schedule_games(RuntimeOrigin::root(), schedules.clone()).unwrap();
@@ -487,6 +489,7 @@ fn deposit_player_flow() {
 				} else {
 					Default::default()
 				},
+				private_claims: None,
 			})
 			.collect::<Vec<_>>();
 		// Top up the airdrop source for the second event's prize allocation.

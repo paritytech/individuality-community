@@ -21,6 +21,7 @@ use super::*;
 use codec::Encode;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
+use indiv_support::credit_trees::MAX_PRIVATE_CLAIM_SLOTS;
 use sp_runtime::{traits::One, transaction_validity::TransactionSource};
 
 /// What the benchmarks cannot set up themselves, because only the runtime knows how its XCM
@@ -35,6 +36,87 @@ pub trait BenchmarkHelper {
 	/// A sweep's validity depends on the clock, so a benchmark of it sets the clock. Only the
 	/// runtime knows which pallet holds it.
 	fn set_unix_time(secs: u64);
+}
+
+/// A distinct ring key, standing in for the one-time key a claimant's wallet makes.
+#[cfg(feature = "runtime-benchmarks")]
+fn private_ring_key<T: Config>(seed: u32) -> crate::PrivateRingKey<T> {
+	use verifiable::GenerateVerifiable;
+
+	let secret = T::RingVrf::new_secret(sp_io::hashing::blake2_256(&seed.encode()));
+	T::RingVrf::member_from_secret(&secret)
+}
+
+/// Open the private claim path of `game_index`, as a private game's first award does.
+#[cfg(feature = "runtime-benchmarks")]
+fn open_private_game<T: Config>(game_index: GameIdx, slots: u8) {
+	PrivateGames::<T>::insert(
+		game_index,
+		PrivateGameInfo {
+			slots,
+			registration_starts: 0,
+			registration_ends: u32::MAX,
+			key_count: 0,
+			eligible_players: 0,
+			phase: PrivateGamePhase::Building { included: 0, failures: 0 },
+		},
+	);
+}
+
+/// Register `count` keys for `game_index`, as that many claimants would.
+#[cfg(feature = "runtime-benchmarks")]
+fn fill_private_ring<T: Config>(game_index: GameIdx, count: u32) {
+	let keys = (0..count).map(private_ring_key::<T>).collect::<Vec<_>>();
+	PrivateRingKeys::<T>::insert(
+		game_index,
+		BoundedVec::try_from(keys).expect("count is bounded by MaxPrivateRingKeys"),
+	);
+	PrivateGames::<T>::mutate(game_index, |game| {
+		if let Some(game) = game {
+			game.key_count = count;
+		}
+	});
+}
+
+/// Close `game_index`'s registration, which is what lets its rings be built.
+#[cfg(feature = "runtime-benchmarks")]
+fn close_private_registration<T: Config>(game_index: GameIdx) {
+	PrivateGames::<T>::mutate(game_index, |game| {
+		if let Some(game) = game {
+			game.registration_ends = 0;
+		}
+	});
+}
+
+/// Push `count` of `game_index`'s keys, so a measured step starts from a part-built ring.
+#[cfg(feature = "runtime-benchmarks")]
+fn push_private_keys<T: Config>(game_index: GameIdx, count: u32) {
+	let mut pushed = 0;
+	while pushed < count {
+		let step = (count - pushed).min(T::PrivateKeysPerBuild::get());
+		pallet::Pallet::<T>::do_build_private_ring(game_index, step)
+			.expect("registration is closed and the keys are waiting");
+		pushed += step;
+	}
+}
+
+/// Put `game_index` in its cleanup phase with `entries` claimants registered.
+#[cfg(feature = "runtime-benchmarks")]
+fn seed_private_clean_up<T: Config>(game_index: GameIdx, entries: u32) {
+	open_private_game::<T>(game_index, 1);
+	fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
+	// The step that ended the build removed the keys, so a game in its cleanup holds none.
+	PrivateRingKeys::<T>::remove(game_index);
+	for index in 0..entries {
+		let claimant = AccountOrPerson::Person(sp_io::hashing::blake2_256(&index.encode()));
+		PrivateRegistrations::<T>::insert(game_index, &claimant, ());
+		PrivateCreditBalances::<T>::insert(game_index, &claimant, 1);
+	}
+	PrivateGames::<T>::mutate(game_index, |game| {
+		if let Some(game) = game {
+			game.phase = PrivateGamePhase::CleaningUp;
+		}
+	});
 }
 
 #[benchmarks]
@@ -79,6 +161,7 @@ mod benches {
 		));
 
 		PendingNftClaimCreditRootInfo::<T>::put(NftClaimCreditRootInfo {
+			private_slots: 0,
 			game_index: 7,
 			timestamp: 1_234,
 		});
@@ -226,6 +309,82 @@ mod benches {
 		Ok(())
 	}
 
+	// Registering one key for one claimant. The key list is read and rewritten at its
+	// `MaxEncodedLen` whatever it holds, so a full list costs what an empty one does and the
+	// benchmark needs no component.
+	#[benchmark]
+	fn register_private_claim_key() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		let caller: T::AccountId = whitelisted_caller();
+		let claimant = AccountOrPerson::Account(caller.clone());
+		open_private_game::<T>(game_index, MAX_PRIVATE_CLAIM_SLOTS);
+		PrivateCreditBalances::<T>::insert(
+			game_index,
+			&claimant,
+			T::PrivateClaimEntryCredits::get(),
+		);
+		fill_private_ring::<T>(game_index, T::MaxPrivateRingKeys::get() - 1);
+
+		#[extrinsic_call]
+		_(RawOrigin::Signed(caller), game_index, private_ring_key::<T>(u32::MAX));
+
+		assert!(PrivateRingKeys::<T>::get(game_index).len() as u32 == T::MaxPrivateRingKeys::get());
+
+		Ok(())
+	}
+
+	// One push step. `n` is the keys it pushes, swept over the whole per-call range. The call is
+	// KZG commitment work, which scales with the keys pushed and nothing else.
+	//
+	// The keys before the measured step are pushed first, so `n` is what the measured run pushes
+	// and the step is a middle one that finishes no root.
+	#[benchmark]
+	fn build_private_ring(
+		n: Linear<1, { T::PrivateKeysPerBuild::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		let keys = T::MinPrivateRingKeys::get().max(n);
+		open_private_game::<T>(game_index, 1);
+		fill_private_ring::<T>(game_index, keys);
+		close_private_registration::<T>(game_index);
+		push_private_keys::<T>(game_index, keys - n);
+
+		#[extrinsic_call]
+		_(RawOrigin::Authorized, game_index, n, BlockNumberFor::<T>::zero());
+
+		assert!(
+			matches!(
+				PrivateGames::<T>::get(game_index).expect("the game is private").phase,
+				PrivateGamePhase::Building { included, .. } if included == keys
+			),
+			"the step pushed the keys it was given"
+		);
+
+		Ok(())
+	}
+
+	// The step that closes the ring, which is the same call with no keys to push. Finishing the
+	// root, storing it, dropping the keys it commits to and queueing it for delivery is the worst
+	// of its two shapes; abandoning a ring writes the same entries with no root to compute.
+	#[benchmark]
+	fn finish_private_ring() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		let keys = T::MinPrivateRingKeys::get();
+		open_private_game::<T>(game_index, 1);
+		fill_private_ring::<T>(game_index, keys);
+		close_private_registration::<T>(game_index);
+		push_private_keys::<T>(game_index, keys);
+
+		#[extrinsic_call]
+		build_private_ring(RawOrigin::Authorized, game_index, 0, BlockNumberFor::<T>::zero());
+
+		assert!(PrivateOutcomes::<T>::get(game_index).is_some(), "the root is final");
+		assert!(PrivateRingIntermediates::<T>::get(game_index).is_none());
+		assert!(PrivateRingKeys::<T>::decode_len(game_index).is_none(), "the keys go with it");
+
+		Ok(())
+	}
+
 	/// Authorizing a sweep reads the oldest entry and the clock. The map holds one sweep's worth
 	/// of entries, each under a key of its own, which is the state a sweep is submitted against.
 	#[benchmark]
@@ -237,6 +396,109 @@ mod benches {
 			pallet::Pallet::<T>::authorize_sweep_expired_roots(
 				TransactionSource::Local,
 				&FIRST_ROOT_TIMESTAMP,
+			)
+			.expect("must authorize");
+		}
+
+		Ok(())
+	}
+
+	// Authorizing a build step reads the game's record and its keys, which say how many keys the
+	// step still owes, so it is measured against a full registration.
+	#[benchmark]
+	fn authorize_build_private_ring() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		open_private_game::<T>(game_index, 1);
+		fill_private_ring::<T>(game_index, T::MaxPrivateRingKeys::get());
+		close_private_registration::<T>(game_index);
+		let to_include =
+			pallet::Pallet::<T>::private_ring_build_step(game_index).expect("a step is due");
+
+		#[block]
+		{
+			pallet::Pallet::<T>::authorize_build_private_ring(
+				TransactionSource::Local,
+				&game_index,
+				&to_include,
+			)
+			.expect("must authorize");
+		}
+
+		Ok(())
+	}
+
+	// Delivering one ring, which assembles the XCM around a full ring root and drains the queue.
+	#[benchmark]
+	fn send_private_ring() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		// The channel is sized for the ring message, which is far larger than a credit tree's.
+		<T as Config>::BenchmarkHelper::open_nft_claims_channel(
+			pallet::Pallet::<T>::private_ring_channel_size(),
+		);
+		open_private_game::<T>(game_index, 1);
+		fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
+		close_private_registration::<T>(game_index);
+		while let Some(to_include) = pallet::Pallet::<T>::private_ring_build_step(game_index) {
+			pallet::Pallet::<T>::do_build_private_ring(game_index, to_include)
+				.expect("the ring builds");
+		}
+
+		#[extrinsic_call]
+		_(RawOrigin::Authorized, game_index, BlockNumberFor::<T>::zero());
+
+		assert!(PrivateOutcomes::<T>::get(game_index).is_none(), "a sent ring owes no delivery");
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn authorize_send_private_ring() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		open_private_game::<T>(game_index, 1);
+		fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
+		close_private_registration::<T>(game_index);
+		while let Some(to_include) = pallet::Pallet::<T>::private_ring_build_step(game_index) {
+			pallet::Pallet::<T>::do_build_private_ring(game_index, to_include)
+				.expect("the ring builds");
+		}
+		#[block]
+		{
+			pallet::Pallet::<T>::authorize_send_private_ring(TransactionSource::Local, &game_index)
+				.expect("must authorize");
+		}
+
+		Ok(())
+	}
+
+	// One cleanup step, over `n` of the registrations a private game leaves behind. The ring keys
+	// went with the build step that closed the ring, so no step here touches them.
+	#[benchmark]
+	fn clean_up_private_game(
+		n: Linear<0, { crate::PRIVATE_CLEAN_UP_ITEMS }>,
+	) -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		seed_private_clean_up::<T>(game_index, n);
+
+		#[extrinsic_call]
+		_(RawOrigin::Authorized, game_index, BlockNumberFor::<T>::zero());
+
+		assert_eq!(PrivateRegistrations::<T>::iter_prefix(game_index).count(), 0);
+
+		Ok(())
+	}
+
+	// Authorizing a cleanup step reads the game's record and its undelivered outcome, so it is a
+	// fixed cost.
+	#[benchmark]
+	fn authorize_clean_up_private_game() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		seed_private_clean_up::<T>(game_index, 1);
+
+		#[block]
+		{
+			pallet::Pallet::<T>::authorize_clean_up_private_game(
+				TransactionSource::Local,
+				&game_index,
 			)
 			.expect("must authorize");
 		}
@@ -274,6 +536,7 @@ fn record_roots<T: Config>(n: u32) -> Vec<BlockNumberFor<T>> {
 				root: CreditProofNode([index as u8; 32]),
 				leaf_count: 1,
 				timestamp,
+				private_slots: 0,
 			},
 		);
 		pallet::Pallet::<T>::note_root_expiry(*block, timestamp);
@@ -302,6 +565,7 @@ fn queue_credit_trees<T: Config>(n: u32) -> Vec<BlockNumberFor<T>> {
 		NftClaimCreditRoots::<T>::insert(
 			block,
 			NftClaimCreditTree {
+				private_slots: 0,
 				game_index: 7,
 				root: CreditProofNode([index as u8; 32]),
 				leaf_count: 1,

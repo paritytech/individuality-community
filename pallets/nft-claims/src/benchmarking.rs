@@ -19,7 +19,8 @@
 use super::*;
 use crate::{
 	pallet::{
-		ClaimedLeaves, CollectionMinters, NextExpectedSequence, PendingTreeDeletions, TreeExpiries,
+		ClaimedLeaves, CollectionMinters, NextExpectedSequence, PendingTreeDeletions,
+		PrivateGameEnds, PrivateRingCloses, TreeExpiries,
 	},
 	types::CreditTreeBatch,
 	BenchmarkHelper,
@@ -32,7 +33,8 @@ use frame_support::{
 	BoundedVec,
 };
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
-use indiv_support::credit_trees::CreditTreeDelivery;
+use indiv_support::{credit_trees::CreditTreeDelivery, utils::BigEndianU64};
+use sp_runtime::traits::{Bounded, Zero};
 
 /// The `i`-th distinct credit a benchmarked tree commits to.
 fn credit(i: u32) -> NftClaimCredit {
@@ -45,6 +47,10 @@ fn credit(i: u32) -> NftClaimCredit {
 ///
 /// The sequence numbers start at one, so a receiver still expecting zero sees the batch as
 /// ahead of the stream.
+///
+/// Every tree names a private game of its own, which is the dearest batch to store: a tree that
+/// names slots reads the game's ring and its closure, and a game per tree gives each of those a
+/// key of its own.
 fn batch<T: Config>(n: u32) -> CreditTreeBatch<T> {
 	let mut trees = BoundedVec::new();
 	for i in 0..n {
@@ -53,7 +59,8 @@ fn batch<T: Config>(n: u32) -> CreditTreeBatch<T> {
 				sequence: Some(i.saturating_add(1) as TreeSequence),
 				block: i,
 				tree: NftClaimCreditTree {
-					game_index: 1,
+					private_slots: 1,
+					game_index: i.saturating_add(1),
 					// Distinct per tree and never the zero root the pallet skips as invalid.
 					root: CreditProofNode([i.saturating_add(1) as u8; 32]),
 					leaf_count: 1,
@@ -309,6 +316,200 @@ mod benches {
 		Ok(())
 	}
 
+	/// Worst case: every ring in the batch is new, so each one is written.
+	#[benchmark]
+	fn receive_private_rings(
+		n: Linear<1, { T::MaxPrivateRingsPerMessage::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (root, _proof, _alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
+			&pallet::Pallet::<T>::private_claim_context(1, 0),
+			&pallet::Pallet::<T>::private_claim_message(0, &whitelisted_caller()),
+		);
+		let rings = (0..n)
+			.map(|game_index| PrivateRingDelivery {
+				game_index,
+				slots: 1,
+				outcome: PrivateGameOutcome::Ring { root: root.clone(), key_count: 1 },
+			})
+			.collect::<Vec<_>>();
+		let batch = crate::PrivateRingBatchOf::<T> {
+			source_time: 1_000,
+			rings: BoundedVec::try_from(rings)
+				.map_err(|_| BenchmarkError::Stop("n is bounded by MaxPrivateRingsPerMessage"))?,
+		};
+		let origin = T::EnsureGameChainOrigin::try_successful_origin()
+			.map_err(|_| BenchmarkError::Stop("failed to construct game chain origin"))?;
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, batch);
+
+		assert_eq!(PrivateRings::<T>::iter().count(), n as usize);
+
+		Ok(())
+	}
+
+	/// Worst case: the alias is unspent, so the claim spends it and mints.
+	///
+	/// The ring VRF verification is not measured here. `authorize` runs it and
+	/// `authorize_claim_private` charges it. The collection is registered with
+	/// [`ItemSelection::Random`], as in `claim_account`, a contract selection's weight being
+	/// reserved and refunded outside this function.
+	#[benchmark]
+	fn claim_private() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		let slot = 0;
+		let mint_to: T::AccountId = account("mint_to", 0, 0);
+
+		let owner: T::AccountId = account("collection-owner", 0, 0);
+		let collection: CollectionId = 0;
+		let (root, proof, alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
+			&pallet::Pallet::<T>::private_claim_context(game_index, slot),
+			&pallet::Pallet::<T>::private_claim_message(collection, &mint_to),
+		);
+		PrivateRings::<T>::insert(
+			game_index,
+			crate::PrivateRing {
+				root,
+				slots: 1,
+				key_count: 1,
+				opens_at: BlockNumberFor::<T>::zero(),
+				closes_at: BlockNumberFor::<T>::max_value(),
+			},
+		);
+		// One item, so the random draw resolves to it whatever the alias's bytes are.
+		T::BenchmarkHelper::prepare_collection(&owner, collection, 0);
+		CollectionMinters::<T>::insert(
+			collection,
+			CollectionMinter { owner, selection: ItemSelection::Random },
+		);
+
+		#[extrinsic_call]
+		_(RawOrigin::Authorized, game_index, slot, alias, proof, collection, mint_to);
+
+		assert_eq!(SpentPrivateClaims::<T>::iter_prefix(game_index).count(), 1);
+
+		Ok(())
+	}
+
+	/// Worst case: every check passes, so the whole ring VRF verification runs. It takes no
+	/// component, a ring proof costing the same whatever the ring holds.
+	#[benchmark]
+	fn authorize_claim_private() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		let slot = 0;
+		let mint_to: T::AccountId = account("mint_to", 0, 0);
+		let collection: CollectionId = 0;
+		let (root, proof, alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
+			&pallet::Pallet::<T>::private_claim_context(game_index, slot),
+			&pallet::Pallet::<T>::private_claim_message(collection, &mint_to),
+		);
+		PrivateRings::<T>::insert(
+			game_index,
+			crate::PrivateRing {
+				root,
+				slots: 1,
+				key_count: 1,
+				opens_at: BlockNumberFor::<T>::zero(),
+				closes_at: BlockNumberFor::<T>::max_value(),
+			},
+		);
+
+		#[block]
+		{
+			pallet::Pallet::<T>::authorize_claim_private(
+				TransactionSource::External,
+				&game_index,
+				&slot,
+				&alias,
+				&proof,
+				&collection,
+				&mint_to,
+			)
+			.expect("the proof verifies against the ring it was made for");
+		}
+
+		Ok(())
+	}
+
+	/// Worst case: the whole per-call budget of aliases is removed, so the ring stays and the
+	/// call refunds nothing.
+	///
+	/// One key per alias, because the aliases removed are the cost driver: a fixed set of them
+	/// would charge one write however many a real call makes.
+	#[benchmark]
+	fn close_private_ring(n: Linear<0, PRIVATE_CLOSE_ITEMS>) -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		let caller: T::AccountId = account("caller", 0, 0);
+		let (root, _proof, _alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
+			&pallet::Pallet::<T>::private_claim_context(game_index, 0),
+			&pallet::Pallet::<T>::private_claim_message(0, &caller),
+		);
+		// A window that closed in the block the ring arrived in, which is the state the call is
+		// allowed in.
+		PrivateRings::<T>::insert(
+			game_index,
+			crate::PrivateRing {
+				root,
+				slots: 1,
+				key_count: 1,
+				opens_at: BlockNumberFor::<T>::zero(),
+				closes_at: BlockNumberFor::<T>::zero(),
+			},
+		);
+		// Filed as `receive_private_rings` files it, so the step that drops the ring pays for
+		// clearing the entry the offchain worker found it by.
+		PrivateRingCloses::<T>::insert(BigEndianU64(0), game_index, ());
+		for i in 0..n {
+			let mut alias = [0u8; 32];
+			alias[..4].copy_from_slice(&i.to_le_bytes());
+			SpentPrivateClaims::<T>::insert(game_index, Alias::from(alias), ());
+		}
+
+		#[extrinsic_call]
+		_(RawOrigin::Authorized, game_index, BlockNumberFor::<T>::from(0u32));
+
+		assert_eq!(
+			SpentPrivateClaims::<T>::iter_prefix(game_index).count(),
+			0,
+			"one call removes the whole budget",
+		);
+
+		Ok(())
+	}
+
+	/// Authorizing a close reads the game's ring, which is the whole of the state the check
+	/// looks at. It takes no component, a ring costing the same whatever it holds.
+	#[benchmark]
+	fn authorize_close_private_ring() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		let caller: T::AccountId = account("caller", 0, 0);
+		let (root, _proof, _alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
+			&pallet::Pallet::<T>::private_claim_context(game_index, 0),
+			&pallet::Pallet::<T>::private_claim_message(0, &caller),
+		);
+		PrivateRings::<T>::insert(
+			game_index,
+			crate::PrivateRing {
+				root,
+				slots: 1,
+				key_count: 1,
+				opens_at: BlockNumberFor::<T>::zero(),
+				closes_at: BlockNumberFor::<T>::zero(),
+			},
+		);
+
+		#[block]
+		{
+			pallet::Pallet::<T>::authorize_close_private_ring(
+				TransactionSource::Local,
+				&game_index,
+			)
+			.expect("the window is closed");
+		}
+
+		Ok(())
+	}
+
 	#[benchmark]
 	fn set_collection_minter() -> Result<(), BenchmarkError> {
 		let owner: T::AccountId = account("collection-owner", 0, 0);
@@ -375,11 +576,21 @@ fn claimable_tree<T: Config>(
 	let proof = binary_merkle_tree::merkle_proof::<BlakeTwo256, _, _>(leaves, leaf_index);
 
 	let timestamp = 1_000;
+	let game_index = 1;
 	CreditTrees::<T>::insert(
 		BLOCK,
-		NftClaimCreditTree { game_index: 1, root: proof.root.into(), leaf_count, timestamp },
+		NftClaimCreditTree {
+			game_index,
+			root: proof.root.into(),
+			leaf_count,
+			timestamp,
+			private_slots: 1,
+		},
 	);
 	TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), BLOCK, ());
+	// The tree is a private game's whose ring was abandoned. That is the dearer of the two shapes
+	// a claim takes: it reads `PrivateGameEnds`, which a tree of a public game does not.
+	PrivateGameEnds::<T>::insert(game_index, PrivateGameEnd::Abandoned);
 
 	let sibling_hashes = BoundedVec::try_from(
 		proof.proof.into_iter().map(CreditProofNode::from).collect::<Vec<_>>(),
@@ -409,6 +620,7 @@ fn fill_due_expiries<T: Config>(n: u32) {
 				root: CreditProofNode([block as u8; 32]),
 				leaf_count: 2,
 				timestamp,
+				private_slots: 0,
 			},
 		);
 		TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
