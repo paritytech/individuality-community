@@ -1701,33 +1701,35 @@ pub mod pallet {
 						return;
 					}
 
-					// The window runs from this block, so every member of the ring gets the same
-					// one. A redelivery keeps the window the first one set: extending it would
-					// leave the last claims of a game standing alone in time.
-					let opens_at = frame_system::Pallet::<T>::block_number()
-						.saturating_add(T::PrivateClaimDelay::get());
-					let closes_at = opens_at.saturating_add(T::PrivateClaimWindow::get());
-					let ring = PrivateRing {
-						root: root.clone(),
-						slots: update.slots,
-						key_count: *key_count,
-						opens_at,
-						closes_at,
-					};
-
 					match PrivateRings::<T>::get(update.game_index) {
 						Some(existing)
-							if existing.root != ring.root ||
-								existing.slots != ring.slots ||
-								existing.key_count != ring.key_count =>
+							if existing.root != *root ||
+								existing.slots != update.slots ||
+								existing.key_count != *key_count =>
 						{
 							// A game's ring is built once and never changes, so two rings for one
 							// game mean the chains disagree about who registered.
 							Self::note_private_outcome_conflict(update.game_index);
 						},
+						// A redelivery keeps the window the first one set: extending it would
+						// leave the last claims of a game standing alone in time.
 						Some(_) => {},
 						None => {
-							PrivateRings::<T>::insert(update.game_index, ring);
+							// The window runs from this block, so every member of the ring gets
+							// the same one.
+							let opens_at = frame_system::Pallet::<T>::block_number()
+								.saturating_add(T::PrivateClaimDelay::get());
+							let closes_at = opens_at.saturating_add(T::PrivateClaimWindow::get());
+							PrivateRings::<T>::insert(
+								update.game_index,
+								PrivateRing {
+									root: root.clone(),
+									slots: update.slots,
+									key_count: *key_count,
+									opens_at,
+									closes_at,
+								},
+							);
 							PrivateRingCloses::<T>::insert(
 								Self::close_key(closes_at),
 								update.game_index,
