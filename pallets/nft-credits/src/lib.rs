@@ -159,8 +159,9 @@ use indiv_support::{
 	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
 	traits::RingExponent,
 	tx_priority,
-	weight_budget::OcwWeightBudget,
 };
+#[cfg(feature = "std")]
+use indiv_support::weight_budget::OcwWeightBudget;
 use sp_runtime::{traits::BlakeTwo256, Percent, SaturatedConversion, Saturating};
 use verifiable::GenerateVerifiable;
 use xcm::{
@@ -2112,6 +2113,7 @@ impl<T: Config> Pallet<T> {
 
 	/// Asserts the configuration invariants of the NFT claim credits, as the pallet's
 	/// `integrity_test` runs them.
+	#[cfg(feature = "std")]
 	pub(crate) fn integrity_test_credits() {
 		let e_max = indiv_pallet_game::Pallet::<T>::max_enactments().saturating_sub(1);
 

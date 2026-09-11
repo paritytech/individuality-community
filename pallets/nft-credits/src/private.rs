@@ -59,7 +59,7 @@ use xcm::{latest::prelude::*, VersionedXcm};
 
 use crate::{
 	pallet::*, AuthorizeInvalidity, Config, Error, Event, NftClaimsCall, Pallet, PrivateGameInfo,
-	PrivateGamePhase, PrivateRingBatchOf, WeightInfo as _, LOG_TARGET,
+	PrivateGamePhase, PrivateRingBatchOf, LOG_TARGET,
 };
 
 /// How many registration entries one [`Pallet::clean_up_private_game`] call removes.
@@ -719,6 +719,7 @@ impl<T: Config> Pallet<T> {
 	/// its entry price stays inside what one game awards.
 	#[cfg(feature = "std")]
 	pub(crate) fn private_integrity_test(budget: &indiv_support::weight_budget::OcwWeightBudget) {
+		use crate::WeightInfo as _;
 		// One game awards a claimant one credit per co-player that reports them a person in each
 		// round, so a full attendance holds this many. Nobody can pay an entry price above it,
 		// and every game's ring is then abandoned.
