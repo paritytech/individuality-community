@@ -248,7 +248,7 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
 	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
-	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:0)
+	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:1)
 	/// Storage: `NftCredits::PrivateRingIntermediates` (r:1 w:1)
 	/// Storage: `NftCredits::PrivateRings` (r:0 w:1)
 	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:1)
@@ -260,7 +260,7 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		Weight::from_parts(150_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 80000))
 			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(4))
+			.saturating_add(T::DbWeight::get().writes(5))
 	}
 	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)
 	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:0)
@@ -296,7 +296,6 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 			.saturating_add(T::DbWeight::get().reads(1))
 	}
 	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
-	/// Storage: `NftCredits::PrivateRingKeys` (r:0 w:1)
 	/// Storage: `NftCredits::PrivateRegistrations` (r:33 w:32)
 	/// Storage: `NftCredits::PrivateCreditBalances` (r:33 w:32)
 	/// The range of component `n` is `[0, 32]`.
@@ -311,7 +310,7 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
-			.saturating_add(T::DbWeight::get().writes(2))
+			.saturating_add(T::DbWeight::get().writes(1))
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
 	}
 	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)

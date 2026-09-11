@@ -2935,6 +2935,7 @@ mod private_claims {
 			// proved against it would strand their proof.
 			assert!(NftCredits::private_ring_build_step(GAME).is_none());
 
+			let keys = PrivateRingKeys::<Test>::get(GAME).to_vec();
 			close_registration_and_build();
 
 			let info = PrivateGames::<Test>::get(GAME).unwrap();
@@ -2945,11 +2946,11 @@ mod private_claims {
 			// the game hides in the same set.
 			assert_eq!(
 				PrivateOutcomes::<Test>::get(GAME).unwrap(),
-				PrivateGameOutcome::Ring {
-					root: PrivateRingKeys::<Test>::get(GAME).to_vec().try_into().unwrap(),
-					key_count: 4
-				}
+				PrivateGameOutcome::Ring { root: keys.try_into().unwrap(), key_count: 4 }
 			);
+			// The root commits to the keys, so the list goes with the step that finished it and
+			// the cleanup that follows never reads it.
+			assert!(PrivateRingKeys::<Test>::decode_len(GAME).is_none());
 			assert_eq!(PrivateRingDeliveryQueue::<Test>::get().to_vec(), vec![GAME]);
 			// The intermediate is dropped once the root is final.
 			assert!(PrivateRingIntermediates::<Test>::get(GAME).is_none());
@@ -2980,8 +2981,10 @@ mod private_claims {
 				Event::<Test>::PrivateRingAbandoned { game_index: GAME, key_count: 1, required: 2 }
 					.into(),
 			);
-			// No ring was built, so nothing was pushed either.
+			// No ring was built, so nothing was pushed either. The keys commit to nothing, so
+			// they go with the abandonment rather than waiting for the cleanup.
 			assert!(PrivateRingIntermediates::<Test>::get(GAME).is_none());
+			assert!(PrivateRingKeys::<Test>::decode_len(GAME).is_none());
 			assert!(matches!(
 				PrivateGames::<Test>::get(GAME).unwrap().phase,
 				PrivateGamePhase::CleaningUp
@@ -3108,7 +3111,6 @@ mod private_claims {
 			assert_eq!(removed, 8, "four registrations and four credit balances");
 
 			assert!(PrivateGames::<Test>::get(GAME).is_none());
-			assert_eq!(PrivateRingKeys::<Test>::get(GAME).len(), 0);
 			assert_eq!(PrivateRegistrations::<Test>::iter().count(), 0);
 			assert_eq!(PrivateCreditBalances::<Test>::iter().count(), 0);
 			System::assert_has_event(

@@ -258,7 +258,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		// Minimum execution time: 150_000_000 picoseconds.
 		Weight::from_parts(150_000_000, 70000)
 			.saturating_add(T::DbWeight::get().reads(3_u64))
-			.saturating_add(T::DbWeight::get().writes(4_u64))
+			.saturating_add(T::DbWeight::get().writes(5_u64))
 	}
 	fn authorize_build_private_ring() -> Weight {
 		// Proof Size summary in bytes:
@@ -295,7 +295,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			// Standard Error: 100_000
 			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(2_u64))
-			.saturating_add(T::DbWeight::get().writes(2_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
 	}
 	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:0)
@@ -495,7 +495,7 @@ impl WeightInfo for () {
 		// Minimum execution time: 150_000_000 picoseconds.
 		Weight::from_parts(150_000_000, 70000)
 			.saturating_add(RocksDbWeight::get().reads(3_u64))
-			.saturating_add(RocksDbWeight::get().writes(4_u64))
+			.saturating_add(RocksDbWeight::get().writes(5_u64))
 	}
 	fn authorize_build_private_ring() -> Weight {
 		// Proof Size summary in bytes:
@@ -532,7 +532,7 @@ impl WeightInfo for () {
 			// Standard Error: 100_000
 			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
 			.saturating_add(RocksDbWeight::get().reads(2_u64))
-			.saturating_add(RocksDbWeight::get().writes(2_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
 			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
 	}
 	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:0)

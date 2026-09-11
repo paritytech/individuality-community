@@ -333,6 +333,10 @@ impl<T: Config> Pallet<T> {
 				.ok_or(Error::<T>::NoPrivateRingToBuild)?;
 			let root = T::RingVrf::finish_members(intermediate);
 			PrivateOutcomes::<T>::insert(game_index, PrivateGameOutcome::Ring { root, key_count });
+			// The root commits to the keys, and registration is closed, so nothing reads them
+			// again. They go here rather than in the cleanup, which would carry the whole list
+			// into the proof of every one of its steps.
+			PrivateRingKeys::<T>::remove(game_index);
 			info.phase = PrivateGamePhase::CleaningUp;
 			PrivateGames::<T>::insert(game_index, info);
 			Self::queue_private_ring_delivery(game_index);
@@ -421,8 +425,9 @@ impl<T: Config> Pallet<T> {
 		let required = Self::private_ring_floor(&info);
 
 		// A ring half-pushed before the retries ran out commits to nothing anyone can prove
-		// against.
+		// against. The keys go with it: the game mints through its credit trees from here on.
 		PrivateRingIntermediates::<T>::remove(game_index);
+		PrivateRingKeys::<T>::remove(game_index);
 		PrivateOutcomes::<T>::insert(game_index, PrivateGameOutcome::Abandoned { key_count });
 		info.phase = PrivateGamePhase::CleaningUp;
 		PrivateGames::<T>::insert(game_index, info);
@@ -474,14 +479,10 @@ impl<T: Config> Pallet<T> {
 	/// One call removes at most [`PRIVATE_CLEAN_UP_ITEMS`] entries, so a game is dropped over as
 	/// many calls as it takes. The game's record goes last, because it is what says the cleanup is
 	/// still owed. The outcome is already delivered by then, its delivery being what releases the
-	/// cleanup, so nothing here reads it.
+	/// cleanup, so nothing here reads it. The ring keys went with the build step that closed the
+	/// ring, so no step here touches the list either.
 	pub(crate) fn do_clean_up_private_game(game_index: GameIdx) -> Result<u32, DispatchError> {
 		ensure!(Self::private_clean_up_due(game_index), Error::<T>::NoPrivateGameToCleanUp);
-
-		// The keys are one entry and the ring that commits to them is built, so they go first and
-		// in full. Every step's base cost covers their removal, and `removed` counts only what
-		// the refund is measured in.
-		PrivateRingKeys::<T>::remove(game_index);
 
 		// The claimants are read before they are removed, rather than cleared by prefix, so that
 		// the count the refund is measured in is exact.

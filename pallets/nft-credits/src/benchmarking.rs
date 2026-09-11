@@ -105,6 +105,8 @@ fn push_private_keys<T: Config>(game_index: GameIdx, count: u32) {
 fn seed_private_clean_up<T: Config>(game_index: GameIdx, entries: u32) {
 	open_private_game::<T>(game_index, 1);
 	fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
+	// The step that ended the build removed the keys, so a game in its cleanup holds none.
+	PrivateRingKeys::<T>::remove(game_index);
 	for index in 0..entries {
 		let claimant = AccountOrPerson::Person(sp_io::hashing::blake2_256(&index.encode()));
 		PrivateRegistrations::<T>::insert(game_index, &claimant, ());
@@ -362,8 +364,8 @@ mod benches {
 	}
 
 	// The step that closes the ring, which is the same call with no keys to push. Finishing the
-	// root, storing it and queueing it for delivery is the worst of its two shapes; abandoning a
-	// ring writes the same entries with no root to compute.
+	// root, storing it, dropping the keys it commits to and queueing it for delivery is the worst
+	// of its two shapes; abandoning a ring writes the same entries with no root to compute.
 	#[benchmark]
 	fn finish_private_ring() -> Result<(), BenchmarkError> {
 		let game_index = 1;
@@ -378,6 +380,7 @@ mod benches {
 
 		assert!(PrivateOutcomes::<T>::get(game_index).is_some(), "the root is final");
 		assert!(PrivateRingIntermediates::<T>::get(game_index).is_none());
+		assert!(PrivateRingKeys::<T>::decode_len(game_index).is_none(), "the keys go with it");
 
 		Ok(())
 	}
@@ -465,8 +468,8 @@ mod benches {
 		Ok(())
 	}
 
-	// One cleanup step, over `n` of the registrations a private game leaves behind. The first
-	// step removes the keys, so they are in storage while this runs.
+	// One cleanup step, over `n` of the registrations a private game leaves behind. The ring keys
+	// went with the build step that closed the ring, so no step here touches them.
 	#[benchmark]
 	fn clean_up_private_game(
 		n: Linear<0, { crate::PRIVATE_CLEAN_UP_ITEMS }>,
