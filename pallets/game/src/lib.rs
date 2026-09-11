@@ -1075,10 +1075,10 @@ pub mod pallet {
 		/// `Report::Person` vote awards an attendance NFT claim credit to the attestee immediately;
 		/// `Report::NotPerson` awards nothing.
 		///
-		/// The capacity check requires one free credit slot per entry, including `NotPerson`
-		/// votes. If capacity is insufficient, the call returns `Error::CreditCapacityExhausted`
-		/// before recording any votes or credits. Retry when capacity is available and reporting
-		/// is still open.
+		/// The capacity check requires one free credit slot per `Person` vote in the report. If
+		/// capacity is insufficient, the call returns `Error::CreditCapacityExhausted` before
+		/// recording any votes or credits. Retry when capacity is available and reporting is
+		/// still open.
 		///
 		/// After the votes from the report are counted, the reporter and each of the reported
 		/// players whose attendance can now be determined are processed early. This lets the
@@ -1126,12 +1126,18 @@ pub mod pallet {
 			// flattened length is the exact per-item cost driver charged as `e` in the weight.
 			let co_player_entries = full_report.iter().map(|round| round.len() as u32).sum::<u32>();
 
-			// A report awards one credit per `Person` vote and cannot leave part of them to a later
-			// block, so it is refused whole while fewer than that can be recorded. Every entry is
-			// counted here, because the votes themselves are read below, after the state changes
-			// have begun.
+			// Only a `Person` vote awards a credit here. An attendee's remaining credits are
+			// backfilled in the player-process phase, which reserves its own capacity.
+			let person_votes = full_report
+				.iter()
+				.flat_map(|round| round.iter())
+				.filter(|report| **report == Report::Person)
+				.count() as u32;
+
+			// A report awards all of its credits or none, so it is refused whole while fewer than
+			// that can be recorded. Refusing it keeps a credit from being earned and then dropped.
 			ensure!(
-				T::NftClaimCredits::remaining_capacity(game_index) >= co_player_entries,
+				T::NftClaimCredits::remaining_capacity(game_index) >= person_votes,
 				Error::<T>::CreditCapacityExhausted
 			);
 

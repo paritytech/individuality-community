@@ -1051,6 +1051,46 @@ fn a_report_that_exactly_fits_the_buffers_is_accepted() {
 }
 
 #[test]
+fn a_report_is_refused_on_its_person_votes_alone() {
+	// A `NotPerson` vote awards nothing, so it needs no capacity. Room for the report's `Person`
+	// votes is enough, however many entries the report carries.
+	new_test_ext().execute_with(|| {
+		let game = start_game_for_a_three_credit_report();
+		let who = AccountOrPerson::Account(ALICE);
+		let bob = AccountOrPerson::Account(BOB);
+		let charlie = AccountOrPerson::Account(CHARLIE);
+
+		// One slot, against a report of three entries.
+		fill_credit_buffer(game, System::block_number(), 1);
+		assert_eq!(NftCredits::remaining_credit_capacity(game), 1);
+
+		assert_noop!(
+			Game::report(
+				RuntimeOrigin::signed(ALICE),
+				build_report_with_opinion(&who, |member| if *member == bob || *member == charlie {
+					Report::Person
+				} else {
+					Report::NotPerson
+				})
+			),
+			indiv_pallet_game::Error::<Test>::CreditCapacityExhausted
+		);
+		assert_eq!(awarded_credit_count(), 0);
+
+		assert_ok!(Game::report(
+			RuntimeOrigin::signed(ALICE),
+			build_report_with_opinion(&who, |member| if *member == bob {
+				Report::Person
+			} else {
+				Report::NotPerson
+			})
+		));
+		assert_eq!(awarded_credit_count(), 1);
+		assert_eq!(NftCredits::remaining_credit_capacity(game), 0);
+	});
+}
+
+#[test]
 fn a_refused_report_is_accepted_once_a_block_commits_a_tree() {
 	// Capacity comes back a tree at a time, so a reporter refused in one block submits again in a
 	// later one. The refusal defers the report; it does not end the reporter's game.
