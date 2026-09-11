@@ -27,7 +27,7 @@ use frame_support::{
 };
 use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
 use indiv_support::{
-	credit_trees::PrivateClaimSetting,
+	credit_trees::{PrivateClaimSetting, MAX_PRIVATE_CLAIM_SLOTS},
 	traits::{AddOnlyPeopleTrait, AppendOnlyMembers, RingExponent, RingMode, RingPosition},
 };
 use sp_core::{crypto::VrfSecret, ed25519, sr25519, Pair};
@@ -8216,7 +8216,7 @@ fn private_claim_slots_are_bounded_at_scheduling() {
 			Error::<Test>::InvalidGameSetup
 		);
 
-		let max: u8 = <Test as crate::Config>::MaxPrivateClaimSlots::get();
+		let max = MAX_PRIVATE_CLAIM_SLOTS;
 		let over = max + 1;
 		assert_noop!(
 			Game::schedule_games(RuntimeOrigin::root(), vec![schedule(Some(over))]),

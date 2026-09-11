@@ -342,6 +342,13 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 /// slot is one mint that cannot be tied to the others.
 pub type PrivateClaimSlot = u8;
 
+/// The most private claim slots a game may grant one claimant.
+///
+/// A slot is one private mint, so this bounds what a claimant takes from one game. Both chains
+/// check it: the game chain when a game is scheduled, the claims chain when the game's outcome
+/// arrives, so a delivered slot count out of this range is rejected rather than served.
+pub const MAX_PRIVATE_CLAIM_SLOTS: PrivateClaimSlot = 5;
+
 /// A game's opt-in to the private claim path, as scheduled.
 ///
 /// Registration costs one flat credit price and grants `slots` slots to every claimant, which is

@@ -216,7 +216,7 @@ use indiv_support::{
 		authorize_expiry_sweep, credit_leaf, drain_due_expiries, expiry_deadline, oldest_expiry,
 		AwardBlock, CreditProofNode, ExpirySweepTx, ExpiryTimestamp, NftClaimCredit,
 		NftClaimCreditLeaf, NftClaimCreditTree, PrivateClaimSlot, PrivateGameOutcome,
-		PrivateRingBatch, PrivateRingDelivery, TreeSequence,
+		PrivateRingBatch, PrivateRingDelivery, TreeSequence, MAX_PRIVATE_CLAIM_SLOTS,
 	},
 	identity::AccountOrPerson,
 	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
@@ -1672,12 +1672,15 @@ pub mod pallet {
 		fn store_private_outcome(
 			update: &PrivateRingDelivery<<T::RingVrf as GenerateVerifiable>::Members>,
 		) {
-			if update.slots == 0 {
-				// A game that grants no slot is a public game, which reaches no outcome.
+			if update.slots == 0 || update.slots > MAX_PRIVATE_CLAIM_SLOTS {
+				// A game that grants no slot is a public game, which reaches no outcome. The game
+				// chain schedules no game above the shared maximum, so a count outside the range
+				// is not genuine and its claims are never opened.
 				log::error!(
 					target: LOG_TARGET,
-					"Invalid private outcome for game {}: no slots",
+					"Invalid private outcome for game {}: {} slots",
 					update.game_index,
+					update.slots,
 				);
 				return;
 			}

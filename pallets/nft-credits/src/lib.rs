@@ -148,6 +148,8 @@ use indiv_pallet_chunks_manager::ChunksApi;
 use indiv_pallet_game::{
 	AttesterPosition, GameIdx, GroupsSetting, IndexToPlayer, PlayerToIndex, RoundIndex,
 };
+#[cfg(feature = "std")]
+use indiv_support::weight_budget::OcwWeightBudget;
 use indiv_support::{
 	credit_trees::{
 		authorize_expiry_sweep, drain_due_expiries, expiry_deadline, oldest_expiry, AwardBlock,
@@ -160,8 +162,6 @@ use indiv_support::{
 	traits::RingExponent,
 	tx_priority,
 };
-#[cfg(feature = "std")]
-use indiv_support::weight_budget::OcwWeightBudget;
 use sp_runtime::{traits::BlakeTwo256, Percent, SaturatedConversion, Saturating};
 use verifiable::GenerateVerifiable;
 use xcm::{

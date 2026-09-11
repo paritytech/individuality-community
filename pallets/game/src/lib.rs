@@ -255,7 +255,7 @@ use indiv_pallet_airdrop::types::{
 };
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
-	credit_trees::AwardCredits,
+	credit_trees::{AwardCredits, MAX_PRIVATE_CLAIM_SLOTS},
 	traits::{Alias, CommunicationIdentifier, Context},
 	weight_budget::OcwWeightBudget,
 };
@@ -337,13 +337,6 @@ pub mod pallet {
 		/// Note: the actual number of players in a group is configured per game.
 		#[pallet::constant]
 		type MaxGroupSize: Get<u32>;
-
-		/// The most private claim slots a game may grant one claimant.
-		///
-		/// A slot is one private mint, so this bounds what a claimant takes from one game. Zero
-		/// disables the private path and rejects every schedule that names it.
-		#[pallet::constant]
-		type MaxPrivateClaimSlots: Get<u8>;
 
 		/// The minimum number of players in a group.
 		///
@@ -1541,7 +1534,7 @@ pub mod pallet {
 				// read as `None`, because it schedules a private game nobody can claim from.
 				if let Some(private) = schedule.private_claims {
 					ensure!(
-						private.slots > 0 && private.slots <= T::MaxPrivateClaimSlots::get(),
+						private.slots > 0 && private.slots <= MAX_PRIVATE_CLAIM_SLOTS,
 						Error::<T>::InvalidGameSetup
 					);
 				}

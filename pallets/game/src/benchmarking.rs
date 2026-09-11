@@ -60,7 +60,7 @@ pub trait BenchmarkHelper<AccountSignature, TicketSignature, Ticket, AccountId, 
 )]
 mod benches {
 	use super::*;
-	use indiv_support::credit_trees::PrivateClaimSetting;
+	use indiv_support::credit_trees::{PrivateClaimSetting, MAX_PRIVATE_CLAIM_SLOTS};
 
 	/// Sampling range for `remove_available_and_pending_invites`'s Linear
 	/// regression. `PendingInvites` is user-controlled and unbounded; the runtime
@@ -911,7 +911,7 @@ mod benches {
 			airdrops_scheduled: 0,
 			// A private game is the worst case: every attendance credit is also written to the
 			// claimant's spendable balance for the private claim path.
-			private_claims: Some(PrivateClaimSetting { slots: T::MaxPrivateClaimSlots::get() }),
+			private_claims: Some(PrivateClaimSetting { slots: MAX_PRIVATE_CLAIM_SLOTS }),
 		};
 		// The credits read the running game to learn that it is private, so it is in storage as
 		// it would be during a player process.
@@ -1567,7 +1567,7 @@ mod benches {
 			rounds: rounds as u8,
 			max_group_size,
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: Some(PrivateClaimSetting { slots: T::MaxPrivateClaimSlots::get() }),
+			private_claims: Some(PrivateClaimSetting { slots: MAX_PRIVATE_CLAIM_SLOTS }),
 		};
 		assert_ok!(Pallet::<T>::new_game(&game_schedule));
 

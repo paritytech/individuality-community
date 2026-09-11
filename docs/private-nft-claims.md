@@ -127,7 +127,7 @@ chain refuses an abandonment for a game holding a ring, and a ring for one alrea
 
 | Item | Where | Reference value |
 |---|---|---|
-| `MaxPrivateClaimSlots` | `pallet-game` | 5 — upper bound on the slots a game may schedule |
+| `MAX_PRIVATE_CLAIM_SLOTS` | `indiv-support` | 5 — upper bound on the slots a game may schedule, checked on both chains |
 | `PrivateClaimEntryCredits` | `pallet-nft-credits` | 5 — flat registration price, in credits |
 | `PrivateRegistrationSeconds` | `pallet-nft-credits` | 2 hours — how long key registration stays open |
 | `MinPrivateRingKeys` | `pallet-nft-credits` | 16 — absolute floor, below which the game is abandoned |

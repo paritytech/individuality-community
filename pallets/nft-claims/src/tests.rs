@@ -2404,7 +2404,7 @@ mod private_claims {
 	use frame_support::traits::OnInitialize;
 	use indiv_pallet_scarcity::CollectionId;
 	use indiv_support::{
-		credit_trees::{PrivateGameOutcome, PrivateRingDelivery},
+		credit_trees::{PrivateGameOutcome, PrivateRingDelivery, MAX_PRIVATE_CLAIM_SLOTS},
 		identity::AccountOrPerson,
 		traits::Alias,
 		utils::BigEndianU64,
@@ -2611,6 +2611,46 @@ mod private_claims {
 			));
 			assert_eq!(PrivateRings::<Test>::get(GAME).unwrap().key_count, 2);
 			System::assert_has_event(Event::PrivateOutcomeConflict { game_index: GAME }.into());
+		});
+	}
+
+	#[test]
+	fn a_delivered_outcome_is_refused_outside_the_slot_range() {
+		new_test_ext().execute_with(|| {
+			let keys = [member(1).1, member(2).1];
+
+			// A game that grants no slot is a public game, which reaches no outcome.
+			assert_ok!(NftClaims::receive_private_rings(
+				game_chain_origin(),
+				private_ring_batch(vec![private_ring_delivery(GAME, 0, &keys)])
+			));
+			assert!(PrivateRings::<Test>::get(GAME).is_none());
+
+			// The game chain schedules no game above the shared maximum, so a delivery naming
+			// more slots opens no claims.
+			assert_ok!(NftClaims::receive_private_rings(
+				game_chain_origin(),
+				private_ring_batch(vec![private_ring_delivery(
+					GAME,
+					MAX_PRIVATE_CLAIM_SLOTS + 1,
+					&keys
+				)])
+			));
+			assert!(PrivateRings::<Test>::get(GAME).is_none());
+
+			// The maximum itself is stored.
+			assert_ok!(NftClaims::receive_private_rings(
+				game_chain_origin(),
+				private_ring_batch(vec![private_ring_delivery(
+					GAME,
+					MAX_PRIVATE_CLAIM_SLOTS,
+					&keys
+				)])
+			));
+			assert_eq!(
+				PrivateRings::<Test>::get(GAME).expect("a ring is stored").slots,
+				MAX_PRIVATE_CLAIM_SLOTS
+			);
 		});
 	}
 

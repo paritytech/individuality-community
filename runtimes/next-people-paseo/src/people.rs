@@ -631,9 +631,6 @@ impl indiv_pallet_game::Config for Runtime {
 	type MaxGroupSize = ConstU32<6>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type MaxGroupSize = ConstU32<10>;
-	// Five slots, held by every claimant that pays `PrivateClaimEntryCredits`. One ring serves
-	// them all, so the count costs this chain nothing.
-	type MaxPrivateClaimSlots = ConstU8<5>;
 	type UnixTime = RuntimeClock;
 	#[cfg(not(feature = "runtime-benchmarks"))]
 	type MaxRounds = ConstU32<3>;

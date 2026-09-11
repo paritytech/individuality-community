@@ -21,6 +21,7 @@ use super::*;
 use codec::Encode;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
+use indiv_support::credit_trees::MAX_PRIVATE_CLAIM_SLOTS;
 use sp_runtime::{traits::One, transaction_validity::TransactionSource};
 
 /// What the benchmarks cannot set up themselves, because only the runtime knows how its XCM
@@ -314,8 +315,7 @@ mod benches {
 		let game_index = 1;
 		let caller: T::AccountId = whitelisted_caller();
 		let claimant = AccountOrPerson::Account(caller.clone());
-		let slots = T::MaxPrivateClaimSlots::get().max(1);
-		open_private_game::<T>(game_index, slots);
+		open_private_game::<T>(game_index, MAX_PRIVATE_CLAIM_SLOTS);
 		PrivateCreditBalances::<T>::insert(
 			game_index,
 			&claimant,
