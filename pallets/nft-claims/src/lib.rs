@@ -625,10 +625,12 @@ pub mod pallet {
 	pub type PrivateRingCloses<T: Config> =
 		StorageDoubleMap<_, Identity, BigEndianU64, Twox64Concat, GameIdx, (), OptionQuery>;
 
-	/// How many private claims the current block has executed, against
-	/// [`Config::MaxPrivateClaimsPerBlock`]. Reset at the start of every block.
+	/// The block a private claim last ran in, and how many that block ran, against
+	/// [`Config::MaxPrivateClaimsPerBlock`]. A count filed under an earlier block is spent and
+	/// stands for zero, so every block opens a fresh allowance without a reset writing to it.
 	#[pallet::storage]
-	pub type PrivateClaimsThisBlock<T: Config> = StorageValue<_, u32, ValueQuery>;
+	pub type PrivateClaimsAtBlock<T: Config> =
+		StorageValue<_, (BlockNumberFor<T>, u32), ValueQuery>;
 
 	/// The collections whose owners accept claims, each bound to the registering owner and the
 	/// [`ItemSelection`] deciding the item. A collection with no entry cannot be claimed into.
@@ -1179,7 +1181,15 @@ pub mod pallet {
 			// Spent before the selection, so that a minter contract that reenters with the same
 			// proof finds the alias gone. A failure below unwinds the whole dispatch.
 			SpentPrivateClaims::<T>::insert(game_index, alias, ());
-			PrivateClaimsThisBlock::<T>::mutate(|executed| *executed = executed.saturating_add(1));
+			let now = frame_system::Pallet::<T>::block_number();
+			PrivateClaimsAtBlock::<T>::mutate(|(at, executed)| {
+				if *at == now {
+					*executed = executed.saturating_add(1);
+				} else {
+					*at = now;
+					*executed = 1;
+				}
+			});
 
 			// A private claim spends its credit on the game chain, at registration, so there is
 			// no credit here to draw the item from. The alias stands in for it.
@@ -1345,21 +1355,6 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		/// Reopens the block's private claim allowance.
-		///
-		/// The counter is per block and is cleared rather than carried. A carried counter would
-		/// close the path for good once one block filled the cap.
-		fn on_initialize(_now: BlockNumberFor<T>) -> Weight {
-			// Read first. Only a block that ran a private claim leaves a counter to clear, and
-			// every other block would pay for the write.
-			if PrivateClaimsThisBlock::<T>::exists() {
-				PrivateClaimsThisBlock::<T>::kill();
-				return T::DbWeight::get().reads_writes(1, 1);
-			}
-
-			T::DbWeight::get().reads(1)
-		}
-
 		#[cfg(feature = "std")]
 		fn integrity_test() {
 			assert!(
@@ -1887,9 +1882,12 @@ pub mod pallet {
 			mint_to: &T::AccountId,
 		) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
 			// The allowance is read before the proof, because checking it costs a verification
-			// itself. `Future` keeps the claim in the pool, a later block being what makes it
-			// valid.
-			if PrivateClaimsThisBlock::<T>::get() >= T::MaxPrivateClaimsPerBlock::get() {
+			// itself. A count filed under an earlier block belongs to that block and leaves this
+			// one its full allowance. `Future` keeps the claim in the pool, a later block being
+			// what makes it valid.
+			let now = frame_system::Pallet::<T>::block_number();
+			let (at, executed) = PrivateClaimsAtBlock::<T>::get();
+			if at == now && executed >= T::MaxPrivateClaimsPerBlock::get() {
 				return Err(InvalidTransaction::Future.into());
 			}
 
@@ -1899,7 +1897,6 @@ pub mod pallet {
 			// Checked before the proof, which is the dear part. `Future` keeps a claim made
 			// ahead of the window in the pool, the opening block being what makes it valid,
 			// whereas a closed window never takes one again.
-			let now = frame_system::Pallet::<T>::block_number();
 			if now < ring.opens_at {
 				return Err(InvalidTransaction::Future.into());
 			}

@@ -2398,10 +2398,9 @@ mod private_claims {
 	use super::*;
 	use crate::{
 		AuthorizeInvalidity, CollectionMinter, CollectionMinters, Error, ItemSelection,
-		PrivateClaimsThisBlock, PrivateGameEnd, PrivateGameEnds, PrivateRingCloses, PrivateRings,
+		PrivateClaimsAtBlock, PrivateGameEnd, PrivateGameEnds, PrivateRingCloses, PrivateRings,
 		SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
 	};
-	use frame_support::traits::OnInitialize;
 	use indiv_pallet_scarcity::CollectionId;
 	use indiv_support::{
 		credit_trees::{PrivateGameOutcome, PrivateRingDelivery, MAX_PRIVATE_CLAIM_SLOTS},
@@ -2829,7 +2828,7 @@ mod private_claims {
 					let purse = PURSE + (index as u64) * 2 + slot as u64;
 					let (proof, alias) = proof(secret, &keys, slot, purse);
 					assert_ok!(claim(slot, alias, proof, COLLECTION, purse));
-					NftClaims::on_initialize(System::block_number() + 1);
+					System::set_block_number(System::block_number() + 1);
 				}
 			}
 
@@ -2965,11 +2964,13 @@ mod private_claims {
 				Err(InvalidTransaction::Future.into())
 			);
 
-			// The allowance reopens with the next block.
-			assert_eq!(PrivateClaimsThisBlock::<Test>::get(), 2);
-			NftClaims::on_initialize(System::block_number() + 1);
-			assert_eq!(PrivateClaimsThisBlock::<Test>::get(), 0);
+			// The allowance reopens with the next block. The count stays filed under the block
+			// that ran it, which is what makes it spent.
+			let now = System::block_number();
+			assert_eq!(PrivateClaimsAtBlock::<Test>::get(), (now, 2));
+			System::set_block_number(now + 1);
 			assert_ok!(claim(0, alias, proof, COLLECTION, PURSE + 2));
+			assert_eq!(PrivateClaimsAtBlock::<Test>::get(), (now + 1, 1));
 		});
 	}
 
@@ -3062,8 +3063,6 @@ mod private_claims {
 
 			let closes_at = PrivateRings::<Test>::get(GAME).unwrap().closes_at;
 			System::set_block_number(closes_at);
-			// The two claims above filled the block's allowance, which the next block reopens.
-			NftClaims::on_initialize(closes_at);
 			let post = close().unwrap();
 
 			assert_eq!(SpentPrivateClaims::<Test>::iter_prefix(GAME).count(), 0);
@@ -3134,7 +3133,6 @@ mod private_claims {
 
 			let closes_at = PrivateRings::<Test>::get(GAME).unwrap().closes_at;
 			System::set_block_number(closes_at);
-			NftClaims::on_initialize(closes_at);
 			assert_ok!(close());
 			assert_eq!(PrivateGameEnds::<Test>::get(GAME), Some(PrivateGameEnd::Closed));
 

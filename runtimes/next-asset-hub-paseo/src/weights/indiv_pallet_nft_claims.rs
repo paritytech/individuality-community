@@ -324,7 +324,7 @@ impl<T: frame_system::Config> indiv_pallet_nft_claims::WeightInfo for WeightInfo
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 	}
-	/// Storage: `NftClaims::PrivateClaimsThisBlock` (r:0 w:1)
+	/// Storage: `NftClaims::PrivateClaimsAtBlock` (r:0 w:1)
 	/// Storage: `NftClaims::SpentPrivateClaims` (r:0 w:1)
 	/// Storage: `NftClaims::CollectionMinters` (r:1 w:0)
 	fn claim_private() -> Weight {
@@ -337,7 +337,7 @@ impl<T: frame_system::Config> indiv_pallet_nft_claims::WeightInfo for WeightInfo
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
-	/// Storage: `NftClaims::PrivateClaimsThisBlock` (r:1 w:0)
+	/// Storage: `NftClaims::PrivateClaimsAtBlock` (r:1 w:0)
 	/// Storage: `NftClaims::PrivateRings` (r:1 w:0)
 	/// Storage: `NftClaims::SpentPrivateClaims` (r:1 w:0)
 	fn authorize_claim_private() -> Weight {
