@@ -686,6 +686,9 @@ pub mod pallet {
 		StorageMap<_, Twox64Concat, GameIdx, PrivateGameOutcome<PrivateRingRoot<T>>>;
 
 	/// The games whose outcome has not been delivered yet, in the order they reached it.
+	///
+	/// A game that reached its outcome while this was full is left out of it and delivered once
+	/// it is empty. [`PrivateOutcomes`] says which deliveries are owed, not this.
 	#[pallet::storage]
 	pub type PrivateRingDeliveryQueue<T: Config> =
 		StorageValue<_, BoundedVec<GameIdx, T::MaxQueuedPrivateRings>, ValueQuery>;
@@ -1059,7 +1062,8 @@ pub mod pallet {
 			Self::do_build_private_ring(game_index, to_include)
 		}
 
-		/// Delivers the private claim ring at the front of [`PrivateRingDeliveryQueue`].
+		/// Delivers the private claim ring at the front of [`PrivateRingDeliveryQueue`], or the
+		/// outcome of a game the queue turned away once it is empty.
 		///
 		/// Authorized call submitted by this pallet's offchain worker: it is accepted from a
 		/// local or in-block source only, so it cannot be submitted externally.

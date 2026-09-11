@@ -451,17 +451,24 @@ mod benches {
 		Ok(())
 	}
 
-	// Authorizing a delivery decodes the delivery queue, so it is measured against a full one.
+	// Authorizing a delivery decodes the queue and, when it is empty, reads the outcome of a game
+	// a full queue turned away. That branch touches both entries, so it is the one measured.
 	#[benchmark]
 	fn authorize_send_private_ring() -> Result<(), BenchmarkError> {
-		let queue = (1..=T::MaxQueuedPrivateRings::get()).collect::<Vec<_>>();
-		PrivateRingDeliveryQueue::<T>::put(
-			BoundedVec::try_from(queue).expect("the queue is built at its own bound"),
-		);
+		let game_index = 1;
+		open_private_game::<T>(game_index, 1);
+		fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
+		close_private_registration::<T>(game_index);
+		while let Some(to_include) = pallet::Pallet::<T>::private_ring_build_step(game_index) {
+			pallet::Pallet::<T>::do_build_private_ring(game_index, to_include)
+				.expect("the ring builds");
+		}
+		// The ring reached its outcome with the queue full, so it waits outside the queue.
+		PrivateRingDeliveryQueue::<T>::kill();
 
 		#[block]
 		{
-			pallet::Pallet::<T>::authorize_send_private_ring(TransactionSource::Local, &1)
+			pallet::Pallet::<T>::authorize_send_private_ring(TransactionSource::Local, &game_index)
 				.expect("must authorize");
 		}
 
@@ -485,7 +492,8 @@ mod benches {
 		Ok(())
 	}
 
-	// Authorizing a cleanup step reads the game's record only, so it is a fixed cost.
+	// Authorizing a cleanup step reads the game's record and its undelivered outcome, so it is a
+	// fixed cost.
 	#[benchmark]
 	fn authorize_clean_up_private_game() -> Result<(), BenchmarkError> {
 		let game_index = 1;

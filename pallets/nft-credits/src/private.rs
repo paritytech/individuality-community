@@ -462,11 +462,11 @@ impl<T: Config> Pallet<T> {
 
 	/// Whether `game_index` has registration state left to drop.
 	///
-	/// A game still queued for delivery owes none: the last step removes its record, and
-	/// [`Pallet::do_send_private_ring`] reads the slots from it. Cleaning up first would leave
-	/// the queue with a front that can never be sent, and no later ring is deliverable behind it.
+	/// A game whose outcome is not delivered owes none: the last step removes its record, and
+	/// [`Pallet::do_send_private_ring`] reads the slots from it. The outcome and not the queue
+	/// says a delivery is owed, so a ring a full queue turned away is held off here as well.
 	pub(crate) fn private_clean_up_due(game_index: GameIdx) -> bool {
-		if PrivateRingDeliveryQueue::<T>::get().contains(&game_index) {
+		if PrivateOutcomes::<T>::contains_key(game_index) {
 			return false;
 		}
 
@@ -521,15 +521,16 @@ impl<T: Config> Pallet<T> {
 	}
 
 	/// Queue the ring of `game_index` for delivery to the claims chain.
+	///
+	/// A full queue leaves the game out of it. The outcome stays, and
+	/// [`Pallet::authorize_send_private_ring`] takes the delivery once the queue is drained, so
+	/// the ring is delayed and not lost.
 	fn queue_private_ring_delivery(game_index: GameIdx) {
 		if PrivateRingDeliveryQueue::<T>::mutate(|queue| queue.try_push(game_index)).is_err() {
-			// The queue fills only after delivery failed for as many rings as it holds. No call
-			// re-queues a dropped outcome, so the game's credits then mint on neither path: the
-			// claims chain refuses a public claim against a private game's tree and holds no ring
-			// to claim against.
-			log::error!(
+			// The queue fills only after delivery failed for as many rings as it holds.
+			log::warn!(
 				target: LOG_TARGET,
-				"Private ring delivery queue full, ring for game {game_index} not queued",
+				"Private ring delivery queue full, ring for game {game_index} waits for room",
 			);
 		}
 	}
@@ -543,8 +544,14 @@ impl<T: Config> Pallet<T> {
 			return Err(AuthorizeInvalidity::TransactionNotLocal.into());
 		}
 
+		// The front is delivered first, so the queue's order holds. An empty queue is what lets
+		// a game a full queue turned away go: its outcome is what says the delivery is owed.
 		let queue = PrivateRingDeliveryQueue::<T>::get();
-		if queue.first() != Some(game_index) {
+		let owed = match queue.first() {
+			Some(front) => front == game_index,
+			None => PrivateOutcomes::<T>::contains_key(game_index),
+		};
+		if !owed {
 			return Err(AuthorizeInvalidity::NoQueuedPrivateRings.into());
 		}
 
@@ -653,9 +660,12 @@ impl<T: Config> Pallet<T> {
 	///
 	/// Building comes first, because an unfinished ring has nothing to deliver. Delivery comes
 	/// before cleanup, because claims wait on the ring and on nothing the cleanup drops. One
-	/// ring fills a message, so only the front of the queue is delivered per block.
+	/// ring fills a message, so only the front of the queue is delivered per block, and a game a
+	/// full queue turned away follows once the queue is empty.
 	pub(crate) fn submit_private_ring_work(block_number: BlockNumberFor<T>) {
+		let queue = PrivateRingDeliveryQueue::<T>::get();
 		let mut cleanup = None;
+		let mut unqueued = None;
 		for (game_index, _) in PrivateGames::<T>::iter() {
 			if let Some(to_include) = Self::private_ring_build_step(game_index) {
 				Self::submit_private_call(
@@ -672,12 +682,18 @@ impl<T: Config> Pallet<T> {
 				);
 				return;
 			}
+			if unqueued.is_none() &&
+				!queue.contains(&game_index) &&
+				PrivateOutcomes::<T>::contains_key(game_index)
+			{
+				unqueued = Some(game_index);
+			}
 			if cleanup.is_none() && Self::private_clean_up_due(game_index) {
 				cleanup = Some(game_index);
 			}
 		}
 
-		if let Some(game_index) = PrivateRingDeliveryQueue::<T>::get().first().copied() {
+		if let Some(game_index) = queue.first().copied().or(unqueued) {
 			Self::submit_private_call(
 				Call::<T>::send_private_ring {
 					game_index,

@@ -2725,7 +2725,7 @@ mod migration {
 mod private_claims {
 	use super::*;
 	use crate::private::PRIVATE_RING_BUILD_RETRIES;
-	use indiv_support::credit_trees::PrivateClaimSetting;
+	use indiv_support::{credit_trees::PrivateClaimSetting, offchain::RETRY_WINDOW};
 	use verifiable::{mock::Mock, GenerateVerifiable};
 
 	/// The index the mock's first game runs under.
@@ -3197,7 +3197,7 @@ mod private_claims {
 
 			// The last cleanup step removes the record `do_send_private_ring` reads the slots
 			// from. Running it first would leave the queue with a front that can never be sent,
-			// and `authorize_send_private_ring` takes the front alone, so no later game's ring
+			// and the front is delivered before anything behind it, so no later game's ring
 			// would be deliverable either.
 			assert_eq!(
 				NftCredits::authorize_clean_up_private_game(TransactionSource::Local, &GAME)
@@ -3217,6 +3217,57 @@ mod private_claims {
 			));
 			assert_ok!(NftCredits::do_clean_up_private_game(GAME));
 			assert!(PrivateGames::<Test>::get(GAME).is_none());
+		});
+	}
+
+	#[test]
+	fn a_ring_a_full_queue_turns_away_is_delivered_once_it_drains() {
+		new_test_ext().execute_with(|| {
+			let players = play_private_game(1);
+			open_registration();
+			for (seed, player) in players.iter().enumerate() {
+				let AccountOrPerson::Account(account) = player else { unreachable!() };
+				register(account, seed as u8);
+			}
+
+			// The deliveries of other games fill the queue, so this ring finds no room in it.
+			let queued = (GAME + 1..=GAME + MaxQueuedPrivateRings::get() as GameIdx)
+				.collect::<Vec<_>>();
+			PrivateRingDeliveryQueue::<Test>::put(
+				BoundedVec::try_from(queued.clone()).expect("the queue is filled to its bound")
+			);
+			close_registration_and_build();
+
+			// The outcome and not the queue says the delivery is owed, so the cleanup that
+			// would strand the ring stays shut.
+			assert_eq!(PrivateRingDeliveryQueue::<Test>::get().to_vec(), queued);
+			assert!(PrivateOutcomes::<Test>::get(GAME).is_some());
+			assert!(!NftCredits::private_clean_up_due(GAME));
+
+			// The queued deliveries go first, so the ring waits for them.
+			assert_eq!(
+				NftCredits::authorize_send_private_ring(TransactionSource::Local, &GAME)
+					.map(|_| ()),
+				Err(AuthorizeInvalidity::NoQueuedPrivateRings.into()),
+			);
+
+			// The games ahead are delivered, which empties the queue and is what brings the
+			// ring back: the offchain worker submits the delivery it could not queue.
+			PrivateRingDeliveryQueue::<Test>::kill();
+			clear_pool();
+			NftCredits::submit_private_ring_work(16);
+			assert_eq!(
+				submitted_calls(),
+				vec![RuntimeCall::NftCredits(Call::send_private_ring {
+					game_index: GAME,
+					discriminator: 16 / u64::from(RETRY_WINDOW)
+				})]
+			);
+
+			assert_ok!(NftCredits::authorize_send_private_ring(TransactionSource::Local, &GAME));
+			assert_ok!(NftCredits::do_send_private_ring(GAME));
+			assert!(PrivateOutcomes::<Test>::get(GAME).is_none());
+			assert!(NftCredits::private_clean_up_due(GAME));
 		});
 	}
 
