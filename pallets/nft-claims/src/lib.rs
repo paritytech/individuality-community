@@ -98,11 +98,10 @@
 //! - **Fully claimed.** The set bits of [`ClaimedLeaves`] reach the tree's `leaf_count`. Every
 //!   credit the tree commits to has been minted, so no proof can be built against it again, and the
 //!   claim that completes it removes it.
-//! - **Expiry.** A tree that is not fully claimed outlives [`Config::TreeTtl`]. The TTL runs from
-//!   the tree block's own wall-clock time, which the game chain records in the tree, not from the
-//!   time the tree arrived here. [`Pallet::claim`] does not check the TTL, so the sweep that
-//!   removes the tree is what ends claimability, and [`Event::CreditTreesExpired`] reports that
-//!   those unclaimed credits are unmintable from then on.
+//! - **Expiry.** [`Config::TreeTtl`] starts at the timestamp of the buffer's first award. Delivery
+//!   to this chain does not restart the TTL. [`Pallet::claim`] does not check expiry. Claims remain
+//!   possible until the expiry sweep removes the tree. The sweep emits
+//!   [`Event::CreditTreesExpired`], which counts the trees it removed with credits left unclaimed.
 //!
 //! [`Pallet::sweep_expired_trees`] performs the expiry, and this pallet's offchain worker submits
 //! it. [`TreeExpiries`] files each tree under the timestamp its deadline runs from and iterates in

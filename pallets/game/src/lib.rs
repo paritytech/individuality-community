@@ -1075,10 +1075,10 @@ pub mod pallet {
 		/// `Report::Person` vote awards an attendance NFT claim credit to the attestee immediately;
 		/// `Report::NotPerson` awards nothing.
 		///
-		/// The call is refused with `Error::CreditCapacityExhausted` while fewer credits can be
-		/// recorded than the report may award, counting every entry as a `Person` vote. It awards
-		/// all of its credits or none, so refusing it keeps a credit from being earned and then
-		/// dropped. Submit it again once later blocks have committed the buffered credits.
+		/// The capacity check requires one free credit slot per entry, including `NotPerson`
+		/// votes. If capacity is insufficient, the call returns `Error::CreditCapacityExhausted`
+		/// before recording any votes or credits. Retry when capacity is available and reporting
+		/// is still open.
 		///
 		/// After the votes from the report are counted, the reporter and each of the reported
 		/// players whose attendance can now be determined are processed early. This lets the

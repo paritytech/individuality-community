@@ -115,11 +115,8 @@ pub fn credit_leaf<AccountId: Encode>(
 /// Tree blocks are not contiguous, because a block that awarded no credit has no tree.
 pub type TreeSequence = u64;
 
-/// The People-chain block whose `on_initialize` committed a set of NFT claim credits to a tree.
-/// Both chains key a credit tree by it. It is at or after the block each of those credits was
-/// earned in, because a full tree spills the credits that follow it into a later block's.
-/// Fixed to `u32` so the XCM payload and the claim chain's storage stay free of a foreign chain's
-/// block number type.
+/// The People-chain block whose buffered credits a tree commits to.
+/// The credits buffered in block `b` are committed by the tree that block `b + 1` builds.
 pub type CreditTreeBlock = u32;
 
 /// The wall-clock second a credit tree commits to, as both chains key an expiry entry by it.
@@ -270,8 +267,8 @@ pub struct NftClaimCreditTree {
 	/// Always this committed count, never one the claimant supplies: that would let them pick
 	/// which hash path is checked.
 	pub leaf_count: u32,
-	/// The tree block's wall-clock time in seconds since the UNIX epoch.
-	/// Both chains run the tree's TTL from it, so the deadline is the same on each.
+	/// The Unix timestamp of the buffer's first award, in seconds.
+	/// Each chain calculates expiry from this timestamp and its configured TTL.
 	pub timestamp: u32,
 }
 

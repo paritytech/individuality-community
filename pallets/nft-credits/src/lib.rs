@@ -1008,8 +1008,8 @@ impl<T: Config> Pallet<T> {
 			Some(pending)
 				if pending.awards < AWARDS_PER_TREE && pending.game_index == game_index =>
 				(buffer, pending),
-			// A full buffer, one of another game, or none at all. Only the buffer being filled
-			// holds anything, so the one after it is empty and needs no read of its own.
+			// This buffer is full or belongs to another game.
+			// Nothing is buffered past the cursor, so the next block's buffer is a fresh one.
 			Some(_) => (buffer.saturating_add(One::one()), fresh),
 			None => (buffer, fresh),
 		};
