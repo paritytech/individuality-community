@@ -1356,16 +1356,6 @@ fn integrity_test_rejects_an_entry_price_above_what_a_game_awards() {
 	});
 }
 
-/// A delivery queue that holds nothing is rejected, because no ring would ever be delivered.
-#[test]
-#[should_panic(expected = "`MaxQueuedPrivateRings` must be at least one")]
-fn integrity_test_rejects_an_empty_delivery_queue() {
-	new_test_ext().execute_with(|| {
-		MaxQueuedPrivateRings::set(&0);
-		<Pallet<Test> as Hooks<u64>>::integrity_test();
-	});
-}
-
 /// The credit tree delivery to the NFT claims chain: the queue the `on_initialize` commit feeds,
 /// the offchain-worker-driven `send_credit_trees` and the `replay_credit_trees` repair.
 mod credit_tree_delivery {
@@ -2903,7 +2893,7 @@ mod private_claims {
 	/// Deliver the game's built outcome, which is what releases its cleanup.
 	fn deliver_outcome() {
 		assert_ok!(NftCredits::do_send_private_ring(GAME));
-		assert!(PrivateRingDeliveryQueue::<Test>::get().is_empty());
+		assert!(PrivateOutcomes::<Test>::get(GAME).is_none());
 	}
 
 	/// Register `player`, who must hold the credits the entry price costs.
@@ -2922,7 +2912,7 @@ mod private_claims {
 	}
 
 	#[test]
-	fn the_ring_is_built_once_registration_closes_and_is_queued_for_delivery() {
+	fn the_ring_is_built_once_registration_closes_and_awaits_delivery() {
 		new_test_ext().execute_with(|| {
 			let players = play_private_game(2);
 			open_registration();
@@ -2951,7 +2941,6 @@ mod private_claims {
 			// The root commits to the keys, so the list goes with the step that finished it and
 			// the cleanup that follows never reads it.
 			assert!(PrivateRingKeys::<Test>::decode_len(GAME).is_none());
-			assert_eq!(PrivateRingDeliveryQueue::<Test>::get().to_vec(), vec![GAME]);
 			// The intermediate is dropped once the root is final.
 			assert!(PrivateRingIntermediates::<Test>::get(GAME).is_none());
 			System::assert_has_event(
@@ -2970,13 +2959,12 @@ mod private_claims {
 
 			close_registration_and_build();
 
-			// The abandonment is queued for the claims chain, which reopens the public path for
-			// the game's trees, so the credits are not lost.
+			// The abandonment waits for the claims chain, which reopens the public path for the
+			// game's trees, so the credits are not lost.
 			assert_eq!(
 				PrivateOutcomes::<Test>::get(GAME).unwrap(),
 				PrivateGameOutcome::Abandoned { key_count: 1 }
 			);
-			assert_eq!(PrivateRingDeliveryQueue::<Test>::get().to_vec(), vec![GAME]);
 			System::assert_has_event(
 				Event::<Test>::PrivateRingAbandoned { game_index: GAME, key_count: 1, required: 2 }
 					.into(),
@@ -3184,7 +3172,7 @@ mod private_claims {
 	}
 
 	#[test]
-	fn a_queued_ring_holds_off_the_cleanup_that_would_strand_it() {
+	fn an_undelivered_outcome_holds_off_the_cleanup_that_would_strand_it() {
 		new_test_ext().execute_with(|| {
 			let players = play_private_game(1);
 			open_registration();
@@ -3193,12 +3181,10 @@ mod private_claims {
 				register(account, seed as u8);
 			}
 			close_registration_and_build();
-			assert_eq!(PrivateRingDeliveryQueue::<Test>::get().to_vec(), vec![GAME]);
+			assert!(PrivateOutcomes::<Test>::get(GAME).is_some());
 
 			// The last cleanup step removes the record `do_send_private_ring` reads the slots
-			// from. Running it first would leave the queue with a front that can never be sent,
-			// and the front is delivered before anything behind it, so no later game's ring
-			// would be deliverable either.
+			// from. Running it first would leave an outcome that can never be sent.
 			assert_eq!(
 				NftCredits::authorize_clean_up_private_game(TransactionSource::Local, &GAME)
 					.map(|_| ()),
@@ -3221,7 +3207,7 @@ mod private_claims {
 	}
 
 	#[test]
-	fn a_ring_a_full_queue_turns_away_is_delivered_once_it_drains() {
+	fn a_game_with_no_outcome_has_no_delivery_to_authorize() {
 		new_test_ext().execute_with(|| {
 			let players = play_private_game(1);
 			open_registration();
@@ -3230,30 +3216,19 @@ mod private_claims {
 				register(account, seed as u8);
 			}
 
-			// The deliveries of other games fill the queue, so this ring finds no room in it.
-			let queued = (GAME + 1..=GAME + MaxQueuedPrivateRings::get() as GameIdx)
-				.collect::<Vec<_>>();
-			PrivateRingDeliveryQueue::<Test>::put(
-				BoundedVec::try_from(queued.clone()).expect("the queue is filled to its bound")
-			);
-			close_registration_and_build();
-
-			// The outcome and not the queue says the delivery is owed, so the cleanup that
-			// would strand the ring stays shut.
-			assert_eq!(PrivateRingDeliveryQueue::<Test>::get().to_vec(), queued);
-			assert!(PrivateOutcomes::<Test>::get(GAME).is_some());
-			assert!(!NftCredits::private_clean_up_due(GAME));
-
-			// The queued deliveries go first, so the ring waits for them.
+			// The ring is not built yet, so nothing is owed to the claims chain.
 			assert_eq!(
 				NftCredits::authorize_send_private_ring(TransactionSource::Local, &GAME)
 					.map(|_| ()),
-				Err(AuthorizeInvalidity::NoQueuedPrivateRings.into()),
+				Err(AuthorizeInvalidity::NoPrivateRingToSend.into()),
 			);
 
-			// The games ahead are delivered, which empties the queue and is what brings the
-			// ring back: the offchain worker submits the delivery it could not queue.
-			PrivateRingDeliveryQueue::<Test>::kill();
+			// The outcome is what says the delivery is owed, and it is what the offchain worker
+			// submits the call for.
+			close_registration_and_build();
+			assert!(PrivateOutcomes::<Test>::get(GAME).is_some());
+			assert!(!NftCredits::private_clean_up_due(GAME));
+
 			clear_pool();
 			NftCredits::submit_private_ring_work(16);
 			assert_eq!(
@@ -3268,6 +3243,13 @@ mod private_claims {
 			assert_ok!(NftCredits::do_send_private_ring(GAME));
 			assert!(PrivateOutcomes::<Test>::get(GAME).is_none());
 			assert!(NftCredits::private_clean_up_due(GAME));
+
+			// A sent outcome is owed no second delivery.
+			assert_eq!(
+				NftCredits::authorize_send_private_ring(TransactionSource::Local, &GAME)
+					.map(|_| ()),
+				Err(AuthorizeInvalidity::NoPrivateRingToSend.into()),
+			);
 		});
 	}
 
@@ -3372,7 +3354,6 @@ mod private_claims {
 				PrivateOutcomes::<Test>::get(GAME).unwrap(),
 				PrivateGameOutcome::Abandoned { key_count: 4 }
 			);
-			assert_eq!(PrivateRingDeliveryQueue::<Test>::get().to_vec(), vec![GAME]);
 			System::assert_has_event(
 				Event::<Test>::PrivateRingAbandoned { game_index: GAME, key_count: 4, required: 2 }
 					.into(),
@@ -3423,7 +3404,6 @@ mod private_claims {
 
 			System::assert_has_event(Event::<Test>::PrivateRingSent { game_index: GAME }.into());
 			assert!(PrivateOutcomes::<Test>::get(GAME).is_none());
-			assert!(PrivateRingDeliveryQueue::<Test>::get().is_empty());
 			let batch = last_sent_private_ring_batch();
 			assert_eq!(batch.rings.len(), 1);
 			assert_eq!(batch.rings[0].game_index, GAME);
@@ -3466,9 +3446,8 @@ mod private_claims {
 			System::assert_has_event(
 				Event::<Test>::PrivateRingSendFailed { game_index: GAME }.into(),
 			);
-			// The ring and its queue entry survive, so the next offchain worker cycle retries it.
+			// The outcome survives, so the next offchain worker cycle retries it.
 			assert!(PrivateOutcomes::<Test>::get(GAME).is_some());
-			assert_eq!(PrivateRingDeliveryQueue::<Test>::get().to_vec(), vec![GAME]);
 
 			// With room for the message the same delivery goes out.
 			set_claims_max_message_size(NftCredits::private_ring_channel_size());
@@ -3476,7 +3455,6 @@ mod private_claims {
 
 			System::assert_has_event(Event::<Test>::PrivateRingSent { game_index: GAME }.into());
 			assert!(PrivateOutcomes::<Test>::get(GAME).is_none());
-			assert!(PrivateRingDeliveryQueue::<Test>::get().is_empty());
 		});
 	}
 

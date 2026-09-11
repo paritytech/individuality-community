@@ -325,12 +325,6 @@ pub mod pallet {
 		#[pallet::constant]
 		type PrivateClaimEntryCredits: Get<u32>;
 
-		/// The maximum number of private claim rings waiting for delivery.
-		///
-		/// A game builds one ring, so size it against the games a delivery outage spans.
-		#[pallet::constant]
-		type MaxQueuedPrivateRings: Get<u32>;
-
 		/// Per-ring weight that `receive_private_rings` costs on [`Config::NftClaimsParaId`].
 		///
 		/// Delivery is offchain-worker driven and the message asks for unpaid execution, so no
@@ -680,18 +674,11 @@ pub mod pallet {
 	/// The outcome of every private game whose claims chain does not hold it yet, keyed by game.
 	///
 	/// Both outcomes are delivered: a ring opens the private path on the claims chain, and an
-	/// abandonment reopens the public one. The entry is removed once the message is sent.
+	/// abandonment reopens the public one. An entry is what says a delivery is owed, so it is
+	/// removed once the message is sent and the game's cleanup waits for that.
 	#[pallet::storage]
 	pub type PrivateOutcomes<T: Config> =
 		StorageMap<_, Twox64Concat, GameIdx, PrivateGameOutcome<PrivateRingRoot<T>>>;
-
-	/// The games whose outcome has not been delivered yet, in the order they reached it.
-	///
-	/// A game that reached its outcome while this was full is left out of it and delivered once
-	/// it is empty. [`PrivateOutcomes`] says which deliveries are owed, not this.
-	#[pallet::storage]
-	pub type PrivateRingDeliveryQueue<T: Config> =
-		StorageValue<_, BoundedVec<GameIdx, T::MaxQueuedPrivateRings>, ValueQuery>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -718,7 +705,7 @@ pub mod pallet {
 			claimant: AccountOrPerson<T::AccountId>,
 			credits: u32,
 		},
-		/// A game's ring is final and queued for delivery. `key_count` is the anonymity set every
+		/// A game's ring is final and awaits delivery. `key_count` is the anonymity set every
 		/// claim of the game hides in.
 		PrivateRingBuilt { game_index: GameIdx, key_count: u32 },
 		/// The game has no ring, so its credits are claimed over the public path once the claims
@@ -734,7 +721,7 @@ pub mod pallet {
 		PrivateRingBuildFailed { game_index: GameIdx, failures: u8 },
 		/// A private game's outcome was handed to the XCM router for delivery.
 		PrivateRingSent { game_index: GameIdx },
-		/// Delivering a private game's outcome failed. It stays queued and the offchain worker
+		/// Delivering a private game's outcome failed. The outcome stays and the offchain worker
 		/// retries it in the next cycle.
 		PrivateRingSendFailed { game_index: GameIdx },
 		/// A private game reached its outcome, so its registrations, keys and unspent credits are
@@ -845,7 +832,7 @@ pub mod pallet {
 		/// No private claim ring has keys left to push.
 		NoPrivateRingToBuild = 203,
 		/// No private claim ring is waiting to be delivered to the NFT claims chain.
-		NoQueuedPrivateRings = 204,
+		NoPrivateRingToSend = 204,
 		/// No private game has registration state left to drop.
 		NoPrivateGameToCleanUp = 205,
 	}
@@ -1062,8 +1049,8 @@ pub mod pallet {
 			Self::do_build_private_ring(game_index, to_include)
 		}
 
-		/// Delivers the private claim ring at the front of [`PrivateRingDeliveryQueue`], or the
-		/// outcome of a game the queue turned away once it is empty.
+		/// Delivers the outcome one private game reached, which [`PrivateOutcomes`] holds until
+		/// the claims chain has it.
 		///
 		/// Authorized call submitted by this pallet's offchain worker: it is accepted from a
 		/// local or in-block source only, so it cannot be submitted externally.

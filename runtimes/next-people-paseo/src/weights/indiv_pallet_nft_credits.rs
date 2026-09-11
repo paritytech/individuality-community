@@ -251,7 +251,6 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:1)
 	/// Storage: `NftCredits::PrivateRingIntermediates` (r:1 w:1)
 	/// Storage: `NftCredits::PrivateRings` (r:0 w:1)
-	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:1)
 	fn finish_private_ring() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `20000`
@@ -260,7 +259,7 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		Weight::from_parts(150_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 80000))
 			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(5))
+			.saturating_add(T::DbWeight::get().writes(4))
 	}
 	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)
 	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:0)
@@ -274,7 +273,6 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 			.saturating_add(T::DbWeight::get().reads(2))
 	}
 	/// Storage: `NftCredits::PrivateRings` (r:1 w:1)
-	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:1)
 	fn send_private_ring() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `20000`
@@ -283,9 +281,8 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		Weight::from_parts(60_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 80000))
 			.saturating_add(T::DbWeight::get().reads(2))
-			.saturating_add(T::DbWeight::get().writes(2))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
-	/// Storage: `NftCredits::PrivateRingDeliveryQueue` (r:1 w:0)
 	/// Storage: `NftCredits::PrivateOutcomes` (r:1 w:0)
 	fn authorize_send_private_ring() -> Weight {
 		// Proof Size summary in bytes:
@@ -294,7 +291,7 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		// Minimum execution time: 10_000_000 picoseconds.
 		Weight::from_parts(10_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 80000))
-			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().reads(1))
 	}
 	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
 	/// Storage: `NftCredits::PrivateRegistrations` (r:33 w:32)

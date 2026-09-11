@@ -446,13 +446,11 @@ mod benches {
 		#[extrinsic_call]
 		_(RawOrigin::Authorized, game_index, BlockNumberFor::<T>::zero());
 
-		assert!(PrivateOutcomes::<T>::get(game_index).is_none(), "a sent ring leaves the queue");
+		assert!(PrivateOutcomes::<T>::get(game_index).is_none(), "a sent ring owes no delivery");
 
 		Ok(())
 	}
 
-	// Authorizing a delivery decodes the queue and, when it is empty, reads the outcome of a game
-	// a full queue turned away. That branch touches both entries, so it is the one measured.
 	#[benchmark]
 	fn authorize_send_private_ring() -> Result<(), BenchmarkError> {
 		let game_index = 1;
@@ -463,9 +461,6 @@ mod benches {
 			pallet::Pallet::<T>::do_build_private_ring(game_index, to_include)
 				.expect("the ring builds");
 		}
-		// The ring reached its outcome with the queue full, so it waits outside the queue.
-		PrivateRingDeliveryQueue::<T>::kill();
-
 		#[block]
 		{
 			pallet::Pallet::<T>::authorize_send_private_ring(TransactionSource::Local, &game_index)

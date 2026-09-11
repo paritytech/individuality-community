@@ -813,8 +813,6 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// claimant earned would put them in a different ring, and the ring a claim proves against
 	// names its maker. The pallet's `integrity_test` rejects a price above what a game awards.
 	type PrivateClaimEntryCredits = ConstU32<5>;
-	// One outcome per private game, so this covers an outage spanning sixteen of them.
-	type MaxQueuedPrivateRings = ConstU32<16>;
 	type PrivateRingRemoteWeight = PrivateRingRemoteWeight;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;

@@ -275,7 +275,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		// Minimum execution time: 60_000_000 picoseconds.
 		Weight::from_parts(60_000_000, 70000)
 			.saturating_add(T::DbWeight::get().reads(2_u64))
-			.saturating_add(T::DbWeight::get().writes(2_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
 	fn authorize_send_private_ring() -> Weight {
 		// Proof Size summary in bytes:
@@ -283,7 +283,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		//  Estimated: `70000`
 		// Minimum execution time: 10_000_000 picoseconds.
 		Weight::from_parts(10_000_000, 70000)
-			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().reads(1_u64))
 	}
 	/// The range of component `n` is `[0, 32]`.
 	fn clean_up_private_game(n: u32, ) -> Weight {
@@ -512,7 +512,7 @@ impl WeightInfo for () {
 		// Minimum execution time: 60_000_000 picoseconds.
 		Weight::from_parts(60_000_000, 70000)
 			.saturating_add(RocksDbWeight::get().reads(2_u64))
-			.saturating_add(RocksDbWeight::get().writes(2_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 	fn authorize_send_private_ring() -> Weight {
 		// Proof Size summary in bytes:
@@ -520,7 +520,7 @@ impl WeightInfo for () {
 		//  Estimated: `70000`
 		// Minimum execution time: 10_000_000 picoseconds.
 		Weight::from_parts(10_000_000, 70000)
-			.saturating_add(RocksDbWeight::get().reads(2_u64))
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
 	}
 	/// The range of component `n` is `[0, 32]`.
 	fn clean_up_private_game(n: u32, ) -> Weight {
