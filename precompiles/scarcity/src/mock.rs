@@ -39,7 +39,7 @@ frame_support::construct_runtime!(
 	{
 		System: frame_system,
 		Balances: pallet_balances,
-		Scarcity: pallet_scarcity,
+		Scarcity: indiv_pallet_scarcity,
 		Revive: pallet_revive,
 	}
 );
@@ -63,13 +63,13 @@ impl pallet_balances::Config for Test {
 
 parameter_types! {
 	pub const ScarcityHoldReason: RuntimeHoldReason =
-		RuntimeHoldReason::Scarcity(pallet_scarcity::HoldReason::StorageDeposit);
+		RuntimeHoldReason::Scarcity(indiv_pallet_scarcity::HoldReason::StorageDeposit);
 }
 
 type StoragePrice = LinearStoragePrice<ConstU64<1>, ConstU64<1>, u64>;
 type Consideration = HoldConsideration<AccountId32, Balances, ScarcityHoldReason, Identity, u64>;
 
-impl pallet_scarcity::Config for Test {
+impl indiv_pallet_scarcity::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
 	type WeightInfo = ();
 	type UnixTime = MockUnixTime;

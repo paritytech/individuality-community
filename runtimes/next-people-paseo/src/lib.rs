@@ -244,10 +244,7 @@ pub type Migrations = (
 	cumulus_pallet_xcmp_queue::migration::v6::MigrateV5ToV6<Runtime>,
 	cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
-	indiv_pallet_members_notifier::migration::SeedSubscriptionWhitelist<
-		Runtime,
-		people::AssetHubSubscriptionWhitelist,
-	>,
+	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)
@@ -279,7 +276,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 3_001_000,
+	spec_version: 3_002_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 5,
@@ -1615,18 +1612,18 @@ impl_runtime_apis! {
 		}
 
 		fn nft_claim_credit_proofs(
-			award_block: BlockNumber,
+			tree_block: BlockNumber,
 			claimant: indiv_support::identity::AccountOrPerson<AccountId>,
 		) -> Result<Vec<indiv_pallet_nft_credits::NftClaimCreditProof>, indiv_pallet_nft_credits::NftClaimCreditProofError> {
-			NftCredits::nft_claim_credit_proofs(award_block, &claimant)
+			NftCredits::nft_claim_credit_proofs(tree_block, &claimant)
 		}
 
 		fn nft_claim_credit_proof_from_awards(
-			award_block: BlockNumber,
+			tree_block: BlockNumber,
 			awards: Vec<indiv_pallet_nft_credits::NftClaimCreditAward<AccountId>>,
 			leaf_index: u32,
 		) -> Result<indiv_pallet_nft_credits::NftClaimCreditProof, indiv_pallet_nft_credits::NftClaimCreditProofError> {
-			NftCredits::nft_claim_credit_proof_from_awards(award_block, awards, leaf_index)
+			NftCredits::nft_claim_credit_proof_from_awards(tree_block, awards, leaf_index)
 		}
 	}
 
