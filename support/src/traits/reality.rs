@@ -657,6 +657,11 @@ pub trait AppendOnlyMembers: MembershipProver {
 	#[cfg(feature = "runtime-benchmarks")]
 	fn onboard_all_and_build_ring(identifier: &Identifier, ring_index: RingIndex)
 		-> DispatchResult;
+	/// Seals the built current append-only ring and advances to a new empty ring for benchmarks.
+	/// The current ring must have a root with every member included. This bypasses filling a ring
+	/// only to construct distinct benchmark recycler keys.
+	#[cfg(feature = "runtime-benchmarks")]
+	fn seal_current_ring(identifier: &Identifier) -> DispatchResult;
 }
 
 /// A trait that is able to provide randomness paired with the moment it was produced.

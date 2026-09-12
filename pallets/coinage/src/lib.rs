@@ -81,7 +81,7 @@ use sp_runtime::{
 	ArithmeticError, SaturatedConversion, Saturating,
 };
 use verifiable::GenerateVerifiable;
-use weight_interpolation::{interpolate_unload_weight, AliasCountSample};
+use weight_interpolation::interpolate_unload_weight;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -1972,21 +1972,14 @@ pub mod pallet {
 				"MinimumExponentForOutputUnloadFee should be <= to MaximumExponent",
 			);
 
-			assert!(T::MaxConsolidation::get() > 0, "MaxConsolidation must be greater than zero",);
 			assert!(T::MaxSplitOutputs::get() >= 2, "MaxSplitOutputs must be at least 2",);
 
-			// A benchmarking requirement only: the unload benchmarks sample 1, 2, 4, 8 and the
-			// maximum alias count (see `weight_interpolation`), so a maximum below 8 cannot be
-			// benchmarked and leaves the interpolation points out of order.
+			// The unload benchmarks sample 1, 2, 4, 8, 16, 32 and the maximum alias count. A
+			// maximum below 8 cannot provide the distinct initial sample coordinates.
 			assert!(
 				Self::max_aliases_per_unload() >= 8,
 				"the unload benchmarks need MaxConsolidation and the recycler ring capacity to be \
 				at least 8",
-			);
-			assert!(
-				Self::max_recyclers_per_unload() >= 8,
-				"the unload benchmarks need the exponent range and MaxConsolidation to allow at \
-				least 8 recyclers",
 			);
 
 			let budget = OcwWeightBudget::from_normal_max::<T>();
@@ -2156,15 +2149,6 @@ pub mod pallet {
 			Self::max_aliases_per_unload().checked_ilog2().map_or(1, |log| 1 << log)
 		}
 
-		/// The most recyclers [`Call::unload_recyclers_into_external_asset_non_anonymous`] unloads
-		/// at once: one per denomination, capped by `MaxConsolidation`.
-		pub(crate) fn max_recyclers_per_unload() -> u32 {
-			let denominations = i32::from(T::MaximumExponent::get())
-				.saturating_sub(i32::from(T::MinimumExponent::get()))
-				.saturating_add(1);
-			u32::try_from(denominations).unwrap_or(0).min(T::MaxConsolidation::get())
-		}
-
 		/// Weight of [`Call::unload_recycler_into_coin`], see [`weight_interpolation`].
 		///
 		/// The call accepts only a power of two aliases, so its `Max` sample is
@@ -2174,13 +2158,15 @@ pub mod pallet {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_coin_unload(),
-				|sample| match sample {
-					AliasCountSample::One => T::WeightInfo::unload_recycler_into_coin_1(),
-					AliasCountSample::Two => T::WeightInfo::unload_recycler_into_coin_2(),
-					AliasCountSample::Four => T::WeightInfo::unload_recycler_into_coin_4(),
-					AliasCountSample::Eight => T::WeightInfo::unload_recycler_into_coin_8(),
-					AliasCountSample::Max => T::WeightInfo::unload_recycler_into_coin_max(),
-				},
+				[
+					T::WeightInfo::unload_recycler_into_coin_1(),
+					T::WeightInfo::unload_recycler_into_coin_2(),
+					T::WeightInfo::unload_recycler_into_coin_4(),
+					T::WeightInfo::unload_recycler_into_coin_8(),
+					T::WeightInfo::unload_recycler_into_coin_16(),
+					T::WeightInfo::unload_recycler_into_coin_32(),
+					T::WeightInfo::unload_recycler_into_coin_max(),
+				],
 			)
 		}
 
@@ -2190,18 +2176,15 @@ pub mod pallet {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_unload(),
-				|sample| match sample {
-					AliasCountSample::One =>
-						T::WeightInfo::unload_recycler_into_external_asset_prepaid_1(),
-					AliasCountSample::Two =>
-						T::WeightInfo::unload_recycler_into_external_asset_prepaid_2(),
-					AliasCountSample::Four =>
-						T::WeightInfo::unload_recycler_into_external_asset_prepaid_4(),
-					AliasCountSample::Eight =>
-						T::WeightInfo::unload_recycler_into_external_asset_prepaid_8(),
-					AliasCountSample::Max =>
-						T::WeightInfo::unload_recycler_into_external_asset_prepaid_max(),
-				},
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_1(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_2(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_4(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_8(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_16(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_32(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_max(),
+				],
 			)
 		}
 
@@ -2213,20 +2196,29 @@ pub mod pallet {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_unload(),
-				|sample| {
-					match sample {
-					AliasCountSample::One =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(d),
-					AliasCountSample::Two =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(d),
-					AliasCountSample::Four =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(d),
-					AliasCountSample::Eight =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(d),
-					AliasCountSample::Max =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(d),
-				}
-				},
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(
+						d,
+					),
+				],
 			)
 		}
 
@@ -2240,18 +2232,15 @@ pub mod pallet {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_unload(),
-				|sample| match sample {
-					AliasCountSample::One =>
-						T::WeightInfo::unload_recycler_into_external_asset_from_output_1(),
-					AliasCountSample::Two =>
-						T::WeightInfo::unload_recycler_into_external_asset_from_output_2(),
-					AliasCountSample::Four =>
-						T::WeightInfo::unload_recycler_into_external_asset_from_output_4(),
-					AliasCountSample::Eight =>
-						T::WeightInfo::unload_recycler_into_external_asset_from_output_8(),
-					AliasCountSample::Max =>
-						T::WeightInfo::unload_recycler_into_external_asset_from_output_max(),
-				},
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_1(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_2(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_4(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_8(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_16(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_32(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_max(),
+				],
 			)
 		}
 
@@ -2268,20 +2257,15 @@ pub mod pallet {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_unload(),
-				|sample| {
-					match sample {
-					AliasCountSample::One =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(d),
-					AliasCountSample::Two =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(d),
-					AliasCountSample::Four =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(d),
-					AliasCountSample::Eight =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(d),
-					AliasCountSample::Max =>
-						T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(d),
-				}
-				},
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(d),
+				],
 			)
 		}
 
@@ -2318,45 +2302,40 @@ pub mod pallet {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_unload(),
-				|sample| match sample {
-					AliasCountSample::One =>
-						T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_1(),
-					AliasCountSample::Two =>
-						T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_2(),
-					AliasCountSample::Four =>
-						T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_4(),
-					AliasCountSample::Eight =>
-						T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_8(),
-					AliasCountSample::Max =>
-						T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_max(),
-				},
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_1(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_2(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_4(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_8(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_16(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_32(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_max(),
+				],
 			)
 		}
 
 		/// Weight of [`Call::unload_recyclers_into_external_asset_non_anonymous`] for `alias_count`
 		/// aliases over any number of recyclers.
 		///
-		/// The samples unload one alias from each of 1, 2, 4, 8 and
-		/// [`Self::max_recyclers_per_unload`] recyclers, the worst case per alias: aliases sharing
-		/// a recycler share its ring verification. A count above the recycler maximum extends the
-		/// last segment, see [`weight_interpolation`].
+		/// The samples unload one alias from each of 1, 2, 4, 8, 16, 32 and
+		/// `MaxConsolidation` recyclers. Aliases sharing a recycler share its ring verification,
+		/// so one alias per recycler is the worst case per alias.
 		pub(crate) fn unload_recyclers_into_external_asset_non_anonymous_weight(
 			alias_count: u32,
 		) -> Weight {
-			interpolate_unload_weight(alias_count, Self::max_recyclers_per_unload(), |sample| {
-				match sample {
-					AliasCountSample::One =>
-						T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_1(),
-					AliasCountSample::Two =>
-						T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_2(),
-					AliasCountSample::Four =>
-						T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_4(),
-					AliasCountSample::Eight =>
-						T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_8(),
-					AliasCountSample::Max =>
-						T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_max(),
-				}
-			})
+			interpolate_unload_weight(
+				alias_count,
+				T::MaxConsolidation::get(),
+				[
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_1(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_2(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_4(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_8(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_16(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_32(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_max(),
+				],
+			)
 		}
 
 		pub(crate) fn unload_recycler_into_coins_from_output_weight(
@@ -2367,18 +2346,15 @@ pub mod pallet {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_unload(),
-				|sample| match sample {
-					AliasCountSample::One =>
-						T::WeightInfo::unload_recycler_into_coins_from_output_1(d),
-					AliasCountSample::Two =>
-						T::WeightInfo::unload_recycler_into_coins_from_output_2(d),
-					AliasCountSample::Four =>
-						T::WeightInfo::unload_recycler_into_coins_from_output_4(d),
-					AliasCountSample::Eight =>
-						T::WeightInfo::unload_recycler_into_coins_from_output_8(d),
-					AliasCountSample::Max =>
-						T::WeightInfo::unload_recycler_into_coins_from_output_max(d),
-				},
+				[
+					T::WeightInfo::unload_recycler_into_coins_from_output_1(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_2(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_4(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_8(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_16(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_32(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_max(d),
+				],
 			)
 		}
 
@@ -2394,16 +2370,15 @@ pub mod pallet {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_unload(),
-				|sample| match sample {
-					AliasCountSample::One => T::WeightInfo::unload_recycler_into_coins_prepaid_1(d),
-					AliasCountSample::Two => T::WeightInfo::unload_recycler_into_coins_prepaid_2(d),
-					AliasCountSample::Four =>
-						T::WeightInfo::unload_recycler_into_coins_prepaid_4(d),
-					AliasCountSample::Eight =>
-						T::WeightInfo::unload_recycler_into_coins_prepaid_8(d),
-					AliasCountSample::Max =>
-						T::WeightInfo::unload_recycler_into_coins_prepaid_max(d),
-				},
+				[
+					T::WeightInfo::unload_recycler_into_coins_prepaid_1(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_2(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_4(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_8(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_16(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_32(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_max(d),
+				],
 			)
 		}
 
