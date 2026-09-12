@@ -36,7 +36,7 @@ member set, the proven message, or the accounts and values feeding into it.
 Those all feed the cache key, so a stale entry does not go wrong, it simply
 never matches, and the run pays full ring-VRF proof generation instead.
 
-The unload benchmarks sample the alias count at the fixed values 1, 2, 4, 8 and
+The unload benchmarks sample the alias count at the fixed values 1, 2, 4, 8, 16, 32 and
 the maximum (`unload_recycler_into_coin_1`, ..., `unload_recycler_into_coin_max`)
 rather than sweeping a `Linear` component, and the pallet interpolates between
 them (see `weight_interpolation.rs`). The proofs a run needs are therefore the
@@ -86,8 +86,9 @@ Flags:
 - `--no-write` — run the full harvest and print the entry count without
   modifying `proof_cache.rs`. Useful for dry runs.
 - `--profile <profile>` — cargo profile for the runtime build, `production` by
-  default. The cached proofs are the same either way, so `release` trades a
-  slower harvest for a much shorter build.
+  default. The cached proofs are the same either way. `dev` uses the debug WASM
+  artefact and gives the shortest build, while `release` uses the compact
+  compressed WASM artefact and gives the fastest harvest.
 
 After the script finishes, still run the step 5 verification below.
 

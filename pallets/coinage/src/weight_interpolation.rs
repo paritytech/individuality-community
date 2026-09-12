@@ -18,87 +18,82 @@
 //!
 //! Ring-VRF batch verification is sublinear in the proof count, so one linear fit over the
 //! whole alias range misprices small batches. Each unload call is therefore benchmarked at the
-//! fixed alias counts 1, 2, 4, 8 and its maximum, with no `Linear` component for the count, and
-//! the weight of any other count is interpolated linearly between the two nearest samples.
+//! fixed alias counts 1, 2, 4, 8, 16, 32 and its maximum, with no `Linear` component for the count,
+//! and the weight of any other count is interpolated linearly between the two nearest samples.
 
 use frame_support::weights::Weight;
 
-/// The alias counts at which an unload call is benchmarked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AliasCountSample {
-	One,
-	Two,
-	Four,
-	Eight,
-	/// The most aliases the call accepts; each call's weight helper says which bound.
-	Max,
-}
-
-impl AliasCountSample {
-	const ALL: [Self; 5] = [Self::One, Self::Two, Self::Four, Self::Eight, Self::Max];
-
-	fn alias_count(self, max: u32) -> u32 {
-		match self {
-			Self::One => 1,
-			Self::Two => 2,
-			Self::Four => 4,
-			Self::Eight => 8,
-			Self::Max => max,
-		}
-	}
-}
-
-/// The weight of an unload call for `alias_count` aliases, from the call's benchmarks at each
-/// [`AliasCountSample`].
+/// The weight of an unload call for `alias_count` aliases, from its seven fixed benchmarks.
 ///
-/// `max` is the count the `Max` sample was benchmarked at and must be at least 8, which the
-/// pallet's `integrity_test` checks. Above `max` the last segment is extended and never drops
-/// below the `Max` sample, so a call with more aliases than the samples cover is not
-/// under-charged: `unload_recyclers_into_external_asset_non_anonymous` is sampled per recycler
-/// but charged per alias, and its aliases can outnumber its recyclers.
+/// `max` is the count of the final benchmark and must be at least 8, which the pallet's
+/// `integrity_test` checks. Samples above `max` share its coordinate; their component-wise
+/// maximum is the charge at that coordinate. Above `max`, the final distinct segment is extended
+/// and floored at the combined maximum-coordinate weight.
 pub(crate) fn interpolate_unload_weight(
 	alias_count: u32,
 	max: u32,
-	weight_at: impl Fn(AliasCountSample) -> Weight,
+	weights: [Weight; 7],
 ) -> Weight {
-	let points = AliasCountSample::ALL.map(|sample| (sample.alias_count(max), weight_at(sample)));
-	interpolate_weight(alias_count, &points)
+	let coordinates = [1, 2, 4, 8, 16.min(max), 32.min(max), max];
+	interpolate_weight(alias_count, coordinates, weights)
 }
 
-/// Piecewise-linear interpolation of `points`, given in increasing `x` order.
+/// Piecewise-linear interpolation of seven ordered sample coordinates and weights.
 ///
 /// Below the first point the first weight is returned. Above the last point the last segment
-/// is extended, component-wise never below the last weight. Each `Weight` component is
-/// interpolated on its own and rounded up.
-fn interpolate_weight(x: u32, points: &[(u32, Weight)]) -> Weight {
-	let [(first_x, first_weight), .., (_, last_weight)] = points else {
-		frame_support::defensive!("interpolation needs at least two points");
-		return points.first().map_or(Weight::zero(), |(_, weight)| *weight);
-	};
-	if x <= *first_x {
-		return *first_weight;
+/// is extended, component-wise never below the combined final weight. Equal coordinates are
+/// combined first so every sample at a clamped count contributes to the charge. Each `Weight`
+/// component is interpolated on its own and rounded up.
+fn interpolate_weight(x: u32, coordinates: [u32; 7], weights: [Weight; 7]) -> Weight {
+	let mut distinct_coordinates = [0; 7];
+	let mut distinct_weights = [Weight::zero(); 7];
+	let mut distinct_len = 0;
+
+	for index in 0..coordinates.len() {
+		if distinct_len > 0 && coordinates[index] == distinct_coordinates[distinct_len - 1] {
+			distinct_weights[distinct_len - 1] =
+				distinct_weights[distinct_len - 1].max(weights[index]);
+		} else {
+			distinct_coordinates[distinct_len] = coordinates[index];
+			distinct_weights[distinct_len] = weights[index];
+			distinct_len += 1;
+		}
 	}
-	// The segment `x` falls in, or the last one when `x` is past every point.
-	let Some([(x_lo, w_lo), (x_hi, w_hi)]) = points
-		.windows(2)
-		.find(|pair| x <= pair[1].0)
-		.or_else(|| points.windows(2).last())
-	else {
-		frame_support::defensive!("two points always form a segment");
-		return *last_weight;
-	};
-	let interpolated = Weight::from_parts(
-		interpolate_component(x, *x_lo, *x_hi, w_lo.ref_time(), w_hi.ref_time()),
-		interpolate_component(x, *x_lo, *x_hi, w_lo.proof_size(), w_hi.proof_size()),
-	);
-	// Past the last point `interpolate_component` continues the segment's line. Only a falling
-	// segment (measurement noise) is floored at the last sample, so more aliases never cost
-	// less than the `Max` sample.
-	if x > *x_hi {
-		interpolated.max(*last_weight)
-	} else {
-		interpolated
+
+	if x <= distinct_coordinates[0] {
+		return distinct_weights[0];
 	}
+
+	for index in 1..distinct_len {
+		if x <= distinct_coordinates[index] {
+			if x == distinct_coordinates[index] {
+				return distinct_weights[index];
+			}
+			return interpolate_between(
+				x,
+				distinct_coordinates[index - 1],
+				distinct_coordinates[index],
+				distinct_weights[index - 1],
+				distinct_weights[index],
+			);
+		}
+	}
+
+	interpolate_between(
+		x,
+		distinct_coordinates[distinct_len - 2],
+		distinct_coordinates[distinct_len - 1],
+		distinct_weights[distinct_len - 2],
+		distinct_weights[distinct_len - 1],
+	)
+	.max(distinct_weights[distinct_len - 1])
+}
+
+fn interpolate_between(x: u32, x_lo: u32, x_hi: u32, w_lo: Weight, w_hi: Weight) -> Weight {
+	Weight::from_parts(
+		interpolate_component(x, x_lo, x_hi, w_lo.ref_time(), w_hi.ref_time()),
+		interpolate_component(x, x_lo, x_hi, w_lo.proof_size(), w_hi.proof_size()),
+	)
 }
 
 /// `y` at `x` on the line through `(x_lo, y_lo)` and `(x_hi, y_hi)`, rounded up.
@@ -128,67 +123,77 @@ mod tests {
 		Weight::from_parts(ref_time, proof_size)
 	}
 
-	/// Samples growing by a different amount per component, so a mix-up between them shows.
-	fn samples(sample: AliasCountSample) -> Weight {
-		match sample {
-			AliasCountSample::One => weight(100, 1_000),
-			AliasCountSample::Two => weight(150, 1_200),
-			AliasCountSample::Four => weight(220, 1_600),
-			AliasCountSample::Eight => weight(340, 2_400),
-			AliasCountSample::Max => weight(500, 4_000),
-		}
+	fn samples() -> [Weight; 7] {
+		[
+			weight(100, 1_000),
+			weight(150, 1_200),
+			weight(220, 1_600),
+			weight(340, 2_400),
+			weight(500, 4_000),
+			weight(700, 7_000),
+			weight(1_100, 10_000),
+		]
 	}
 
 	#[test]
 	fn sampled_counts_return_their_sample() {
-		for (count, sample) in [
-			(1, AliasCountSample::One),
-			(2, AliasCountSample::Two),
-			(4, AliasCountSample::Four),
-			(8, AliasCountSample::Eight),
-			(16, AliasCountSample::Max),
-		] {
-			assert_eq!(interpolate_unload_weight(count, 16, samples), samples(sample));
+		for (count, expected) in
+			[(1, samples()[0]), (2, samples()[1]), (4, samples()[2]), (8, samples()[3])]
+		{
+			assert_eq!(interpolate_unload_weight(count, 64, samples()), expected);
 		}
 	}
 
 	#[test]
 	fn counts_between_samples_interpolate_each_component() {
 		// Halfway between 2 and 4.
-		assert_eq!(interpolate_unload_weight(3, 16, samples), weight(185, 1_400));
+		assert_eq!(interpolate_unload_weight(3, 64, samples()), weight(185, 1_400));
 		// A quarter of the way from 4 to 8 on ref_time (220 + 120 / 4) and proof_size
 		// (1600 + 800 / 4).
-		assert_eq!(interpolate_unload_weight(5, 16, samples), weight(250, 1_800));
-		// Halfway between 8 and the maximum of 16.
-		assert_eq!(interpolate_unload_weight(12, 16, samples), weight(420, 3_200));
+		assert_eq!(interpolate_unload_weight(5, 64, samples()), weight(250, 1_800));
+		// Halfway between 8 and 16.
+		assert_eq!(interpolate_unload_weight(12, 64, samples()), weight(420, 3_200));
 	}
 
 	#[test]
 	fn interpolation_rounds_up() {
-		let points = [(4, weight(10, 20)), (8, weight(11, 23))];
+		let points = [1, 2, 4, 8, 16, 32, 64];
+		let weights = [
+			weight(0, 0),
+			weight(0, 0),
+			weight(10, 20),
+			weight(11, 23),
+			weight(11, 23),
+			weight(11, 23),
+			weight(11, 23),
+		];
 		// 10 + 1 / 4 and 20 + 3 / 4, both rounded up.
-		assert_eq!(interpolate_weight(5, &points), weight(11, 21));
+		assert_eq!(interpolate_weight(5, points, weights), weight(11, 21));
 	}
 
 	#[test]
 	fn zero_aliases_charge_the_first_sample() {
-		assert_eq!(interpolate_unload_weight(0, 16, samples), samples(AliasCountSample::One));
+		assert_eq!(interpolate_unload_weight(0, 64, samples()), samples()[0]);
 	}
 
 	#[test]
 	fn counts_above_max_extend_the_last_segment() {
-		// From 8 to 16 ref_time rises by 160 and proof_size by 1_600, so by 20 and 200 per
-		// alias.
-		assert_eq!(interpolate_unload_weight(20, 16, samples), weight(580, 4_800));
+		// From 32 to 64 ref_time rises by 400 and proof_size by 3_000, so extending by half
+		// that segment adds 200 and 1_500 respectively.
+		assert_eq!(interpolate_unload_weight(80, 64, samples()), weight(1_300, 11_500));
 	}
 
 	#[test]
 	fn a_falling_last_segment_never_drops_below_max() {
-		let falling = |sample| match sample {
-			AliasCountSample::Eight => weight(100, 100),
-			AliasCountSample::Max => weight(90, 120),
-			_ => weight(10, 10),
-		};
+		let falling = [
+			weight(10, 10),
+			weight(10, 10),
+			weight(10, 10),
+			weight(100, 100),
+			weight(90, 120),
+			weight(90, 120),
+			weight(90, 120),
+		];
 		// Inside the segment the measured fall is followed.
 		assert_eq!(interpolate_unload_weight(12, 16, falling), weight(95, 110));
 		// Past it, ref_time holds at the `Max` sample while proof_size keeps rising.
@@ -198,20 +203,24 @@ mod tests {
 
 	#[test]
 	fn max_equal_to_eight_charges_the_larger_sample_above_it() {
-		let at_eight = |sample| match sample {
-			AliasCountSample::Eight => weight(100, 300),
-			AliasCountSample::Max => weight(120, 250),
-			_ => weight(10, 10),
-		};
-		assert_eq!(interpolate_unload_weight(8, 8, at_eight), weight(100, 300));
-		assert_eq!(interpolate_unload_weight(9, 8, at_eight), weight(120, 300));
+		let at_eight = [
+			weight(10, 10),
+			weight(10, 10),
+			weight(10, 10),
+			weight(100, 300),
+			weight(120, 250),
+			weight(110, 350),
+			weight(115, 275),
+		];
+		assert_eq!(interpolate_unload_weight(8, 8, at_eight), weight(120, 350));
+		assert_eq!(interpolate_unload_weight(9, 8, at_eight), weight(148, 435));
 	}
 
 	#[test]
 	fn interpolation_is_monotonic_over_growing_samples() {
 		let mut previous = Weight::zero();
 		for count in 0..40 {
-			let current = interpolate_unload_weight(count, 16, samples);
+			let current = interpolate_unload_weight(count, 64, samples());
 			assert!(current.all_gte(previous), "weight fell from {previous:?} to {current:?}");
 			previous = current;
 		}
@@ -219,11 +228,46 @@ mod tests {
 
 	#[test]
 	fn extreme_values_saturate() {
-		let huge = |sample| match sample {
-			AliasCountSample::Eight => weight(0, 0),
-			AliasCountSample::Max => weight(u64::MAX, u64::MAX),
-			_ => weight(0, 0),
-		};
+		let huge = [
+			weight(0, 0),
+			weight(0, 0),
+			weight(0, 0),
+			weight(0, 0),
+			weight(u64::MAX, u64::MAX),
+			weight(u64::MAX, u64::MAX),
+			weight(u64::MAX, u64::MAX),
+		];
 		assert_eq!(interpolate_unload_weight(u32::MAX, 16, huge), weight(u64::MAX, u64::MAX));
+	}
+
+	#[test]
+	fn clamped_coordinates_combine_each_weight_component() {
+		let weights = [
+			weight(1, 1),
+			weight(2, 2),
+			weight(4, 4),
+			weight(80, 800),
+			weight(100, 700),
+			weight(90, 900),
+			weight(95, 750),
+		];
+		assert_eq!(interpolate_unload_weight(12, 16, weights), weight(90, 850));
+		assert_eq!(interpolate_unload_weight(16, 16, weights), weight(100, 900));
+		assert_eq!(interpolate_unload_weight(17, 16, weights), weight(103, 913));
+	}
+
+	#[test]
+	fn all_supported_maxima_have_ordered_effective_samples() {
+		for max in [8, 16, 32, 64, 19] {
+			assert_eq!(
+				interpolate_unload_weight(max, max, samples()),
+				match max {
+					8 => samples()[3].max(samples()[4]).max(samples()[5]).max(samples()[6]),
+					16 => samples()[4].max(samples()[5]).max(samples()[6]),
+					32 => samples()[5].max(samples()[6]),
+					_ => samples()[6],
+				}
+			);
+		}
 	}
 }

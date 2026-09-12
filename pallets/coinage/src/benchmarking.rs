@@ -407,12 +407,10 @@ fn fund_pallet_account<T: Config>(amount: FungiblesBalanceOf<T>) {
 		.expect("should hold");
 }
 
-/// Sets up `n` recycler rings, one per denomination, each with minimal members.
-/// - Ring 0: value = min_exp
-/// - Ring 1: value = min_exp + 1
-/// - Ring i: value = min_exp + i
+/// Sets up `n` distinct recycler rings, each with the minimum onboarding cohort.
 ///
-/// Each ring has only `RecyclerOnboardingSize` members (almost empty).
+/// Denominations cycle first and ring indices advance after every denomination. This gives one
+/// independently verified ring per input even when `n` exceeds the denomination count.
 fn setup_multi_recyclers<T: Config>(
 	n: u32,
 	seed: u32,
@@ -422,22 +420,28 @@ fn setup_multi_recyclers<T: Config>(
 	FungiblesBalanceOf<T>,
 ) {
 	let min_exp = T::MinimumExponent::get();
+	let max_exp = T::MaximumExponent::get();
+	let denomination_count = u32::try_from(i16::from(max_exp) - i16::from(min_exp) + 1)
+		.expect("the configured denomination range must be positive");
 	let onboarding_size = pallet::RECYCLER_ONBOARDING_SIZE;
 
 	let mut inputs = Vec::new();
 	let mut sign_data = Vec::new();
 	let mut total_asset_amount: FungiblesBalanceOf<T> = 0u32.into();
 
-	let mut seed_offset = seed;
-
 	for i in 0..n {
-		// One ring per denomination, all at ring index 0
-		let value = min_exp.saturating_add(i as i8);
-		let ring_index = 0u32;
+		let value_offset = i % denomination_count;
+		let value = i8::try_from(
+			i16::from(min_exp) + i16::try_from(value_offset).expect("i8 exponent range"),
+		)
+		.expect("configured denomination must fit i8");
+		let ring_index = i / denomination_count;
+		let member_seed = seed
+			.checked_add(i.checked_mul(onboarding_size).expect("benchmark seed multiplication"))
+			.expect("benchmark seed addition");
 
 		let identifier = Pallet::<T>::recycler_collection_identifier(INSTANCE_ID, value);
-		let members = setup_recycler_with_pending::<T>(value, onboarding_size, seed_offset);
-		seed_offset += onboarding_size;
+		let members = setup_recycler_with_pending::<T>(value, onboarding_size, member_seed);
 
 		T::MemberService::onboard_all_and_build_ring(&identifier, ring_index)
 			.expect("should build ring");
@@ -445,6 +449,13 @@ fn setup_multi_recyclers<T: Config>(
 			T::MemberService::ring_revision(&identifier, ring_index).expect("ring should be built");
 
 		let actual_ring_members = T::MemberService::ring_members(&identifier, ring_index);
+		assert_eq!(actual_ring_members.len(), onboarding_size as usize);
+		assert!(
+			!inputs.iter().any(|input: &UnloadRecyclerInput<T::MaxConsolidation>| {
+				input.value == value && input.index == ring_index
+			}),
+			"each benchmark recycler must have a distinct denomination and ring index",
+		);
 
 		let (secret, _) = &members[0];
 		let alias =
@@ -462,6 +473,8 @@ fn setup_multi_recyclers<T: Config>(
 		let asset_amount = Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value)
 			.expect("denomination should be in range");
 		total_asset_amount = total_asset_amount.saturating_add(asset_amount);
+
+		T::MemberService::seal_current_ring(&identifier).expect("should advance benchmark ring");
 	}
 
 	(inputs, sign_data, total_asset_amount)
@@ -915,13 +928,23 @@ mod benches {
 		Ok(loaded_coin_piece_exponents)
 	}
 
-	fn setup_unload_recycler_into_external_asset_and_loaded_coins<T: Config>(
+	/// Set up only the values and loaded-coin outputs checked by unload validation.
+	///
+	/// This intentionally does not build a recycler ring. Validation only reads these output
+	/// values, and keeping it independent avoids mutating a denomination that the multi-recycler
+	/// setup has sealed into distinct rings.
+	fn setup_mixed_output_validation<T: Config>(
 		a: u32,
 		d: u32,
 		mode: UnloadFeeBenchMode,
-	) -> Result<MixedOutputScenario<T>, BenchmarkError> {
-		common_setup::<T>();
-
+	) -> Result<
+		(
+			Denomination,
+			FungiblesBalanceOf<T>,
+			BoundedVec<(Denomination, MemberOf<T>), T::MaxSplitOutputs>,
+		),
+		BenchmarkError,
+	> {
 		let min_exp = T::MinimumExponent::get();
 		let amount_per_unit = Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), min_exp)
 			.expect("minimum exponent should be in range");
@@ -965,6 +988,22 @@ mod benches {
 			.collect::<Vec<_>>()
 			.try_into()
 			.map_err(|_| BenchmarkError::Skip)?;
+		let external_asset_amount = amount_per_unit
+			.checked_mul(&external_asset_units.saturated_into::<FungiblesBalanceOf<T>>())
+			.ok_or(BenchmarkError::Skip)?;
+
+		Ok((input_value, external_asset_amount, loaded_coins))
+	}
+
+	fn setup_unload_recycler_into_external_asset_and_loaded_coins<T: Config>(
+		a: u32,
+		d: u32,
+		mode: UnloadFeeBenchMode,
+	) -> Result<MixedOutputScenario<T>, BenchmarkError> {
+		common_setup::<T>();
+
+		let (input_value, external_asset_amount, loaded_coins) =
+			setup_mixed_output_validation::<T>(a, d, mode)?;
 
 		let (index, revision, members) = setup_built_recycler::<T>(input_value, a, 60_000);
 		let asset_amount =
@@ -1005,9 +1044,7 @@ mod benches {
 			index,
 			revision,
 			dest,
-			external_asset_amount: amount_per_unit
-				.checked_mul(&external_asset_units.saturated_into::<FungiblesBalanceOf<T>>())
-				.ok_or(BenchmarkError::Skip)?,
+			external_asset_amount,
 			loaded_coins,
 		})
 	}
@@ -1743,10 +1780,10 @@ mod benches {
 
 	// ==================== UnloadToken-origin extrinsics ====================
 
-	/// Each unload call is benchmarked at the fixed alias counts 1, 2, 4, 8 and its maximum, with
-	/// no `Linear` component for the count. Ring-VRF batch verification is sublinear in the
-	/// proof count, so a linear fit over the whole range misprices small batches; the pallet
-	/// interpolates between the samples instead, see `crate::weight_interpolation`.
+	/// Each unload call is benchmarked at the fixed alias counts 1, 2, 4, 8, 16, 32 and its
+	/// maximum, with no `Linear` component for the count. Ring-VRF batch verification is sublinear
+	/// in the proof count, so a linear fit over the whole range misprices small batches; the
+	/// pallet interpolates between the samples instead, see `crate::weight_interpolation`.
 	///
 	/// `unload_recycler_into_coin` accepts a power of two aliases, so its maximum is the largest
 	/// power of two within the per-ring alias limit.
@@ -1824,6 +1861,32 @@ mod benches {
 			call()?;
 		}
 
+		assert!(CoinsByOwner::<T>::contains_key(&dest));
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coin_16() -> Result<(), BenchmarkError> {
+		let (call, dest) = prepare_unload_recycler_into_coin::<T>(
+			16.min(Pallet::<T>::max_aliases_per_coin_unload()),
+		);
+		#[block]
+		{
+			call()?;
+		}
+		assert!(CoinsByOwner::<T>::contains_key(&dest));
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coin_32() -> Result<(), BenchmarkError> {
+		let (call, dest) = prepare_unload_recycler_into_coin::<T>(
+			32.min(Pallet::<T>::max_aliases_per_coin_unload()),
+		);
+		#[block]
+		{
+			call()?;
+		}
 		assert!(CoinsByOwner::<T>::contains_key(&dest));
 		Ok(())
 	}
@@ -1919,6 +1982,32 @@ mod benches {
 			call()?;
 		}
 
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_prepaid_16() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(
+			16.min(Pallet::<T>::max_aliases_per_unload()),
+		);
+		#[block]
+		{
+			call()?;
+		}
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_prepaid_32() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(
+			32.min(Pallet::<T>::max_aliases_per_unload()),
+		);
+		#[block]
+		{
+			call()?;
+		}
 		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
 		Ok(())
 	}
@@ -2056,6 +2145,32 @@ mod benches {
 			call()?;
 		}
 
+		balances.assert_moved(None);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_from_output_16() -> Result<(), BenchmarkError> {
+		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(
+			16.min(Pallet::<T>::max_aliases_per_unload()),
+		);
+		#[block]
+		{
+			call()?;
+		}
+		balances.assert_moved(None);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_from_output_32() -> Result<(), BenchmarkError> {
+		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(
+			32.min(Pallet::<T>::max_aliases_per_unload()),
+		);
+		#[block]
+		{
+			call()?;
+		}
 		balances.assert_moved(None);
 		Ok(())
 	}
@@ -2249,6 +2364,40 @@ mod benches {
 	}
 
 	#[benchmark]
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			16.min(Pallet::<T>::max_aliases_per_unload()),
+			d,
+			UnloadFeeBenchMode::Prepaid,
+		)?;
+		#[block]
+		{
+			call()?;
+		}
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			32.min(Pallet::<T>::max_aliases_per_unload()),
+			d,
+			UnloadFeeBenchMode::Prepaid,
+		)?;
+		#[block]
+		{
+			call()?;
+		}
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
@@ -2339,6 +2488,40 @@ mod benches {
 			call()?;
 		}
 
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_16(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			16.min(Pallet::<T>::max_aliases_per_unload()),
+			d,
+			UnloadFeeBenchMode::FromOutput,
+		)?;
+		#[block]
+		{
+			call()?;
+		}
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_32(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			32.min(Pallet::<T>::max_aliases_per_unload()),
+			d,
+			UnloadFeeBenchMode::FromOutput,
+		)?;
+		#[block]
+		{
+			call()?;
+		}
 		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
 		Ok(())
 	}
@@ -2444,6 +2627,32 @@ mod benches {
 	}
 
 	#[benchmark]
+	fn unload_recycler_into_external_asset_non_anonymous_16() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_non_anonymous::<T>(
+			16.min(Pallet::<T>::max_aliases_per_unload()),
+		);
+		#[block]
+		{
+			call()?;
+		}
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_external_asset_non_anonymous_32() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_non_anonymous::<T>(
+			32.min(Pallet::<T>::max_aliases_per_unload()),
+		);
+		#[block]
+		{
+			call()?;
+		}
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
 	fn unload_recycler_into_external_asset_non_anonymous_max() -> Result<(), BenchmarkError> {
 		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_non_anonymous::<T>(
 			Pallet::<T>::max_aliases_per_unload(),
@@ -2458,12 +2667,11 @@ mod benches {
 		Ok(())
 	}
 
-	/// Sets up a signed unload of one alias from each of `n` recyclers, one per denomination.
+	/// Sets up a signed unload of one alias from each of `n` distinct recycler rings.
 	/// Returns the call, the destination and the amount it must receive.
 	///
 	/// One alias per recycler is the worst case per alias: aliases sharing a recycler share its
-	/// ring verification. The pallet charges per alias and extends the last segment above the
-	/// recycler maximum, see `crate::weight_interpolation`.
+	/// ring verification. The pallet samples through `MaxConsolidation`, the dispatch input bound.
 	fn prepare_unload_recyclers_into_external_asset_non_anonymous<T: Config>(
 		n: u32,
 	) -> (impl FnOnce() -> Result<(), BenchmarkError>, T::AccountId, FungiblesBalanceOf<T>) {
@@ -2544,9 +2752,35 @@ mod benches {
 	}
 
 	#[benchmark]
+	fn unload_recyclers_into_external_asset_non_anonymous_16() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(
+			16.min(T::MaxConsolidation::get()),
+		);
+		#[block]
+		{
+			call()?;
+		}
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recyclers_into_external_asset_non_anonymous_32() -> Result<(), BenchmarkError> {
+		let (call, dest, expected) = prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(
+			32.min(T::MaxConsolidation::get()),
+		);
+		#[block]
+		{
+			call()?;
+		}
+		assert_eq!(T::Fungibles::balance(asset_id::<T>(), &dest), expected);
+		Ok(())
+	}
+
+	#[benchmark]
 	fn unload_recyclers_into_external_asset_non_anonymous_max() -> Result<(), BenchmarkError> {
 		let (call, dest, expected) = prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(
-			Pallet::<T>::max_recyclers_per_unload(),
+			T::MaxConsolidation::get(),
 		);
 
 		#[block]
@@ -2913,6 +3147,40 @@ mod benches {
 	}
 
 	#[benchmark]
+	fn unload_recycler_into_coins_from_output_16(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
+			16.min(Pallet::<T>::max_aliases_per_unload()),
+			d,
+			UnloadFeeBenchMode::FromOutput,
+		)?;
+		#[block]
+		{
+			call()?;
+		}
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_from_output_32(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
+			32.min(Pallet::<T>::max_aliases_per_unload()),
+			d,
+			UnloadFeeBenchMode::FromOutput,
+		)?;
+		#[block]
+		{
+			call()?;
+		}
+		expectation.assert_unloaded(UnloadFeeBenchMode::FromOutput);
+		Ok(())
+	}
+
+	#[benchmark]
 	fn unload_recycler_into_coins_from_output_max(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
@@ -2991,6 +3259,40 @@ mod benches {
 			call()?;
 		}
 
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_prepaid_16(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
+			16.min(Pallet::<T>::max_aliases_per_unload()),
+			d,
+			UnloadFeeBenchMode::Prepaid,
+		)?;
+		#[block]
+		{
+			call()?;
+		}
+		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
+		Ok(())
+	}
+
+	#[benchmark]
+	fn unload_recycler_into_coins_prepaid_32(
+		d: Linear<1, { T::MaxSplitOutputs::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
+			32.min(Pallet::<T>::max_aliases_per_unload()),
+			d,
+			UnloadFeeBenchMode::Prepaid,
+		)?;
+		#[block]
+		{
+			call()?;
+		}
 		expectation.assert_unloaded(UnloadFeeBenchMode::Prepaid);
 		Ok(())
 	}
@@ -3255,7 +3557,7 @@ mod benches {
 	/// (multiple inputs, validates n recycler revisions).
 	#[benchmark]
 	fn as_none_tx_ext_unload_recyclers_into_external_asset_non_anonymous(
-		n: Linear<1, { Pallet::<T>::max_recyclers_per_unload() }>,
+		n: Linear<1, { T::MaxConsolidation::get() }>,
 	) -> Result<(), BenchmarkError> {
 		common_setup::<T>();
 
@@ -3961,26 +4263,27 @@ mod benches {
 	/// Benchmark `validate_unload_calls` operations.
 	/// - `r`: number of recycler revision checks
 	/// - `d`: number of output validations (coin destinations and loaded-coin outputs)
-	// NOTE: we use one recycler per denomination to avoid the expensive setup of creating multiple
-	// full recyclers.
+	// The benchmark-only helper seals small rings, so every revision check uses a distinct ring.
 	#[benchmark]
 	fn validate_unload_calls(
-		r: Linear<1, { Pallet::<T>::max_recyclers_per_unload() }>,
+		r: Linear<1, { T::MaxConsolidation::get() }>,
 		d: Linear<0, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
 		common_setup::<T>();
 
-		let (inputs, _, _) = setup_multi_recyclers::<T>(r, 0);
 		let mixed_output_validation = if d > 0 {
-			let scenario = setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(
+			let (input_value, external_asset_amount, loaded_coins) = setup_mixed_output_validation::<T>(
 				1,
 				d,
 				UnloadFeeBenchMode::Prepaid,
 			)?;
-			Some((scenario.input_value, scenario.external_asset_amount, scenario.loaded_coins))
+			Some((input_value, external_asset_amount, loaded_coins))
 		} else {
 			None
 		};
+		// Output validation does not need a recycler ring, so it is independent of the distinct
+		// recycler rings below.
+		let (inputs, _, _) = setup_multi_recyclers::<T>(r, 0);
 
 		// Setup `d` destination accounts (that don't have coins)
 		let mut destinations: Vec<T::AccountId> = Vec::new();

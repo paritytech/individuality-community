@@ -96,9 +96,13 @@ def run_capture(cmd: list[str], env: dict | None = None) -> str:
 
 def runtime_wasm_path(runtime: str, profile: str) -> Path:
     snake = runtime.replace("-", "_") + "_runtime"
+    # wasm-builder writes the uncompressed runtime in Cargo's shared debug directory for the
+    # `dev` and `test` profiles. Its optimised builds write the compact compressed artefact in
+    # the selected profile directory. `bench` also uses Cargo's shared release directory.
+    profile_dir = {"dev": "debug", "test": "debug", "bench": "release"}.get(profile, profile)
+    wasm_name = f"{snake}.wasm" if profile in {"dev", "test"} else f"{snake}.compact.compressed.wasm"
     return (
-        REPO_ROOT / "target" / profile / "wbuild"
-        / f"{runtime}-runtime" / f"{snake}.compact.compressed.wasm"
+        REPO_ROOT / "target" / profile_dir / "wbuild" / f"{runtime}-runtime" / wasm_name
     )
 
 

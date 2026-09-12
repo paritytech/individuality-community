@@ -81,36 +81,64 @@ pub trait WeightInfo {
 	fn unload_recycler_into_coin_2() -> Weight;
 	fn unload_recycler_into_coin_4() -> Weight;
 	fn unload_recycler_into_coin_8() -> Weight;
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_coin_16() -> Weight { Self::unload_recycler_into_coin_max() }
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_coin_32() -> Weight { Self::unload_recycler_into_coin_max() }
 	fn unload_recycler_into_coin_max() -> Weight;
 	fn unload_recycler_into_external_asset_prepaid_1() -> Weight;
 	fn unload_recycler_into_external_asset_prepaid_2() -> Weight;
 	fn unload_recycler_into_external_asset_prepaid_4() -> Weight;
 	fn unload_recycler_into_external_asset_prepaid_8() -> Weight;
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_prepaid_16() -> Weight { Self::unload_recycler_into_external_asset_prepaid_max() }
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_prepaid_32() -> Weight { Self::unload_recycler_into_external_asset_prepaid_max() }
 	fn unload_recycler_into_external_asset_prepaid_max() -> Weight;
 	fn unload_recycler_into_external_asset_from_output_1() -> Weight;
 	fn unload_recycler_into_external_asset_from_output_2() -> Weight;
 	fn unload_recycler_into_external_asset_from_output_4() -> Weight;
 	fn unload_recycler_into_external_asset_from_output_8() -> Weight;
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_from_output_16() -> Weight { Self::unload_recycler_into_external_asset_from_output_max() }
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_from_output_32() -> Weight { Self::unload_recycler_into_external_asset_from_output_max() }
 	fn unload_recycler_into_external_asset_from_output_max() -> Weight;
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(d: u32, ) -> Weight;
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(d: u32, ) -> Weight;
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(d: u32, ) -> Weight;
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(d: u32, ) -> Weight;
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(d: u32, ) -> Weight { Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(d) }
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(d: u32, ) -> Weight { Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(d) }
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(d: u32, ) -> Weight;
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_1(d: u32, ) -> Weight;
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_2(d: u32, ) -> Weight;
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_4(d: u32, ) -> Weight;
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_8(d: u32, ) -> Weight;
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_16(d: u32, ) -> Weight { Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(d) }
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_32(d: u32, ) -> Weight { Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(d) }
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_max(d: u32, ) -> Weight;
 	fn unload_recycler_into_external_asset_non_anonymous_1() -> Weight;
 	fn unload_recycler_into_external_asset_non_anonymous_2() -> Weight;
 	fn unload_recycler_into_external_asset_non_anonymous_4() -> Weight;
 	fn unload_recycler_into_external_asset_non_anonymous_8() -> Weight;
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_non_anonymous_16() -> Weight { Self::unload_recycler_into_external_asset_non_anonymous_max() }
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_external_asset_non_anonymous_32() -> Weight { Self::unload_recycler_into_external_asset_non_anonymous_max() }
 	fn unload_recycler_into_external_asset_non_anonymous_max() -> Weight;
 	fn unload_recyclers_into_external_asset_non_anonymous_1() -> Weight;
 	fn unload_recyclers_into_external_asset_non_anonymous_2() -> Weight;
 	fn unload_recyclers_into_external_asset_non_anonymous_4() -> Weight;
 	fn unload_recyclers_into_external_asset_non_anonymous_8() -> Weight;
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recyclers_into_external_asset_non_anonymous_16() -> Weight { Self::unload_recyclers_into_external_asset_non_anonymous_max() }
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recyclers_into_external_asset_non_anonymous_32() -> Weight { Self::unload_recyclers_into_external_asset_non_anonymous_max() }
 	fn unload_recyclers_into_external_asset_non_anonymous_max() -> Weight;
 	fn unload_recyclers_into_external_asset_non_anonymous_fee_fail() -> Weight;
 	fn unload_archived_recycler_into_external_asset_fee_fail() -> Weight;
@@ -119,11 +147,19 @@ pub trait WeightInfo {
 	fn unload_recycler_into_coins_from_output_2(d: u32, ) -> Weight;
 	fn unload_recycler_into_coins_from_output_4(d: u32, ) -> Weight;
 	fn unload_recycler_into_coins_from_output_8(d: u32, ) -> Weight;
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_coins_from_output_16(d: u32, ) -> Weight { Self::unload_recycler_into_coins_from_output_max(d) }
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_coins_from_output_32(d: u32, ) -> Weight { Self::unload_recycler_into_coins_from_output_max(d) }
 	fn unload_recycler_into_coins_from_output_max(d: u32, ) -> Weight;
 	fn unload_recycler_into_coins_prepaid_1(d: u32, ) -> Weight;
 	fn unload_recycler_into_coins_prepaid_2(d: u32, ) -> Weight;
 	fn unload_recycler_into_coins_prepaid_4(d: u32, ) -> Weight;
 	fn unload_recycler_into_coins_prepaid_8(d: u32, ) -> Weight;
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_coins_prepaid_16(d: u32, ) -> Weight { Self::unload_recycler_into_coins_prepaid_max(d) }
+	/// Temporary conservative delegation until regenerated benchmark output replaces it.
+	fn unload_recycler_into_coins_prepaid_32(d: u32, ) -> Weight { Self::unload_recycler_into_coins_prepaid_max(d) }
 	fn unload_recycler_into_coins_prepaid_max(d: u32, ) -> Weight;
 	fn as_none_tx_ext_others() -> Weight;
 	fn as_none_tx_ext_unload_recycler_into_external_asset_non_anonymous() -> Weight;
