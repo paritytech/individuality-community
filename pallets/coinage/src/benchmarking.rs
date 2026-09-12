@@ -4280,11 +4280,8 @@ mod benches {
 		common_setup::<T>();
 
 		let mixed_output_validation = if d > 0 {
-			let (input_value, external_asset_amount, loaded_coins) = setup_mixed_output_validation::<T>(
-				1,
-				d,
-				UnloadFeeBenchMode::Prepaid,
-			)?;
+			let (input_value, external_asset_amount, loaded_coins) =
+				setup_mixed_output_validation::<T>(1, d, UnloadFeeBenchMode::Prepaid)?;
 			Some((input_value, external_asset_amount, loaded_coins))
 		} else {
 			None
