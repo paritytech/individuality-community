@@ -41,7 +41,7 @@ fn credit(i: u32) -> NftClaimCredit {
 	credit
 }
 
-/// A batch of `n` trees of the live stream, one per award block, as the game pallet sends it.
+/// A batch of `n` trees of the live stream, one per block, as the game pallet sends it.
 ///
 /// The sequence numbers start at one, so a receiver still expecting zero sees the batch as
 /// ahead of the stream.
@@ -97,7 +97,7 @@ mod benches {
 	///
 	/// The component starts at one because a one-leaf tree has no such claim. Its first claim is
 	/// its last, and only a proof of no sibling hashes verifies against it. It stops at the
-	/// largest power of two within [`Config::MaxCreditsPerAwardBlock`], which is the biggest tree
+	/// largest power of two within [`Config::MaxCreditsPerTree`], which is the biggest tree
 	/// this chain stores.
 	///
 	/// The claim is made under [`ClaimantKind::Account`], the kind whose origin check takes the
@@ -108,7 +108,7 @@ mod benches {
 	/// top, reserved and refunded outside this function.
 	#[benchmark]
 	fn claim_account(
-		n: Linear<1, { T::MaxCreditsPerAwardBlock::get().ilog2() }>,
+		n: Linear<1, { T::MaxCreditsPerTree::get().ilog2() }>,
 	) -> Result<(), BenchmarkError> {
 		let kind = ClaimantKind::Account;
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
@@ -137,7 +137,7 @@ mod benches {
 	/// alias up rather than take the account as it stands.
 	#[benchmark]
 	fn claim_person(
-		n: Linear<1, { T::MaxCreditsPerAwardBlock::get().ilog2() }>,
+		n: Linear<1, { T::MaxCreditsPerTree::get().ilog2() }>,
 	) -> Result<(), BenchmarkError> {
 		let kind = ClaimantKind::Person;
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
@@ -167,7 +167,7 @@ mod benches {
 	/// the bitmap stay for the sweep to take.
 	#[benchmark]
 	fn claim_last_account(
-		n: Linear<0, { T::MaxCreditsPerAwardBlock::get().ilog2() }>,
+		n: Linear<0, { T::MaxCreditsPerTree::get().ilog2() }>,
 	) -> Result<(), BenchmarkError> {
 		let kind = ClaimantKind::Account;
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
@@ -199,7 +199,7 @@ mod benches {
 	/// look the signer's alias up rather than take the account as it stands.
 	#[benchmark]
 	fn claim_last_person(
-		n: Linear<0, { T::MaxCreditsPerAwardBlock::get().ilog2() }>,
+		n: Linear<0, { T::MaxCreditsPerTree::get().ilog2() }>,
 	) -> Result<(), BenchmarkError> {
 		let kind = ClaimantKind::Person;
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
@@ -244,7 +244,7 @@ mod benches {
 		// Only the tree that is not due is left, which is the one filed last.
 		assert_eq!(TreeExpiries::<T>::iter().count(), 1);
 		assert_eq!(
-			oldest_expiry::<TreeExpiries<T>, AwardBlock>(),
+			oldest_expiry::<TreeExpiries<T>, CreditTreeBlock>(),
 			Some(FIRST_EXPIRY_TIMESTAMP.saturating_add(n))
 		);
 
@@ -330,7 +330,7 @@ mod benches {
 	impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }
 
-const BLOCK: AwardBlock = 1;
+const BLOCK: CreditTreeBlock = 1;
 
 const COLLECTION: CollectionId = 0;
 

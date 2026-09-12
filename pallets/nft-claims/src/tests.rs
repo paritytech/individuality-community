@@ -22,7 +22,7 @@ use crate::{
 };
 use frame_support::{assert_noop, assert_ok, dispatch::GetDispatchInfo, BoundedVec};
 use indiv_support::credit_trees::{
-	AwardBlock, CreditProofNode, CreditTreeDelivery, ExpiryTimestamp, NftClaimCreditTree,
+	CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpiryTimestamp, NftClaimCreditTree,
 };
 use sp_runtime::DispatchError;
 
@@ -258,7 +258,7 @@ mod claim {
 	const PURSE: u64 = 100;
 
 	/// The block whose tree the tests claim against.
-	const BLOCK: AwardBlock = 10;
+	const BLOCK: CreditTreeBlock = 10;
 
 	/// The collection the tests mint into.
 	const COLLECTION: CollectionId = 3;
@@ -812,7 +812,7 @@ mod claim {
 					COLLECTION,
 					PURSE
 				),
-				Error::<Test>::UnknownAwardBlock
+				Error::<Test>::UnknownCreditTree
 			);
 		});
 	}
@@ -1804,7 +1804,7 @@ mod expiry {
 
 	/// The timestamp the next sweep starts at.
 	fn oldest_filed() -> Option<u32> {
-		oldest_expiry::<TreeExpiries<Test>, AwardBlock>()
+		oldest_expiry::<TreeExpiries<Test>, CreditTreeBlock>()
 	}
 
 	#[test]
@@ -1847,7 +1847,7 @@ mod expiry {
 	fn a_tree_of_more_leaves_than_the_bitmap_holds_is_not_stored() {
 		new_test_ext().execute_with(|| {
 			// The mock's trees commit to three leaves.
-			MaxCreditsPerAwardBlock::set(&2);
+			MaxCreditsPerTree::set(&2);
 
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
@@ -2088,7 +2088,7 @@ mod deletions {
 		InvalidTransaction, TransactionSource, TransactionValidityError,
 	};
 
-	fn send(front: AwardBlock) -> frame_support::dispatch::DispatchResultWithPostInfo {
+	fn send(front: CreditTreeBlock) -> frame_support::dispatch::DispatchResultWithPostInfo {
 		NftClaims::send_tree_deletions(
 			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
 			front,
@@ -2096,7 +2096,7 @@ mod deletions {
 		)
 	}
 
-	fn queue(blocks: Vec<AwardBlock>) {
+	fn queue(blocks: Vec<CreditTreeBlock>) {
 		PendingTreeDeletions::<Test>::put(
 			BoundedVec::try_from(blocks).expect("fits MaxQueuedTreeDeletions"),
 		);
@@ -2250,13 +2250,13 @@ mod migration {
 	use indiv_support::credit_trees::NftClaimCreditLeaf;
 
 	/// Whether the tree of `block` is filed for expiry under the timestamp it commits to.
-	fn filed(block: AwardBlock) -> bool {
+	fn filed(block: CreditTreeBlock) -> bool {
 		TreeExpiries::<Test>::contains_key(ExpiryTimestamp::from(tree(block).timestamp), block)
 	}
 
 	/// Stores the tree of `block` the way a chain running the old code left it: the tree alone,
 	/// with no expiry entry and with `claimed` of its leaves recorded by hash.
-	fn store_old_tree(block: AwardBlock, claimed: u32) {
+	fn store_old_tree(block: CreditTreeBlock, claimed: u32) {
 		CreditTrees::<Test>::insert(block, tree(block));
 		for index in 0..claimed {
 			ClaimedCredits::<Test>::insert(block, NftClaimCreditLeaf([index as u8; 32]), ());
@@ -2327,7 +2327,7 @@ mod migration {
 	fn the_migration_removes_a_tree_that_outgrew_the_credit_bound() {
 		new_test_ext().execute_with(|| {
 			let mut oversized = tree(10);
-			oversized.leaf_count = MaxCreditsPerAwardBlock::get() + 1;
+			oversized.leaf_count = MaxCreditsPerTree::get() + 1;
 			CreditTrees::<Test>::insert(10, oversized);
 
 			migrate();
