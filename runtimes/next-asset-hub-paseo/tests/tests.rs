@@ -943,14 +943,13 @@ mod dap {
 		weights::Weight,
 	};
 	use next_asset_hub_paseo_runtime::{
-		AllPalletsWithoutSystem, Balances, EthExtraImpl, Executive, ExistentialDeposit, Runtime,
-		RuntimeCall, RuntimeOrigin, SessionKeys, System, TxExtension, UncheckedExtrinsic,
+		AllPalletsWithoutSystem, Balances, Executive, ExistentialDeposit, Runtime, RuntimeCall,
+		RuntimeOrigin, SessionKeys, System, TxExtensionV0, UncheckedExtrinsic,
 	};
-	use pallet_revive::evm::runtime::EthExtra;
 	use parachains_common::{AccountId, AuraId};
 	use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
 	use sp_keyring::Sr25519Keyring;
-	use sp_runtime::MultiSignature;
+	use sp_runtime::{generic, MultiSignature};
 
 	use asset_test_utils::ExtBuilder;
 
@@ -961,9 +960,19 @@ mod dap {
 	fn construct_extrinsic(sender: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
 		let account_id = AccountId::from(sender.public());
 		let nonce = frame_system::Pallet::<Runtime>::account(&account_id).nonce;
-		// `EthExtra::get_eth_extension` returns the same Substrate-side `TxExtension` we sign over,
-		// constructed with the right defaults for nonce/tip and skipping the PGAS branch.
-		let tx_ext: TxExtension = EthExtraImpl::get_eth_extension(nonce, 0);
+		let tx_ext = TxExtensionV0::from((
+			frame_system::AuthorizeCall::<Runtime>::new(),
+			frame_system::CheckNonZeroSender::<Runtime>::new(),
+			frame_system::CheckSpecVersion::<Runtime>::new(),
+			frame_system::CheckTxVersion::<Runtime>::new(),
+			frame_system::CheckGenesis::<Runtime>::new(),
+			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
+			frame_system::CheckNonce::<Runtime>::from(nonce),
+			frame_system::CheckWeight::<Runtime>::new(),
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
+			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
+			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
+		));
 		let payload =
 			sp_runtime::generic::SignedPayload::new(call.clone(), tx_ext.clone()).unwrap();
 		let signature = payload.using_encoded(|e| sender.sign(e));
@@ -1079,19 +1088,19 @@ mod pgas_fees {
 		traits::{
 			fungible::Inspect as FungibleInspect,
 			fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
-			SignedTransactionBuilder,
 		},
 	};
 	use next_asset_hub_paseo_runtime::{
-		Assets, Balances, Executive, ExistentialDeposit, NftClaims, PgasAssetId, PgasMinBalance,
-		Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, Scarcity, SessionKeys, System,
-		TxExtension, UncheckedExtrinsic,
+		Address, Assets, Balances, Executive, ExistentialDeposit, NftClaims, PgasAssetId,
+		PgasMinBalance, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, Scarcity, SessionKeys,
+		System, TxExtensionOtherVersions, TxExtensionV0, TxExtensionV1, UncheckedExtrinsic,
 	};
 	use parachains_common::{AccountId, AuraId};
 	use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
 	use sp_keyring::Sr25519Keyring;
 	use sp_runtime::{
 		generic,
+		traits::TransactionExtension,
 		transaction_validity::{InvalidTransaction, TransactionValidityError},
 		MultiSignature,
 	};
@@ -1101,14 +1110,15 @@ mod pgas_fees {
 	use super::ALICE;
 
 	/// Builds a signed extrinsic whose `ChargePGAS` has the PGAS path enabled. The `dap` module's
-	/// helper cannot be reused: it goes through `EthExtraImpl::get_eth_extension`, which
-	/// constructs `ChargePGAS` with `new_skip_pgas`.
+	/// helper cannot be reused: it intentionally creates a legacy V0 signed transaction with
+	/// ordinary asset payment rather than a V1 `ChargePGAS` transaction.
 	fn construct_extrinsic(sender: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
 		let account_id = AccountId::from(sender.public());
 		let nonce = frame_system::Pallet::<Runtime>::account(&account_id).nonce;
-		let tx_ext = TxExtension::from((
+		let mut tx_ext = TxExtensionV1::from((
 			(
 				(),
+				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
 				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
 				frame_system::AuthorizeCall::<Runtime>::new(),
 				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
@@ -1131,14 +1141,49 @@ mod pgas_fees {
 			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
 		));
-		let payload = generic::SignedPayload::new(call.clone(), tx_ext.clone()).unwrap();
-		let signature = payload.using_encoded(|e| sender.sign(e));
-		UncheckedExtrinsic::new_signed_transaction(
-			call,
-			account_id.into(),
-			MultiSignature::Sr25519(signature),
-			tx_ext,
+		let rest_ext = (
+			(
+				tx_ext.0 .0 .2.clone(),
+				tx_ext.0 .0 .3.clone(),
+				tx_ext.0 .0 .4.clone(),
+				tx_ext.0 .0 .5.clone(),
+			),
+			tx_ext.0 .1.clone(),
+			tx_ext.0 .2.clone(),
+			tx_ext.0 .3.clone(),
+			tx_ext.0 .4.clone(),
+			tx_ext.0 .5.clone(),
+			tx_ext.0 .6.clone(),
+			tx_ext.0 .7.clone(),
+			tx_ext.0 .8.clone(),
+			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
+			tx_ext.0 .11.clone(),
+		);
+		let message = (
+			next_asset_hub_paseo_runtime::INDIVIDUALITY_EXTENSION_VERSION,
+			&call,
+			&rest_ext,
+			&rest_ext.implicit().unwrap(),
 		)
+			.using_encoded(sp_io::hashing::blake2_256);
+		tx_ext.0 .0 .1 = pallet_verify_signature::VerifySignature::<Runtime>::new_with_signature(
+			MultiSignature::Sr25519(sender.sign(&message)),
+			account_id,
+		);
+		generic::UncheckedExtrinsic::<
+			Address,
+			RuntimeCall,
+			MultiSignature,
+			TxExtensionV0,
+			TxExtensionOtherVersions,
+		>::from_parts(
+			call,
+			generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(
+				TxExtensionOtherVersions::new(tx_ext),
+			)),
+		)
+		.into()
 	}
 
 	#[test]
@@ -1469,18 +1514,19 @@ mod external_asset_teleport {
 /// The transaction pipeline is what decides whether a call can reach dispatch unpaid, so its shape
 /// is an invariant of this chain, not an implementation detail.
 mod tx_extension_pipeline {
-	use next_asset_hub_paseo_runtime::{RuntimeCall, TxExtension};
+	use next_asset_hub_paseo_runtime::{RuntimeCall, TxExtensionV1};
 	use sp_runtime::traits::TransactionExtension;
 
 	/// Every extension of the pipeline, in the order it runs.
 	///
-	/// The four ahead of `RestrictOrigins` are the ones that replace the origin, and everything
+	/// The five ahead of `RestrictOrigins` are the ones that replace the origin, and everything
 	/// that charges the transaction runs after it. An extension that installs an origin the
 	/// payment extensions do not charge therefore needs an allowance in
 	/// `pallet-origin-restriction` to bound it, which is why an addition anywhere in this list is
 	/// a deliberate change rather than an implementation detail.
-	const PIPELINE: [&str; 17] = [
+	const PIPELINE: [&str; 18] = [
 		"UnitTransactionExtension",
+		"VerifyMultiSignature",
 		"AsScarcity",
 		"AuthorizeCall",
 		"AsPgas",
@@ -1501,7 +1547,7 @@ mod tx_extension_pipeline {
 
 	#[test]
 	fn the_pipeline_is_the_expected_one() {
-		let identifiers = <TxExtension as TransactionExtension<RuntimeCall>>::metadata()
+		let identifiers = <TxExtensionV1 as TransactionExtension<RuntimeCall>>::metadata()
 			.into_iter()
 			.map(|meta| meta.identifier)
 			.collect::<Vec<_>>();

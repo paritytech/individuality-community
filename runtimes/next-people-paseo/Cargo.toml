@@ -23,6 +23,7 @@ serde_json = { features = ["alloc"], workspace = true }
 # Substrate
 frame-benchmarking = { workspace = true, optional = true }
 frame-executive = { workspace = true }
+frame-metadata-hash-extension = { workspace = true }
 frame-support = { workspace = true }
 frame-system = { workspace = true }
 frame-system-benchmarking = { workspace = true, optional = true }
@@ -117,6 +118,7 @@ parachains-common = { workspace = true }
 assets-common = { workspace = true }
 
 [dev-dependencies]
+frame-metadata = { workspace = true, features = ["std"] }
 parking_lot = { workspace = true }
 sp-trie = { workspace = true }
 
@@ -138,6 +140,8 @@ std = [
 	"enumflags2/std",
 	"frame-benchmarking?/std",
 	"frame-executive/std",
+	"frame-metadata-hash-extension/std",
+	"frame-metadata/std",
 	"frame-support/std",
 	"frame-system-benchmarking?/std",
 	"frame-system-rpc-runtime-api/std",
@@ -295,6 +299,12 @@ coinage-benchmark-proof-cache-regenerate = [
 # expose those host functions (executor param `EccRfc163`). Weights in this repository
 # are measured against the default in-runtime backend.
 ec-crypto-hostcalls = ["indiv-support/ec-crypto-hostcalls"]
+
+# Enable metadata hash generation at compile time for the `CheckMetadataHash` extension.
+metadata-hash = ["substrate-wasm-builder?/metadata-hash"]
+
+# A feature that should be enabled when the runtime should be built for on-chain deployment.
+on-chain-release-build = ["metadata-hash", "sp-api/disable-logging"]
 
 try-runtime = [
 	"assets-common/try-runtime",
