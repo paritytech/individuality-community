@@ -5,6 +5,7 @@ The single home for end-to-end testing in this repo.
 ```
 e2e/
   zombienet/   local network harness for Relay + People (1502) + Asset Hub (1500)
+  coinage-instance/   local Coinage instance setup example
   packages/
     shared/        @individuality-e2e/shared
     descriptors/   @individuality-e2e/descriptors-src -> generates @polkadot-api/descriptors
@@ -22,6 +23,8 @@ the `e2e/` directory; `just --list` shows every recipe with its one-line descrip
 ## What lives here
 
 - `zombienet/` is infrastructure, not a pnpm package. It spawns and bootstraps the local network.
+- `coinage-instance` creates a Coinage instance backed by an example asset on the local network.
+  See its [README](./coinage-instance/README.md) for the call sequence.
 - `packages/shared` contains the connection helpers used by the live suites.
 - `packages/descriptors` generates `@polkadot-api/descriptors` from locally built runtime WASM.
 - `suites/initialization-tests` validates the bootstrapped local network state.
