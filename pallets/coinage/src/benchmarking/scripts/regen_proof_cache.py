@@ -186,7 +186,7 @@ def main() -> None:
     p.add_argument(
         "--profile", default="production",
         help="Cargo profile to build the runtime with. The cached proofs do not depend on it, "
-             "so `release` trades a slower harvest for a much shorter build (default: production)",
+             "so `dev`/`release` trades a slower harvest for a much shorter build (default: production)",
     )
     args = p.parse_args()
 
