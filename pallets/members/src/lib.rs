@@ -3096,6 +3096,34 @@ pub mod pallet {
 			Ok(())
 		}
 
+		#[cfg(feature = "runtime-benchmarks")]
+		fn seal_current_ring(identifier: &Identifier) -> DispatchResult {
+			let collection =
+				Collections::<T>::get(identifier).ok_or(Error::<T>::CollectionNotFound)?;
+			ensure!(collection.mode == RingMode::AppendOnly, Error::<T>::InvalidRing);
+			ensure!(!SuspendedCollections::<T>::contains_key(identifier), Error::<T>::InvalidRing);
+
+			let current_ring = CurrentRingIndex::<T>::get(identifier);
+			ensure!(Root::<T>::contains_key(identifier, current_ring), Error::<T>::InvalidRing);
+			RingKeysStatus::<T>::try_mutate(
+				identifier,
+				current_ring,
+				|status| -> DispatchResult {
+					ensure!(
+						status.total > 0 && status.total == status.included,
+						Error::<T>::InvalidRing
+					);
+					ensure!(status.immutable_since.is_none(), Error::<T>::InvalidRing);
+					status.immutable_since = Some(T::Clock::now().as_secs());
+					Ok(())
+				},
+			)?;
+
+			let next_ring = current_ring.checked_add(1).ok_or(ArithmeticError::Overflow)?;
+			CurrentRingIndex::<T>::insert(identifier, next_ring);
+			Ok(())
+		}
+
 		fn delete_collection(owner: T::Location, identifier: &Identifier) -> DispatchResult {
 			let collection_info =
 				Collections::<T>::get(identifier).ok_or(Error::<T>::CollectionNotFound)?;
