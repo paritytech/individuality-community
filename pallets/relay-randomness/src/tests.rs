@@ -221,6 +221,23 @@ fn random_returns_moment_zero_before_first_observation() {
 }
 
 #[test]
+fn random_handles_missing_block_randomness_independently() {
+	new_test_ext().execute_with(|| {
+		process_proof(None, [2u8; 32], 42);
+
+		let (output, moment) =
+			<RelayBlockRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"ctx");
+		assert_eq!(output, blake2_256(b"ctx"));
+		assert_eq!(moment, 0);
+
+		let (output, moment) =
+			<RelayOneEpochAgoRandomness<Test> as RandomnessT<[u8; 32], u32>>::random(b"ctx");
+		assert_eq!(output, blake2_256(&[&b"ctx"[..], &[2u8; 32]].concat()));
+		assert_eq!(moment, 39);
+	});
+}
+
+#[test]
 #[should_panic(expected = "Invalid current block randomness")]
 fn panics_when_current_block_randomness_is_undecodable() {
 	new_test_ext().execute_with(|| {

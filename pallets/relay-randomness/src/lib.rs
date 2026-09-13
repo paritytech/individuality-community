@@ -44,9 +44,13 @@
 //!
 //! So consumers can require randomness produced after a commitment of theirs.
 //!
-//! [`RelayBlockRandomness`] and [`RelayOneEpochAgoRandomness`] expose the stored values
-//! through [`indiv_support::traits::MomentRandomness`] and
-//! [`frame_support::traits::Randomness`].
+//! [`RelayBlockRandomness`] and [`RelayOneEpochAgoRandomness`] provide the stored
+//! value through [`indiv_support::traits::MomentRandomness`] and a hash of the
+//! subject and stored value through [`frame_support::traits::Randomness`].
+//!
+//! Record commitments with [`indiv_support::traits::MomentRandomness::current_moment`].
+//! Accept a result only if its returned moment is greater than the commitment moment.
+//! Both moments use relay chain block numbers, not parachain block numbers.
 //!
 //! # Example
 //!
