@@ -121,8 +121,10 @@ jobs:
         runtime:
           - name: next-people-paseo-runtime
             package: next-people-paseo-runtime
+            features: runtime-benchmarks,coinage-benchmark-proof-cache-strict
           - name: next-asset-hub-paseo-runtime
             package: next-asset-hub-paseo-runtime
+            features: runtime-benchmarks
 
     steps:
       - name: Install updates and protobuf-compiler
@@ -183,9 +185,16 @@ jobs:
           RUNTIME_BLOB_PATH=./target/release/wbuild/$PACKAGE_NAME/$RUNTIME_BLOB_NAME
           # build wasm
           echo "Preparing wasm for benchmarking RUNTIME_BLOB_PATH=$RUNTIME_BLOB_PATH"
-          cargo build --release -p ${{ matrix.runtime.package }} --features=runtime-benchmarks -q --locked
+          cargo build --release -p ${{ matrix.runtime.package }} --features=${{ matrix.runtime.features }} -q --locked
           # run benchmarking
           echo "Running benchmarking for RUNTIME_BLOB_PATH=$RUNTIME_BLOB_PATH"
-          ./frame-omni-bencher v1 benchmark pallet --runtime $RUNTIME_BLOB_PATH --all --steps 2 --repeat 1 --min-duration 0 --genesis-builder runtime --exclude-pallets=pallet_xcm_benchmarks::fungible,pallet_xcm_benchmarks::generic,pallet_xcm --quiet
+          set -o pipefail
+          if ! ./frame-omni-bencher v1 benchmark pallet --runtime $RUNTIME_BLOB_PATH --all --steps 2 --repeat 1 --min-duration 0 --genesis-builder runtime --exclude-pallets=pallet_xcm_benchmarks::fungible,pallet_xcm_benchmarks::generic,pallet_xcm --quiet 2>&1 | tee benchmark-runtime.log; then
+            if grep -q 'alias proof cache miss' benchmark-runtime.log; then
+              echo '::error::Coinage alias proof cache miss. Run python3 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py, commit pallets/coinage/src/benchmarking/proof_cache.rs, and see pallets/coinage/src/benchmarking/README.md.'
+            fi
+            exit 1
+          fi
         env:
           RUSTFLAGS: "-C debug-assertions -D warnings"
+          RUNTIME_LOG: error

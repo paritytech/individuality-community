@@ -289,6 +289,9 @@ runtime-benchmarks = [
 coinage-benchmark-proof-cache-regenerate = [
 	"indiv-pallet-coinage/benchmark-proof-cache-regenerate",
 ]
+coinage-benchmark-proof-cache-strict = [
+	"indiv-pallet-coinage/benchmark-proof-cache-strict",
+]
 
 # Build the ring VRF suite with the RFC-163 EC host functions instead of the default
 # in-runtime arkworks code. A runtime built with this only runs on validators that

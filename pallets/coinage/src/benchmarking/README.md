@@ -62,6 +62,14 @@ CACHE_ENTRY: (hex!("..."), &hex!("..."), hex!("...")),
 Drop the flags after you've updated `proof_cache.rs` so the normal cache
 lookup path is active again.
 
+## CI cache coverage gate
+
+The `benchmark-runtime` CI job enables strict mode for `next-people-paseo-runtime` and fails on
+an `alias proof cache miss`. The failure reports the ring exponent, member count and cache key,
+then tells you to run `python3 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py`,
+commit the regenerated `proof_cache.rs`, and see this README. A benchmark change that preserves
+coverage needs no cache change.
+
 ## Regenerating the cache
 
 There are two paths: a scripted one that wraps steps 2–4 below, and the
