@@ -17,17 +17,28 @@
 //! Shared types for the NFT claim credit trees.
 //! The game pallet builds the commitments on the People chain and ships them over XCM.
 //! The nft-claims pallet receives them in a batch.
+//!
+//! Both chains file what they hold under the tree's timestamp, and the helpers driving a sweep of
+//! those entries are shared so the two sweeps behave alike.
 
 use alloc::vec::Vec;
-use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use codec::{Decode, DecodeWithMemTracking, Encode, FullCodec, MaxEncodedLen};
 use frame_support::{
 	pallet_prelude::{BoundedVec, Get},
+	storage::IterableStorageDoubleMap,
+	weights::Weight,
 	CloneNoBound, DebugNoBound, EqNoBound, PartialEqNoBound,
 };
 use scale_info::TypeInfo;
 use sp_core::H256;
+use sp_runtime::{
+	transaction_validity::{
+		InvalidTransaction, TransactionSource, TransactionValidityError, ValidTransaction,
+	},
+	SaturatedConversion,
+};
 
-use crate::identity::AccountOrPerson;
+use crate::{identity::AccountOrPerson, offchain::TX_LONGEVITY, tx_priority, utils::BigEndianU32};
 
 /// An NFT claim credit earned by a player.
 /// Hashes one successful report of one player on another, in one round of one game.
@@ -101,16 +112,136 @@ pub fn credit_leaf<AccountId: Encode>(
 
 /// The position of a credit tree in the order the game pallet queued them for delivery.
 /// Contiguous, so the receiver can tell that a tree never arrived.
-/// Award blocks are not contiguous, because a block that awarded no credit has no tree.
+/// Tree blocks are not contiguous, because a block that awarded no credit has no tree.
 pub type TreeSequence = u64;
 
-/// The People-chain block a set of NFT claim credits was awarded in.
-/// Both chains key a credit tree by it.
-/// Fixed to `u32` so the XCM payload and the claim chain's storage stay free of a foreign chain's
-/// block number type.
-pub type AwardBlock = u32;
+/// The People-chain block whose buffered credits a tree commits to.
+/// The credits buffered in block `b` are committed by the tree that block `b + 1` builds.
+pub type CreditTreeBlock = u32;
 
-/// The Merkle commitment to all NFT claim credits awarded in one block.
+/// The wall-clock second a credit tree commits to, as both chains key an expiry entry by it.
+///
+/// Encoded big-endian, so an `Identity`-hashed map of these keys iterates from the oldest
+/// timestamp to the newest. A sweep therefore reaches every due entry before the first that is
+/// not due.
+pub type ExpiryTimestamp = BigEndianU32;
+
+/// The wall-clock second at which a tree committed to at `timestamp` has outlived `ttl` seconds.
+/// `timestamp` and the result are seconds since the UNIX epoch; `ttl` is a duration.
+pub fn expiry_deadline(timestamp: u32, ttl: u64) -> u64 {
+	u64::from(timestamp).saturating_add(ttl)
+}
+
+/// How long, in seconds, the game chain keeps a credit root past the claims chain's deadline for
+/// the tree built from it.
+///
+/// The game chain holds the awards a claimant builds a proof from, so its root has to outlive the
+/// claims chain's copy of the tree. Adding this grace to the claims chain's TTL puts the two in
+/// that order without either runtime configuring it. It also covers the case the game chain's TTL
+/// exists for: a deletion message that never arrived.
+pub const ROOT_TTL_GRACE: u64 = 30 * 24 * 60 * 60;
+
+/// The timestamp of the oldest entry of `Expiries`, which is where the next sweep starts.
+/// `None` means nothing is filed. The map iterates in timestamp order, so this reads one entry.
+pub fn oldest_expiry<Expiries, Key>() -> Option<u32>
+where
+	Expiries: IterableStorageDoubleMap<ExpiryTimestamp, Key, ()>,
+	Key: FullCodec,
+{
+	Expiries::iter_keys().next().map(|(timestamp, _)| timestamp.0)
+}
+
+/// Removes up to `limit` entries of `Expiries` that `now` has reached the deadline of, oldest
+/// first, and returns their keys.
+///
+/// The map iterates in timestamp order, so this stops at the first entry that is not due and never
+/// reads the ones after it. A call that reaches `limit` leaves the rest to the next call.
+pub fn drain_due_expiries<Expiries, Key>(ttl: u64, now: u64, limit: u32) -> Vec<Key>
+where
+	Expiries: IterableStorageDoubleMap<ExpiryTimestamp, Key, ()>,
+	Key: FullCodec,
+{
+	let due = Expiries::iter_keys()
+		.take_while(|(timestamp, _)| now >= expiry_deadline(timestamp.0, ttl))
+		.take(limit as usize)
+		.collect::<Vec<_>>();
+
+	// Collected before any removal, because removing an entry the storage iterator has not
+	// reached yet invalidates it.
+	due.into_iter()
+		.map(|(timestamp, key)| {
+			Expiries::remove(timestamp, &key);
+			key
+		})
+		.collect::<Vec<_>>()
+}
+
+/// The parts of an expiry sweep's validity only the sweeping pallet can name.
+pub struct ExpirySweepTx {
+	/// Tag prefix of the sweep's `provides` tag, which is the pallet's call name. It must not be
+	/// empty.
+	pub tag: &'static str,
+	/// Reported for a source that is neither local nor in-block.
+	pub not_local: TransactionValidityError,
+	/// Reported when nothing is filed, so there is nothing to sweep.
+	pub nothing_to_sweep: TransactionValidityError,
+}
+
+/// Validates a sweep of `Expiries` that starts at `oldest`, the entries being kept `ttl` seconds
+/// past the timestamp they are filed under.
+///
+/// Only a pallet's own offchain worker submits such a sweep, so this accepts local and in-block
+/// sources only. `oldest` must be the timestamp of the map's oldest entry, which orders retries:
+/// an earlier timestamp is swept and `Stale`, a later one is `Future` until the sweep reaches it.
+/// An entry that is not yet due is `Future` as well, because time alone makes that transaction
+/// valid.
+pub fn authorize_expiry_sweep<T, Expiries, Key>(
+	tx: ExpirySweepTx,
+	source: TransactionSource,
+	oldest: u32,
+	ttl: u64,
+	now: u64,
+) -> Result<(ValidTransaction, Weight), TransactionValidityError>
+where
+	T: frame_system::Config,
+	Expiries: IterableStorageDoubleMap<ExpiryTimestamp, Key, ()>,
+	Key: FullCodec,
+{
+	if !matches!(source, TransactionSource::InBlock | TransactionSource::Local) {
+		return Err(tx.not_local);
+	}
+
+	let Some(filed) = oldest_expiry::<Expiries, Key>() else {
+		return Err(tx.nothing_to_sweep);
+	};
+	if oldest < filed {
+		return Err(InvalidTransaction::Stale.into());
+	}
+	if oldest > filed || now < expiry_deadline(filed, ttl) {
+		return Err(InvalidTransaction::Future.into());
+	}
+
+	// A finite longevity drops a stranded retry from the pool. Propagation is off because peers
+	// validate a gossiped transaction with a source of `External`, which this call rejects.
+	//
+	// The tag is the timestamp, so every sweep that starts at one timestamp shares it and the pool
+	// keeps one attempt. A submitter that sweeps one timestamp over successive blocks replaces its
+	// own pending attempt, so one block holds at most one sweep of it.
+	let validity = ValidTransaction::with_tag_prefix(tx.tag)
+		.and_provides(filed)
+		.priority(
+			tx_priority::BACKGROUND_PROGRESS
+				.saturating_add(frame_system::Pallet::<T>::block_number().saturated_into::<u64>()),
+		)
+		.longevity(TX_LONGEVITY)
+		.propagate(false)
+		.build()
+		.expect("tag prefix is not empty; qed");
+
+	Ok((validity, Weight::zero()))
+}
+
+/// The Merkle commitment to the NFT claim credits one block committed.
 /// Sent to Asset Hub, where a claimant mints an NFT by proving their leaf against [`Self::root`].
 #[derive(
 	Encode,
@@ -129,16 +260,15 @@ pub struct NftClaimCreditTree {
 	/// Only one game runs at a time, so every leaf belongs to this game.
 	/// Carried so a game's trees can be grouped without mapping blocks to games.
 	pub game_index: u32,
-	/// The binary Merkle root over the block's leaves, in award order.
+	/// The binary Merkle root over the block's leaves, in the order the credits were awarded.
 	pub root: CreditProofNode,
 	/// The number of leaves in the tree.
 	/// A proof cannot be checked without it: the count decides how an odd layer was rehashed.
 	/// Always this committed count, never one the claimant supplies: that would let them pick
 	/// which hash path is checked.
 	pub leaf_count: u32,
-	/// The block's wall-clock time in seconds since the UNIX epoch.
-	/// Useful to display the age of the tree.
-	/// May be used by chain data consumers, not used in the runtime.
+	/// The Unix timestamp of the buffer's first award, in seconds.
+	/// Each chain calculates expiry from this timestamp and its configured TTL.
 	pub timestamp: u32,
 }
 
@@ -165,7 +295,7 @@ pub struct CreditTreeDelivery {
 	/// The receiver leaves its gap tracking untouched for an unsequenced tree.
 	pub sequence: Option<TreeSequence>,
 	/// The block whose credits the tree commits to.
-	pub block: AwardBlock,
+	pub block: CreditTreeBlock,
 	/// The commitment itself.
 	pub tree: NftClaimCreditTree,
 }
@@ -197,9 +327,9 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 /// The pallet holding them reads the game's own state, so the dependency runs that way and the
 /// game reaches it through this trait.
 ///
-/// The `award_*` methods return how many credits were really awarded, which is fewer than asked
-/// for whenever a slot was already taken or the block had no room, and is what a caller debits
-/// from the capacity it reserved.
+/// The `award_*` methods return how many credits were really awarded, which is fewer than asked for
+/// whenever a slot was already taken, and is what a caller debits from the capacity it reserved
+/// with [`AwardCredits::remaining_capacity`]. A credit awarded with nowhere to record it is lost.
 pub trait AwardCredits<AccountId> {
 	/// Award the credit `attester` earns `attestee` by reporting them a person in `round` of
 	/// `game_index`, from `attester_position` in their group.
@@ -223,11 +353,15 @@ pub trait AwardCredits<AccountId> {
 		award_time: u32,
 	) -> u32;
 
-	/// How many further credits the current block can award.
+	/// How many further credits of `game_index` can be recorded right now.
 	///
-	/// A caller that cannot split its awards across blocks checks this first; the value falls as
-	/// the block awards.
-	fn remaining_capacity() -> u32;
+	/// A caller that cannot split its awards across blocks checks this first, and defers or refuses
+	/// the whole batch while the value is below what the batch awards. It falls as credits are
+	/// awarded and rises again as the blocks commit them.
+	///
+	/// The game is a parameter because a tree carries one game index: room left over by another
+	/// game's credits is not room for `game_index`'s.
+	fn remaining_capacity(game_index: u32) -> u32;
 
 	/// Clear up to `limit` of `game_index`'s awarded-credit slots, resuming from `cursor`.
 	/// Returns where to resume, or `None` once the game has none left.
@@ -268,7 +402,7 @@ impl<AccountId> AwardCredits<AccountId> for () {
 		0
 	}
 
-	fn remaining_capacity() -> u32 {
+	fn remaining_capacity(_: u32) -> u32 {
 		u32::MAX
 	}
 

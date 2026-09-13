@@ -20,6 +20,7 @@
 
 use super::*;
 use crate::{extension::AsPgas, Pallet as Pgas};
+use alloc::vec::Vec;
 use codec::Encode;
 use core::time::Duration;
 use frame_benchmarking::v2::{benchmarks, *};
@@ -32,8 +33,9 @@ use frame_support::{
 };
 use frame_system::{offchain::CreateAuthorizedTransaction, RawOrigin as SystemOrigin};
 use indiv_support::traits::{Identifier, RingIndex};
-use sp_runtime::traits::{
-	AsTransactionAuthorizedOrigin, DispatchTransaction, Dispatchable, TxBaseImplication,
+use sp_runtime::{
+	traits::{AsTransactionAuthorizedOrigin, DispatchTransaction, Dispatchable, TxBaseImplication},
+	BoundedVec,
 };
 use verifiable::GenerateVerifiable;
 
@@ -50,7 +52,8 @@ pub trait BenchmarkHelper<T: Config> {
 	fn set_time(now: Duration);
 
 	/// Seed the membership prover at `(identifier, ring_index)` with at least one member and
-	/// return a [`ProofOf<T>`] that will verify against `context` + `message` for that ring.
+	/// return a [`ProofOf<T>`] that will verify against `contexts` + `message` for that ring.
+	/// A single context yields a plain claim proof; several yield a multi-context batch proof.
 	///
 	/// Runtimes are free to implement this however is most convenient — by pushing a ring root
 	/// into `pallet-members-subscriber`'s storage, by reusing a pre-computed proof cache, etc.
@@ -59,7 +62,7 @@ pub trait BenchmarkHelper<T: Config> {
 	fn seed_and_create_proof(
 		identifier: &Identifier,
 		ring_index: RingIndex,
-		context: &Context,
+		contexts: &[Context],
 		message: &[u8],
 	) -> ProofOf<T>;
 }
@@ -98,6 +101,45 @@ mod benches {
 		_(origin, 0u32, target.clone());
 
 		assert!(ClaimedGasAliases::<T>::contains_key(day, alias));
+		Ok(())
+	}
+
+	/// Worst case for the constant batch weight: a full batch of
+	/// `MaxPgasClaimsPerBatch` claims.
+	#[benchmark]
+	fn batch_claim_pgas() -> Result<(), BenchmarkError> {
+		T::BenchmarkHelper::set_time(Duration::from_secs(86400));
+
+		let admin: T::AccountId = account("admin", 0, 0);
+		frame_system::Pallet::<T>::inc_sufficients(&admin);
+		T::Fungibles::create(T::PgasAssetId::get(), admin, true, T::PgasMinBalance::get())
+			.expect("asset creation should work");
+
+		let n = T::MaxPgasClaimsPerBatch::get();
+		let day = Day::from(1u32);
+		let mut aliases = crate::pallet::BatchAliases::new();
+		for i in 0..n {
+			let mut alias: Alias = [0x42u8; 32];
+			alias[0..4].copy_from_slice(&i.to_le_bytes());
+			aliases.try_push(alias).expect("`MaxPgasClaimsPerBatch` fits `BatchAliases`");
+		}
+		let origin: T::RuntimeOrigin = crate::Origin::BatchClaimAliases {
+			aliases: aliases.clone(),
+			day,
+			collection: PgasCollection::People,
+		}
+		.into();
+
+		let slot_indices: BoundedVec<u32, T::MaxPgasClaimsPerBatch> =
+			(0..n).collect::<Vec<_>>().try_into().expect("count matches the bound");
+		let target: T::AccountId = account("target", 0, 0);
+
+		#[extrinsic_call]
+		_(origin, slot_indices, target);
+
+		for alias in &aliases {
+			assert!(ClaimedGasAliases::<T>::contains_key(day, alias));
+		}
 		Ok(())
 	}
 
@@ -201,7 +243,7 @@ mod benches {
 		let ring_index = 0u32;
 
 		let proof =
-			T::BenchmarkHelper::seed_and_create_proof(&identifier, ring_index, &context, &msg);
+			T::BenchmarkHelper::seed_and_create_proof(&identifier, ring_index, &[context], &msg);
 		// Whatever revision the helper seeded — we measure the happy path where the caller
 		// names the correct current revision.
 		let revision =
@@ -209,6 +251,69 @@ mod benches {
 				.expect("`seed_and_create_proof` must leave a ring in place");
 
 		let tx_ext = AsPgas::<T>::new(Some(AsPgasInfo::Claim {
+			proof,
+			ring_index,
+			revision,
+			collection: PgasCollection::People,
+			day,
+		}));
+		let info = call.get_dispatch_info();
+		let len = call.encoded_size();
+
+		#[block]
+		{
+			tx_ext
+				.test_run(SystemOrigin::None.into(), &call, &info, len, extension_version, |_| {
+					Ok(Default::default())
+				})
+				.expect("test_run must produce a result")
+				.expect("dispatch substitute must succeed");
+		}
+
+		Ok(())
+	}
+
+	/// Weight of the [`AsPgas`] transaction extension for a successful batch claim: one proof
+	/// covering the worst case of `MaxPgasClaimsPerBatch` contexts.
+	#[benchmark]
+	fn as_pgas_batch_claim_tx_ext() -> Result<(), BenchmarkError> {
+		// Middle of the period.
+		let now = Duration::from_secs(SECS_PER_DAY + SECS_PER_DAY / 2);
+		T::BenchmarkHelper::set_time(now);
+
+		// Asset must exist.
+		let admin: T::AccountId = account("pgas_admin", 0, 0);
+		frame_system::Pallet::<T>::inc_sufficients(&admin);
+		T::Fungibles::create(T::PgasAssetId::get(), admin, true, T::PgasMinBalance::get())
+			.expect("asset create should succeed");
+
+		let n = T::MaxPgasClaimsPerBatch::get();
+		let target: T::AccountId = whitelisted_caller();
+		let slot_indices: BoundedVec<u32, T::MaxPgasClaimsPerBatch> =
+			(0..n).collect::<Vec<_>>().try_into().expect("count matches the bound");
+		let call = Call::<T>::batch_claim_pgas { slot_indices, target };
+		let call: <T as frame_system::Config>::RuntimeCall = call.into();
+		let extension_version = 0u8;
+
+		// Match the extension's on-chain message derivation exactly.
+		let msg =
+			TxBaseImplication((extension_version, &call)).using_encoded(sp_io::hashing::blake2_256);
+		let day = Pgas::<T>::current_day();
+		let identifier = PgasCollection::People.identifier();
+		let ring_index = 0u32;
+
+		let contexts = (0..n)
+			.map(|slot_index| Pgas::<T>::build_gas_context(day, slot_index))
+			.collect::<Vec<_>>();
+		let proof =
+			T::BenchmarkHelper::seed_and_create_proof(&identifier, ring_index, &contexts, &msg);
+		// Whatever revision the helper seeded — we measure the happy path where the caller
+		// names the correct current revision.
+		let revision =
+			<T::MembershipProver as MembershipProver>::ring_revision(&identifier, ring_index)
+				.expect("`seed_and_create_proof` must leave a ring in place");
+
+		let tx_ext = AsPgas::<T>::new(Some(AsPgasInfo::BatchClaim {
 			proof,
 			ring_index,
 			revision,
