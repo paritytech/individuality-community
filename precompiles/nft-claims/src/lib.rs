@@ -20,7 +20,7 @@
 //! or externally owned, register the collection for deposit-free claim minting, pick the
 //! [`ItemSelection`], withdraw it again and read the current registration back.
 //!
-//! This surface lives outside the Scarcity precompile crate on purpose: `pallet-scarcity` is
+//! This surface lives outside the Scarcity precompile crate on purpose: `indiv-pallet-scarcity` is
 //! a standalone base layer, and not every runtime that has it also has `pallet-nft-claims`.
 //! A runtime wires this precompile in only when it has both pallets.
 //!
@@ -48,6 +48,7 @@ use frame_system::RawOrigin;
 use indiv_pallet_nft_claims::{
 	CollectionMinters, Error as NftClaimsError, ItemSelection, Pallet as NftClaims, WeightInfo as _,
 };
+use indiv_pallet_scarcity::CollectionId;
 use pallet_revive::{
 	precompiles::{
 		alloy::{self, primitives::Address, sol_types::SolCall},
@@ -55,7 +56,6 @@ use pallet_revive::{
 	},
 	sp_runtime::DispatchError,
 };
-use pallet_scarcity::CollectionId;
 
 pub(crate) use indiv_precompile_support::{
 	address_of, caller_account, charge_reads, ensure_no_value, ensure_not_delegate, revert,
