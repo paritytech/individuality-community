@@ -43,6 +43,7 @@ mod test_pay_for_recycler_unload_fee_token_with_coin;
 mod test_pay_for_recycler_unload_fee_token_with_external_asset;
 mod test_pay_for_recycler_unload_fee_token_with_native;
 mod test_recycler_lifecycle;
+mod test_recycler_unloaded_count;
 mod test_split;
 mod test_sponsored_instance;
 mod test_transfer;

@@ -390,6 +390,8 @@ parameter_types! {
 		0,
 		[PalletInstance(TrustBackedAssetsPalletIndex::get()), GeneralIndex(EXTERNAL_ASSET_ID as u128)],
 	);
+	/// The People chain. It reserves the external asset, and it receives the tree deletions the
+	/// nft-claims pallet owes the game pallet.
 	pub PeopleLocation: Location = Location::new(1, [Parachain(system_parachain::PEOPLE_ID)]);
 }
 

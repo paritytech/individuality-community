@@ -49,6 +49,25 @@ runs:
       with:
         shared-key: individuality-cache-e2e-runtime-wasm
 
+    - name: Bump spec version
+      run: |
+        set -euo pipefail
+
+        # Workspace-only change carried into this build's artifacts; nothing
+        # is committed or pushed. See e2e/README.md for more details.
+        for f in runtimes/next-people-paseo/src/lib.rs runtimes/next-asset-hub-paseo/src/lib.rs; do
+          lines=$(grep -cE '^[[:space:]]*spec_version: [0-9][0-9_]*,$' "$f")
+          if [ "$lines" -ne 1 ]; then
+            echo "::error::expected exactly one spec_version line in $f, found $lines"
+            exit 1
+          fi
+          spec_version=$(grep -hE '^[[:space:]]*spec_version: [0-9][0-9_]*,$' "$f" \
+            | grep -oE '[0-9][0-9_]*' | tr -d '_')
+          sed -i -E "s/^([[:space:]]*spec_version: )[0-9][0-9_]*,$/\1$((spec_version + 1)),/" "$f"
+          grep -E '^[[:space:]]*spec_version: ' "$f"
+        done
+      shell: bash
+
     - name: Build E2E runtime WASM artifacts
       run: cargo build --release -p next-people-paseo-runtime -p next-asset-hub-paseo-runtime --locked
       shell: bash

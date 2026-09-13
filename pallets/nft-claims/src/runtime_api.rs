@@ -18,8 +18,8 @@
 
 use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode};
+use indiv_pallet_scarcity::{CollectionId, ItemIndex};
 use indiv_support::credit_trees::NftClaimCredit;
-use pallet_scarcity::{CollectionId, ItemIndex};
 use scale_info::TypeInfo;
 use sp_core::H160;
 use sp_runtime::DispatchError;
