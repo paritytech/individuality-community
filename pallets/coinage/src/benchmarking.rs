@@ -16,7 +16,6 @@
 
 //! Coinage pallet benchmarks.
 
-#[cfg(not(feature = "benchmark-proof-cache-regenerate"))]
 mod proof_cache;
 
 use super::*;
@@ -267,6 +266,30 @@ fn setup_built_recycler<T: Config>(
 	(ring_index, revision, members)
 }
 
+/// Builds a sealed ring for output-sweep benchmarks with a fixed member list across samples.
+/// Verification uses the configured ring exponent and root, not the number of occupied slots.
+/// Cleaning benchmarks still use full rings because they measure work over stored members.
+fn setup_built_unload_recycler<T: Config>(
+	value: Denomination,
+	seed: u32,
+) -> (RingIndex, RevisionIndex, Vec<(SecretOf<T>, MemberOf<T>)>) {
+	let count = Pallet::<T>::max_aliases_per_unload().max(pallet::RECYCLER_ONBOARDING_SIZE);
+	let members = setup_recycler_with_pending::<T>(value, count, seed);
+	let identifier = Pallet::<T>::recycler_collection_identifier(INSTANCE_ID, value);
+	let ring_index = 0;
+	T::MemberService::onboard_all_and_build_ring(&identifier, ring_index)
+		.expect("should build unload ring");
+	let status = T::MemberService::ring_status(&identifier, ring_index).expect("ring exists");
+	assert_eq!(status.included, count);
+	if status.immutable_since.is_none() {
+		// Preserve the expiration check and next-ring state of a full append-only ring.
+		T::MemberService::seal_current_ring(&identifier).expect("should seal unload ring");
+	}
+	let revision =
+		T::MemberService::ring_revision(&identifier, ring_index).expect("ring should be built");
+	(ring_index, revision, members)
+}
+
 #[cfg(feature = "benchmark-proof-cache-regenerate")]
 use alloc::string::String;
 #[cfg(feature = "benchmark-proof-cache-regenerate")]
@@ -312,22 +335,26 @@ fn generate_alias_proof<T: Config>(
 ) -> (ProofOf<T>, Alias) {
 	let member = CryptoOf::<T>::member_from_secret(secret);
 
-	#[cfg(not(feature = "benchmark-proof-cache-regenerate"))]
-	{
-		if let Some(cached) = proof_cache::lookup_alias_proof::<_, ProofOf<T>>(
-			T::RecyclerRingExponent::get(),
-			&member,
-			all_members,
-			msg,
-		) {
-			return cached;
-		}
-		log::warn!(
-			target: LOG_TARGET,
-			"alias proof cache miss: creating a ring-VRF proof; regenerate the cache with \
-			 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py"
+	if let Some((proof, alias)) = proof_cache::lookup_alias_proof::<_, ProofOf<T>>(
+		T::RecyclerRingExponent::get(),
+		&member,
+		all_members,
+		msg,
+	) {
+		#[cfg(feature = "benchmark-proof-cache-regenerate")]
+		emit_cache_entry(
+			&sp_crypto_hashing::blake2_256(&(&member, all_members, msg).encode()),
+			&proof.encode(),
+			&alias,
 		);
+		return (proof, alias);
 	}
+	#[cfg(not(feature = "benchmark-proof-cache-regenerate"))]
+	log::warn!(
+		target: LOG_TARGET,
+		"alias proof cache miss: creating a ring-VRF proof; regenerate the cache with \
+		 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py"
+	);
 
 	// Cache miss: compute the proof
 	let domain_size: <CryptoOf<T> as GenerateVerifiable>::Config =
@@ -835,7 +862,7 @@ mod benches {
 		}
 		let split_into: BoundedVec<_, T::MaxSplitOutputs> = split_into.try_into().unwrap();
 
-		let (index, revision, members) = setup_built_recycler::<T>(input_value, a, 50_000);
+		let (index, revision, members) = setup_built_unload_recycler::<T>(input_value, 50_000);
 		let asset_amount =
 			Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), input_value)
 				.expect("denomination should be in range");
@@ -1013,7 +1040,7 @@ mod benches {
 		let (input_value, external_asset_amount, loaded_coins) =
 			setup_mixed_output_validation::<T>(a, d, mode)?;
 
-		let (index, revision, members) = setup_built_recycler::<T>(input_value, a, 60_000);
+		let (index, revision, members) = setup_built_unload_recycler::<T>(input_value, 60_000);
 		let asset_amount =
 			Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), input_value)
 				.expect("denomination should be in range");
@@ -4069,8 +4096,9 @@ mod benches {
 	fn as_unload_token_from_output_tx_ext() -> Result<(), BenchmarkError> {
 		common_setup::<T>();
 
-		let value =
-			denomination_covering_unload_fee::<T>(T::MinimumExponentForOutputUnloadFee::get());
+		// The signed denomination stays fixed when regenerated weights change the fee.
+		// The helper still rejects a configuration whose largest coin cannot cover that fee.
+		let value = denomination_covering_unload_fee::<T>(T::MaximumExponent::get());
 
 		let (index, revision, members) = setup_built_recycler::<T>(value, 1, 0);
 
@@ -4546,5 +4574,87 @@ mod benches {
 		Ok(())
 	}
 
+	#[cfg(test)]
+	mod fee_proof_tests {
+		use super::*;
+		use crate::mock::{new_test_ext_bench, MockPaidUnloadTokenFeeOverride, Test};
+		use frame_benchmarking::BenchmarkingSetup;
+		use frame_support::assert_ok;
+
+		#[test]
+		fn output_fee_benchmark_keeps_its_signed_denomination_when_fees_change() {
+			for fee in [2, 10_000] {
+				new_test_ext_bench().execute_with(|| {
+					MockPaidUnloadTokenFeeOverride::set(&Some(fee));
+					assert_ok!(<SelectedBenchmark as BenchmarkingSetup<Test>>::unit_test_instance(
+						&SelectedBenchmark::as_unload_token_from_output_tx_ext,
+						&[]
+					));
+					assert_eq!(Pallet::<Test>::get_paid_unload_token_fee_in_native(), fee);
+					let identifier = Pallet::<Test>::recycler_collection_identifier(
+						INSTANCE_ID,
+						<Test as Config>::MaximumExponent::get(),
+					);
+					assert!(
+						<Test as Config>::MemberService::ring_revision(&identifier, 0).is_some()
+					);
+				});
+			}
+		}
+	}
+
 	impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext_bench(), crate::mock::Test);
+}
+
+#[cfg(test)]
+mod setup_tests {
+	use super::*;
+	use crate::mock::{new_test_ext_bench, Test};
+	use frame_support::assert_ok;
+	use indiv_support::traits::{AppendOnlyMembers, MembershipProver};
+
+	#[test]
+	fn unload_ring_preserves_sealed_revision_and_proofs_after_later_onboarding() {
+		new_test_ext_bench().execute_with(|| {
+			common_setup::<Test>();
+			let value = <Test as Config>::MinimumExponent::get();
+			let (index, revision, members) = setup_built_unload_recycler::<Test>(value, 50_000);
+			let identifier = Pallet::<Test>::recycler_collection_identifier(INSTANCE_ID, value);
+			let count = Pallet::<Test>::max_aliases_per_unload();
+			assert_eq!(members.len(), count as usize);
+			assert!(count < <Test as Config>::RecyclerRingExponent::get().ring_capacity());
+			let status = <Test as Config>::MemberService::ring_status(&identifier, index).unwrap();
+			assert_eq!(status.total, count);
+			assert_eq!(status.included, count);
+			assert_eq!(status.immutable_since, Some(3600));
+			let keys = members.iter().map(|(_, member)| *member).collect::<Vec<_>>();
+			let (proof, alias) = generate_alias_proof::<Test>(&members[0].0, &keys, &[0; 32]);
+			setup_recycler_with_pending::<Test>(value, pallet::RECYCLER_ONBOARDING_SIZE, 80_000);
+			assert_ok!(<Test as Config>::MemberService::onboard_all_and_build_ring(&identifier, 1));
+			assert_eq!(<Test as Config>::MemberService::ring_members(&identifier, index), keys);
+			assert_eq!(
+				<Test as Config>::MemberService::ring_revision(&identifier, index),
+				Some(revision)
+			);
+			assert!(<Test as Config>::MemberService::ring_revision(&identifier, 1).is_some());
+			assert_ok!(RecyclerManager::<Test>::unload(
+				INSTANCE_ID,
+				value,
+				index,
+				revision,
+				&[alias],
+				&[proof],
+				&[0; 32]
+			));
+			<Test as Config>::BenchmarkHelper::set_time(core::time::Duration::from_secs(
+				3600 + u64::from(<<Test as Config>::RecyclerExpirationTime as Get<u32>>::get()),
+			));
+			assert!(!RecyclerManager::<Test>::validate_recycler_revision(
+				INSTANCE_ID,
+				value,
+				index,
+				revision
+			));
+		});
+	}
 }

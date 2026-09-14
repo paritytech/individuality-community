@@ -44,6 +44,14 @@ same at any `--steps` and `--repeat`, and one harvest is warm for every run.
 The remaining `Linear` components (split outputs, ring cleaning, ...) do not
 feed a proof.
 
+The output-sweep benchmarks build a fixed member list large enough for
+`max_aliases_per_unload()`, rather than filling every slot in the ring. They
+seal the ring to retain the expiration check and next-ring state. Proof
+verification still uses the configured ring exponent, and cleaning benchmarks
+still fill the ring because their measured work depends on its members.
+The output-fee extension signs a fixed maximum denomination and fee limit, so
+regenerating weights does not change its cached proof's message.
+
 ## Regeneration feature flags
 
 Two feature flags toggle the regeneration mode. The harvest commands below
@@ -52,8 +60,8 @@ already enable them; you only need to know what they do.
 - pallet: `benchmark-proof-cache-regenerate`
 - runtime shim: `coinage-benchmark-proof-cache-regenerate`
 
-With either flag enabled, `generate_alias_proof(...)` skips the cache lookup
-and emits each proof as:
+With either flag enabled, `generate_alias_proof(...)` emits each proof it uses,
+including matching cached proofs. Only missing entries need proof generation:
 
 ```rust
 CACHE_ENTRY: (hex!("..."), &hex!("..."), hex!("...")),
@@ -77,8 +85,8 @@ python3 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py
 The script builds the R2e10 runtime with the regeneration feature (using the
 stable toolchain pinned in `rust-toolchain.toml`), runs `frame-omni-bencher`,
 deduplicates and sorts the captured `CACHE_ENTRY:` lines, and splices the
-result into `CACHE_ENTRIES_R2E10` in `proof_cache.rs`. A harvest creates every
-proof cold and takes a while.
+result into `CACHE_ENTRIES_R2E10` in `proof_cache.rs`. Existing matching proofs
+are reused, but missing proofs are generated and can make a harvest slow.
 
 Flags:
 
@@ -91,6 +99,10 @@ Flags:
   compressed WASM artefact and gives the fastest harvest.
 
 After the script finishes, still run the step 5 verification below.
+
+The `/cmd bench` command generates weights, not the proof cache. Regenerate
+and commit the cache before requesting new weights after proof-input changes.
+That command uses `RUNTIME_LOG=off`, which hides cache-miss warnings.
 
 ### Manual regeneration
 
