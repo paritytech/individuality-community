@@ -39,7 +39,7 @@ use indiv_support::{
 	traits::{
 		Alias, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar, Context,
 		ContextualAlias, CountedMembers, Identifier, MembershipProver, RevisedContextualAlias,
-		RingExponent, RingMode, Username, PEOPLE_LITE_IDENTIFIER,
+		RingExponent, RingMode, PEOPLE_LITE_IDENTIFIER,
 	},
 	tx_priority,
 };
@@ -550,8 +550,8 @@ pub mod pallet {
 			let current_block = frame_system::Pallet::<T>::block_number();
 			let block_tolerance = Self::account_setup_block_tolerance();
 			ensure!(
-				valid_at_block <= current_block &&
-					current_block <= valid_at_block.saturating_add(block_tolerance),
+				valid_at_block <= current_block
+					&& current_block <= valid_at_block.saturating_add(block_tolerance),
 				Error::<T>::CallBlockOutOfRange
 			);
 			ensure!(
@@ -666,11 +666,9 @@ pub mod pallet {
 		///
 		/// This action requires user consent, provided through a signature verified in this
 		/// function. The signing payload is constructed by encoding, in order, the tuple of:
-		/// - the user's account
-		/// - the verifier's account
-		/// - the user's identifier_key
-		/// - the user's chosen username, without the `.` separator and any following digits
-		/// - the user's chosen reserved_username, as an `Option`
+		/// - the user's account,
+		/// - the verifier's account,
+		/// - the user's identifier_key.
 		///
 		/// For more information about the signing payload, check
 		/// [types::LiteConsumerRegistrationParams::signing_payload].
@@ -684,13 +682,8 @@ pub mod pallet {
 				Error::<T>::InvalidAttestationSignature,
 			);
 			let account = params.account.clone();
-			T::LiteConsumerRegistrar::register_lite_consumer(
-				params.account,
-				params.identifier_key,
-				params.username,
-				params.reserved_username,
-			)
-			.map_err(|e| e.into())?;
+			T::LiteConsumerRegistrar::register_lite_consumer(params.account, params.identifier_key)
+				.map_err(|e| e.into())?;
 			Self::deposit_event(Event::ConsumerRegistered { account });
 			Ok(())
 		}
@@ -808,8 +801,9 @@ pub mod pallet {
 
 		fn try_origin(o: OriginFor<T>, arg: &Context) -> Result<Self::Success, OriginFor<T>> {
 			match o.clone().into_caller().try_into() {
-				Ok(Origin::LiteAlias(rev_ca)) if &rev_ca.ca.context == arg =>
-					Ok((rev_ca.ca.alias, *PEOPLE_LITE_IDENTIFIER)),
+				Ok(Origin::LiteAlias(rev_ca)) if &rev_ca.ca.context == arg => {
+					Ok((rev_ca.ca.alias, *PEOPLE_LITE_IDENTIFIER))
+				},
 				_ => Err(o),
 			}
 		}

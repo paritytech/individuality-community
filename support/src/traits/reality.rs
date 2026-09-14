@@ -392,8 +392,9 @@ impl RingMembersState {
 	pub fn start_mutation_session(mut self) -> Result<Self, Self> {
 		self.mode = match self.mode {
 			RingMutationMode::AppendOnly => RingMutationMode::Mutating(1),
-			RingMutationMode::Mutating(n) =>
-				RingMutationMode::Mutating(n.checked_add(1).ok_or(self.clone())?),
+			RingMutationMode::Mutating(n) => {
+				RingMutationMode::Mutating(n.checked_add(1).ok_or(self.clone())?)
+			},
 		};
 		Ok(self)
 	}
@@ -718,13 +719,6 @@ pub trait CountedMembers {
 	fn set_active_count(count: u32);
 }
 
-/// Username type used in individuality systems.
-///
-/// WARNING
-///
-/// Changing the maximum length of this type will require a migration in all pallets using it!
-pub type Username = BoundedVec<u8, ConstU32<32>>;
-
 /// Service for registering consumers.
 pub trait ConsumerRegistrar<AccountId> {
 	type Error;
@@ -739,8 +733,6 @@ pub trait ConsumerRegistrar<AccountId> {
 	fn register_lite_consumer(
 		account: AccountId,
 		identifier_key: CommunicationIdentifier,
-		username: Username,
-		reserved_username: Option<Username>,
 	) -> Result<(), Self::Error>;
 }
 
@@ -750,8 +742,6 @@ impl<Account> ConsumerRegistrar<Account> for () {
 	fn register_lite_consumer(
 		_account: Account,
 		_identifier_key: CommunicationIdentifier,
-		_username: Username,
-		_reserved_username: Option<Username>,
 	) -> Result<(), Self::Error> {
 		Ok(())
 	}
@@ -850,9 +840,9 @@ pub mod identity {
 		pub fn eq_platform(&self, other: &Social) -> bool {
 			matches!(
 				(&self, &other),
-				(Social::Twitter { .. }, Social::Twitter { .. }) |
-					(Social::Github { .. }, Social::Github { .. }) |
-					(Social::Discord { .. }, Social::Discord { .. })
+				(Social::Twitter { .. }, Social::Twitter { .. })
+					| (Social::Github { .. }, Social::Github { .. })
+					| (Social::Discord { .. }, Social::Discord { .. })
 			)
 		}
 	}

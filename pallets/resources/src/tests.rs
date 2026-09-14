@@ -18,15 +18,17 @@
 
 use super::{pallet::*, *};
 use crate::{
+	migration::{v1, MigrateV0ToV1},
 	mock::*,
-	types::{Credibility, NotificationReference, PersonalUsernameChoice},
+	types::{ConsumerInfo, Credibility, NotificationReference},
 	Error,
 };
 use codec::Encode;
 use frame_support::{
 	assert_noop, assert_ok,
 	dispatch::GetDispatchInfo,
-	traits::{Authorize, Hooks},
+	storage::unhashed,
+	traits::{Authorize, GetStorageVersion, Hooks, OnRuntimeUpgrade, StorageVersion},
 };
 use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::{
@@ -43,48 +45,21 @@ use sp_statement_store::{get_allowance, StatementAllowance};
 
 // --- Test Helpers ---
 
-/// Register a lite person with the given index, username, and optional reservation.
-/// Uses a default communication identifier (`comm_id(b"key1")`). Returns the account ID.
-fn register_lite(idx: u64, lite_uname: &[u8], reservation: Option<&[u8]>) -> AccountId32 {
-	let reserved = reservation.map(username::<Test>);
-	assert_ok!(Resources::register_lite_person(
-		lite_person_origin(idx),
-		comm_id(b"key1"),
-		username::<Test>(lite_uname),
-		reserved
-	));
+/// Register a lite person with the given index. Uses a default communication identifier
+/// (`comm_id(b"key1")`). Returns the account ID.
+fn register_lite(idx: u64) -> AccountId32 {
+	assert_ok!(Resources::register_lite_person(lite_person_origin(idx), comm_id(b"key1")));
 	id_to_account(idx)
 }
 
 /// Register a full person: first registers a lite identity, then links it to a person
-/// alias with a standalone username. The caller should set the clock beforehand.
-/// Returns the lite account ID.
-fn register_full_person(
-	lite_idx: u64,
-	person_id: u64,
-	lite_uname: &[u8],
-	person_uname: &[u8],
-) -> AccountId32 {
-	let lite_account = register_lite(lite_idx, lite_uname, None);
+/// alias. The caller should set the clock beforehand. Returns the lite account ID.
+fn register_full_person(lite_idx: u64, person_id: u64) -> AccountId32 {
+	let lite_account = register_lite(lite_idx);
 	let proof = mock_lite_proof(lite_account.clone());
 	let origin = person_origin_for(person_id, 0, 0);
-	assert_ok!(Resources::register_person(
-		origin,
-		lite_account.clone(),
-		proof,
-		PersonalUsernameChoice::Standalone(username::<Test>(person_uname))
-	));
+	assert_ok!(Resources::register_person(origin, lite_account.clone(), proof));
 	lite_account
-}
-
-/// Assert that the reservation queue for a username contains exactly the given
-/// account IDs (by index), in order.
-fn assert_queue_members(reserved_uname: &Username, expected_ids: &[u64]) {
-	let queue = UsernameReservationQueue::<Test>::get(reserved_uname).expect("Queue should exist");
-	assert_eq!(queue.len(), expected_ids.len(), "Queue length mismatch");
-	for (i, &id) in expected_ids.iter().enumerate() {
-		assert_eq!(queue[i].account, id_to_account(id), "Queue member mismatch at position {i}");
-	}
 }
 
 // --- Tests ---
@@ -95,17 +70,13 @@ fn register_lite_person_success() {
 		System::set_block_number(1);
 		let user_account = id_to_account(1);
 		let origin = lite_person_origin(1);
-		let uname = username::<Test>(b"testuser.12");
 		let comm = comm_id(b"key1");
 
-		assert_ok!(Resources::register_lite_person(origin.clone(), comm, uname.clone(), None));
+		assert_ok!(Resources::register_lite_person(origin.clone(), comm));
 
 		let consumer_info = Consumers::<Test>::get(&user_account).unwrap();
 		assert_eq!(consumer_info.identifier_key, comm);
-		assert_eq!(consumer_info.lite_username, uname.clone());
-		assert_eq!(consumer_info.full_username, None);
 		assert_eq!(consumer_info.credibility, Credibility::Lite);
-		assert_eq!(UsernameOwnerOf::<Test>::get(&uname), Some(user_account.clone()));
 		assert_eq!(System::sufficients(&user_account), 1); // Sufficiency increased
 
 		System::assert_has_event(
@@ -115,68 +86,26 @@ fn register_lite_person_success() {
 }
 
 #[test]
-fn register_lite_person_with_reservation_success() {
-	new_test_ext().execute_with(|| {
-		let user_account = id_to_account(1);
-		let origin = lite_person_origin(1);
-		let uname = username::<Test>(b"testuser.12");
-		let reserved_uname = username::<Test>(b"reserved");
-		let comm = comm_id(b"key1");
-		set_time_sec(100);
-
-		assert_ok!(Resources::register_lite_person(
-			origin.clone(),
-			comm,
-			uname.clone(),
-			Some(reserved_uname.clone())
-		));
-
-		let consumer_info = Consumers::<Test>::get(&user_account).unwrap();
-		assert_eq!(consumer_info.lite_username, uname.clone());
-		assert_eq!(UsernameOwnerOf::<Test>::get(&uname), Some(user_account.clone()));
-
-		let queue = UsernameReservationQueue::<Test>::get(&reserved_uname)
-			.expect("Username reservation in queue should exist");
-		let front = queue.first().unwrap();
-		assert_eq!(front.account, user_account);
-		assert_eq!(front.joined_at, 100);
-		// ReservationOf should be set for the account
-		assert_eq!(ReservationOf::<Test>::get(&user_account), Some(reserved_uname));
-	});
-}
-
-#[test]
-fn register_person_success_standalone_username() {
+fn register_person_success() {
 	new_test_ext().execute_with(|| {
 		System::set_block_number(1);
 		let person_id = 10;
 		let person_alias = id_to_alias(person_id);
 		let origin = person_origin_for(person_id, 0, 0);
-		let lite_uname = username::<Test>(b"liteuser.12");
-		let person_uname = username::<Test>(b"personuser");
 
-		let lite_account = register_lite(1, b"liteuser.12", None);
+		let lite_account = register_lite(1);
 		set_time_sec(100);
 
 		let proof = mock_lite_proof(lite_account.clone());
 
-		assert_ok!(Resources::register_person(
-			origin.clone(),
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Standalone(person_uname.clone())
-		));
+		assert_ok!(Resources::register_person(origin.clone(), lite_account.clone(), proof));
 
 		let consumer_info = Consumers::<Test>::get(&lite_account).unwrap();
 		assert_eq!(consumer_info.identifier_key, comm_id(b"key1"));
-		assert_eq!(consumer_info.lite_username, lite_uname);
-		assert_eq!(consumer_info.full_username, Some(person_uname.clone()));
 		assert_eq!(
 			consumer_info.credibility,
 			Credibility::Person { alias: person_alias, last_update: 100, demoted: false }
 		);
-		assert_eq!(UsernameOwnerOf::<Test>::get(&lite_uname), Some(lite_account.clone()));
-		assert_eq!(UsernameOwnerOf::<Test>::get(&person_uname), Some(lite_account.clone()));
 		assert_eq!(AccountOfAlias::<Test>::get(person_alias), Some(lite_account.clone()));
 		assert_eq!(System::sufficients(&lite_account), 1); // Should still be 1
 
@@ -187,137 +116,13 @@ fn register_person_success_standalone_username() {
 }
 
 #[test]
-fn register_person_standalone_auto_leaves_reservation_queue() {
-	new_test_ext().execute_with(|| {
-		let person_id = 10;
-		let person_alias = id_to_alias(person_id);
-		let origin = person_origin_for(person_id, 0, 0);
-		let reserved_uname = username::<Test>(b"reserved");
-		let person_uname = username::<Test>(b"personuser");
-		set_time_sec(100);
-
-		// Register a lite person with a reservation — they become the active holder.
-		let lite_account = register_lite(1, b"liteuser.12", Some(b"reserved"));
-		// Add a second person to the queue so we can verify promotion.
-		advance_time_sec(10);
-		let lite_user_two = register_lite(2, b"usertwo.12", Some(b"reserved"));
-
-		assert_queue_members(&reserved_uname, &[1, 2]);
-		assert_eq!(ReservationOf::<Test>::get(&lite_account), Some(reserved_uname.clone()));
-
-		// Register as a full person with a Standalone username — should auto-leave the queue.
-		advance_time_sec(10);
-		let proof = mock_lite_proof(lite_account.clone());
-		assert_ok!(Resources::register_person(
-			origin,
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Standalone(person_uname.clone())
-		));
-
-		// The lite identity's reservation was cleaned up.
-		assert_eq!(ReservationOf::<Test>::get(&lite_account), None);
-		// User 2 was promoted to active holder, keeping their original joined_at.
-		assert_queue_members(&reserved_uname, &[2]);
-		let queue = UsernameReservationQueue::<Test>::get(&reserved_uname).unwrap();
-		assert_eq!(queue[0].account, lite_user_two);
-		assert_eq!(queue[0].joined_at, 110, "Promoted holder keeps original joined_at");
-
-		// The full person registration succeeded with the standalone username.
-		let consumer_info = Consumers::<Test>::get(&lite_account).unwrap();
-		assert_eq!(consumer_info.full_username, Some(person_uname.clone()));
-		assert_eq!(
-			consumer_info.credibility,
-			Credibility::Person { alias: person_alias, last_update: 120, demoted: false }
-		);
-		assert_eq!(UsernameOwnerOf::<Test>::get(&person_uname), Some(lite_account));
-	});
-}
-
-#[test]
-fn register_person_standalone_auto_leaves_queue_as_non_holder() {
-	new_test_ext().execute_with(|| {
-		let person_id = 10;
-		let origin = person_origin_for(person_id, 0, 0);
-		let reserved_uname = username::<Test>(b"reserved");
-		let person_uname = username::<Test>(b"personuser");
-		set_time_sec(100);
-
-		// User 1 is the holder, user 2 (our lite identity) joins the queue behind them.
-		register_lite(1, b"userone.12", Some(b"reserved"));
-		advance_time_sec(10);
-		let lite_account = register_lite(2, b"liteuser.12", Some(b"reserved"));
-
-		assert_queue_members(&reserved_uname, &[1, 2]);
-
-		// Register as a full person with a Standalone username — auto-leaves queue.
-		advance_time_sec(10);
-		let proof = mock_lite_proof(lite_account.clone());
-		assert_ok!(Resources::register_person(
-			origin,
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Standalone(person_uname.clone())
-		));
-
-		// User 2's reservation was cleaned up, holder (user 1) is unaffected.
-		assert_eq!(ReservationOf::<Test>::get(&lite_account), None);
-		assert_queue_members(&reserved_uname, &[1]);
-		let queue = UsernameReservationQueue::<Test>::get(&reserved_uname).unwrap();
-		assert_eq!(queue[0].joined_at, 100, "Holder's joined_at must not change");
-	});
-}
-
-#[test]
-fn register_person_success_with_reservation() {
-	new_test_ext().execute_with(|| {
-		let person_id = 10;
-		let person_alias = id_to_alias(person_id);
-		let origin = person_origin_for(person_id, 0, 0);
-		let reserved_uname = username::<Test>(b"reserved");
-		set_time_sec(50);
-
-		let lite_account = register_lite(1, b"liteuser.12", Some(b"reserved"));
-		assert!(UsernameReservationQueue::<Test>::get(&reserved_uname).is_some());
-		assert_eq!(ReservationOf::<Test>::get(&lite_account), Some(reserved_uname.clone()));
-		set_time_sec(100);
-
-		let proof = mock_lite_proof(lite_account.clone());
-
-		assert_ok!(Resources::register_person(
-			origin.clone(),
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Reservation(reserved_uname.clone())
-		));
-
-		let consumer_info = Consumers::<Test>::get(&lite_account).unwrap();
-		assert_eq!(consumer_info.full_username, Some(reserved_uname.clone()));
-		assert_eq!(
-			consumer_info.credibility,
-			Credibility::Person { alias: person_alias, last_update: 100, demoted: false }
-		);
-		assert_eq!(UsernameOwnerOf::<Test>::get(&reserved_uname), Some(lite_account.clone()));
-		assert_eq!(AccountOfAlias::<Test>::get(person_alias), Some(lite_account.clone()));
-		assert!(UsernameReservationQueue::<Test>::get(&reserved_uname).is_none()); // Reservation consumed
-																			 // ReservationOf should be cleaned up after claiming
-		assert_eq!(ReservationOf::<Test>::get(&lite_account), None);
-	});
-}
-
-#[test]
 fn register_fails_if_already_registered() {
 	new_test_ext().execute_with(|| {
-		let user_account = register_lite(1, b"testuser.12", None);
+		let user_account = register_lite(1);
 
 		// Try registering lite again
 		assert_noop!(
-			Resources::register_lite_person(
-				lite_person_origin(1),
-				comm_id(b"key1"),
-				username::<Test>(b"secondtestuser.12"),
-				None
-			),
+			Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")),
 			Error::<Test>::AlreadyRegistered
 		);
 
@@ -325,7 +130,6 @@ fn register_fails_if_already_registered() {
 		let person_id = 10;
 		let person_alias = id_to_alias(person_id);
 		let person_origin = person_origin_for(person_id, 0, 0);
-		let person_uname = username::<Test>(b"personuser");
 		let proof = mock_lite_proof(user_account.clone());
 
 		// Need to upgrade credibility before this check
@@ -338,143 +142,8 @@ fn register_fails_if_already_registered() {
 		AccountOfAlias::<Test>::insert(person_alias, user_account.clone()); // Mock alias already used
 
 		assert_noop!(
-			Resources::register_person(
-				person_origin.clone(),
-				user_account.clone(),
-				proof,
-				PersonalUsernameChoice::Standalone(person_uname.clone())
-			),
+			Resources::register_person(person_origin.clone(), user_account.clone(), proof),
 			Error::<Test>::AlreadyRegistered // Because alias is already registered
-		);
-	});
-}
-
-#[test]
-fn register_fails_if_username_taken() {
-	new_test_ext().execute_with(|| {
-		let uname = username::<Test>(b"takenuser.12");
-
-		// User 1 registers with uname
-		register_lite(1, b"takenuser.12", None);
-
-		// User 2 tries to register lite with same uname
-		assert_noop!(
-			Resources::register_lite_person(
-				lite_person_origin(2),
-				comm_id(b"key1"),
-				uname.clone(),
-				None
-			),
-			Error::<Test>::UsernameTaken
-		);
-
-		// User 3 (full person) tries to register with same uname (standalone)
-		let person_id = 10;
-		let person_origin = person_origin_for(person_id, 0, 0);
-		let lite_account_for_person = register_lite(3, b"another.34", None);
-		let proof = mock_lite_proof(lite_account_for_person.clone());
-		assert_noop!(
-			Resources::register_person(
-				person_origin.clone(),
-				lite_account_for_person.clone(),
-				proof.clone(),
-				PersonalUsernameChoice::Standalone(uname.clone()), // Trying taken username
-			),
-			Error::<Test>::UsernameTaken
-		);
-
-		// User 3 tries to register using a reservation for the taken username
-		// (This scenario shouldn't happen if reservation checks work, but test anyway)
-		assert_noop!(
-			Resources::register_person(
-				person_origin.clone(),
-				lite_account_for_person.clone(),
-				proof.clone(),
-				PersonalUsernameChoice::Reservation(uname.clone()), // Trying taken username
-			),
-			Error::<Test>::NoReservation // It will fail here first as reservation doesn't exist
-		);
-	});
-}
-
-#[test]
-fn register_fails_if_username_invalid() {
-	new_test_ext().execute_with(|| {
-		// Lite person invalid names
-		let invalid_lite_unames = [
-			b"invalid".to_vec(),  // No digits
-			b"invalid.".to_vec(), // No digits
-			b"invalid.1".to_vec(), /* Not enough
-			                       * digits */
-			b"Invalid.12".to_vec(),  // Uppercase
-			b"in_valid.12".to_vec(), // Underscore
-			b"short.12".to_vec(),    // Too short base
-		];
-		for uname_bytes in invalid_lite_unames {
-			let uname = username::<Test>(&uname_bytes);
-			assert_noop!(
-				Resources::register_lite_person(
-					lite_person_origin(1),
-					comm_id(b"key1"),
-					uname.clone(),
-					None
-				),
-				Error::<Test>::InvalidUsername,
-			);
-		}
-
-		// Person invalid names
-		let person_id = 10;
-		let person_origin = person_origin_for(person_id, 0, 0);
-		let lite_account_for_person = register_lite(2, b"linking.12", None);
-		let proof = mock_lite_proof(lite_account_for_person.clone());
-
-		let invalid_person_unames = [
-			b"Invalid".to_vec(),  // Uppercase
-			b"in_valid".to_vec(), // Underscore
-			b"invalid.12".to_vec(), /* Dot separator (only allowed for
-			                       * lite) */
-			b"short".to_vec(), // Too short
-		];
-		for uname_bytes in invalid_person_unames {
-			let uname = username::<Test>(&uname_bytes);
-			assert_noop!(
-				Resources::register_person(
-					person_origin.clone(),
-					lite_account_for_person.clone(),
-					proof.clone(),
-					PersonalUsernameChoice::Standalone(uname.clone())
-				),
-				Error::<Test>::InvalidUsername
-			);
-		}
-
-		// Test invalid reserved username for lite person
-		let valid_uname = username::<Test>(b"gooduser.12");
-		let invalid_reserved = username::<Test>(b"Invalid");
-		assert_noop!(
-			Resources::register_lite_person(
-				lite_person_origin(1),
-				comm_id(b"key1"),
-				valid_uname.clone(),
-				Some(invalid_reserved)
-			),
-			Error::<Test>::InvalidUsername // validate_username runs even for reservation
-		);
-
-		// Test invalid reserved username for full person
-		register_lite(1, b"gooduser.12", Some(b"reserved"));
-		let invalid_reserved = username::<Test>(b"Invalid");
-		// reservation doesn't exist; it it did, the reserved username must have been validated when
-		// the reservation was made, as checked above
-		assert_noop!(
-			Resources::register_person(
-				person_origin.clone(),
-				lite_account_for_person.clone(),
-				proof.clone(),
-				PersonalUsernameChoice::Reservation(invalid_reserved)
-			),
-			Error::<Test>::NoReservation
 		);
 	});
 }
@@ -484,8 +153,7 @@ fn register_person_fails_invalid_proof() {
 	new_test_ext().execute_with(|| {
 		let person_id = 10;
 		let origin = person_origin_for(person_id, 0, 0);
-		let lite_account = register_lite(1, b"linking.12", None);
-		let person_uname = username::<Test>(b"personuser");
+		let lite_account = register_lite(1);
 
 		// Create proof using a different account's authority
 		let invalid_proof = mock_lite_proof(id_to_account(99)); // Proof for account 99
@@ -494,57 +162,9 @@ fn register_person_fails_invalid_proof() {
 			Resources::register_person(
 				origin.clone(),
 				lite_account.clone(),
-				invalid_proof, // Incorrect proof
-				PersonalUsernameChoice::Standalone(person_uname.clone())
+				invalid_proof // Incorrect proof
 			),
 			Error::<Test>::InvalidProofOfOwnership
-		);
-	});
-}
-
-#[test]
-fn register_fails_reserved_username_taken() {
-	new_test_ext().execute_with(|| {
-		let reserved_uname = username::<Test>(b"reserved");
-		set_time_sec(100);
-
-		// User 1 registers and reserves "reserved"
-		register_lite(1, b"userone.12", Some(b"reserved"));
-
-		// User 2 tries to reserve the same name - should join the queue
-		register_lite(2, b"usertwo.12", Some(b"reserved"));
-
-		// User 2 is now in the queue (behind user 1 who is at front)
-		assert_queue_members(&reserved_uname, &[1, 2]);
-		assert_eq!(ReservationOf::<Test>::get(id_to_account(2)), Some(reserved_uname.clone()));
-
-		// User 3 (full person) tries to use the reservation made by User 1
-		let person_id = 10;
-		let person_origin = person_origin_for(person_id, 0, 0);
-		let lite_account_for_person = register_lite(3, b"userthree.12", None);
-		let proof = mock_lite_proof(lite_account_for_person.clone());
-		assert_noop!(
-			Resources::register_person(
-				person_origin.clone(),
-				lite_account_for_person.clone(),
-				proof.clone(),
-				PersonalUsernameChoice::Reservation(reserved_uname.clone())
-			),
-			Error::<Test>::NotReservationHolder
-		);
-
-		// Test scenario where reserved name is already taken as a primary name
-		let uname4 = username::<Test>(b"userfour.12");
-		register_lite(4, b"userfour.12", None);
-		// User 5 tries to reserve it
-		assert_noop!(
-			Resources::register_lite_person(
-				lite_person_origin(5),
-				comm_id(b"key1"),
-				username::<Test>(b"userfive.12"),
-				Some(uname4)
-			),
-			Error::<Test>::UsernameReservationTaken
 		);
 	});
 }
@@ -555,15 +175,13 @@ fn register_person_fails_no_linked_lite_identity() {
 		let person_id = 10;
 		let origin = person_origin_for(person_id, 0, 0);
 		let non_existent_lite_account = id_to_account(99); // This account is not registered
-		let person_uname = username::<Test>(b"personuser");
 		let proof = mock_lite_proof(non_existent_lite_account.clone());
 
 		assert_noop!(
 			Resources::register_person(
 				origin.clone(),
 				non_existent_lite_account.clone(), // Non-existent account
-				proof,
-				PersonalUsernameChoice::Standalone(person_uname.clone())
+				proof
 			),
 			Error::<Test>::NoLinkedIdentity
 		);
@@ -579,18 +197,14 @@ fn register_person_fails_lite_identity_already_linked() {
 		let person2_id = 20;
 		let person2_origin = person_origin_for(person2_id, 1, 0); // Different ring/rev
 
-		let person1_uname = username::<Test>(b"firstpersonuser");
-		let person2_uname = username::<Test>(b"secondpersonuser");
-
-		let lite_account = register_lite(1, b"liteuser.12", None);
+		let lite_account = register_lite(1);
 
 		// Person 1 links the lite account
 		let proof1 = mock_lite_proof(lite_account.clone());
 		assert_ok!(Resources::register_person(
 			person1_origin.clone(),
 			lite_account.clone(),
-			proof1,
-			PersonalUsernameChoice::Standalone(person1_uname.clone())
+			proof1
 		));
 
 		// Person 2 tries to link the same lite account
@@ -599,8 +213,7 @@ fn register_person_fails_lite_identity_already_linked() {
 			Resources::register_person(
 				person2_origin.clone(),
 				lite_account.clone(), // Already linked lite account
-				proof2,
-				PersonalUsernameChoice::Standalone(person2_uname.clone())
+				proof2
 			),
 			Error::<Test>::AlreadyLinked
 		);
@@ -615,7 +228,7 @@ fn touch_authorization_success() {
 		let person_alias = id_to_alias(person_id);
 		let person_origin = person_origin_for(person_id, 0, 0);
 		set_time_sec(100);
-		let lite_account = register_full_person(1, person_id, b"liteper.12", b"fullperson");
+		let lite_account = register_full_person(1, person_id);
 		assert_eq!(
 			Consumers::<Test>::get(&lite_account).unwrap().credibility,
 			Credibility::Person { alias: person_alias, last_update: 100, demoted: false }
@@ -657,7 +270,7 @@ fn touch_authorization_fails_not_registered() {
 #[test]
 fn touch_authorization_fails_not_full_person() {
 	new_test_ext().execute_with(|| {
-		let lite_account = register_lite(1, b"liteper.12", None);
+		let lite_account = register_lite(1);
 
 		// Try touching with a Person origin (that isn't linked) - should fail NotRegistered
 		let person_id = 10;
@@ -687,7 +300,7 @@ fn touch_authorization_fails_too_early() {
 		let person_id = 10;
 		let person_origin = person_origin_for(person_id, 0, 0);
 		set_time_sec(100);
-		register_full_person(1, person_id, b"liteper.12", b"fullperson");
+		register_full_person(1, person_id);
 
 		// Advance time less than the minimum interval
 		let duration: u32 = <Test as Config>::MinPersonAuthUpdateInterval::get();
@@ -702,110 +315,10 @@ fn touch_authorization_fails_too_early() {
 }
 
 #[test]
-fn remove_username_reservation_success() {
-	new_test_ext().execute_with(|| {
-		System::set_block_number(1);
-		let reserved_uname = username::<Test>(b"reserved");
-		let reservation_time = 100;
-		set_time_sec(reservation_time);
-		let reservation_duration = 40;
-		UsernameReservationDuration::<Test>::put(reservation_duration);
-
-		register_lite(1, b"liteper.12", Some(b"reserved"));
-		assert!(UsernameReservationQueue::<Test>::contains_key(&reserved_uname));
-
-		// Advance time past expiry
-		advance_time_sec(reservation_duration + 1u64);
-
-		let account = id_to_account(1);
-		// Remove expired reservation (permissionless authorized call).
-		assert_ok!(Resources::remove_expired_username_reservation(
-			SystemOrigin::Authorized.into(),
-			reserved_uname.clone(),
-			account.clone(),
-		));
-
-		// Check reservation is gone
-		assert!(!UsernameReservationQueue::<Test>::contains_key(&reserved_uname));
-
-		System::assert_has_event(
-			Event::<Test>::ExpiredUsernameReservationRemoved { username: reserved_uname, account }
-				.into(),
-		);
-	});
-}
-
-#[test]
-fn remove_username_reservation_fails_no_reservation() {
-	new_test_ext().execute_with(|| {
-		let non_reserved_uname = username::<Test>(b"notreserved");
-
-		assert_noop!(
-			Resources::remove_expired_username_reservation(
-				SystemOrigin::Authorized.into(),
-				non_reserved_uname.clone(),
-				id_to_account(1),
-			),
-			Error::<Test>::NoReservation
-		);
-	});
-}
-
-#[test]
-fn remove_username_reservation_fails_too_early() {
-	new_test_ext().execute_with(|| {
-		let reserved_uname = username::<Test>(b"reserved");
-		let reservation_time = 100;
-		set_time_sec(reservation_time);
-		let reservation_duration = 40;
-		UsernameReservationDuration::<Test>::put(reservation_duration);
-
-		register_lite(1, b"liteper.12", Some(b"reserved"));
-
-		// Advance time, but not past expiry
-		advance_time_sec(reservation_duration - 1u64);
-
-		// The expiry check is enforced in the authorize closure; verify it rejects here.
-		assert!(matches!(
-			Resources::validate_reservation_expiry(&reserved_uname, &id_to_account(1)),
-			Err(Error::<Test>::ReservationFresh),
-		));
-	});
-}
-
-#[test]
-fn remove_username_reservation_authorize_returns_custom_invalidity_when_too_early() {
-	new_test_ext().execute_with(|| {
-		let reserved_uname = username::<Test>(b"reserved");
-		let reservation_time = 100;
-		set_time_sec(reservation_time);
-		let reservation_duration = 40;
-		UsernameReservationDuration::<Test>::put(reservation_duration);
-
-		register_lite(1, b"liteper.12", Some(b"reserved"));
-		advance_time_sec(reservation_duration - 1u64);
-
-		let call = crate::Call::<Test>::remove_expired_username_reservation {
-			username: reserved_uname,
-			account: id_to_account(1),
-		};
-		let result = call.authorize(TransactionSource::External);
-
-		assert_eq!(
-			result,
-			Some(Err(InvalidTransaction::Custom(
-				crate::extension::CustomValidity::InvalidExpiredUsernameReservationRemoval as u8
-			)
-			.into()))
-		);
-	});
-}
-
-#[test]
 fn update_identifier_key_success() {
 	new_test_ext().execute_with(|| {
 		System::set_block_number(1);
-		let user_account = register_lite(1, b"liteper.12", None);
+		let user_account = register_lite(1);
 		let origin = RuntimeOrigin::signed(user_account.clone());
 		let new_comm = comm_id(b"key2");
 
@@ -832,114 +345,6 @@ fn update_identifier_key_fails_not_registered() {
 	});
 }
 
-#[test]
-fn validate_username_variants() {
-	new_test_ext().execute_with(|| {
-		// Valid lite
-		assert_ok!(Resources::validate_username(&username::<Test>(b"abcdefg.12"), false));
-		assert_ok!(Resources::validate_username(&username::<Test>(b"userlongname.12345"), false));
-
-		// Invalid lite
-
-		// Empty username
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b""), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Too short base
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcdef.12"), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Digit in base
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcdef1.12"), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Too few digits
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcdefg.1"), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// No digits
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcdefg."), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// No separator/digits
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcdefg"), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Multiple separators
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abc.defg.12"), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Hyphen in base
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcdef-g.12"), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Uppercase base
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcDefg.12"), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Non-digit suffix
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcdefg.1a"), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Underscore
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abc_defg.12"), false),
-			Err(Error::<Test>::InvalidUsername)
-		));
-
-		// Valid person
-		assert_ok!(Resources::validate_username(&username::<Test>(b"abcdefg"), true)); // Meets min length if MinUsernameLength is <= 7
-
-		// Invalid person
-
-		// Empty username
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b""), true),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Too short
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abc"), true),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// One character below the minimum length
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcdef"), true),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Digits not allowed
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcd123"), true),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Uppercase
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"Abcdefg"), true),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Hyphen
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abc-defg"), true),
-			Err(Error::<Test>::InvalidUsername)
-		));
-		// Dot separator not allowed
-		assert!(matches!(
-			Resources::validate_username(&username::<Test>(b"abcdefg.12"), true),
-			Err(Error::<Test>::InvalidUsername)
-		));
-	});
-}
-
 // --- Statement Allowance Tests ---
 
 #[test]
@@ -956,12 +361,7 @@ fn allowance_increases_for_full_person_and_reverts_on_demote() {
 		assert_eq!(get_allowance(&lite_account), StatementAllowance::default());
 
 		// Register lite person first.
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key"),
-			username::<Test>(b"liteper.12"),
-			None
-		));
+		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key")));
 
 		// Verify lite person gets lite statement limit.
 		let allowance_after_lite = get_allowance(&lite_account);
@@ -970,12 +370,7 @@ fn allowance_increases_for_full_person_and_reverts_on_demote() {
 		// Upgrade to full person
 		let proof = mock_lite_proof(lite_account.clone());
 		set_time_sec(100);
-		assert_ok!(Resources::register_person(
-			person_origin.clone(),
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Standalone(username::<Test>(b"fullperson"))
-		));
+		assert_ok!(Resources::register_person(person_origin.clone(), lite_account.clone(), proof));
 
 		// Verify full person gets higher statement limit.
 		let allowance_after_person = get_allowance(&lite_account);
@@ -1005,21 +400,11 @@ fn allowance_not_increased_on_duplicate_lite_register() {
 
 		assert_eq!(get_allowance(&lite_account), StatementAllowance::default());
 
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key1"),
-			username::<Test>(b"liteone.12"),
-			None
-		));
+		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
 		assert_eq!(get_allowance(&lite_account), lite_allowance);
 
 		assert_noop!(
-			Resources::register_lite_person(
-				lite_person_origin(1),
-				comm_id(b"key2"),
-				username::<Test>(b"litetwo.12"),
-				None
-			),
+			Resources::register_lite_person(lite_person_origin(1), comm_id(b"key2")),
 			Error::<Test>::AlreadyRegistered
 		);
 		assert_eq!(get_allowance(&lite_account), lite_allowance);
@@ -1033,22 +418,12 @@ fn allowance_not_increased_on_failed_person_register_invalid_proof() {
 		let person_origin = person_origin_for(10, 0, 0);
 		let lite_allowance = <Test as Config>::LitePersonStatementLimit::get();
 
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key1"),
-			username::<Test>(b"liteper.12"),
-			None
-		));
+		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
 		assert_eq!(get_allowance(&lite_account), lite_allowance);
 
 		let invalid_proof = mock_lite_proof(id_to_account(2));
 		assert_noop!(
-			Resources::register_person(
-				person_origin,
-				lite_account.clone(),
-				invalid_proof,
-				PersonalUsernameChoice::Standalone(username::<Test>(b"fullperson"))
-			),
+			Resources::register_person(person_origin, lite_account.clone(), invalid_proof),
 			Error::<Test>::InvalidProofOfOwnership
 		);
 		assert_eq!(get_allowance(&lite_account), lite_allowance);
@@ -1064,12 +439,7 @@ fn allowance_not_increased_on_failed_person_register_already_linked() {
 		let lite_allowance = <Test as Config>::LitePersonStatementLimit::get();
 		let person_allowance = <Test as Config>::PersonStatementLimit::get();
 
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key1"),
-			username::<Test>(b"liteper.12"),
-			None
-		));
+		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
 		assert_eq!(get_allowance(&lite_account), lite_allowance);
 
 		let proof = mock_lite_proof(lite_account.clone());
@@ -1077,18 +447,12 @@ fn allowance_not_increased_on_failed_person_register_already_linked() {
 		assert_ok!(Resources::register_person(
 			first_person_origin,
 			lite_account.clone(),
-			proof.clone(),
-			PersonalUsernameChoice::Standalone(username::<Test>(b"fullperson"))
+			proof.clone()
 		));
 		assert_eq!(get_allowance(&lite_account), person_allowance);
 
 		assert_noop!(
-			Resources::register_person(
-				second_person_origin,
-				lite_account.clone(),
-				proof,
-				PersonalUsernameChoice::Standalone(username::<Test>(b"secondperson"))
-			),
+			Resources::register_person(second_person_origin, lite_account.clone(), proof),
 			Error::<Test>::AlreadyLinked
 		);
 		assert_eq!(get_allowance(&lite_account), person_allowance);
@@ -1102,21 +466,11 @@ fn allowance_not_decreased_when_demote_not_expired() {
 		let person_origin = person_origin_for(10, 0, 0);
 		let person_allowance = <Test as Config>::PersonStatementLimit::get();
 
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key1"),
-			username::<Test>(b"liteper.12"),
-			None
-		));
+		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
 
 		let proof = mock_lite_proof(lite_account.clone());
 		set_time_sec(100);
-		assert_ok!(Resources::register_person(
-			person_origin,
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Standalone(username::<Test>(b"fullperson"))
-		));
+		assert_ok!(Resources::register_person(person_origin, lite_account.clone(), proof));
 		assert_eq!(get_allowance(&lite_account), person_allowance);
 
 		assert_noop!(
@@ -1133,12 +487,7 @@ fn allowance_not_decreased_when_demote_not_full_person() {
 		let lite_account = id_to_account(1);
 		let lite_allowance = <Test as Config>::LitePersonStatementLimit::get();
 
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key1"),
-			username::<Test>(b"liteper.12"),
-			None
-		));
+		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
 		assert_eq!(get_allowance(&lite_account), lite_allowance);
 
 		assert_noop!(
@@ -1152,12 +501,7 @@ fn allowance_not_decreased_when_demote_not_full_person() {
 #[test]
 fn demote_auth_expired_authorize_returns_custom_invalidity_when_not_demotable() {
 	new_test_ext().execute_with(|| {
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key1"),
-			username::<Test>(b"liteper.12"),
-			None
-		));
+		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
 
 		let call = crate::Call::<Test>::demote_auth_expired { account: id_to_account(1) };
 		let result = call.authorize(TransactionSource::External);
@@ -1172,67 +516,11 @@ fn demote_auth_expired_authorize_returns_custom_invalidity_when_not_demotable() 
 	});
 }
 
-// --- Set Username Reservation Duration Tests ---
-
-#[test]
-fn set_username_reservation_duration_success() {
-	new_test_ext().execute_with(|| {
-		System::set_block_number(1);
-		let new_duration = 12345u64;
-
-		// Ensure initial value is different (or default)
-		assert_ne!(UsernameReservationDuration::<Test>::get(), new_duration);
-
-		// Set duration with root origin
-		assert_ok!(Resources::set_username_reservation_duration(
-			RuntimeOrigin::root(),
-			new_duration
-		));
-
-		// Verify storage updated
-		assert_eq!(UsernameReservationDuration::<Test>::get(), new_duration);
-
-		System::assert_has_event(
-			Event::<Test>::UsernameReservationDurationSet { duration: new_duration }.into(),
-		);
-	});
-}
-
-#[test]
-fn set_username_reservation_duration_fails_non_root() {
-	new_test_ext().execute_with(|| {
-		let new_duration = 12345u64;
-		let non_root_account = id_to_account(1);
-
-		// Try with signed origin (non-root)
-		assert_noop!(
-			Resources::set_username_reservation_duration(
-				RuntimeOrigin::signed(non_root_account),
-				new_duration
-			),
-			sp_runtime::DispatchError::BadOrigin
-		);
-
-		// Try with lite person origin (non-root)
-		assert_noop!(
-			Resources::set_username_reservation_duration(lite_person_origin(1), new_duration),
-			sp_runtime::DispatchError::BadOrigin
-		);
-
-		// Try with person origin (non-root)
-		assert_noop!(
-			Resources::set_username_reservation_duration(person_origin_for(10, 0, 0), new_duration),
-			sp_runtime::DispatchError::BadOrigin
-		);
-	});
-}
-
 #[test]
 fn statement_allowance_lifecycle() {
 	new_test_ext().execute_with(|| {
 		let person_id = 10;
 		let person_origin = person_origin_for(person_id, 0, 0);
-		let person_uname = username::<Test>(b"personuser");
 
 		let lite_allowance = <Test as Config>::LitePersonStatementLimit::get();
 		let person_allowance = <Test as Config>::PersonStatementLimit::get();
@@ -1243,18 +531,13 @@ fn statement_allowance_lifecycle() {
 
 		// 2. Register as a lite person - should acquire lite person allowance.
 		set_time_sec(100);
-		let lite_account = register_lite(1, b"liteuser.12", None);
+		let lite_account = register_lite(1);
 		let allowance_after_lite = get_allowance(&lite_account);
 		assert_eq!(allowance_after_lite, lite_allowance);
 
 		// 3. Promote to a full person - should increase allowance to full person level.
 		let proof = mock_lite_proof(lite_account.clone());
-		assert_ok!(Resources::register_person(
-			person_origin.clone(),
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Standalone(person_uname.clone())
-		));
+		assert_ok!(Resources::register_person(person_origin.clone(), lite_account.clone(), proof));
 		let allowance_after_person = get_allowance(&lite_account);
 		assert_eq!(allowance_after_person, person_allowance);
 
@@ -1285,46 +568,6 @@ fn statement_allowance_lifecycle() {
 }
 
 #[test]
-fn queue_full_error() {
-	new_test_ext().execute_with(|| {
-		let reserved_uname = username::<Test>(b"reserved");
-		set_time_sec(100);
-
-		let max_queue_length: u32 = <Test as Config>::MaxReservationQueueLength::get();
-		let min_username_length: u32 = <Test as Config>::MinUsernameLength::get();
-		let min_username_length = min_username_length as usize;
-
-		// Fill the queue to capacity with dynamically generated lite usernames.
-		// Lite usernames require: >= MinUsernameLength lowercase letters, '.', then >= 2 digits.
-		// Pad "user" with 'x' to reach MinUsernameLength.
-		let base: String = "user"
-			.chars()
-			.chain(core::iter::repeat('x'))
-			.take(min_username_length)
-			.collect();
-		for idx in 1..=max_queue_length as u64 {
-			let lite_name = format!("{base}.{idx:02}");
-			register_lite(idx, lite_name.as_bytes(), Some(b"reserved"));
-		}
-
-		let queue = UsernameReservationQueue::<Test>::get(&reserved_uname).unwrap();
-		assert_eq!(queue.len(), max_queue_length as usize);
-
-		// Next user trying to join the same queue should fail with QueueFull
-		let overflow_idx = max_queue_length as u64 + 1;
-		assert_noop!(
-			Resources::register_lite_person(
-				lite_person_origin(overflow_idx),
-				comm_id(b"key1"),
-				username::<Test>(b"overflow.12"),
-				Some(reserved_uname.clone())
-			),
-			Error::<Test>::QueueFull
-		);
-	})
-}
-
-#[test]
 fn touch_restores_allowance_for_demoted_person() {
 	new_test_ext().execute_with(|| {
 		let lite_account = id_to_account(1);
@@ -1337,19 +580,9 @@ fn touch_restores_allowance_for_demoted_person() {
 
 		// Register as lite person, then promote to full person.
 		set_time_sec(100);
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key1"),
-			username::<Test>(b"liteuser.12"),
-			None
-		));
+		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
 		let proof = mock_lite_proof(lite_account.clone());
-		assert_ok!(Resources::register_person(
-			person_origin.clone(),
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Standalone(username::<Test>(b"personuser"))
-		));
+		assert_ok!(Resources::register_person(person_origin.clone(), lite_account.clone(), proof));
 		assert_eq!(get_allowance(&lite_account), person_allowance);
 
 		// Let person auth expire and demote.
@@ -1380,123 +613,6 @@ fn touch_restores_allowance_for_demoted_person() {
 }
 
 #[test]
-fn reservation_expiry_promotes_next() {
-	new_test_ext().execute_with(|| {
-		let reserved_uname = username::<Test>(b"reserved");
-		let reservation_duration = 40u64;
-		set_time_sec(100);
-		UsernameReservationDuration::<Test>::put(reservation_duration);
-
-		register_lite(1, b"userone.12", Some(b"reserved"));
-		register_lite(2, b"usertwo.12", Some(b"reserved"));
-
-		// Advance past the reservation duration
-		advance_time_sec(reservation_duration + 1);
-
-		// Remove expired reservation
-		assert_ok!(Resources::remove_expired_username_reservation(
-			SystemOrigin::Authorized.into(),
-			reserved_uname.clone(),
-			id_to_account(1),
-		));
-
-		// User 1's reservation should be cleaned up
-		assert_eq!(ReservationOf::<Test>::get(id_to_account(1)), None);
-
-		// User 2 should be promoted to active holder (front of queue)
-		assert_queue_members(&reserved_uname, &[2]);
-		let queue = UsernameReservationQueue::<Test>::get(&reserved_uname).unwrap();
-		assert_eq!(queue[0].joined_at, 100);
-	});
-}
-
-#[test]
-fn remove_expired_reservation_mid_queue() {
-	new_test_ext().execute_with(|| {
-		let reserved_uname = username::<Test>(b"reserved");
-		let reservation_duration = 40u64;
-		UsernameReservationDuration::<Test>::put(reservation_duration);
-
-		// User 1 joins at t=100, user 2 at t=110, user 3 at t=120.
-		set_time_sec(100);
-		register_lite(1, b"userone.12", Some(b"reserved"));
-		advance_time_sec(10);
-		register_lite(2, b"usertwo.12", Some(b"reserved"));
-		advance_time_sec(10);
-		register_lite(3, b"userthre.12", Some(b"reserved"));
-
-		assert_queue_members(&reserved_uname, &[1, 2, 3]);
-
-		// Advance to t=151: user 1 (joined 100, expires >140) and user 2 (joined 110,
-		// expires >150) are expired, but user 3 (joined 120, expires >160) is still fresh.
-		set_time_sec(151);
-
-		// Remove user 2 from the middle of the queue.
-		assert_ok!(Resources::remove_expired_username_reservation(
-			SystemOrigin::Authorized.into(),
-			reserved_uname.clone(),
-			id_to_account(2),
-		));
-
-		assert_eq!(ReservationOf::<Test>::get(id_to_account(2)), None);
-		assert_queue_members(&reserved_uname, &[1, 3]);
-
-		// User 3 is not expired yet — the authorize closure should reject this.
-		assert!(matches!(
-			Resources::validate_reservation_expiry(&reserved_uname, &id_to_account(3)),
-			Err(Error::<Test>::ReservationFresh),
-		));
-
-		// Remove user 1 (front) — user 3 becomes the new front.
-		assert_ok!(Resources::remove_expired_username_reservation(
-			SystemOrigin::Authorized.into(),
-			reserved_uname.clone(),
-			id_to_account(1),
-		));
-
-		assert_eq!(ReservationOf::<Test>::get(id_to_account(1)), None);
-		assert_queue_members(&reserved_uname, &[3]);
-		let queue = UsernameReservationQueue::<Test>::get(&reserved_uname).unwrap();
-		assert_eq!(queue[0].joined_at, 120, "User 3 keeps original joined_at");
-	});
-}
-
-#[test]
-fn claim_cleans_up_queue() {
-	new_test_ext().execute_with(|| {
-		let reserved_uname = username::<Test>(b"reserved");
-		set_time_sec(50);
-
-		register_lite(1, b"userone.12", Some(b"reserved"));
-		register_lite(2, b"usertwo.12", Some(b"reserved"));
-		register_lite(3, b"userthre.12", Some(b"reserved"));
-
-		// Verify queue has 3 entries (1 holder + 2 waiters)
-		assert_queue_members(&reserved_uname, &[1, 2, 3]);
-
-		set_time_sec(100);
-
-		// User 1 claims the reservation via register_person
-		let person_id = 10;
-		let origin = person_origin_for(person_id, 0, 0);
-		let proof = mock_lite_proof(id_to_account(1));
-
-		assert_ok!(Resources::register_person(
-			origin,
-			id_to_account(1),
-			proof,
-			PersonalUsernameChoice::Reservation(reserved_uname.clone())
-		));
-
-		// Everything should be cleaned up
-		assert!(UsernameReservationQueue::<Test>::get(&reserved_uname).is_none());
-		assert_eq!(ReservationOf::<Test>::get(id_to_account(1)), None);
-		assert_eq!(ReservationOf::<Test>::get(id_to_account(2)), None);
-		assert_eq!(ReservationOf::<Test>::get(id_to_account(3)), None);
-	})
-}
-
-#[test]
 fn touch_keeps_existing_allowance_for_non_demoted_person() {
 	new_test_ext().execute_with(|| {
 		let lite_account = id_to_account(1);
@@ -1508,19 +624,9 @@ fn touch_keeps_existing_allowance_for_non_demoted_person() {
 
 		// Register as lite person, then promote to full person.
 		set_time_sec(100);
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key1"),
-			username::<Test>(b"liteuser.12"),
-			None
-		));
+		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
 		let proof = mock_lite_proof(lite_account.clone());
-		assert_ok!(Resources::register_person(
-			person_origin.clone(),
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Standalone(username::<Test>(b"personuser"))
-		));
+		assert_ok!(Resources::register_person(person_origin.clone(), lite_account.clone(), proof));
 		assert_eq!(get_allowance(&lite_account), person_allowance);
 
 		// Touch without demotion — allowance should remain unchanged.
@@ -1535,6 +641,84 @@ fn touch_keeps_existing_allowance_for_non_demoted_person() {
 			Credibility::Person { alias: person_alias, last_update: touch_time, demoted: false }
 		);
 	});
+}
+
+mod migration {
+	use super::*;
+
+	type OldUsername = v1::Username;
+
+	fn old_username(s: &[u8]) -> OldUsername {
+		s.to_vec().try_into().unwrap()
+	}
+
+	fn seed_old_consumer(who: &AccountId32, credibility: Credibility) {
+		let value = (
+			comm_id(b"key1"),
+			Some(old_username(b"fullperson")),
+			old_username(b"liteuser.12"),
+			credibility,
+		)
+			.encode();
+		unhashed::put_raw(&Consumers::<Test>::hashed_key_for(who), &value);
+	}
+
+	#[test]
+	fn v1_translates_consumers_and_clears_username_storage() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<Resources>();
+			let lite = id_to_account(1);
+			let person = id_to_account(2);
+			let alias = id_to_alias(10);
+			let person_credibility =
+				Credibility::Person { alias, last_update: 100, demoted: false };
+			seed_old_consumer(&lite, Credibility::Lite);
+			seed_old_consumer(&person, person_credibility.clone());
+			// An old record does not decode under the current type until migrated.
+			assert_eq!(Consumers::<Test>::get(&lite), None);
+
+			v1::UsernameOwnerOf::<Test>::insert(old_username(b"liteuser.12"), &lite);
+			v1::UsernameReservationDuration::<Test>::put(60);
+			v1::UsernameReservationQueue::<Test>::insert(old_username(b"reserved"), ());
+			v1::ReservationOf::<Test>::insert(&lite, old_username(b"reserved"));
+
+			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+
+			assert_eq!(
+				Consumers::<Test>::get(&lite),
+				Some(ConsumerInfo {
+					identifier_key: comm_id(b"key1"),
+					credibility: Credibility::Lite
+				})
+			);
+			assert_eq!(
+				Consumers::<Test>::get(&person),
+				Some(ConsumerInfo {
+					identifier_key: comm_id(b"key1"),
+					credibility: person_credibility
+				})
+			);
+			assert_eq!(v1::UsernameOwnerOf::<Test>::iter_keys().count(), 0);
+			assert!(!v1::UsernameReservationDuration::<Test>::exists());
+			assert_eq!(v1::UsernameReservationQueue::<Test>::iter_keys().count(), 0);
+			assert_eq!(v1::ReservationOf::<Test>::iter_keys().count(), 0);
+			assert_eq!(Resources::on_chain_storage_version(), StorageVersion::new(1));
+		});
+	}
+
+	#[test]
+	fn v1_does_nothing_on_current_version() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(1).put::<Resources>();
+			let lite = register_lite(1);
+			v1::UsernameReservationDuration::<Test>::put(60);
+
+			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+
+			assert!(Consumers::<Test>::contains_key(&lite));
+			assert_eq!(v1::UsernameReservationDuration::<Test>::get(), 60);
+		});
+	}
 }
 
 mod notification {
@@ -3944,8 +3128,9 @@ mod dynamic_parameters {
 	fn identifier(collection: MembershipCollection) -> &'static Identifier {
 		match collection {
 			MembershipCollection::People => indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER,
-			MembershipCollection::LitePeople =>
-				indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER,
+			MembershipCollection::LitePeople => {
+				indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER
+			},
 		}
 	}
 
@@ -4401,9 +3586,9 @@ mod dynamic_parameters {
 			let period_key = BigEndianU32::from(period);
 			SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(1), ());
 			set_time_sec(
-				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
-					LongTermStorageGraceWindow::get() as u64 +
-					1,
+				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64
+					+ LongTermStorageGraceWindow::get() as u64
+					+ 1,
 			);
 			let limit = LongTermStorageCleanupLimit::get();
 			let clear = |limit: u32| {
@@ -4436,9 +3621,9 @@ mod dynamic_parameters {
 				SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(i as u64), ());
 			}
 			set_time_sec(
-				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
-					LongTermStorageGraceWindow::get() as u64 +
-					1,
+				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64
+					+ LongTermStorageGraceWindow::get() as u64
+					+ 1,
 			);
 
 			// A lowered limit removes fewer entries per offchain-worker run.

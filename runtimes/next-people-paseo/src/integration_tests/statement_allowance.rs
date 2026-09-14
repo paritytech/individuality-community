@@ -37,8 +37,6 @@ fn lite_person_registration_grants_lite_allowance() {
 			OriginCaller::PeopleLite(indiv_pallet_people_lite::Origin::LitePerson(account.clone()))
 				.into(),
 			[1u8; 65],
-			b"mynameisme.12".to_vec().try_into().unwrap(),
-			None,
 		)
 		.unwrap();
 
