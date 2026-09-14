@@ -31,6 +31,7 @@ Mirrors steps 2-4 of `pallets/coinage/src/benchmarking/README.md`:
 The unload benchmarks sample fixed alias counts, so the proofs a run needs do
 not depend on `--steps` or `--repeat`: one harvest at `--steps 2 --repeat 1`
 is warm for every run.
+The harvest reuses matching cached proofs and generates missing proofs.
 
 After the script finishes, run the coinage benchmarks under `RUNTIME_LOG=warn`
 and check that no `alias proof cache miss` line appears.
@@ -149,6 +150,8 @@ def harvest(runtime: str, profile: str) -> set[str]:
         m = CACHE_ENTRY_RE.search(line)
         if m:
             entries.add(m.group(1))
+    if not entries:
+        die("no CACHE_ENTRY lines found; check the runtime regeneration feature and logging")
     return entries
 
 
