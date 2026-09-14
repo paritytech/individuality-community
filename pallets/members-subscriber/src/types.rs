@@ -134,7 +134,7 @@ pub struct RingCollectionState<MaxMissing: Get<u32>, MaxDeleted: Get<u32>> {
 	/// Updated from each batch's `next_ring_index`. Used as the scan range for missing detection.
 	pub next_ring_index: u32,
 	/// Lowest ring index the gap scan has not examined yet. The scan resumes here and advances by
-	/// at most one page per batch, so a jump larger than a page is finished by later batches.
+	/// at most one page per scan call, so a jump larger than a page is finished by later calls.
 	/// Two kinds of index below it are never revisited: one that replay abandoned, and one the
 	/// notifier deleted after the scan passed it while `deleted_indices` was at capacity.
 	pub next_scan_index: u32,
