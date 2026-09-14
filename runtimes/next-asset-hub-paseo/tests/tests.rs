@@ -1802,7 +1802,7 @@ mod credit_tree_removal {
 	use indiv_pallet_nft_claims::{ClaimantKind, CreditTrees, PendingTreeDeletions, TreeExpiries};
 	use indiv_support::{
 		credit_trees::{
-			credit_leaf, expiry_deadline, oldest_expiry, AwardBlock, CreditProofNode,
+			credit_leaf, expiry_deadline, oldest_expiry, CreditProofNode, CreditTreeBlock,
 			CreditTreeDelivery, ExpiryTimestamp, NftClaimCreditTree,
 		},
 		identity::AccountOrPerson,
@@ -1813,7 +1813,7 @@ mod credit_tree_removal {
 	};
 	use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, PEOPLE_ID};
 
-	const BLOCK: AwardBlock = 1;
+	const BLOCK: CreditTreeBlock = 1;
 	/// The wall-clock time the delivered tree commits to. The value is arbitrary, because
 	/// `due_at` derives the deadline from it.
 	const TIMESTAMP: u32 = 1_000_000;
@@ -1961,7 +1961,7 @@ mod credit_tree_removal {
 		ext().execute_with(|| {
 			let claimant = AccountId::from([1u8; 32]);
 			deliver_tree(&AccountOrPerson::Account(claimant), [7u8; 32]);
-			assert_eq!(oldest_expiry::<TreeExpiries<Runtime>, AwardBlock>(), Some(TIMESTAMP));
+			assert_eq!(oldest_expiry::<TreeExpiries<Runtime>, CreditTreeBlock>(), Some(TIMESTAMP));
 
 			// One second before the tree falls due, the pallet's own check rejects the sweep.
 			set_now(due_at() - 1);
@@ -1979,7 +1979,7 @@ mod credit_tree_removal {
 
 			assert!(!CreditTrees::<Runtime>::contains_key(BLOCK));
 			assert_eq!(PendingTreeDeletions::<Runtime>::get().to_vec(), vec![BLOCK]);
-			assert_eq!(oldest_expiry::<TreeExpiries<Runtime>, AwardBlock>(), None);
+			assert_eq!(oldest_expiry::<TreeExpiries<Runtime>, CreditTreeBlock>(), None);
 			assert!(System::events().iter().any(|record| matches!(
 				record.event,
 				RuntimeEvent::NftClaims(indiv_pallet_nft_claims::Event::CreditTreesExpired {
@@ -1998,7 +1998,7 @@ mod credit_tree_removal {
 			deliver_tree(&AccountOrPerson::Account(claimant), [7u8; 32]);
 
 			assert!(!CreditTrees::<Runtime>::contains_key(BLOCK));
-			assert_eq!(oldest_expiry::<TreeExpiries<Runtime>, AwardBlock>(), None);
+			assert_eq!(oldest_expiry::<TreeExpiries<Runtime>, CreditTreeBlock>(), None);
 		});
 	}
 

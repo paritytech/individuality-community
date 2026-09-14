@@ -35,7 +35,7 @@ use indiv_pallet_scarcity::{
 };
 use indiv_support::{
 	credit_trees::{
-		credit_leaf, AwardBlock, CreditProofNode, CreditTreeDelivery, NftClaimCredit,
+		credit_leaf, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, NftClaimCredit,
 		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
 	},
 	identity::AccountOrPerson,
@@ -161,7 +161,7 @@ parameter_types! {
 	pub const MaxTreesPerMessage: u32 = 4;
 	pub const MaxProofNodes: u32 = 16;
 	/// Wider than a byte, so the tests cover a bitmap of more than one byte.
-	pub storage MaxCreditsPerAwardBlock: u32 = 12;
+	pub storage MaxCreditsPerTree: u32 = 12;
 	/// The instances the mock minter has handed out, as `(collection, item, owner)` in mint order.
 	pub storage MintedInstances: Vec<(CollectionId, ItemIndex, u64)> = Vec::new();
 	/// The collections the mock backend holds, as `(collection, owner, next_item_index)`.
@@ -249,9 +249,9 @@ pub fn sent_deletion_xcms() -> Vec<(xcm::latest::Location, Vec<u8>)> {
 	SENT_XCMS.with_borrow(|sent| sent.clone())
 }
 
-/// The award blocks named by the last deletion message. This also checks the pallet index and call
+/// The tree blocks named by the last deletion message. This also checks the pallet index and call
 /// index the message was addressed to.
-pub fn last_sent_deletions() -> Vec<AwardBlock> {
+pub fn last_sent_deletions() -> Vec<CreditTreeBlock> {
 	use xcm::latest::{Instruction, Xcm};
 
 	let (_, encoded) = sent_deletion_xcms().pop().expect("an XCM was sent");
@@ -267,7 +267,7 @@ pub fn last_sent_deletions() -> Vec<AwardBlock> {
 
 	assert_eq!(call[0], GameChainPalletIndex::get(), "addressed to the nft-credits pallet");
 	assert_eq!(call[1], 20, "the call index of `receive_tree_deletions`");
-	Vec::<AwardBlock>::decode(&mut &call[2..]).expect("the blocks decode")
+	Vec::<CreditTreeBlock>::decode(&mut &call[2..]).expect("the blocks decode")
 }
 
 /// Makes the next XCM send fail, as a closed or congested channel would.
@@ -359,7 +359,7 @@ pub const SELECTOR_FAILED_WEIGHT: Weight = Weight::from_parts(250_000, 700);
 pub struct ReentrantClaim {
 	pub claimant: u64,
 	pub kind: ClaimantKind,
-	pub block: AwardBlock,
+	pub block: CreditTreeBlock,
 	pub credit: NftClaimCredit,
 	pub leaf_index: u32,
 	pub proof: Vec<CreditProofNode>,
@@ -454,7 +454,7 @@ impl pallet_nft_claims::Config for Test {
 	type Nfts = MockNfts;
 	type CollectionSelector = MockSelector;
 	type MaxProofNodes = MaxProofNodes;
-	type MaxCreditsPerAwardBlock = MaxCreditsPerAwardBlock;
+	type MaxCreditsPerTree = MaxCreditsPerTree;
 	type UnixTime = MockTime;
 	type TreeTtl = TreeTtl;
 	type MaxQueuedTreeDeletions = MaxQueuedTreeDeletions;
@@ -548,12 +548,12 @@ pub fn submitted_calls() -> Vec<RuntimeCall> {
 }
 
 /// Whether the leaf at `leaf_index` of `block`'s tree is recorded as claimed.
-pub fn leaf_is_claimed(block: AwardBlock, leaf_index: u32) -> bool {
+pub fn leaf_is_claimed(block: CreditTreeBlock, leaf_index: u32) -> bool {
 	NftClaims::leaf_is_claimed(&crate::ClaimedLeaves::<Test>::get(block), leaf_index)
 }
 
 /// How many of `block`'s leaves are recorded as claimed.
-pub fn claimed_leaves(block: AwardBlock) -> u32 {
+pub fn claimed_leaves(block: CreditTreeBlock) -> u32 {
 	NftClaims::claimed_leaf_count(&crate::ClaimedLeaves::<Test>::get(block))
 }
 
@@ -562,7 +562,7 @@ pub fn game_chain_origin() -> RuntimeOrigin {
 }
 
 /// A credit tree whose fields are derived from `block`, so trees of different blocks differ.
-pub fn tree(block: AwardBlock) -> NftClaimCreditTree {
+pub fn tree(block: CreditTreeBlock) -> NftClaimCreditTree {
 	NftClaimCreditTree {
 		game_index: 7,
 		root: CreditProofNode([block as u8; 32]),
@@ -572,12 +572,12 @@ pub fn tree(block: AwardBlock) -> NftClaimCreditTree {
 }
 
 /// One update of the live stream: a tree with the sequence number it was delivered under.
-pub fn update(sequence: TreeSequence, block: AwardBlock) -> CreditTreeDelivery {
+pub fn update(sequence: TreeSequence, block: CreditTreeBlock) -> CreditTreeDelivery {
 	CreditTreeDelivery { sequence: Some(sequence), block, tree: tree(block) }
 }
 
 /// One resent update, which carries no sequence number.
-pub fn replay(block: AwardBlock) -> CreditTreeDelivery {
+pub fn replay(block: CreditTreeBlock) -> CreditTreeDelivery {
 	CreditTreeDelivery { sequence: None, block, tree: tree(block) }
 }
 
@@ -598,7 +598,7 @@ pub fn leaves(awards: &[Award]) -> Vec<NftClaimCreditLeaf> {
 }
 
 /// The tree `awards` commit to, with the root the game chain would have recorded for `block`.
-pub fn tree_of(block: AwardBlock, awards: &[Award]) -> NftClaimCreditTree {
+pub fn tree_of(block: CreditTreeBlock, awards: &[Award]) -> NftClaimCreditTree {
 	NftClaimCreditTree {
 		game_index: 7,
 		root: binary_merkle_tree::merkle_root::<BlakeTwo256, _>(leaves(awards)).into(),

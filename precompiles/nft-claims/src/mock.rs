@@ -232,7 +232,7 @@ impl indiv_pallet_nft_claims::Config for Test {
 	type CollectionSelector = MockSelector;
 	type MaxProofNodes = ConstU32<16>;
 	// No tree reaches this mock, so the bitmap this sizes is never written.
-	type MaxCreditsPerAwardBlock = ConstU32<12>;
+	type MaxCreditsPerTree = ConstU32<12>;
 	type UnixTime = MockUnixTime;
 	type TreeTtl = ConstU64<{ 30 * 24 * 60 * 60 }>;
 	type MaxQueuedTreeDeletions = ConstU32<8>;
