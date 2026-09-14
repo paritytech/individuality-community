@@ -42,7 +42,7 @@ pub mod v1 {
 
 	/// Use [`MigrateV0ToV1`] rather than this directly.
 	///
-	/// The root carries the award block's wall-clock time, which is what it is filed under, so
+	/// The root carries the tree block's wall-clock time, which is what it is filed under, so
 	/// each root ends up where one recorded today would.
 	pub struct MigrateToRootExpiries<T>(PhantomData<T>);
 
