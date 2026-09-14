@@ -188,9 +188,9 @@ def main() -> None:
         help="Print the entry count but do not modify proof_cache.rs",
     )
     p.add_argument(
-        "--profile", default="production",
+        "--profile", default="release",
         help="Cargo profile to build the runtime with. The cached proofs do not depend on it, "
-             "so `dev`/`release` trades a slower harvest for a much shorter build (default: production)",
+             "so `dev`/`release` trades a slower harvest for a much shorter build (default: release)",
     )
     args = p.parse_args()
 

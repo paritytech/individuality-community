@@ -93,7 +93,7 @@ Flags:
 - `--no-build` — skip the cargo build and reuse existing WASM.
 - `--no-write` — run the full harvest and print the entry count without
   modifying `proof_cache.rs`. Useful for dry runs.
-- `--profile <profile>` — cargo profile for the runtime build, `production` by
+- `--profile <profile>` — cargo profile for the runtime build, `release` by
   default. The cached proofs are the same either way. `dev` uses the debug WASM
   artefact and gives the shortest build, while `release` uses the compact
   compressed WASM artefact and gives the fastest harvest.
@@ -123,12 +123,12 @@ cargo test -p indiv-pallet-coinage \
 Runtime:
 
 ```bash
-cargo build --profile production -p next-people-paseo-runtime \
+cargo build --release -p next-people-paseo-runtime \
   --features runtime-benchmarks,coinage-benchmark-proof-cache-regenerate \
   --locked
 
 RUNTIME_LOG=error frame-omni-bencher v1 benchmark pallet \
-  --runtime ./target/production/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.compact.compressed.wasm \
+  --runtime ./target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.compact.compressed.wasm \
   --pallet indiv_pallet_coinage \
   --extrinsic unload_recycler_into_external_asset_prepaid_1 \
   --steps 2 \
@@ -143,12 +143,12 @@ RUNTIME_LOG=error frame-omni-bencher v1 benchmark pallet \
 ### 2. Harvest full runtime entries
 
 ```bash
-cargo build --profile production -p next-people-paseo-runtime \
+cargo build --release -p next-people-paseo-runtime \
   --features runtime-benchmarks,coinage-benchmark-proof-cache-regenerate \
   --locked
 
 RUNTIME_LOG=error frame-omni-bencher v1 benchmark pallet \
-  --runtime ./target/production/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.compact.compressed.wasm \
+  --runtime ./target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.compact.compressed.wasm \
   --pallet indiv_pallet_coinage \
   --extrinsic '*' \
   --steps 2 \
