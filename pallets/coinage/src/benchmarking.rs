@@ -269,28 +269,16 @@ fn setup_built_recycler<T: Config>(
 
 #[cfg(any(
 	feature = "benchmark-proof-cache-regenerate",
-	all(
-		feature = "benchmark-proof-cache-strict",
-		not(feature = "benchmark-proof-cache-regenerate")
-	)
+	feature = "benchmark-proof-cache-strict"
 ))]
 use alloc::string::String;
 #[cfg(any(
 	feature = "benchmark-proof-cache-regenerate",
-	all(
-		feature = "benchmark-proof-cache-strict",
-		not(feature = "benchmark-proof-cache-regenerate")
-	)
+	feature = "benchmark-proof-cache-strict"
 ))]
 use core::fmt::Write;
 
-#[cfg(any(
-	feature = "benchmark-proof-cache-regenerate",
-	all(
-		feature = "benchmark-proof-cache-strict",
-		not(feature = "benchmark-proof-cache-regenerate")
-	)
-))]
+#[cfg(any(feature = "benchmark-proof-cache-regenerate", feature = "benchmark-proof-cache-strict"))]
 fn to_hex(bytes: &[u8]) -> String {
 	let mut out = String::with_capacity(bytes.len() * 2);
 	for byte in bytes {
@@ -344,7 +332,7 @@ fn generate_alias_proof<T: Config>(
 		{
 			let cache_key = sp_crypto_hashing::blake2_256(&(&member, all_members, msg).encode());
 			panic!(
-				"alias proof cache miss: ring exponent {}, member count {}, key {}; run python3 \
+				"alias proof cache miss: ring exponent {}, member count {} and key {}; run python3 \
 				 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py, commit the \
 				 regenerated pallets/coinage/src/benchmarking/proof_cache.rs, and see \
 				 pallets/coinage/src/benchmarking/README.md",
