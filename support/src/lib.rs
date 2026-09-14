@@ -27,6 +27,7 @@ pub mod genesis;
 pub mod identity;
 pub mod labels;
 pub mod members_notifier_subscriber;
+pub mod offchain;
 pub mod parameters;
 pub mod pgas;
 pub mod traits;

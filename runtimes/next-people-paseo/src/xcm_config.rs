@@ -247,6 +247,10 @@ pub type Barrier = TrailingSetTopicAsId<
 					AllowTopLevelPaidExecutionFrom<Everything>,
 					// Parent and its pluralities (i.e. governance bodies) get free execution.
 					AllowExplicitUnpaidExecutionFrom<ParentOrParentsPlurality>,
+					// The chain the credit trees are delivered to. It sends back the roots it is
+					// finished with. Unlike `AllowAssetHubExecution` above, this accepts only a
+					// message that asks for free execution.
+					AllowExplicitUnpaidExecutionFrom<Equals<NextAhLocation>>,
 					// Subscriptions for version tracking are OK.
 					AllowSubscriptionsFrom<ParentRelayOrSiblingParachains>,
 					// HRMP notifications from the relay chain are OK.

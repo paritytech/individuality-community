@@ -18,11 +18,11 @@
 
 use super::*;
 use frame_system::RawOrigin;
-use pallet_revive::{codec::DecodeAll, sp_runtime::traits::UniqueSaturatedInto};
-use pallet_scarcity::{
+use indiv_pallet_scarcity::{
 	weights::WeightInfo as _, ItemDefs, ItemIndex, OnCollectionDeleted, OnPurseOccupied,
 	Pallet as Scarcity, ValidateMetadata,
 };
+use pallet_revive::{codec::DecodeAll, sp_runtime::traits::UniqueSaturatedInto};
 use IScarcityCollection::IScarcityCollectionCalls;
 
 /// ERC-721 precompile answering for every collection under the address prefix `PREFIX`.
@@ -34,7 +34,7 @@ pub struct ScarcityCollection<T, const PREFIX: u16>(PhantomData<T>);
 
 impl<T, const PREFIX: u16> pallet_revive::precompiles::Precompile for ScarcityCollection<T, PREFIX>
 where
-	T: pallet_scarcity::Config + pallet_revive::Config,
+	T: indiv_pallet_scarcity::Config + pallet_revive::Config,
 {
 	type T = T;
 	type Interface = IScarcityCollectionCalls;
@@ -258,7 +258,7 @@ pub(crate) fn is_mutating(input: &IScarcityCollectionCalls) -> bool {
 
 impl<T, const PREFIX: u16> ScarcityCollection<T, PREFIX>
 where
-	T: pallet_scarcity::Config + pallet_revive::Config,
+	T: indiv_pallet_scarcity::Config + pallet_revive::Config,
 {
 	fn supports_interface(
 		call: &IScarcityCollection::supportsInterfaceCall,
@@ -497,10 +497,12 @@ where
 		// The pallet call plus the runtime's metadata policy, which validates every pair inside
 		// it, mirroring the pallet's own weight annotation.
 		env.charge(
-			<T as pallet_scarcity::Config>::WeightInfo::define_item(call.keys.len() as u32)
-				.saturating_add(<T as pallet_scarcity::Config>::MetadataPolicy::validate_weight(
-					call.keys.len() as u32,
-				)),
+			<T as indiv_pallet_scarcity::Config>::WeightInfo::define_item(call.keys.len() as u32)
+				.saturating_add(
+					<T as indiv_pallet_scarcity::Config>::MetadataPolicy::validate_weight(
+						call.keys.len() as u32,
+					),
+				),
 		)?;
 		let metadata = bounded_metadata::<T>(&call.keys, &call.values)?;
 		let who = caller_account::<T>(env)?;
@@ -520,12 +522,14 @@ where
 		// then the pallet call and the runtime's metadata policy and purse hook behind it.
 		charge_reads(env, 2)?;
 		env.charge(
-			<T as pallet_scarcity::Config>::WeightInfo::mint(call.keys.len() as u32)
-				.saturating_add(<T as pallet_scarcity::Config>::MetadataPolicy::validate_weight(
-					call.keys.len() as u32,
-				)),
+			<T as indiv_pallet_scarcity::Config>::WeightInfo::mint(call.keys.len() as u32)
+				.saturating_add(
+					<T as indiv_pallet_scarcity::Config>::MetadataPolicy::validate_weight(
+						call.keys.len() as u32,
+					),
+				),
 		)?;
-		env.charge(<<T as pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
 			T::AccountId,
 		>>::on_purse_occupied_weight())?;
 		// The zero address maps to a real fallback purse; minting there would strand the
@@ -579,11 +583,11 @@ where
 		if caller_account::<T>(env)? != holder {
 			return Err(revert(ERR_NOT_HOLDER));
 		}
-		env.charge(<T as pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
 		// The move registers its destination. `WeightInfo::transfer_by_holder` does not cover that:
 		// the extrinsic adds the same term to its own annotation, and the benchmark runtime wires
 		// no handler.
-		env.charge(<<T as pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
 			T::AccountId,
 		>>::on_purse_occupied_weight())?;
 		let to = account_of::<T>(transfer.to);
@@ -635,7 +639,7 @@ where
 		// Collection-membership validation reads, the destination's reverse address mapping and
 		// the pallet call.
 		charge_reads(env, 3)?;
-		env.charge(<T as pallet_scarcity::Config>::WeightInfo::force_transfer())?;
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::force_transfer())?;
 		// See `mint` on why the zero address is rejected.
 		if call.to == Address::ZERO {
 			return Err(revert(ERR_ZERO_DESTINATION));
@@ -655,7 +659,7 @@ where
 		// The move registers its destination, which the benchmark does not cover. See
 		// `transfer_from`. Charged past the rejections above so a revert does not pay for a
 		// registration that never happens.
-		env.charge(<<T as pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
 			T::AccountId,
 		>>::on_purse_occupied_weight())?;
 		Scarcity::<T>::force_transfer(RawOrigin::Signed(who).into(), nft.instance, to)
@@ -685,8 +689,8 @@ where
 		charge_reads(env, 2)?;
 		let (purse, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let who = caller_account::<T>(env)?;
-		let worst = <T as pallet_scarcity::Config>::WeightInfo::force_burn(
-			<T as pallet_scarcity::Config>::MaxInstanceMetadata::get(),
+		let worst = <T as indiv_pallet_scarcity::Config>::WeightInfo::force_burn(
+			<T as indiv_pallet_scarcity::Config>::MaxInstanceMetadata::get(),
 		);
 		let charged = env.charge(worst)?;
 		let post = Scarcity::<T>::force_burn(RawOrigin::Signed(who).into(), nft.instance)
@@ -747,8 +751,10 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
 		env.charge(
-			<T as pallet_scarcity::Config>::WeightInfo::set_collection_metadata()
-				.saturating_add(<T as pallet_scarcity::Config>::MetadataPolicy::validate_weight(1)),
+			<T as indiv_pallet_scarcity::Config>::WeightInfo::set_collection_metadata()
+				.saturating_add(
+					<T as indiv_pallet_scarcity::Config>::MetadataPolicy::validate_weight(1),
+				),
 		)?;
 		let bounded = bounded_key::<T>(key)?;
 		let who = caller_account::<T>(env)?;
@@ -773,8 +779,9 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
 		env.charge(
-			<T as pallet_scarcity::Config>::WeightInfo::set_item_metadata()
-				.saturating_add(<T as pallet_scarcity::Config>::MetadataPolicy::validate_weight(1)),
+			<T as indiv_pallet_scarcity::Config>::WeightInfo::set_item_metadata().saturating_add(
+				<T as indiv_pallet_scarcity::Config>::MetadataPolicy::validate_weight(1),
+			),
 		)?;
 		let bounded = bounded_key::<T>(key)?;
 		let who = caller_account::<T>(env)?;
@@ -804,8 +811,10 @@ where
 		// for its own collection.
 		charge_reads(env, 2)?;
 		env.charge(
-			<T as pallet_scarcity::Config>::WeightInfo::set_instance_metadata()
-				.saturating_add(<T as pallet_scarcity::Config>::MetadataPolicy::validate_weight(1)),
+			<T as indiv_pallet_scarcity::Config>::WeightInfo::set_instance_metadata()
+				.saturating_add(
+					<T as indiv_pallet_scarcity::Config>::MetadataPolicy::validate_weight(1),
+				),
 		)?;
 		let (_, nft) = live_instance::<T>(collection, token)?;
 		let bounded = bounded_key::<T>(key)?;
@@ -829,7 +838,7 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
 		// The pallet call, plus the reverse address mapping a nomination resolves.
-		env.charge(<T as pallet_scarcity::Config>::WeightInfo::nominate_collection_owner())?;
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::nominate_collection_owner())?;
 		if successor.is_some() {
 			charge_reads(env, 1)?;
 		}
@@ -858,7 +867,7 @@ where
 		collection: CollectionId,
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
-		env.charge(<T as pallet_scarcity::Config>::WeightInfo::claim_collection_ownership())?;
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::claim_collection_ownership())?;
 		// The outgoing owner, read before the call replaces it, for the event's `previousOwner`.
 		charge_reads(env, 1)?;
 		let previous = Collections::<T>::get(collection)
@@ -885,7 +894,7 @@ where
 		call: &IScarcityCollection::deleteItemCall,
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
-		env.charge(<T as pallet_scarcity::Config>::WeightInfo::delete_item())?;
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::delete_item())?;
 		let who = caller_account::<T>(env)?;
 		Scarcity::<T>::delete_item(RawOrigin::Signed(who).into(), collection, call.item)
 			.map_err(revert_scarcity::<T>)?;
@@ -900,8 +909,8 @@ where
 		// The runtime's cross-pallet cleanup hook runs inside the pallet call, so its weight
 		// is charged with it, mirroring the pallet's own weight annotation.
 		env.charge(
-			<T as pallet_scarcity::Config>::WeightInfo::delete_collection().saturating_add(
-				<T as pallet_scarcity::Config>::OnCollectionDeleted::on_delete_weight(),
+			<T as indiv_pallet_scarcity::Config>::WeightInfo::delete_collection().saturating_add(
+				<T as indiv_pallet_scarcity::Config>::OnCollectionDeleted::on_delete_weight(),
 			),
 		)?;
 		let who = caller_account::<T>(env)?;

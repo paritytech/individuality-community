@@ -17,7 +17,7 @@
 //! The fixed-address collection factory precompile.
 
 use super::*;
-use pallet_scarcity::{weights::WeightInfo as _, Pallet as Scarcity};
+use indiv_pallet_scarcity::{weights::WeightInfo as _, Pallet as Scarcity};
 use IScarcityFactory::IScarcityFactoryCalls;
 
 /// Collection factory at the fixed address index `INDEX`.
@@ -28,7 +28,7 @@ pub struct ScarcityFactory<T, const INDEX: u16>(PhantomData<T>);
 
 impl<T, const INDEX: u16> pallet_revive::precompiles::Precompile for ScarcityFactory<T, INDEX>
 where
-	T: pallet_scarcity::Config + pallet_revive::Config,
+	T: indiv_pallet_scarcity::Config + pallet_revive::Config,
 {
 	type T = T;
 	type Interface = IScarcityFactoryCalls;
@@ -48,7 +48,7 @@ where
 
 		match input {
 			IScarcityFactoryCalls::createCollection(_) => {
-				env.charge(<T as pallet_scarcity::Config>::WeightInfo::create_collection())?;
+				env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::create_collection())?;
 				let who = caller_account::<T>(env)?;
 				let collection = Scarcity::<T>::do_create_collection(who.clone())
 					.map_err(revert_scarcity::<T>)?;
