@@ -435,8 +435,8 @@ impl GroupsSetting {
 				}
 
 				// Special condition for one group.
-				if self.player_count == self.max_per_group ||
-					self.player_count + 1 == self.max_per_group
+				if self.player_count == self.max_per_group
+					|| self.player_count + 1 == self.max_per_group
 				{
 					return true;
 				}

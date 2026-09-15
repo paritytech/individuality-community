@@ -392,10 +392,11 @@ pub mod pallet {
 		fn into_pallet_error<T: Config>(self) -> Error<T> {
 			match self {
 				MixedOutputValidationError::EmptyAliases => Error::<T>::EmptyInputs,
-				MixedOutputValidationError::EmptyLoadedCoins |
-				MixedOutputValidationError::InvalidSplit => Error::<T>::InvalidSplit,
-				MixedOutputValidationError::MemberKeyAlreadyUsed =>
-					Error::<T>::MemberKeyAlreadyUsed,
+				MixedOutputValidationError::EmptyLoadedCoins
+				| MixedOutputValidationError::InvalidSplit => Error::<T>::InvalidSplit,
+				MixedOutputValidationError::MemberKeyAlreadyUsed => {
+					Error::<T>::MemberKeyAlreadyUsed
+				},
 				MixedOutputValidationError::InvalidMemberKey => Error::<T>::InvalidMemberKey,
 				MixedOutputValidationError::Denomination(e) => e.into_pallet_error::<T>(),
 			}
@@ -403,11 +404,12 @@ pub mod pallet {
 
 		fn into_custom_invalidity(self) -> CustomInvalidity {
 			match self {
-				MixedOutputValidationError::EmptyAliases |
-				MixedOutputValidationError::EmptyLoadedCoins => CustomInvalidity::EmptyMixedOutput,
+				MixedOutputValidationError::EmptyAliases
+				| MixedOutputValidationError::EmptyLoadedCoins => CustomInvalidity::EmptyMixedOutput,
 				MixedOutputValidationError::InvalidSplit => CustomInvalidity::InvalidSplit,
-				MixedOutputValidationError::MemberKeyAlreadyUsed =>
-					CustomInvalidity::MemberKeyAlreadyUsed,
+				MixedOutputValidationError::MemberKeyAlreadyUsed => {
+					CustomInvalidity::MemberKeyAlreadyUsed
+				},
 				MixedOutputValidationError::InvalidMemberKey => CustomInvalidity::InvalidMemberKey,
 				MixedOutputValidationError::Denomination(e) => e.into_custom_invalidity(),
 			}
@@ -2826,10 +2828,12 @@ pub mod pallet {
 			let alias_count = inputs[0].aliases.len();
 
 			let actual_weight = match fee {
-				UnloadFee::Prepaid =>
-					Self::unload_recycler_into_external_asset_prepaid_weight(alias_count),
-				UnloadFee::FromOutput { .. } =>
-					Self::unload_recycler_into_external_asset_from_output_weight(alias_count),
+				UnloadFee::Prepaid => {
+					Self::unload_recycler_into_external_asset_prepaid_weight(alias_count)
+				},
+				UnloadFee::FromOutput { .. } => {
+					Self::unload_recycler_into_external_asset_from_output_weight(alias_count)
+				},
 			}
 			.saturating_add(Self::settle_load_deposit_weight(instance_id));
 
@@ -3147,16 +3151,18 @@ pub mod pallet {
 			let loaded_coin_count = loaded_coins.len();
 
 			let actual_weight = match fee {
-				UnloadFee::Prepaid =>
+				UnloadFee::Prepaid => {
 					Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
 						alias_count,
 						loaded_coin_count,
-					),
-				UnloadFee::FromOutput { .. } =>
+					)
+				},
+				UnloadFee::FromOutput { .. } => {
 					Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
 						alias_count,
 						loaded_coin_count,
-					),
+					)
+				},
 			}
 			.saturating_add(Self::settle_load_deposit_weight(instance_id))
 			.saturating_add(Self::charge_load_deposit_weight(instance_id));
@@ -3561,11 +3567,12 @@ pub mod pallet {
 					alias_count,
 					output_count.max(1),
 				),
-				UnloadFee::FromOutput { .. } =>
+				UnloadFee::FromOutput { .. } => {
 					Self::unload_recycler_into_coins_from_output_weight(
 						alias_count,
 						output_count.max(1),
-					),
+					)
+				},
 			}
 			.saturating_add(Self::settle_load_deposit_weight(instance_id));
 
@@ -4199,26 +4206,34 @@ pub mod pallet {
 	impl DenominationToAssetAmountError {
 		pub(crate) fn into_pallet_error<T: Config>(self) -> pallet::Error<T> {
 			match self {
-				DenominationToAssetAmountError::DenominationOutOfBound =>
-					Error::<T>::DenominationOutOfBound,
-				DenominationToAssetAmountError::DenominationTooSmall =>
-					Error::<T>::DenominationTooSmall,
-				DenominationToAssetAmountError::DenominationTooBig =>
-					Error::<T>::DenominationTooBig,
-				DenominationToAssetAmountError::LossyDenominationConversion =>
-					Error::<T>::LossyDenominationConversion,
+				DenominationToAssetAmountError::DenominationOutOfBound => {
+					Error::<T>::DenominationOutOfBound
+				},
+				DenominationToAssetAmountError::DenominationTooSmall => {
+					Error::<T>::DenominationTooSmall
+				},
+				DenominationToAssetAmountError::DenominationTooBig => {
+					Error::<T>::DenominationTooBig
+				},
+				DenominationToAssetAmountError::LossyDenominationConversion => {
+					Error::<T>::LossyDenominationConversion
+				},
 			}
 		}
 		pub(crate) fn into_custom_invalidity(self) -> CustomInvalidity {
 			match self {
-				DenominationToAssetAmountError::DenominationOutOfBound =>
-					CustomInvalidity::DenominationOutOfBound,
-				DenominationToAssetAmountError::DenominationTooSmall =>
-					CustomInvalidity::DenominationTooSmall,
-				DenominationToAssetAmountError::DenominationTooBig =>
-					CustomInvalidity::DenominationTooBig,
-				DenominationToAssetAmountError::LossyDenominationConversion =>
-					CustomInvalidity::LossyDenominationConversion,
+				DenominationToAssetAmountError::DenominationOutOfBound => {
+					CustomInvalidity::DenominationOutOfBound
+				},
+				DenominationToAssetAmountError::DenominationTooSmall => {
+					CustomInvalidity::DenominationTooSmall
+				},
+				DenominationToAssetAmountError::DenominationTooBig => {
+					CustomInvalidity::DenominationTooBig
+				},
+				DenominationToAssetAmountError::LossyDenominationConversion => {
+					CustomInvalidity::LossyDenominationConversion
+				},
 			}
 		}
 	}
@@ -4307,8 +4322,8 @@ pub mod pallet {
 			);
 			// It must hold the asset's minimum balance, to avoid dustings.
 			ensure!(
-				T::Fungibles::balance(asset_id.clone(), &pallet_account) >=
-					T::Fungibles::minimum_balance(asset_id.clone()),
+				T::Fungibles::balance(asset_id.clone(), &pallet_account)
+					>= T::Fungibles::minimum_balance(asset_id.clone()),
 				Error::<T>::PalletAccountBelowMinimumBalance
 			);
 
@@ -4715,8 +4730,8 @@ pub mod pallet {
 				UnloadFee::FromOutput { fee_recycler_value, fee_recycler_index } => {
 					let first_input = inputs.first().ok_or(Error::<T>::EmptyInputs)?;
 					ensure!(
-						first_input.value == fee_recycler_value &&
-							first_input.index == fee_recycler_index,
+						first_input.value == fee_recycler_value
+							&& first_input.index == fee_recycler_index,
 						Error::<T>::RecyclerMismatch
 					);
 					// Note: Double-spend protection for FromOutput mode is in the extension's
@@ -5251,8 +5266,9 @@ pub mod pallet {
 					..
 				}) => {
 					match fee {
-						UnloadFee::FromOutput { .. } =>
-							return Err(CustomInvalidity::FromOutputFeeNotAllowed),
+						UnloadFee::FromOutput { .. } => {
+							return Err(CustomInvalidity::FromOutputFeeNotAllowed)
+						},
 						UnloadFee::Prepaid => {},
 					}
 					(*instance_id, *value, *index, *revision, Some(to), None, None, None, None)
@@ -5268,8 +5284,9 @@ pub mod pallet {
 				}) => {
 					// For this call for Prepaid, `max_fee` must be zero.
 					match fee {
-						UnloadFee::Prepaid =>
-							ensure!(max_fee.is_zero(), CustomInvalidity::MaxFeeNotAllowedForPrepaid),
+						UnloadFee::Prepaid => {
+							ensure!(max_fee.is_zero(), CustomInvalidity::MaxFeeNotAllowedForPrepaid)
+						},
 						UnloadFee::FromOutput { .. } => {},
 					}
 					(
@@ -5435,9 +5452,9 @@ pub mod pallet {
 			call: &<T as frame_system::Config>::RuntimeCall,
 		) -> Option<Alias> {
 			match call.is_sub_type() {
-				Some(Call::<T>::unload_recycler_into_coins { aliases, .. }) |
-				Some(Call::<T>::unload_recycler_into_external_asset { aliases, .. }) |
-				Some(Call::<T>::unload_recycler_into_external_asset_and_loaded_coins {
+				Some(Call::<T>::unload_recycler_into_coins { aliases, .. })
+				| Some(Call::<T>::unload_recycler_into_external_asset { aliases, .. })
+				| Some(Call::<T>::unload_recycler_into_external_asset_and_loaded_coins {
 					aliases,
 					..
 				}) => aliases.first().copied(),
@@ -5458,8 +5475,9 @@ pub mod pallet {
 		) -> Result<(), TransactionValidityError> {
 			let required = match fee_currency {
 				FeeCurrency::Native => Self::paid_unload_token_fees_in_native(count),
-				FeeCurrency::ExternalAsset =>
-					Self::quote_paid_unload_token_fees_in_asset(instance_id, count)?,
+				FeeCurrency::ExternalAsset => {
+					Self::quote_paid_unload_token_fees_in_asset(instance_id, count)?
+				},
 			};
 			ensure!(required <= max_fee, CustomInvalidity::MaxFeeInsufficientForUnload);
 			Ok(())

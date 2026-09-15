@@ -782,8 +782,8 @@ pub mod pallet {
 
 			match stamped {
 				None => Some(StaleAliasAction::Report),
-				Some(stale_since) => (now >=
-					stale_since.saturating_add(T::MappingRetention::get()))
+				Some(stale_since) => (now
+					>= stale_since.saturating_add(T::MappingRetention::get()))
 				.then_some(StaleAliasAction::Retire),
 			}
 		}
@@ -897,8 +897,9 @@ pub mod pallet {
 				let call = match action {
 					StaleAliasAction::Report => Call::<T>::report_stale_aliases { accounts },
 					StaleAliasAction::Retire => Call::<T>::retire_stale_aliases { accounts },
-					StaleAliasAction::ClearReport =>
-						Call::<T>::clear_stale_alias_reports { accounts },
+					StaleAliasAction::ClearReport => {
+						Call::<T>::clear_stale_alias_reports { accounts }
+					},
 				};
 				Self::submit_sweep(call);
 			}

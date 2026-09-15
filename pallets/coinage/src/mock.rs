@@ -414,8 +414,8 @@ impl TestFeeConversion {
 	/// against it.
 	fn asset_for_native(asset: u32, native_amount: u64) -> u64 {
 		let surcharge = if FEE_CONVERSION_RESERVE_PRICING.get() {
-			<AssetsWithHolder as fungibles::Inspect<_>>::balance(asset, &MOCK_MARKET) /
-				RESERVE_PRICE_DIVISOR
+			<AssetsWithHolder as fungibles::Inspect<_>>::balance(asset, &MOCK_MARKET)
+				/ RESERVE_PRICE_DIVISOR
 		} else {
 			0
 		};
@@ -1073,8 +1073,8 @@ pub fn setup_paid_unload_tokens(count: u32) -> (Vec<Secret>, u32, u32, u32) {
 	}
 	Members::process_maintenance();
 
-	let period = (MockTime::now().as_secs() as u32) /
-		get_u32::<<Test as crate::Config>::PaidUnloadTokenTimePeriod>();
+	let period = (MockTime::now().as_secs() as u32)
+		/ get_u32::<<Test as crate::Config>::PaidUnloadTokenTimePeriod>();
 	let ring_index = 0u32;
 	let revision = <Test as crate::Config>::MemberService::ring_revision(
 		&Coinage::paid_token_collection_identifier(period),
@@ -1214,8 +1214,8 @@ pub fn check_accounting() {
 	let archived_value: u64 = RecyclersArchives::<Test>::iter()
 		.filter(|((instance_id, _, _), _)| *instance_id == TEST_INSTANCE_ID)
 		.map(|((_, value, _ring), info)| {
-			Coinage::denomination_to_asset_amount(UNDERLYING_ASSET_UNIT, value).unwrap() *
-				info.remaining as u64
+			Coinage::denomination_to_asset_amount(UNDERLYING_ASSET_UNIT, value).unwrap()
+				* info.remaining as u64
 		})
 		.sum();
 
@@ -1498,10 +1498,12 @@ pub fn build_unload_free_token_ext_for(
 		alias: people_alias,
 	};
 	let info = match kind {
-		FreeTokenKind::People =>
-			AsCoinageInfo::AsUnloadTokenPeople { proof, period, counter, alias_proofs },
-		FreeTokenKind::LitePeople =>
-			AsCoinageInfo::AsUnloadTokenLitePeople { proof, period, counter, alias_proofs },
+		FreeTokenKind::People => {
+			AsCoinageInfo::AsUnloadTokenPeople { proof, period, counter, alias_proofs }
+		},
+		FreeTokenKind::LitePeople => {
+			AsCoinageInfo::AsUnloadTokenLitePeople { proof, period, counter, alias_proofs }
+		},
 	};
 	let extension = (AuthorizeCall::<Test>::new(), AsCoinage::<Test>::new(Some(info)));
 	Extrinsic::new_signed(runtime_call, 0, UintAuthorityId(0), extension)

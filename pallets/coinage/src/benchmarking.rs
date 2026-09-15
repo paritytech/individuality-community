@@ -464,8 +464,8 @@ fn denomination_covering_unload_fee<T: Config>(start: Denomination) -> Denominat
 		.expect("fee should be available after setup");
 	let required = fee.saturating_add(T::Fungibles::minimum_balance(asset_id::<T>()));
 	let mut value = start;
-	while Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value).unwrap_or_default() <
-		required
+	while Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value).unwrap_or_default()
+		< required
 	{
 		assert!(
 			value < T::MaximumExponent::get(),
@@ -506,8 +506,9 @@ mod benches {
 		// fail (the remainder transfer drops below the existential deposit) and get skipped,
 		// leaving too few points to fit a slope.
 		let value = match mode {
-			UnloadFeeBenchMode::FromOutput =>
-				denomination_covering_unload_fee::<T>(T::MinimumExponent::get()),
+			UnloadFeeBenchMode::FromOutput => {
+				denomination_covering_unload_fee::<T>(T::MinimumExponent::get())
+			},
 			UnloadFeeBenchMode::Prepaid => T::MinimumExponent::get(),
 		};
 		let (index, revision, members) = setup_built_recycler::<T>(value, n, 0);
@@ -715,8 +716,8 @@ mod benches {
 		let amount_per_unit_u128: u128 = amount_per_unit.saturated_into();
 		let required_fee_u128: u128 = required_fee.saturated_into();
 		let min_fee_units_u128 = required_fee_u128
-			.saturating_add(amount_per_unit_u128.saturating_sub(1)) /
-			amount_per_unit_u128;
+			.saturating_add(amount_per_unit_u128.saturating_sub(1))
+			/ amount_per_unit_u128;
 		// `Prepaid` reserves no fee from the output (`max_fee` must be zero), so the whole input
 		// value is split into the `d` outputs. `FromOutput` reserves strictly more than the
 		// required unload fee so the benchmark also exercises the remainder-burn branch.
@@ -885,8 +886,8 @@ mod benches {
 				} else {
 					63 - loaded_coin_units.leading_zeros() as i8
 				};
-				if d >= loaded_coin_units.count_ones() &&
-					min_exp.saturating_add(highest_piece_exp) <= max_exp
+				if d >= loaded_coin_units.count_ones()
+					&& min_exp.saturating_add(highest_piece_exp) <= max_exp
 				{
 					return Ok((input_value, loaded_coin_units));
 				}
@@ -945,8 +946,8 @@ mod benches {
 				let amount_per_unit_u128: u128 = amount_per_unit.saturated_into();
 				let required_fee_u128: u128 = required_fee.saturated_into();
 				let fee_units = required_fee_u128
-					.saturating_add(amount_per_unit_u128.saturating_sub(1)) /
-					amount_per_unit_u128;
+					.saturating_add(amount_per_unit_u128.saturating_sub(1))
+					/ amount_per_unit_u128;
 				u64::try_from(fee_units.saturating_add(1)).map_err(|_| BenchmarkError::Skip)?
 			},
 		};
@@ -1127,8 +1128,8 @@ mod benches {
 			.expect("fee should be available after setup");
 		let mut value = T::MinimumExponent::get();
 		while Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value)
-			.unwrap_or_default() <
-			fee
+			.unwrap_or_default()
+			< fee
 		{
 			value = value.saturating_add(1);
 		}
@@ -2629,8 +2630,8 @@ mod benches {
 	/// this one too would charge callers for a quote that never happened.
 	fn max_fee_below_the_conversion<T: Config>() -> FungiblesBalanceOf<T> {
 		Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-			.expect("fee conversion is set up by `common_setup`") -
-			1u32.into()
+			.expect("fee conversion is set up by `common_setup`")
+			- 1u32.into()
 	}
 
 	/// The early exit `unload_recyclers_into_external_asset_non_anonymous` takes when the fee
@@ -3699,8 +3700,8 @@ mod benches {
 			.expect("fee should be available after setup");
 		let mut value = T::MinimumExponent::get();
 		while Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), value)
-			.unwrap_or_default() <
-			fee
+			.unwrap_or_default()
+			< fee
 		{
 			value = value.saturating_add(1);
 		}

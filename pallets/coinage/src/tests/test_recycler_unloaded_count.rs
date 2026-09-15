@@ -208,8 +208,8 @@ fn unloaded_count_is_dropped_when_the_ring_is_cleaned() {
 		// `RingStatus::total` minus the count is the number of coins the ring still holds, which is
 		// what the ring is archived with.
 		assert_eq!(
-			status.total -
-				RecyclerManager::<Test>::unloaded_count(TEST_INSTANCE_ID, value, 0)
+			status.total
+				- RecyclerManager::<Test>::unloaded_count(TEST_INSTANCE_ID, value, 0)
 					.expect("the ring is counted"),
 			ring_capacity - 5
 		);

@@ -140,7 +140,7 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for VoterAu
 				.map_err(|_| InvalidTransaction::BadProof)?;
 
 		if Pallet::<T>::is_point_frozen(&aliases.point_alias, now) {
-			return Err(InvalidTransaction::Future.into())
+			return Err(InvalidTransaction::Future.into());
 		}
 
 		if Votes::<T>::contains_key(aliases.subject_alias) {

@@ -245,8 +245,8 @@ impl<T: Config> Pallet<T> {
 		let mut record = Self::instance(instance_id)?;
 		ensure!(record.mode == InstanceMode::Sponsored, Error::<T>::InstanceNotSponsored);
 
-		let needs_collapse = record.old_load_deposit.is_some() ||
-			record
+		let needs_collapse = record.old_load_deposit.is_some()
+			|| record
 				.current_load_deposit
 				.as_ref()
 				.is_some_and(|c| !c.is_priced_at(&deposit_asset_id, &price));
@@ -349,8 +349,9 @@ impl<T: Config> Pallet<T> {
 	/// still pays for the instance read that decides it.
 	pub(crate) fn charge_load_deposit_weight(instance_id: InstanceId) -> Weight {
 		match Instances::<T>::get(instance_id) {
-			Some(record) if record.mode == InstanceMode::Sponsored =>
-				T::WeightInfo::charge_load_deposit(),
+			Some(record) if record.mode == InstanceMode::Sponsored => {
+				T::WeightInfo::charge_load_deposit()
+			},
 			_ => T::WeightInfo::read_instance(),
 		}
 	}
@@ -413,8 +414,9 @@ impl<T: Config> Pallet<T> {
 	/// still pays for the instance read that decides it.
 	pub(crate) fn settle_load_deposit_weight(instance_id: InstanceId) -> Weight {
 		match Instances::<T>::get(instance_id) {
-			Some(record) if record.mode == InstanceMode::Sponsored =>
-				T::WeightInfo::settle_load_deposits(),
+			Some(record) if record.mode == InstanceMode::Sponsored => {
+				T::WeightInfo::settle_load_deposits()
+			},
 			_ => T::WeightInfo::read_instance(),
 		}
 	}

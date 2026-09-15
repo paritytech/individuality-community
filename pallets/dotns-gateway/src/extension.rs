@@ -176,8 +176,9 @@ where
 
 	fn weight(&self, _call: &<T as frame_system::Config>::RuntimeCall) -> Weight {
 		match self.0 {
-			Some(AsDotnsGatewayInfo::RegisterFullName { .. }) =>
-				<T as Config>::WeightInfo::as_register_full_name_tx_ext(),
+			Some(AsDotnsGatewayInfo::RegisterFullName { .. }) => {
+				<T as Config>::WeightInfo::as_register_full_name_tx_ext()
+			},
 			None => Weight::zero(),
 		}
 	}

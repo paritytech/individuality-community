@@ -438,8 +438,8 @@ fn instance_creation_footprint_scales_with_the_denomination_range() {
 	new_test_ext_no_instance().execute_with(|| {
 		// The mock wraps `[-2, 7]`, so ten denominations and ten recycler collections, each
 		// estimated at 4 storage entries and 300 bytes, on top of the two registry entries.
-		let registry_bytes = InstanceRecord::<Test>::max_encoded_len() as u64 +
-			<FungiblesAssetIdOf<Test> as MaxEncodedLen>::max_encoded_len() as u64;
+		let registry_bytes = InstanceRecord::<Test>::max_encoded_len() as u64
+			+ <FungiblesAssetIdOf<Test> as MaxEncodedLen>::max_encoded_len() as u64;
 		let footprint = Coinage::instance_creation_footprint();
 		assert_eq!(footprint.count, 10 * 4 + 2);
 		assert_eq!(footprint.size, 10 * 300 + registry_bytes);

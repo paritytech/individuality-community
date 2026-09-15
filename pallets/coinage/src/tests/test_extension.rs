@@ -115,7 +115,8 @@ fn denomination_to_asset_amount_valid_values() {
 		assert_eq!(Coinage::denomination_to_asset_amount(UNDERLYING_ASSET_UNIT, 0), Ok(1000)); // 1000
 		assert_eq!(Coinage::denomination_to_asset_amount(UNDERLYING_ASSET_UNIT, 1), Ok(2000)); // 1000 << 1
 		assert_eq!(Coinage::denomination_to_asset_amount(UNDERLYING_ASSET_UNIT, 2), Ok(4000)); // 1000 << 2
-		assert_eq!(Coinage::denomination_to_asset_amount(UNDERLYING_ASSET_UNIT, 7), Ok(128_000)); // 1000 << 7
+		assert_eq!(Coinage::denomination_to_asset_amount(UNDERLYING_ASSET_UNIT, 7), Ok(128_000));
+		// 1000 << 7
 	});
 }
 

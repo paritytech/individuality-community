@@ -15,8 +15,9 @@
 # Environment:
 #   RPC_PEOPLE      People chain RPC endpoint (required unless every dump is already in DUMP_DIR)
 #   RPC_ASSET_HUB   Asset Hub RPC endpoint (required unless every dump is already in DUMP_DIR)
-#   DUMP_DIR        Where the storage dumps are written. When all five dumps exist there, the chains
-#                   are not contacted and the analysis runs on the files. Defaults to a temp dir.
+#   DUMP_DIR        Where the storage dumps are written, one file per map in `DUMPS`. When a dump
+#                   exists there for every map, the chains are not contacted and the analysis runs
+#                   on the files. Defaults to a temp dir.
 #
 # Output: one row per finding on stdout, `category<TAB>account<TAB>resources_name<TAB>dotns_name`,
 # with the summary on stderr. Exits 1 when any gap is found. Rows in the `reservation_unverified`

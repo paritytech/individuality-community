@@ -554,8 +554,8 @@ mod stale_alias_sweeps {
 			assert_ok!(report(&[ALICE]));
 			assert_eq!(StaleSince::<Test>::get(ALICE), Some(MOCK_GENESIS_TIME));
 			assert!(AccountToAlias::<Test>::get(ALICE).is_some());
-			assert!(System::events().iter().any(|record| record.event ==
-				RuntimeEvent::AliasAccounts(crate::Event::StaleAliasReported {
+			assert!(System::events().iter().any(|record| record.event
+				== RuntimeEvent::AliasAccounts(crate::Event::StaleAliasReported {
 					account: ALICE,
 					collection: PeopleCollection::get(),
 					alias: ALIAS_A,
@@ -776,8 +776,8 @@ mod stale_alias_sweeps {
 			assert_ok!(clear(&[ALICE]));
 			assert_eq!(StaleSince::<Test>::get(ALICE), None);
 			assert!(AccountToAlias::<Test>::get(ALICE).is_some());
-			assert!(System::events().iter().any(|record| record.event ==
-				RuntimeEvent::AliasAccounts(crate::Event::StaleAliasReportCleared {
+			assert!(System::events().iter().any(|record| record.event
+				== RuntimeEvent::AliasAccounts(crate::Event::StaleAliasReportCleared {
 					account: ALICE,
 					collection: PeopleCollection::get(),
 					alias: ALIAS_A,

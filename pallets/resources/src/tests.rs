@@ -18,7 +18,7 @@
 
 use super::{pallet::*, *};
 use crate::{
-	migration::{v1, MigrateV0ToV1},
+	migration::MigrateV0ToV1,
 	mock::*,
 	types::{ConsumerInfo, Credibility, NotificationReference},
 	Error,
@@ -27,8 +27,7 @@ use codec::Encode;
 use frame_support::{
 	assert_noop, assert_ok,
 	dispatch::GetDispatchInfo,
-	storage::unhashed,
-	traits::{Authorize, GetStorageVersion, Hooks, OnRuntimeUpgrade, StorageVersion},
+	traits::{Authorize, GetStorageVersion, Hooks, StorageVersion},
 };
 use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::{
@@ -645,22 +644,52 @@ fn touch_keeps_existing_allowance_for_non_demoted_person() {
 
 mod migration {
 	use super::*;
+	use crate::migration::{v0, Cursor};
+	use frame_support::{
+		migrations::{SteppedMigration, SteppedMigrationError},
+		weights::{Weight, WeightMeter},
+	};
 
-	type OldUsername = v1::Username;
-
-	fn old_username(s: &[u8]) -> OldUsername {
+	fn old_username(s: &[u8]) -> v0::Username {
 		s.to_vec().try_into().unwrap()
 	}
 
+	/// Stores a consumer record for `who` in the shape used while the pallet managed usernames.
 	fn seed_old_consumer(who: &AccountId32, credibility: Credibility) {
-		let value = (
-			comm_id(b"key1"),
-			Some(old_username(b"fullperson")),
-			old_username(b"liteuser.12"),
-			credibility,
-		)
-			.encode();
-		unhashed::put_raw(&Consumers::<Test>::hashed_key_for(who), &value);
+		v0::Consumers::<Test>::insert(
+			who,
+			v0::ConsumerInfo {
+				identifier_key: comm_id(b"key1"),
+				full_username: Some(old_username(b"fullperson")),
+				lite_username: old_username(b"liteuser.12"),
+				credibility,
+			},
+		);
+	}
+
+	fn seed_username_storage(owner: &AccountId32) {
+		v0::UsernameOwnerOf::<Test>::insert(old_username(b"liteuser.12"), owner);
+		v0::UsernameReservationDuration::<Test>::put(60);
+		v0::UsernameReservationQueue::<Test>::insert(old_username(b"reserved"), ());
+		v0::ReservationOf::<Test>::insert(owner, old_username(b"reserved"));
+	}
+
+	fn translate_weight() -> Weight {
+		<Test as Config>::WeightInfo::migrate_v1_translate_consumer()
+	}
+
+	/// Drives the migration to completion with `limit` per step and returns the step count.
+	fn run(limit: Weight) -> u32 {
+		let mut cursor = None;
+		let mut steps = 0;
+		loop {
+			steps += 1;
+			cursor = MigrateV0ToV1::<Test>::step(cursor, &mut WeightMeter::with_limit(limit))
+				.expect("step succeeds");
+			if cursor.is_none() {
+				return steps;
+			}
+		}
 	}
 
 	#[test]
@@ -674,16 +703,14 @@ mod migration {
 				Credibility::Person { alias, last_update: 100, demoted: false };
 			seed_old_consumer(&lite, Credibility::Lite);
 			seed_old_consumer(&person, person_credibility.clone());
+			seed_username_storage(&lite);
 			// An old record does not decode under the current type until migrated.
 			assert_eq!(Consumers::<Test>::get(&lite), None);
 
-			v1::UsernameOwnerOf::<Test>::insert(old_username(b"liteuser.12"), &lite);
-			v1::UsernameReservationDuration::<Test>::put(60);
-			v1::UsernameReservationQueue::<Test>::insert(old_username(b"reserved"), ());
-			v1::ReservationOf::<Test>::insert(&lite, old_username(b"reserved"));
+			// Three items per step, so the migration resumes from its cursor several times.
+			let steps = run(translate_weight().saturating_mul(3));
 
-			MigrateV0ToV1::<Test>::on_runtime_upgrade();
-
+			assert!(steps > 1, "migration should span several steps, took {steps}");
 			assert_eq!(
 				Consumers::<Test>::get(&lite),
 				Some(ConsumerInfo {
@@ -698,11 +725,52 @@ mod migration {
 					credibility: person_credibility
 				})
 			);
-			assert_eq!(v1::UsernameOwnerOf::<Test>::iter_keys().count(), 0);
-			assert!(!v1::UsernameReservationDuration::<Test>::exists());
-			assert_eq!(v1::UsernameReservationQueue::<Test>::iter_keys().count(), 0);
-			assert_eq!(v1::ReservationOf::<Test>::iter_keys().count(), 0);
+			assert_eq!(v0::UsernameOwnerOf::<Test>::iter_keys().count(), 0);
+			assert!(!v0::UsernameReservationDuration::<Test>::exists());
+			assert_eq!(v0::UsernameReservationQueue::<Test>::iter_keys().count(), 0);
+			assert_eq!(v0::ReservationOf::<Test>::iter_keys().count(), 0);
 			assert_eq!(Resources::on_chain_storage_version(), StorageVersion::new(1));
+		});
+	}
+
+	#[test]
+	fn v1_first_step_translates_only_what_the_meter_allows() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<Resources>();
+			let accounts = [id_to_account(1), id_to_account(2)];
+			for account in &accounts {
+				seed_old_consumer(account, Credibility::Lite);
+			}
+
+			let cursor =
+				MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::with_limit(translate_weight()))
+					.expect("step succeeds");
+
+			let Some(Cursor::Consumers(Some(translated))) = cursor else {
+				panic!("expected a consumer cursor, got {cursor:?}");
+			};
+			let untranslated = accounts.iter().find(|a| **a != translated).unwrap();
+			assert!(Consumers::<Test>::get(&translated).is_some());
+			assert_eq!(Consumers::<Test>::get(untranslated), None);
+			assert_eq!(Resources::on_chain_storage_version(), StorageVersion::new(0));
+		});
+	}
+
+	#[test]
+	fn v1_reports_insufficient_weight() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<Resources>();
+			let lite = id_to_account(1);
+			seed_old_consumer(&lite, Credibility::Lite);
+			let too_small = translate_weight().saturating_sub(Weight::from_parts(1, 0));
+
+			let result = MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::with_limit(too_small));
+
+			assert_eq!(
+				result,
+				Err(SteppedMigrationError::InsufficientWeight { required: translate_weight() })
+			);
+			assert_eq!(Consumers::<Test>::get(&lite), None);
 		});
 	}
 
@@ -711,12 +779,15 @@ mod migration {
 		new_test_ext().execute_with(|| {
 			StorageVersion::new(1).put::<Resources>();
 			let lite = register_lite(1);
-			v1::UsernameReservationDuration::<Test>::put(60);
+			seed_username_storage(&lite);
 
-			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+			let cursor =
+				MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::new()).expect("step succeeds");
 
+			assert_eq!(cursor, None);
 			assert!(Consumers::<Test>::contains_key(&lite));
-			assert_eq!(v1::UsernameReservationDuration::<Test>::get(), 60);
+			assert_eq!(v0::UsernameReservationDuration::<Test>::get(), 60);
+			assert_eq!(v0::UsernameOwnerOf::<Test>::iter_keys().count(), 1);
 		});
 	}
 }

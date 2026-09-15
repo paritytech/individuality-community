@@ -257,8 +257,8 @@ pub mod pallet {
 			// where
 			// approval = aye / total_vote_weight
 			// passing_threshold = 50% or 1/2
-			max_duration.saturating_mul(self.aye_weight.into()).saturating_mul(2) >
-				max_duration.saturating_add(remaining).saturating_mul(total_vote_weight)
+			max_duration.saturating_mul(self.aye_weight.into()).saturating_mul(2)
+				> max_duration.saturating_add(remaining).saturating_mul(total_vote_weight)
 		}
 	}
 
@@ -693,8 +693,8 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			let alias = T::EnsurePerson::ensure_origin(origin, &MOB_CONTEXT)?;
 			ensure!(
-				!matches!(opinion, Judgement::Contempt) ||
-					!VotingPenalties::<T>::contains_key(alias),
+				!matches!(opinion, Judgement::Contempt)
+					|| !VotingPenalties::<T>::contains_key(alias),
 				Error::<T>::UnderPenalty
 			);
 			let mut case = OpenCases::<T>::take(case_index).ok_or(Error::<T>::NotOpen)?;
@@ -717,15 +717,15 @@ pub mod pallet {
 			let active_voters = T::EnsurePerson::active_count();
 			let vote_count_result = case.tally.collapsed(active_voters);
 
-			let minimum_turnout_reached = vote_count_result.turnout >=
-				T::MinTurnoutPercentage::get() &&
-				vote_count_result.voter_count >= T::MinTurnoutNominal::get();
+			let minimum_turnout_reached = vote_count_result.turnout
+				>= T::MinTurnoutPercentage::get()
+				&& vote_count_result.voter_count >= T::MinTurnoutNominal::get();
 			let minimum_duration_elapsed = secs > T::MinCaseDuration::get().into();
 
-			if minimum_turnout_reached &&
-				minimum_duration_elapsed &&
-				(vote_count_result.definitive ||
-					vote_count_result.is_passing(T::MaxVotingDuration::get().into(), secs))
+			if minimum_turnout_reached
+				&& minimum_duration_elapsed
+				&& (vote_count_result.definitive
+					|| vote_count_result.is_passing(T::MaxVotingDuration::get().into(), secs))
 			{
 				let ripe_case =
 					RipeCase { details: case.details, verdict: vote_count_result.verdict };
@@ -911,8 +911,8 @@ pub mod pallet {
 			ensure!(
 				current_distribution.as_ref().is_none_or(|distribution| distribution
 					.start
-					.saturating_add(current_schedule.period) <=
-					now),
+					.saturating_add(current_schedule.period)
+					<= now),
 				Error::<T>::Recent
 			);
 			current_schedule.remaining.saturating_dec();
@@ -1111,15 +1111,15 @@ pub mod pallet {
 			let active_voters = T::EnsurePerson::active_count();
 			let vote_count_result = case.tally.collapsed(active_voters);
 
-			let minimum_turnout_reached = vote_count_result.turnout >=
-				T::MinTurnoutPercentage::get() &&
-				vote_count_result.voter_count >= T::MinTurnoutNominal::get();
+			let minimum_turnout_reached = vote_count_result.turnout
+				>= T::MinTurnoutPercentage::get()
+				&& vote_count_result.voter_count >= T::MinTurnoutNominal::get();
 			let minimum_duration_elapsed = secs > T::MinCaseDuration::get().into();
 
-			if minimum_turnout_reached &&
-				minimum_duration_elapsed &&
-				(vote_count_result.definitive ||
-					vote_count_result.is_passing(T::MaxVotingDuration::get().into(), secs))
+			if minimum_turnout_reached
+				&& minimum_duration_elapsed
+				&& (vote_count_result.definitive
+					|| vote_count_result.is_passing(T::MaxVotingDuration::get().into(), secs))
 			{
 				let ripe_case =
 					RipeCase { details: case.details, verdict: vote_count_result.verdict };
@@ -1446,9 +1446,9 @@ pub mod pallet {
 			for case_index in &case_indices {
 				let vote = Votes::<T>::take(case_index, voter).ok_or(Error::<T>::NoSuchVote)?;
 				let case = DoneCases::<T>::get(case_index).ok_or(Error::<T>::NotDone)?;
-				if case.verdict.matches_intent(vote) ||
-					(case.verdict == Judgement::Contempt &&
-						vote == Judgement::Truth(Truth::False))
+				if case.verdict.matches_intent(vote)
+					|| (case.verdict == Judgement::Contempt
+						&& vote == Judgement::Truth(Truth::False))
 				{
 					correct_votes.saturating_inc();
 				} else if vote == Judgement::Contempt {
@@ -1477,8 +1477,8 @@ pub mod pallet {
 
 		fn validate_clean_vote(case_index: CaseIndex, voter: Alias) -> Result<Judgement, Error<T>> {
 			ensure!(
-				!OpenCases::<T>::contains_key(case_index) &&
-					!RipeCases::<T>::contains_key(case_index),
+				!OpenCases::<T>::contains_key(case_index)
+					&& !RipeCases::<T>::contains_key(case_index),
 				Error::<T>::NotDone
 			);
 			if let Some(case) = DoneCases::<T>::get(case_index) {
@@ -1552,10 +1552,12 @@ pub mod pallet {
 
 		fn log_offchain_worker_tx_submit_result(res: Result<(), ()>, operation: &str) {
 			match res {
-				Ok(_) =>
-					log::info!(target: LOG_TARGET, "offchain_worker - {operation} transaction submitted"),
-				Err(e) =>
-					log::error!(target: LOG_TARGET, "offchain_worker - failed to submit {operation} transaction: {e:?}"),
+				Ok(_) => {
+					log::info!(target: LOG_TARGET, "offchain_worker - {operation} transaction submitted")
+				},
+				Err(e) => {
+					log::error!(target: LOG_TARGET, "offchain_worker - failed to submit {operation} transaction: {e:?}")
+				},
 			}
 		}
 
@@ -1574,9 +1576,9 @@ pub mod pallet {
 			credit.cleaned.saturating_inc();
 			match maybe_verdict {
 				Some(verdict)
-					if verdict.matches_intent(vote) ||
-						(verdict == Judgement::Contempt &&
-							vote == Judgement::Truth(Truth::False)) =>
+					if verdict.matches_intent(vote)
+						|| (verdict == Judgement::Contempt
+							&& vote == Judgement::Truth(Truth::False)) =>
 				{
 					credit.correct.saturating_inc();
 				},

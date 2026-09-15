@@ -192,8 +192,8 @@ impl<T: Config> RecyclerManager<T> {
 			}
 		}
 
-		T::MemberService::ring_revision(&identifier, index).is_some() &&
-			T::MemberService::is_revision_valid(&identifier, index, revision)
+		T::MemberService::ring_revision(&identifier, index).is_some()
+			&& T::MemberService::is_revision_valid(&identifier, index, revision)
 	}
 
 	/// Push a member key into the recycler system.
@@ -716,8 +716,9 @@ impl<T: Config> RecyclerManager<T> {
 	) -> Result<(), ValidateAliasProofError> {
 		match RecyclerAliasStates::<T>::get((instance_id, value, index, alias)) {
 			Some(AliasState::Unloaded) => Err(ValidateAliasProofError::AlreadyUnloaded),
-			Some(AliasState::Locked(locked)) if T::UnixTime::now().as_secs() < locked.until =>
-				Err(ValidateAliasProofError::TemporarilyLocked),
+			Some(AliasState::Locked(locked)) if T::UnixTime::now().as_secs() < locked.until => {
+				Err(ValidateAliasProofError::TemporarilyLocked)
+			},
 			Some(AliasState::Locked(_)) | None => Ok(()),
 		}
 	}

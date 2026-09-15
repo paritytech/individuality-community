@@ -315,18 +315,21 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 	fn weight(&self, call: &<T as frame_system::Config>::RuntimeCall) -> Weight {
 		match &self.0 {
 			None => match call.is_sub_type() {
-				Some(Call::<T>::unload_recycler_into_external_asset_non_anonymous { .. }) =>
+				Some(Call::<T>::unload_recycler_into_external_asset_non_anonymous { .. }) => {
 					T::WeightInfo::as_none_tx_ext_unload_recycler_into_external_asset_non_anonymous(
-					),
+					)
+				},
 				Some(Call::<T>::unload_recyclers_into_external_asset_non_anonymous {
 					inputs,
 					..
-				}) =>
+				}) => {
 					T::WeightInfo::as_none_tx_ext_unload_recyclers_into_external_asset_non_anonymous(
 						inputs.len() as u32,
-					),
-				Some(Call::<T>::unload_archived_recycler_into_external_asset { .. }) =>
-					T::WeightInfo::as_none_tx_ext_unload_archived_recycler_into_external_asset(),
+					)
+				},
+				Some(Call::<T>::unload_archived_recycler_into_external_asset { .. }) => {
+					T::WeightInfo::as_none_tx_ext_unload_archived_recycler_into_external_asset()
+				},
 				_ => T::WeightInfo::as_none_tx_ext_others(),
 			},
 			Some(AsCoinageInfo::AsCoin) => match call.is_sub_type() {
@@ -336,10 +339,12 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 					T::WeightInfo::as_coin_split(n)
 				},
 				Some(Call::<T>::transfer { .. }) => T::WeightInfo::as_coin_transfer(),
-				Some(Call::<T>::load_recycler_with_coin { .. }) =>
-					T::WeightInfo::as_coin_load_recycler_with_coin(),
-				Some(Call::<T>::pay_for_recycler_unload_fee_token_with_coin { .. }) =>
-					T::WeightInfo::as_coin_pay_for_recycler_unload_fee_token_with_coin(),
+				Some(Call::<T>::load_recycler_with_coin { .. }) => {
+					T::WeightInfo::as_coin_load_recycler_with_coin()
+				},
+				Some(Call::<T>::pay_for_recycler_unload_fee_token_with_coin { .. }) => {
+					T::WeightInfo::as_coin_pay_for_recycler_unload_fee_token_with_coin()
+				},
 				// Default for unknown/invalid calls - use max of other cases
 				_ => T::WeightInfo::as_coin_transfer()
 					.max(T::WeightInfo::as_coin_load_recycler_with_coin())

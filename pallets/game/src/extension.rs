@@ -144,8 +144,9 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for GameAsI
 		}
 		let airdrop_count = match call.is_sub_type() {
 			// The validation work scales with the number of airdrop VRF entries in the call.
-			Some(Call::sign_up_with_invite { airdrops, .. }) =>
-				airdrops.as_ref().map_or(0, AirdropVrfs::count),
+			Some(Call::sign_up_with_invite { airdrops, .. }) => {
+				airdrops.as_ref().map_or(0, AirdropVrfs::count)
+			},
 			// Any other call is invalid, so VRFs won't be validated.
 			_ => 0,
 		};

@@ -495,4 +495,28 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 			.saturating_add(Weight::from_parts(0, 3517))
 			.saturating_add(T::DbWeight::get().reads(2))
 	}
+	/// Storage: `Resources::Consumers` (r:1 w:1)
+	/// Proof: `Resources::Consumers` (`max_values`: None, `max_size`: Some(222), added: 2697, mode: `MaxEncodedLen`)
+	fn migrate_v1_translate_consumer() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `255`
+		//  Estimated: `3687`
+		// Minimum execution time: 13_000_000 picoseconds.
+		Weight::from_parts(14_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3687))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	/// Storage: `Resources::UsernameOwnerOf` (r:1 w:1)
+	/// Proof: `Resources::UsernameOwnerOf` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
+	fn migrate_v1_clear_username_entry() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `114`
+		//  Estimated: `3546`
+		// Minimum execution time: 6_000_000 picoseconds.
+		Weight::from_parts(7_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3546))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
 }

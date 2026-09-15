@@ -248,8 +248,8 @@ fn test_recycler_lifecycle_granular() {
 		// Ensure ring 1 is populated before asserting its state.
 		if <Test as Config>::MemberService::ring_status(&identifier, 1)
 			.map(|s| s.total)
-			.unwrap_or(0) ==
-			0
+			.unwrap_or(0)
+			== 0
 		{
 			let secret = get_unique_secret();
 			let member = CryptoOf::<Test>::member_from_secret(&secret);

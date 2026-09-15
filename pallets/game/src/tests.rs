@@ -174,10 +174,10 @@ fn outdated_game_schedule_multi_game() {
 		};
 
 		let game_1_player_process_end = GameTimes::<Test>::player_process_end(&game_1);
-		let minimal_next_game_play_time = game_1_player_process_end +
-			durations.registration +
-			durations.shuffle +
-			durations.post_shuffle_margin;
+		let minimal_next_game_play_time = game_1_player_process_end
+			+ durations.registration
+			+ durations.shuffle
+			+ durations.post_shuffle_margin;
 
 		let game_2 = GameSchedule::<u32, u128> {
 			game_play_time: minimal_next_game_play_time,
@@ -874,10 +874,10 @@ mod games_scheduling {
 
 			let durations = <Test as Config>::DefaultPhaseDurations::get();
 			let game1_player_process_end = GameTimes::<Test>::player_process_end(&game1);
-			let minimal_next_game_play_time = game1_player_process_end +
-				durations.registration +
-				durations.shuffle +
-				durations.post_shuffle_margin;
+			let minimal_next_game_play_time = game1_player_process_end
+				+ durations.registration
+				+ durations.shuffle
+				+ durations.post_shuffle_margin;
 			let game2 = GameSchedule::<u32, u128> {
 				// game2 reporting would start at game1 estimated end, leaving no time for
 				// registration and shuffle
@@ -3038,12 +3038,12 @@ mod game_cancellation {
 			let event_id = Game::airdrop_event_id(game_index, 0);
 			let event = indiv_pallet_airdrop::Events::<Test>::get(event_id);
 			assert!(
-				event.is_none() ||
-					matches!(
+				event.is_none()
+					|| matches!(
 						event.expect("checked").status,
-						indiv_pallet_airdrop::types::Status::ClearingRegistrations { .. } |
-							indiv_pallet_airdrop::types::Status::ClearingWinners { .. } |
-							indiv_pallet_airdrop::types::Status::Finalizing { .. },
+						indiv_pallet_airdrop::types::Status::ClearingRegistrations { .. }
+							| indiv_pallet_airdrop::types::Status::ClearingWinners { .. }
+							| indiv_pallet_airdrop::types::Status::Finalizing { .. },
 					),
 			);
 
@@ -3191,7 +3191,7 @@ fn candidate_and_people_vote_weights_applied() {
 			let mut partial: Vec<Report> = Vec::new();
 			for member_idx in groups.group_members(group_idx) {
 				if member_idx == reporter_idx {
-					continue
+					continue;
 				}
 				let member_player = IndexToPlayer::<Test>::get((0, member_idx)).unwrap();
 				let about_target =
@@ -3283,7 +3283,7 @@ fn recognised_people_are_evenly_distributed() {
 			advance_process(); // run on-poll / on-idle once
 			if let Some(g) = crate::Game::<Test>::get() {
 				if matches!(g.state, GameState::Reporting { .. }) {
-					break
+					break;
 				}
 			} else {
 				panic!("game vanished before Reporting phase");
@@ -5270,10 +5270,10 @@ mod cancel_game {
 
 			let durations = <Test as Config>::DefaultPhaseDurations::get();
 			let next = GameSchedule::<u32, u128> {
-				game_play_time: GameTimes::<Test>::player_process_end(&current) +
-					durations.registration +
-					durations.shuffle +
-					durations.post_shuffle_margin,
+				game_play_time: GameTimes::<Test>::player_process_end(&current)
+					+ durations.registration
+					+ durations.shuffle
+					+ durations.post_shuffle_margin,
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
@@ -6756,8 +6756,8 @@ mod airdrop {
 				assert!(!matches!(
 					record.event,
 					RuntimeEvent::Game(
-						crate::Event::<Test>::AirdropScheduled { .. } |
-							crate::Event::<Test>::AirdropScheduleFailed { .. }
+						crate::Event::<Test>::AirdropScheduled { .. }
+							| crate::Event::<Test>::AirdropScheduleFailed { .. }
 					),
 				));
 			}

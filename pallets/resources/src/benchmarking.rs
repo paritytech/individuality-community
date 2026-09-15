@@ -896,5 +896,50 @@ mod benches {
 		Ok(())
 	}
 
+	#[benchmark]
+	fn migrate_v1_translate_consumer() -> Result<(), BenchmarkError> {
+		use crate::migration::{v0, MigrateV0ToV1};
+
+		let account: T::AccountId = whitelisted_caller();
+		v0::Consumers::<T>::insert(
+			&account,
+			v0::ConsumerInfo {
+				identifier_key: [0u8; 65],
+				full_username: Some(BoundedVec::truncate_from([b'b'; 32].to_vec())),
+				lite_username: BoundedVec::truncate_from([b'a'; 32].to_vec()),
+				credibility: Credibility::Person {
+					alias: [1u8; 32],
+					last_update: 0,
+					demoted: false,
+				},
+			},
+		);
+
+		#[block]
+		{
+			MigrateV0ToV1::<T>::translate_next(None);
+		}
+
+		assert!(Consumers::<T>::get(&account).is_some());
+		Ok(())
+	}
+
+	#[benchmark]
+	fn migrate_v1_clear_username_entry() -> Result<(), BenchmarkError> {
+		use crate::migration::{v0, MigrateV0ToV1};
+
+		let account: T::AccountId = whitelisted_caller();
+		let username: v0::Username = BoundedVec::truncate_from([b'a'; 32].to_vec());
+		v0::UsernameOwnerOf::<T>::insert(&username, &account);
+
+		#[block]
+		{
+			MigrateV0ToV1::<T>::clear_next::<_, v0::UsernameOwnerOf<T>>(None);
+		}
+
+		assert!(!v0::UsernameOwnerOf::<T>::contains_key(&username));
+		Ok(())
+	}
+
 	impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }

@@ -308,9 +308,11 @@ impl EnsureOriginWithArg<RuntimeOrigin, Context> for EnsurePersonMock {
 	fn try_origin(origin: RuntimeOrigin, context: &Context) -> Result<Alias, RuntimeOrigin> {
 		match frame_system::ensure_signed(origin.clone()) {
 			Ok(account)
-				if account < MAX_PERSON_ACCOUNT &&
-					context == &crate::Pallet::<Test>::people_airdrops_context() =>
-				Ok(alias_of(account)),
+				if account < MAX_PERSON_ACCOUNT
+					&& context == &crate::Pallet::<Test>::people_airdrops_context() =>
+			{
+				Ok(alias_of(account))
+			},
 			_ => Err(origin),
 		}
 	}

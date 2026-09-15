@@ -18,38 +18,51 @@
 
 use crate::{
 	types::{ConsumerInfo, Credibility},
-	Config, Consumers, Pallet,
+	Config, Consumers, Pallet, WeightInfo,
 };
+use codec::FullCodec;
 use frame_support::{
-	migrations::VersionedMigration, pallet_prelude::*, storage_alias,
-	traits::UncheckedOnRuntimeUpgrade,
+	migrations::{MigrationId, SteppedMigration, SteppedMigrationError},
+	pallet_prelude::*,
+	storage::StoragePrefixedMap,
+	storage_alias,
+	weights::WeightMeter,
 };
 use indiv_support::traits::CommunicationIdentifier;
 use sp_runtime::Saturating;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-resources::migration";
+const PALLET_MIGRATIONS_ID: &[u8; 22] = b"indiv-pallet-resources";
 
-pub type MigrateV0ToV1<T> = VersionedMigration<
-	0,
-	1,
-	v1::RemoveUsernames<T>,
-	Pallet<T>,
-	<T as frame_system::Config>::DbWeight,
->;
+/// A raw storage key returned by `clear` as the position to resume from. Keys of the cleared maps
+/// are at most 81 bytes: two `twox128` prefixes, a `blake2_128` hash and the encoded key.
+pub type RawCursor = BoundedVec<u8, ConstU32<128>>;
 
-pub mod v1 {
+/// Storage as it was while the pallet managed usernames.
+pub mod v0 {
 	use super::*;
 
 	/// The username type stored before usernames moved to the dotNS gateway pallet.
 	pub type Username = BoundedVec<u8, ConstU32<32>>;
 
-	#[derive(Decode)]
-	pub struct OldConsumerInfo {
+	/// A consumer record as stored while the pallet managed usernames.
+	#[derive(Encode, Decode)]
+	pub struct ConsumerInfo {
 		pub identifier_key: CommunicationIdentifier,
 		pub full_username: Option<Username>,
 		pub lite_username: Username,
 		pub credibility: Credibility,
 	}
+
+	/// The `Consumers` map read with the old value type.
+	#[storage_alias]
+	pub type Consumers<T: Config> = StorageMap<
+		Pallet<T>,
+		Blake2_128Concat,
+		<T as frame_system::Config>::AccountId,
+		ConsumerInfo,
+		OptionQuery,
+	>;
 
 	#[storage_alias]
 	pub type UsernameOwnerOf<T: Config> = StorageMap<
@@ -63,7 +76,7 @@ pub mod v1 {
 	#[storage_alias]
 	pub type UsernameReservationDuration<T: Config> = StorageValue<Pallet<T>, u64, ValueQuery>;
 
-	/// Queue entries are not decoded, so the value type stays opaque.
+	/// Queue entries are not decoded, so the value type is opaque.
 	#[storage_alias]
 	pub type UsernameReservationQueue<T: Config> =
 		StorageMap<Pallet<T>, Blake2_128Concat, Username, (), OptionQuery>;
@@ -76,72 +89,171 @@ pub mod v1 {
 		Username,
 		OptionQuery,
 	>;
+}
 
-	/// Use [`super::MigrateV0ToV1`] rather than this directly.
-	///
-	/// Translates every [`Consumers`] record to the shape without username related fields
-	/// and clears the username storage items that no longer exist in the pallet.
-	pub struct RemoveUsernames<T>(PhantomData<T>);
+/// Position of the migration, in the order the stages run.
+#[derive(Encode, Decode, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
+pub enum Cursor<AccountId> {
+	/// Translating `Consumers`; holds the last translated account.
+	Consumers(Option<AccountId>),
+	/// Clearing `UsernameOwnerOf`; holds the position `clear` returned.
+	UsernameOwnerOf(Option<RawCursor>),
+	/// Clearing `UsernameReservationQueue`; holds the position `clear` returned.
+	UsernameReservationQueue(Option<RawCursor>),
+	/// Clearing `ReservationOf`; holds the position `clear` returned.
+	ReservationOf(Option<RawCursor>),
+}
 
-	impl<T: Config> UncheckedOnRuntimeUpgrade for RemoveUsernames<T> {
-		fn on_runtime_upgrade() -> Weight {
-			let mut translated = 0u64;
-			Consumers::<T>::translate_values(|old: OldConsumerInfo| {
-				translated.saturating_inc();
-				Some(ConsumerInfo {
-					identifier_key: old.identifier_key,
-					credibility: old.credibility,
-				})
-			});
+/// Removes usernames from the pallet storage over as many blocks as needed.
+///
+/// Translates every [`Consumers`] record to the shape without username fields, then clears the
+/// four username storage items that no longer exist in the pallet and bumps the storage version
+/// to 1. Each step does as much work as the weight meter allows, one item at a time.
+///
+/// Single use: remove from the runtime once the upgrade carrying it is live.
+pub struct MigrateV0ToV1<T>(PhantomData<T>);
 
-			let mut removed = 0u64;
-			removed.saturating_accrue(UsernameOwnerOf::<T>::clear(u32::MAX, None).unique.into());
-			removed.saturating_accrue(
-				UsernameReservationQueue::<T>::clear(u32::MAX, None).unique.into(),
-			);
-			removed.saturating_accrue(ReservationOf::<T>::clear(u32::MAX, None).unique.into());
-			UsernameReservationDuration::<T>::kill();
-			removed.saturating_inc();
+impl<T: Config> MigrateV0ToV1<T> {
+	/// Translates the first old-shape consumer record after `last`. Returns its account, or `None`
+	/// when no old-shape record remains.
+	pub(crate) fn translate_next(last: Option<&T::AccountId>) -> Option<T::AccountId> {
+		let mut iter = match last {
+			Some(last) => v0::Consumers::<T>::iter_from(v0::Consumers::<T>::hashed_key_for(last)),
+			None => v0::Consumers::<T>::iter(),
+		};
+		let (account, old) = iter.next()?;
+		Consumers::<T>::insert(
+			&account,
+			ConsumerInfo { identifier_key: old.identifier_key, credibility: old.credibility },
+		);
+		Some(account)
+	}
 
-			log::info!(
-				target: LOG_TARGET,
-				"translated {translated} consumer records, removed {removed} username entries"
-			);
-			T::DbWeight::get().reads_writes(
-				translated.saturating_add(removed),
-				translated.saturating_add(removed),
-			)
+	/// Removes one entry of `M` starting at `cursor`. Returns the position to resume from, or
+	/// `None` when the map is empty.
+	pub(crate) fn clear_next<V: FullCodec, M: StoragePrefixedMap<V>>(
+		cursor: Option<&RawCursor>,
+	) -> Option<RawCursor> {
+		let removed = M::clear(1, cursor.map(|c| c.as_slice()));
+		let next = removed.maybe_cursor?;
+		match RawCursor::try_from(next) {
+			Ok(next) => Some(next),
+			Err(_) => {
+				log::error!(
+					target: LOG_TARGET,
+					"clear cursor exceeds {} bytes, leaving the rest of the map in place",
+					<ConstU32<128> as Get<u32>>::get()
+				);
+				None
+			},
 		}
+	}
 
-		#[cfg(feature = "try-runtime")]
-		fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
-			// Keys, not entries: an old record does not decode under the current type, so `iter`
-			// would skip it and report it as missing.
-			Ok((Consumers::<T>::iter_keys().count() as u32).encode())
+	fn required_weight(cursor: &Cursor<T::AccountId>) -> Weight {
+		match cursor {
+			Cursor::Consumers(_) => T::WeightInfo::migrate_v1_translate_consumer(),
+			_ => T::WeightInfo::migrate_v1_clear_username_entry(),
 		}
+	}
+}
 
-		#[cfg(feature = "try-runtime")]
-		fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
-			let consumers = u32::decode(&mut &state[..])
-				.map_err(|_| sp_runtime::TryRuntimeError::Other("pre_upgrade state is not u32"))?;
-			ensure!(
-				Consumers::<T>::iter().count() as u32 == consumers,
-				"a consumer record did not survive the migration"
-			);
-			ensure!(
-				UsernameOwnerOf::<T>::iter_keys().next().is_none(),
-				"UsernameOwnerOf is not empty"
-			);
-			ensure!(
-				UsernameReservationQueue::<T>::iter_keys().next().is_none(),
-				"UsernameReservationQueue is not empty"
-			);
-			ensure!(ReservationOf::<T>::iter_keys().next().is_none(), "ReservationOf is not empty");
-			ensure!(
-				!UsernameReservationDuration::<T>::exists(),
-				"UsernameReservationDuration is not empty"
-			);
-			Ok(())
+impl<T: Config> SteppedMigration for MigrateV0ToV1<T> {
+	type Cursor = Cursor<T::AccountId>;
+	type Identifier = MigrationId<22>;
+
+	fn id() -> Self::Identifier {
+		MigrationId { pallet_id: *PALLET_MIGRATIONS_ID, version_from: 0, version_to: 1 }
+	}
+
+	fn step(
+		cursor: Option<Self::Cursor>,
+		meter: &mut WeightMeter,
+	) -> Result<Option<Self::Cursor>, SteppedMigrationError> {
+		let mut cursor = match cursor {
+			Some(cursor) => cursor,
+			None if Pallet::<T>::on_chain_storage_version() >= StorageVersion::new(1) => {
+				log::info!(target: LOG_TARGET, "storage already at version 1, nothing to migrate");
+				return Ok(None);
+			},
+			None => Cursor::Consumers(None),
+		};
+
+		let mut items = 0u32;
+		loop {
+			let required = Self::required_weight(&cursor);
+			if meter.try_consume(required).is_err() {
+				// A step that did nothing cannot progress with this meter.
+				return if items == 0 {
+					Err(SteppedMigrationError::InsufficientWeight { required })
+				} else {
+					Ok(Some(cursor))
+				};
+			}
+			items.saturating_inc();
+			cursor = match cursor {
+				Cursor::Consumers(last) => match Self::translate_next(last.as_ref()) {
+					Some(account) => Cursor::Consumers(Some(account)),
+					None => Cursor::UsernameOwnerOf(None),
+				},
+				Cursor::UsernameOwnerOf(at) => {
+					match Self::clear_next::<_, v0::UsernameOwnerOf<T>>(at.as_ref()) {
+						Some(at) => Cursor::UsernameOwnerOf(Some(at)),
+						None => Cursor::UsernameReservationQueue(None),
+					}
+				},
+				Cursor::UsernameReservationQueue(at) => {
+					match Self::clear_next::<_, v0::UsernameReservationQueue<T>>(at.as_ref()) {
+						Some(at) => Cursor::UsernameReservationQueue(Some(at)),
+						None => Cursor::ReservationOf(None),
+					}
+				},
+				Cursor::ReservationOf(at) => {
+					match Self::clear_next::<_, v0::ReservationOf<T>>(at.as_ref()) {
+						Some(at) => Cursor::ReservationOf(Some(at)),
+						None => {
+							v0::UsernameReservationDuration::<T>::kill();
+							StorageVersion::new(1).put::<Pallet<T>>();
+							log::info!(target: LOG_TARGET, "username storage removed");
+							return Ok(None);
+						},
+					}
+				},
+			};
 		}
+	}
+
+	#[cfg(feature = "try-runtime")]
+	fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
+		// Keys, not entries: an old record does not decode under the current type, so `iter`
+		// would skip it and report it as missing.
+		Ok((Consumers::<T>::iter_keys().count() as u32).encode())
+	}
+
+	#[cfg(feature = "try-runtime")]
+	fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+		let consumers = u32::decode(&mut &state[..])
+			.map_err(|_| sp_runtime::TryRuntimeError::Other("pre_upgrade state is not u32"))?;
+		ensure!(
+			Consumers::<T>::iter().count() as u32 == consumers,
+			"a consumer record did not survive the migration"
+		);
+		ensure!(
+			v0::UsernameOwnerOf::<T>::iter_keys().next().is_none(),
+			"UsernameOwnerOf is not empty"
+		);
+		ensure!(
+			v0::UsernameReservationQueue::<T>::iter_keys().next().is_none(),
+			"UsernameReservationQueue is not empty"
+		);
+		ensure!(v0::ReservationOf::<T>::iter_keys().next().is_none(), "ReservationOf is not empty");
+		ensure!(
+			!v0::UsernameReservationDuration::<T>::exists(),
+			"UsernameReservationDuration is not empty"
+		);
+		ensure!(
+			Pallet::<T>::on_chain_storage_version() == StorageVersion::new(1),
+			"storage version was not bumped"
+		);
+		Ok(())
 	}
 }

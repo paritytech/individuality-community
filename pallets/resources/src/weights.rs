@@ -73,6 +73,8 @@ pub trait WeightInfo {
 	fn claim_long_term_storage_tx_ext() -> Weight;
 	fn clear_expired_long_term_storage_aliases(n: u32, ) -> Weight;
 	fn authorize_clear_expired_long_term_storage_aliases() -> Weight;
+	fn migrate_v1_translate_consumer() -> Weight;
+	fn migrate_v1_clear_username_entry() -> Weight;
 }
 
 /// Weights for `indiv_pallet_resources` using the Substrate node and recommended hardware.
@@ -489,6 +491,28 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(8_507_000, 3517)
 			.saturating_add(T::DbWeight::get().reads(2_u64))
 	}
+	/// Storage: `Resources::Consumers` (r:1 w:1)
+	/// Proof: `Resources::Consumers` (`max_values`: None, `max_size`: Some(222), added: 2697, mode: `MaxEncodedLen`)
+	fn migrate_v1_translate_consumer() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `255`
+		//  Estimated: `3687`
+		// Minimum execution time: 13_000_000 picoseconds.
+		Weight::from_parts(14_000_000, 3687)
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
+	/// Storage: `Resources::UsernameOwnerOf` (r:1 w:1)
+	/// Proof: `Resources::UsernameOwnerOf` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
+	fn migrate_v1_clear_username_entry() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `114`
+		//  Estimated: `3546`
+		// Minimum execution time: 6_000_000 picoseconds.
+		Weight::from_parts(7_000_000, 3546)
+			.saturating_add(T::DbWeight::get().reads(1_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -903,5 +927,27 @@ impl WeightInfo for () {
 		// Minimum execution time: 8_197_000 picoseconds.
 		Weight::from_parts(8_507_000, 3517)
 			.saturating_add(RocksDbWeight::get().reads(2_u64))
+	}
+	/// Storage: `Resources::Consumers` (r:1 w:1)
+	/// Proof: `Resources::Consumers` (`max_values`: None, `max_size`: Some(222), added: 2697, mode: `MaxEncodedLen`)
+	fn migrate_v1_translate_consumer() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `255`
+		//  Estimated: `3687`
+		// Minimum execution time: 13_000_000 picoseconds.
+		Weight::from_parts(14_000_000, 3687)
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// Storage: `Resources::UsernameOwnerOf` (r:1 w:1)
+	/// Proof: `Resources::UsernameOwnerOf` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
+	fn migrate_v1_clear_username_entry() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `114`
+		//  Estimated: `3546`
+		// Minimum execution time: 6_000_000 picoseconds.
+		Weight::from_parts(7_000_000, 3546)
+			.saturating_add(RocksDbWeight::get().reads(1_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 }
