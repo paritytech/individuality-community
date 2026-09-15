@@ -290,12 +290,18 @@ fn setup_built_unload_recycler<T: Config>(
 	(ring_index, revision, members)
 }
 
-#[cfg(feature = "benchmark-proof-cache-regenerate")]
+#[cfg(any(
+	feature = "benchmark-proof-cache-regenerate",
+	feature = "benchmark-proof-cache-strict"
+))]
 use alloc::string::String;
-#[cfg(feature = "benchmark-proof-cache-regenerate")]
+#[cfg(any(
+	feature = "benchmark-proof-cache-regenerate",
+	feature = "benchmark-proof-cache-strict"
+))]
 use core::fmt::Write;
 
-#[cfg(feature = "benchmark-proof-cache-regenerate")]
+#[cfg(any(feature = "benchmark-proof-cache-regenerate", feature = "benchmark-proof-cache-strict"))]
 fn to_hex(bytes: &[u8]) -> String {
 	let mut out = String::with_capacity(bytes.len() * 2);
 	for byte in bytes {
@@ -320,14 +326,9 @@ fn emit_cache_entry(cache_key: &[u8; 32], proof: &[u8], alias: &Alias) {
 	log::error!("{entry}");
 }
 
-/// Generate alias proof for recycler unload.
-/// First checks the proof cache, falls back to computing the proof if not cached.
-///
-/// A ring-VRF proof takes over a second to create in WASM, so a miss is logged at warn level:
-/// a run that is slower than expected is a cache that no longer matches its inputs. To
-/// regenerate the cache, build with the `benchmark-proof-cache-regenerate` feature (or
-/// `coinage-benchmark-proof-cache-regenerate` on the runtime); see
-/// `pallets/coinage/src/benchmarking/README.md` for the full procedure.
+/// Generates an alias proof for a recycler unload from the cache when available.
+/// Normal mode warns before generating a missed proof; strict mode panics on a miss.
+/// Regeneration mode emits cached and generated proofs and takes precedence over strict mode.
 fn generate_alias_proof<T: Config>(
 	secret: &SecretOf<T>,
 	all_members: &[MemberOf<T>],
@@ -349,34 +350,59 @@ fn generate_alias_proof<T: Config>(
 		);
 		return (proof, alias);
 	}
-	#[cfg(not(feature = "benchmark-proof-cache-regenerate"))]
+	#[cfg(all(
+		feature = "benchmark-proof-cache-strict",
+		not(feature = "benchmark-proof-cache-regenerate")
+	))]
+	{
+		let cache_key = sp_crypto_hashing::blake2_256(&(&member, all_members, msg).encode());
+		panic!(
+			"alias proof cache miss: ring exponent {}, member count {} and key {}; run python3 \
+			 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py, commit the \
+			 regenerated pallets/coinage/src/benchmarking/proof_cache.rs and see \
+			 pallets/coinage/src/benchmarking/README.md",
+			T::RecyclerRingExponent::get().exponent(),
+			all_members.len(),
+			to_hex(&cache_key),
+		);
+	}
+	#[cfg(not(any(
+		feature = "benchmark-proof-cache-regenerate",
+		feature = "benchmark-proof-cache-strict"
+	)))]
 	log::warn!(
 		target: LOG_TARGET,
 		"alias proof cache miss: creating a ring-VRF proof; regenerate the cache with \
 		 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py"
 	);
 
-	// Cache miss: compute the proof
-	let domain_size: <CryptoOf<T> as GenerateVerifiable>::Config =
-		T::RecyclerRingExponent::get().try_into().ok().expect("valid ring exponent");
-	let commitment = CryptoOf::<T>::open(domain_size, &member, all_members.iter().cloned())
-		.expect("should open commitment");
-	let (proof, alias) = CryptoOf::<T>::create(
-		commitment,
-		secret,
-		pallet::UNLOADING_RECYCLER_CONTEXT.as_ref(),
-		msg.as_ref(),
-	)
-	.expect("should create proof");
-
-	#[cfg(feature = "benchmark-proof-cache-regenerate")]
+	#[cfg(any(
+		feature = "benchmark-proof-cache-regenerate",
+		not(feature = "benchmark-proof-cache-strict")
+	))]
 	{
-		let cache_key = sp_crypto_hashing::blake2_256(&(&member, all_members, msg).encode());
-		let encoded_proof = proof.encode();
-		emit_cache_entry(&cache_key, &encoded_proof, &alias);
-	}
+		// Cache miss: compute the proof
+		let domain_size: <CryptoOf<T> as GenerateVerifiable>::Config =
+			T::RecyclerRingExponent::get().try_into().ok().expect("valid ring exponent");
+		let commitment = CryptoOf::<T>::open(domain_size, &member, all_members.iter().cloned())
+			.expect("should open commitment");
+		let (proof, alias) = CryptoOf::<T>::create(
+			commitment,
+			secret,
+			pallet::UNLOADING_RECYCLER_CONTEXT.as_ref(),
+			msg.as_ref(),
+		)
+		.expect("should create proof");
 
-	(proof, alias)
+		#[cfg(feature = "benchmark-proof-cache-regenerate")]
+		{
+			let cache_key = sp_crypto_hashing::blake2_256(&(&member, all_members, msg).encode());
+			let encoded_proof = proof.encode();
+			emit_cache_entry(&cache_key, &encoded_proof, &alias);
+		}
+
+		(proof, alias)
+	}
 }
 
 /// Setup paid unload token ring with n pending members.
@@ -4604,6 +4630,26 @@ mod benches {
 	}
 
 	impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext_bench(), crate::mock::Test);
+}
+
+#[cfg(all(
+	test,
+	feature = "runtime-benchmarks",
+	feature = "benchmark-proof-cache-strict",
+	not(feature = "benchmark-proof-cache-regenerate")
+))]
+mod strict_tests {
+	use super::*;
+
+	#[test]
+	#[should_panic(expected = "alias proof cache miss")]
+	fn strict_proof_cache_miss_panics() {
+		let (secret, member) = new_member_from::<crate::mock::Test>(u32::MAX, u32::MAX);
+		let members = [member];
+		let msg = [u8::MAX; 32];
+
+		let _ = generate_alias_proof::<crate::mock::Test>(&secret, &members, &msg);
+	}
 }
 
 #[cfg(test)]
