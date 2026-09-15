@@ -6,6 +6,47 @@ NFT claim credits are committed to Merkle trees, one per award block. On the pub
 proves a leaf built from the claimant, so the mint is tied to the player. On the private path a
 claim instead proves ring VRF membership of one game's registrants, so the proof does not reveal the player.
 
+## The path at a glance
+
+```mermaid
+sequenceDiagram
+    participant C as Claimant wallet
+    participant P as People chain (NftCredits)
+    participant O as Offchain worker (People)
+    participant A as Asset Hub (NftClaims)
+    participant OA as Offchain worker (Asset Hub)
+
+    Note over P: game scheduled with private_claims
+    Note over P: game starts, player process runs
+    P->>P: first credit award writes the game's private record, its slots and entry threshold
+    P->>P: each award adds one credit, the one reaching the entry threshold marks the claimant Eligible
+    Note over P: player process ends, credits final, key registration opens for PrivateKeyRegistrationSeconds
+    C->>P: register_private_claim_key(game, one-time ring key)
+    Note over P: key registration closes
+    alt registered keys below the anonymity floor
+        P->>P: abandon the game
+    else registered keys at or above the floor
+        loop PrivateKeysPerBuild keys per call
+            O->>P: build_private_ring
+        end
+    end
+    O->>P: send_private_ring
+    P-->>A: XCM receive_private_rings, a ring or an abandonment
+    O->>P: clean_up_private_game, after the delivery
+    alt ring
+        A->>A: store the ring, open the window after PrivateClaimDelay
+        loop one call per slot, at a time and in an order the wallet picks
+            C->>A: claim_private(game, slot, alias, proof, collection, mint_to)
+            A->>A: authorize: verify the proof, the alias is unspent, the window is open
+            A->>A: dispatch: spend the alias, mint into a fresh purse key
+        end
+        Note over A: window closes after PrivateClaimWindow
+        OA->>A: close_private_ring, 32 aliases per call, then the ring
+    else abandonment
+        A->>A: record the game as ended, which reopens the public claim path
+    end
+```
+
 ## How a private game runs
 
 1. **Schedule.** An operator sets `private_claims` on the `GameSchedule` entry, with the number of
