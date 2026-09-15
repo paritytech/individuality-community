@@ -22,12 +22,17 @@
 
 use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use frame_support::{
+	pallet_prelude::{BoundedVec, Get},
+	CloneNoBound, DebugNoBound, EqNoBound, PartialEqNoBound,
+};
 use indiv_pallet_game::GameIdx;
 use indiv_support::{
-	credit_trees::{CreditProofNode, NftClaimCredit, PrivateClaimSlot},
+	credit_trees::{ClaimPath, CreditProofNode, NftClaimCredit, PrivateClaimTier},
 	identity::AccountOrPerson,
 };
 use scale_info::TypeInfo;
+use sp_runtime::Saturating;
 
 /// One credit of one claimant in one game, as a position in [`AwardedCredits`], derived from
 /// the round and the [`indiv_pallet_game::AttesterPosition`] by `Pallet::credit_slot`.
@@ -132,8 +137,8 @@ pub struct CreditBuffer {
 	/// How many awards the buffer holds, which is the leaf index the next one takes. Counted here
 	/// so that awarding reads no chunk to find the buffer's end.
 	pub awards: u32,
-	/// The private claim slots the game grants, `0` for a public game.
-	pub private_slots: PrivateClaimSlot,
+	/// Which path the buffer's game mints on, which its tree carries.
+	pub claim_path: ClaimPath,
 }
 
 /// The inclusion proof of one NFT claim credit against the `NftClaimCreditTree` of the block that
@@ -173,11 +178,11 @@ pub enum NftClaimCreditProofError {
 	RootMismatch,
 }
 
-/// One game's private claim path, from its first awarded credit until its ring is delivered and
-/// its registration state is dropped.
+/// What one tier of a private game's ring ladder is measured against.
 ///
-/// It is copied from the game rather than read back from it, because a game is killed once its
-/// player process ends, which is before registration opens.
+/// Tier `t` is the ring of everyone that earned at least `t` credits. `eligible` is the population
+/// that could register for it and `registered` is how many of them did, so the two decide whether
+/// the tier hides anyone. Both are counted as they land, which is before the ladder is built.
 #[derive(
 	Encode,
 	Decode,
@@ -187,32 +192,52 @@ pub enum NftClaimCreditProofError {
 	Debug,
 	Clone,
 	Copy,
+	Default,
 	PartialEq,
 	Eq,
 )]
-pub struct PrivateGameInfo {
-	/// The slots every registrant holds, from the game's schedule. Each slot is one mint hidden
-	/// by the game's ring.
-	pub slots: PrivateClaimSlot,
+pub struct PrivateTierCounts {
+	/// Claimants that earned exactly this tier's credit count. The population of tier `t` is the
+	/// sum of this from `t` upwards.
+	pub eligible: u32,
+	/// Registrants whose credit count is exactly this tier's, which is the length of the tier's
+	/// key bucket. The ring of tier `t` is the sum of this from `t` upwards.
+	pub registered: u32,
+}
+
+/// One game's private claim path, from its first awarded credit until its ladder is delivered and
+/// its registration state is dropped.
+///
+/// It is copied from the game rather than read back from it, because a game is killed once its
+/// player process ends, which is before registration opens.
+#[derive(
+	CloneNoBound,
+	PartialEqNoBound,
+	EqNoBound,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	DebugNoBound,
+	TypeInfo,
+)]
+#[scale_info(skip_type_params(MaxTiers))]
+pub struct PrivateGameInfo<MaxTiers: Get<u32>> {
 	/// When key registration opens, in seconds since the UNIX epoch. It is the end of the game's
-	/// player process, when the credits are final. Before that, a claimant's balance need not
-	/// reach the entry threshold.
+	/// player process, when the credits are final. Before then a claimant's credit count does not
+	/// name the tier they would register into.
 	pub key_registration_starts: u32,
 	/// When key registration closes, in seconds since the UNIX epoch. Building starts after it, so
-	/// a ring never grows under a claimant who already proved against it.
+	/// no ring grows under a claimant who already proved against it.
 	pub key_registration_ends: u32,
-	/// The number of keys registered, which is the anonymity set of every claim of the game.
+	/// The number of keys registered, which is the ring of tier 1 and the widest anonymity set the
+	/// game offers.
 	pub key_count: u32,
-	/// The credits a claimant must have earned in this game to register for its ring. It is
-	/// derived from the game's own shape, which is unreadable by the time key registration opens.
-	pub entry_threshold: u32,
-	/// How many claimants reached [`Self::entry_threshold`]. It is the population the game's
-	/// registration is measured against, and it is final once the player process ends. A
-	/// claimant below the threshold cannot register, so counting every claimant that holds any
-	/// credit instead would put the floor out of reach.
-	pub eligible_claimants: u32,
-	/// What the game still owes: its ring to build, its outcome to deliver, or its registration
-	/// state to drop.
+	/// One entry per credit count, tier 1 first. A claimant that earns more credits than the
+	/// vector holds is counted in its last tier.
+	pub tiers: BoundedVec<PrivateTierCounts, MaxTiers>,
+	/// The stage the game has reached, from `Registering` to `CleaningUp`. It only moves forward,
+	/// and the entry is removed once `CleaningUp` finishes.
 	pub phase: PrivateGamePhase,
 }
 
@@ -230,12 +255,18 @@ pub struct PrivateGameInfo {
 	Eq,
 )]
 pub enum PrivateGamePhase {
-	/// The game's ring is being built. It is finished once every registered key is pushed.
+	/// The game is taking registrations or waiting for the window to close. The build opens the
+	/// ladder from here, which is where its height is decided.
+	Registering,
+	/// The game's ladder is being built, from its top tier down. Each tier is the tier above it
+	/// plus its own bucket of keys, so one pass over the keys builds every ring.
 	Building {
-		/// How many of the registered keys are already pushed.
+		/// The tier being pushed. The ladder is finished when tier 1 is closed.
+		tier: PrivateClaimTier,
+		/// How many of the tier's own keys are already pushed.
 		included: u32,
-		/// How many build steps failed in a row. A push fails on a chunk the ring cannot be
-		/// built from, which no retry repairs, so the game is abandoned once the count reaches
+		/// How many build steps failed in a row. A push fails on a chunk the ring cannot be built
+		/// from, which no retry repairs, so the game is abandoned once the count reaches
 		/// `PRIVATE_RING_BUILD_RETRIES`.
 		failures: u8,
 	},
@@ -247,7 +278,7 @@ pub enum PrivateGamePhase {
 	CleaningUp,
 }
 
-/// What a claimant of a private game has done with the eligibility their credits earned.
+/// What a claimant of a private game has done with the credits they earned.
 #[derive(
 	Encode,
 	Decode,
@@ -261,15 +292,89 @@ pub enum PrivateGamePhase {
 	Eq,
 )]
 pub enum PrivateClaimantState {
-	/// The claimant holds the game's entry threshold in credits and may register a key.
-	Eligible,
-	/// The claimant registered a key, so a second registration of theirs is refused.
-	Registered,
+	/// The claimant holds credits of the game and may register a key. The count names the tier
+	/// their key goes into and is final once the player process ends. It stops at the ladder's
+	/// top, the credits above it being forfeit.
+	Eligible { credits: u32 },
+	/// The claimant registered a key into the tier their credits named, so a second registration
+	/// of theirs is refused.
+	Registered { credits: u32 },
 }
 
-impl PrivateGameInfo {
+impl PrivateClaimantState {
+	/// The credits the claimant earned, whether or not they have registered.
+	pub fn credits(&self) -> u32 {
+		match self {
+			Self::Eligible { credits } | Self::Registered { credits } => *credits,
+		}
+	}
+}
+
+impl<MaxTiers: Get<u32>> PrivateGameInfo<MaxTiers> {
 	/// Whether key registration is still open at `now`.
 	pub fn accepts_keys(&self, now: u32) -> bool {
 		now >= self.key_registration_starts && now < self.key_registration_ends
+	}
+
+	/// The ring of tier `tier`, which is every registrant that earned at least that many credits.
+	///
+	/// Tiers are one-based, so tier 1 is every registrant. A tier above what the vector holds has
+	/// no ring and reports zero.
+	pub fn ring_size(&self, tier: PrivateClaimTier) -> u32 {
+		self.tier_suffix(tier, |counts| counts.registered)
+	}
+
+	/// The claimants that earned at least `tier` credits, which is the population tier `tier`'s
+	/// ring is measured against.
+	pub fn eligible_at(&self, tier: PrivateClaimTier) -> u32 {
+		self.tier_suffix(tier, |counts| counts.eligible)
+	}
+
+	/// The sum of `count` over every tier at or above `tier`.
+	fn tier_suffix(
+		&self,
+		tier: PrivateClaimTier,
+		count: impl Fn(&PrivateTierCounts) -> u32,
+	) -> u32 {
+		self.tiers
+			.iter()
+			.skip(usize::from(tier).saturating_sub(1))
+			.map(count)
+			.fold(0u32, |sum, held| sum.saturating_add(held))
+	}
+
+	/// Record one more claimant that earned exactly `credits` and one fewer at `credits - 1`.
+	///
+	/// A credit count above what the vector holds is counted in its last tier. Returns whether the
+	/// counts changed.
+	pub fn note_tier_credit(&mut self, credits: u32) -> bool {
+		let Some(reached) = self.tier_index(credits) else {
+			return false;
+		};
+		// A claimant that earned more credits than the vector holds stays in its last tier, so the
+		// award moves nobody.
+		if self.tier_index(credits.saturating_sub(1)) == Some(reached) {
+			return false;
+		}
+
+		self.tiers[reached].eligible.saturating_inc();
+		if let Some(left) = self.tier_index(credits.saturating_sub(1)) {
+			self.tiers[left].eligible = self.tiers[left].eligible.saturating_sub(1);
+		}
+		true
+	}
+
+	/// Record one more registrant that earned exactly `credits`.
+	pub fn note_tier_registration(&mut self, credits: u32) {
+		if let Some(tier) = self.tier_index(credits) {
+			self.tiers[tier].registered.saturating_inc();
+		}
+	}
+
+	/// The position in [`Self::tiers`] that a claimant of `credits` is counted at, `None` for a
+	/// claimant that earned nothing.
+	fn tier_index(&self, credits: u32) -> Option<usize> {
+		let last = self.tiers.len().checked_sub(1)?;
+		(credits > 0).then(|| usize::try_from(credits - 1).unwrap_or(last).min(last))
 	}
 }

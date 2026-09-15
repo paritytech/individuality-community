@@ -22,7 +22,8 @@ use crate::{
 };
 use frame_support::{assert_noop, assert_ok, dispatch::GetDispatchInfo, traits::Hooks, BoundedVec};
 use indiv_support::credit_trees::{
-	CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpiryTimestamp, NftClaimCreditTree,
+	ClaimPath, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpiryTimestamp,
+	NftClaimCreditTree,
 };
 use sp_runtime::DispatchError;
 
@@ -1978,7 +1979,7 @@ mod expiry {
 			// A private game whose ring never arrived. No close removes its trees, so the sweep
 			// is what removes them, and their credits were mintable on neither path.
 			let mut private_tree = tree(10);
-			private_tree.private_slots = 1;
+			private_tree.claim_path = ClaimPath::Private;
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
 				batch(vec![CreditTreeDelivery {
@@ -2415,11 +2416,12 @@ mod private_claims {
 	use crate::{
 		AuthorizeInvalidity, ClosingBlock, CollectionMinter, CollectionMinters, Error,
 		ItemSelection, PrivateClaimCount, PrivateClaimTally, PrivateGameEnd, PrivateGameEnds,
-		PrivateRingCloses, PrivateRings, SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
+		PrivateRingCloses, PrivateRingRoots, PrivateRings, SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
 	};
+	use codec::{Decode, Encode};
 	use indiv_pallet_scarcity::CollectionId;
 	use indiv_support::{
-		credit_trees::{PrivateGameOutcome, PrivateRingDelivery, MAX_PRIVATE_CLAIM_SLOTS},
+		credit_trees::{ClaimPath, PrivateGameOutcome, PrivateRingDelivery},
 		identity::AccountOrPerson,
 		traits::Alias,
 	};
@@ -2461,12 +2463,12 @@ mod private_claims {
 		(secret, key)
 	}
 
-	/// Deliver the game's ring over `keys`, granting `slots` slots to each, and register the
-	/// collection claims mint into.
-	fn store_ring(slots: u8, keys: &[<Mock as GenerateVerifiable>::Member]) {
+	/// Deliver the game's ladder over `keys`, `tiers` tiers tall, and register the collection
+	/// claims mint into.
+	fn store_ring(tiers: u8, keys: &[<Mock as GenerateVerifiable>::Member]) {
 		assert_ok!(NftClaims::receive_private_rings(
 			game_chain_origin(),
-			private_ring_batch(vec![private_ring_delivery(GAME, slots, keys)])
+			private_ring_batch(vec![private_ladder(GAME, tiers, keys)])
 		));
 		add_collection(COLLECTION, COLLECTION_OWNER, 2);
 		CollectionMinters::<Test>::insert(
@@ -2496,7 +2498,7 @@ mod private_claims {
 	/// One award block of [`GAME`], as the game chain delivers the tree of a private game.
 	fn private_update(block: CreditTreeBlock) -> CreditTreeDelivery {
 		let mut tree = tree(block);
-		tree.private_slots = 1;
+		tree.claim_path = ClaimPath::Private;
 		CreditTreeDelivery { sequence: None, block, tree }
 	}
 
@@ -2512,33 +2514,28 @@ mod private_claims {
 	/// build over the `key_count` keys that had registered.
 	fn abandoned_delivery(
 		game_index: crate::GameIdx,
-		slots: u8,
 		key_count: u32,
-	) -> PrivateRingDelivery<<Mock as GenerateVerifiable>::Members> {
-		PrivateRingDelivery {
-			game_index,
-			slots,
-			outcome: PrivateGameOutcome::Abandoned { key_count },
-		}
+	) -> crate::PrivateRingDeliveryOf<Test> {
+		PrivateRingDelivery { game_index, outcome: PrivateGameOutcome::Abandoned { key_count } }
 	}
 
-	/// The proof `secret` makes for `slot` of [`GAME`], minting `COLLECTION` to `mint_to`, with
+	/// The proof `secret` makes for `tier` of [`GAME`], minting `COLLECTION` to `mint_to`, with
 	/// the alias it yields.
 	fn proof(
 		secret: &<Mock as GenerateVerifiable>::Secret,
 		keys: &[<Mock as GenerateVerifiable>::Member],
-		slot: u8,
+		tier: u8,
 		mint_to: u64,
 	) -> (crate::RingProofOf<Test>, Alias) {
-		proof_for(secret, keys, slot, COLLECTION, mint_to)
+		proof_for(secret, keys, tier, COLLECTION, mint_to)
 	}
 
-	/// The proof `secret` makes for `slot` of [`GAME`], minting `collection` to `mint_to`, with
+	/// The proof `secret` makes for `tier` of [`GAME`], minting `collection` to `mint_to`, with
 	/// the alias it yields.
 	fn proof_for(
 		secret: &<Mock as GenerateVerifiable>::Secret,
 		keys: &[<Mock as GenerateVerifiable>::Member],
-		slot: u8,
+		tier: u8,
 		collection: CollectionId,
 		mint_to: u64,
 	) -> (crate::RingProofOf<Test>, Alias) {
@@ -2548,7 +2545,7 @@ mod private_claims {
 		Mock::create(
 			commitment,
 			secret,
-			&NftClaims::private_claim_context(GAME, slot),
+			&NftClaims::private_claim_context(GAME, tier),
 			&NftClaims::private_claim_message(collection, &mint_to),
 		)
 		.expect("the mock creates a proof")
@@ -2556,7 +2553,7 @@ mod private_claims {
 
 	/// What `authorize` makes of the claim. The pool and the block both run it first.
 	fn authorize(
-		slot: u8,
+		tier: u8,
 		alias: Alias,
 		proof: crate::RingProofOf<Test>,
 		collection: CollectionId,
@@ -2565,7 +2562,7 @@ mod private_claims {
 		NftClaims::authorize_claim_private(
 			TransactionSource::External,
 			&GAME,
-			&slot,
+			&tier,
 			&alias,
 			&proof,
 			&collection,
@@ -2576,7 +2573,7 @@ mod private_claims {
 
 	/// The dispatch alone, as it runs once `authorize` has passed.
 	fn dispatch(
-		slot: u8,
+		tier: u8,
 		alias: Alias,
 		proof: crate::RingProofOf<Test>,
 		collection: CollectionId,
@@ -2585,7 +2582,7 @@ mod private_claims {
 		NftClaims::claim_private(
 			frame_system::RawOrigin::Authorized.into(),
 			GAME,
-			slot,
+			tier,
 			alias,
 			proof,
 			collection,
@@ -2595,15 +2592,15 @@ mod private_claims {
 
 	/// A whole claim, the way a block runs one: `authorize`, then the dispatch it authorized.
 	fn claim(
-		slot: u8,
+		tier: u8,
 		alias: Alias,
 		proof: crate::RingProofOf<Test>,
 		collection: CollectionId,
 		mint_to: u64,
 	) -> frame_support::dispatch::DispatchResultWithPostInfo {
-		authorize(slot, alias, proof.clone(), collection, mint_to)
+		authorize(tier, alias, proof.clone(), collection, mint_to)
 			.expect("the claim is authorized");
-		dispatch(slot, alias, proof, collection, mint_to)
+		dispatch(tier, alias, proof, collection, mint_to)
 	}
 
 	#[test]
@@ -2614,14 +2611,14 @@ mod private_claims {
 
 			let ring = PrivateRings::<Test>::get(GAME).unwrap();
 			assert_eq!(ring.key_count, 2);
-			assert_eq!(ring.slots, 2);
+			assert_eq!(ring.height, 2);
 
 			// A second, different ring for the same game is refused. The stored ring stays,
 			// because proofs are already built against it.
 			let other = [member(3).1];
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![private_ring_delivery(GAME, 2, &other)])
+				private_ring_batch(vec![private_ladder(GAME, 2, &other)])
 			));
 			assert_eq!(PrivateRings::<Test>::get(GAME).unwrap().key_count, 2);
 			System::assert_has_event(Event::PrivateOutcomeConflict { game_index: GAME }.into());
@@ -2629,42 +2626,99 @@ mod private_claims {
 	}
 
 	#[test]
-	fn a_delivered_outcome_is_refused_outside_the_slot_range() {
+	fn a_claimant_mints_no_tier_above_their_own_ring() {
+		// The tiers are nested, so a claimant is in every ring up to their credit count and none
+		// above it. A proof against a higher tier names a ring they are not in.
+		new_test_ext().execute_with(|| {
+			let (lower_secret, lower_key) = member(1);
+			let (_, upper_key) = member(2);
+			// Tier 2 holds the one claimant that reached it, tier 1 holds both.
+			assert_ok!(NftClaims::receive_private_rings(
+				game_chain_origin(),
+				private_ring_batch(vec![private_ladder_of(
+					GAME,
+					&[vec![lower_key], vec![upper_key]]
+				)])
+			));
+			add_collection(COLLECTION, COLLECTION_OWNER, 2);
+			CollectionMinters::<Test>::insert(
+				COLLECTION,
+				CollectionMinter { owner: COLLECTION_OWNER, selection: ItemSelection::Random },
+			);
+			open_claim_window();
+
+			// Tier 1's ring holds both keys, so the lower claimant mints it.
+			let ring_one = [upper_key, lower_key];
+			let (tier_one, alias) = proof(&lower_secret, &ring_one, 1, PURSE);
+			assert_ok!(claim(1, alias, tier_one, COLLECTION, PURSE));
+
+			// Tier 2's ring holds the other key alone. The best the lower claimant can do is a
+			// proof against the ring they are in, which tier 2's root does not verify.
+			let (tier_two, alias) = proof(&lower_secret, &ring_one, 2, PURSE + 1);
+			assert_eq!(
+				authorize(2, alias, tier_two, COLLECTION, PURSE + 1),
+				Err(AuthorizeInvalidity::InvalidRingProof.into())
+			);
+		});
+	}
+
+	#[test]
+	fn a_delivery_above_the_tier_bound_lands_nothing() {
+		// The bound is the delivery's own, so a message naming more tiers fails to decode and the
+		// batch it arrived in lands nothing, this game's outcome included.
+		new_test_ext().execute_with(|| {
+			let keys = [member(1).1, member(2).1];
+			let over = MaxPrivateRingTiers::get() as u8 + 1;
+			let roots = match private_ladder(GAME, 1, &keys).outcome {
+				PrivateGameOutcome::Ring { roots, .. } => roots.into_inner(),
+				outcome => panic!("the helper builds a ladder, got {outcome:?}"),
+			};
+			let encoded =
+				crate::PrivateRingBatchOf::<Test> { source_time: 1_000, rings: Default::default() }
+					.encode();
+
+			// The batch as the game chain would encode it, with one more root than the bound.
+			let oversized = (
+				1_000u64,
+				vec![(
+					GAME,
+					0u8, // `PrivateGameOutcome::Ring`
+					core::iter::repeat_n(roots[0].clone(), usize::from(over)).collect::<Vec<_>>(),
+					1u32,
+				)],
+			)
+				.encode();
+			assert!(encoded.len() < oversized.len(), "the oversized batch is the longer encoding");
+			assert!(
+				crate::PrivateRingBatchOf::<Test>::decode(&mut &oversized[..]).is_err(),
+				"a batch above the tier bound does not decode"
+			);
+			assert!(PrivateRings::<Test>::get(GAME).is_none());
+		});
+	}
+
+	#[test]
+	fn a_ladder_with_no_tier_opens_no_claims() {
 		new_test_ext().execute_with(|| {
 			let keys = [member(1).1, member(2).1];
 
-			// A game that grants no slot is a public game, which reaches no outcome.
+			// A ladder of no tiers pays nobody, so the game chain builds none. The delivery's own
+			// bound caps the other end: a message naming more tiers than this runtime carries
+			// fails to decode and never reaches the store.
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![private_ring_delivery(GAME, 0, &keys)])
+				private_ring_batch(vec![private_ladder(GAME, 0, &keys)])
 			));
 			assert!(PrivateRings::<Test>::get(GAME).is_none());
 
-			// The game chain schedules no game above the shared maximum, so a delivery naming
-			// more slots opens no claims.
+			// A ladder as tall as the runtime carries tiers for is stored, one root per tier.
+			let height = MaxPrivateRingTiers::get() as u8;
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![private_ring_delivery(
-					GAME,
-					MAX_PRIVATE_CLAIM_SLOTS + 1,
-					&keys
-				)])
+				private_ring_batch(vec![private_ladder(GAME, height, &keys)])
 			));
-			assert!(PrivateRings::<Test>::get(GAME).is_none());
-
-			// The maximum itself is stored.
-			assert_ok!(NftClaims::receive_private_rings(
-				game_chain_origin(),
-				private_ring_batch(vec![private_ring_delivery(
-					GAME,
-					MAX_PRIVATE_CLAIM_SLOTS,
-					&keys
-				)])
-			));
-			assert_eq!(
-				PrivateRings::<Test>::get(GAME).expect("a ring is stored").slots,
-				MAX_PRIVATE_CLAIM_SLOTS
-			);
+			assert_eq!(PrivateRings::<Test>::get(GAME).expect("a ladder is stored").height, height);
+			assert_eq!(PrivateRingRoots::<Test>::iter_prefix(GAME).count(), usize::from(height));
 		});
 	}
 
@@ -2673,7 +2727,7 @@ mod private_claims {
 		new_test_ext().execute_with(|| {
 			let awards = vec![(AccountOrPerson::Account(ALICE), [1u8; 32])];
 			let mut private_tree = tree_of(BLOCK, &awards);
-			private_tree.private_slots = 2;
+			private_tree.claim_path = ClaimPath::Private;
 			CreditTrees::<Test>::insert(BLOCK, private_tree);
 			add_collection(COLLECTION, COLLECTION_OWNER, 2);
 			CollectionMinters::<Test>::insert(
@@ -2685,7 +2739,7 @@ mod private_claims {
 			// credits are minted publicly instead.
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![abandoned_delivery(GAME, 2, 3)])
+				private_ring_batch(vec![abandoned_delivery(GAME, 3)])
 			));
 			System::assert_has_event(
 				Event::PrivateGameAbandoned { game_index: GAME, key_count: 3 }.into(),
@@ -2717,7 +2771,7 @@ mod private_claims {
 			// second NFT for every credit they spent.
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![abandoned_delivery(GAME, 2, 2)])
+				private_ring_batch(vec![abandoned_delivery(GAME, 2)])
 			));
 
 			assert!(PrivateGameEnds::<Test>::get(GAME).is_none());
@@ -2731,14 +2785,14 @@ mod private_claims {
 		new_test_ext().execute_with(|| {
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![abandoned_delivery(GAME, 2, 1)])
+				private_ring_batch(vec![abandoned_delivery(GAME, 1)])
 			));
 
 			// The public path is open by now, so a claim may already have minted a credit the
 			// ring would let its owner mint again.
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![private_ring_delivery(GAME, 2, &[member(1).1])])
+				private_ring_batch(vec![private_ladder(GAME, 2, &[member(1).1])])
 			));
 
 			assert!(PrivateRings::<Test>::get(GAME).is_none());
@@ -2748,27 +2802,14 @@ mod private_claims {
 	}
 
 	#[test]
-	fn a_ring_granting_no_slot_is_refused() {
-		new_test_ext().execute_with(|| {
-			// A game that grants no slot is a public game, so a ring for one cannot be genuine.
-			assert_ok!(NftClaims::receive_private_rings(
-				game_chain_origin(),
-				private_ring_batch(vec![private_ring_delivery(GAME, 0, &[member(1).1])])
-			));
-
-			assert!(PrivateRings::<Test>::get(GAME).is_none());
-		});
-	}
-
-	#[test]
 	fn a_ring_member_mints_without_naming_themselves() {
 		new_test_ext().execute_with(|| {
 			let (secret, key) = member(1);
 			let keys = [key, member(2).1];
 			store_ring(2, &keys);
-			let (proof, alias) = proof(&secret, &keys, 0, PURSE);
+			let (proof, alias) = proof(&secret, &keys, 1, PURSE);
 
-			assert_ok!(claim(0, alias, proof, COLLECTION, PURSE));
+			assert_ok!(claim(1, alias, proof, COLLECTION, PURSE));
 
 			assert_eq!(MintedInstances::get().len(), 1);
 			assert_eq!(MintedInstances::get()[0].2, PURSE);
@@ -2782,7 +2823,7 @@ mod private_claims {
 			let (secret, key) = member(1);
 			let keys = [key, member(2).1];
 			store_ring(1, &keys);
-			let (proof, alias) = proof(&secret, &keys, 0, PURSE);
+			let (proof, alias) = proof(&secret, &keys, 1, PURSE);
 
 			// The proof is the whole authorisation, so the call takes no signed origin. An
 			// account on the claim would tie its maker's mints to each other.
@@ -2802,47 +2843,47 @@ mod private_claims {
 	}
 
 	#[test]
-	fn a_slot_mints_once() {
+	fn a_tier_mints_once() {
 		new_test_ext().execute_with(|| {
 			let (secret, key) = member(1);
 			let keys = [key, member(2).1];
 			store_ring(2, &keys);
 
-			let (first, alias) = proof(&secret, &keys, 0, PURSE);
-			assert_ok!(claim(0, alias, first.clone(), COLLECTION, PURSE));
+			let (first, alias) = proof(&secret, &keys, 1, PURSE);
+			assert_ok!(claim(1, alias, first.clone(), COLLECTION, PURSE));
 
 			// The alias is the nullifier, so the pool turns the replay away before a block spends
 			// anything on it.
 			assert_eq!(
-				authorize(0, alias, first, COLLECTION, PURSE),
-				Err(AuthorizeInvalidity::SlotAlreadyClaimed.into())
+				authorize(1, alias, first, COLLECTION, PURSE),
+				Err(AuthorizeInvalidity::TierAlreadyClaimed.into())
 			);
 
-			// The next slot is a different context, so the same member mints again. A purse key
+			// The next tier is a different context, so the same member mints again. A purse key
 			// holds one NFT, so the second claim names a fresh one, as a claimant does to keep
 			// their mints apart.
-			let (second, second_alias) = proof(&secret, &keys, 1, PURSE + 1);
-			assert_ok!(claim(1, second_alias, second, COLLECTION, PURSE + 1));
+			let (second, second_alias) = proof(&secret, &keys, 2, PURSE + 1);
+			assert_ok!(claim(2, second_alias, second, COLLECTION, PURSE + 1));
 			assert_ne!(alias, second_alias);
 			assert_eq!(SpentPrivateClaims::<Test>::iter_prefix(GAME).count(), 2);
 		});
 	}
 
 	#[test]
-	fn every_member_holds_the_same_slots() {
+	fn every_member_of_a_tier_holds_it_alike() {
 		new_test_ext().execute_with(|| {
-			// One ring, one entitlement. Both members claim both slots against the same set, so
-			// no claim narrows its maker down.
+			// Both members earned the game's most, so both are in every tier and each mints one
+			// NFT per tier against the same set.
 			let (first_secret, first_key) = member(1);
 			let (second_secret, second_key) = member(2);
 			let keys = [first_key, second_key];
 			store_ring(2, &keys);
 
 			for (index, secret) in [&first_secret, &second_secret].iter().enumerate() {
-				for slot in 0..2u8 {
-					let purse = PURSE + (index as u64) * 2 + slot as u64;
-					let (proof, alias) = proof(secret, &keys, slot, purse);
-					assert_ok!(claim(slot, alias, proof, COLLECTION, purse));
+				for tier in 1..=2u8 {
+					let purse = PURSE + (index as u64) * 2 + u64::from(tier);
+					let (proof, alias) = proof(secret, &keys, tier, purse);
+					assert_ok!(claim(tier, alias, proof, COLLECTION, purse));
 					System::set_block_number(System::block_number() + 1);
 				}
 			}
@@ -2852,18 +2893,18 @@ mod private_claims {
 	}
 
 	#[test]
-	fn a_slot_the_game_does_not_grant_is_refused() {
+	fn a_tier_the_ladder_does_not_reach_is_refused() {
 		new_test_ext().execute_with(|| {
 			let (secret, key) = member(1);
 			let keys = [key, member(2).1];
 			store_ring(1, &keys);
 
-			// The game granted one slot, so no member may claim under its second context,
+			// The ladder is one tier tall, so no member may claim under its second context,
 			// whatever proof they make.
-			let (proof, alias) = proof(&secret, &keys, 1, PURSE);
+			let (proof, alias) = proof(&secret, &keys, 2, PURSE);
 			assert_eq!(
-				authorize(1, alias, proof, COLLECTION, PURSE),
-				Err(AuthorizeInvalidity::SlotOutOfRange.into())
+				authorize(2, alias, proof, COLLECTION, PURSE),
+				Err(AuthorizeInvalidity::TierOutOfRange.into())
 			);
 		});
 	}
@@ -2883,9 +2924,9 @@ mod private_claims {
 				CollectionMinter { owner: COLLECTION_OWNER, selection: ItemSelection::Random },
 			);
 
-			let (proof, alias) = proof_for(&secret, &keys, 0, COLLECTION, PURSE);
+			let (proof, alias) = proof_for(&secret, &keys, 1, COLLECTION, PURSE);
 			assert_eq!(
-				authorize(0, alias, proof, other, PURSE),
+				authorize(1, alias, proof, other, PURSE),
 				Err(AuthorizeInvalidity::InvalidRingProof.into())
 			);
 		});
@@ -2899,9 +2940,9 @@ mod private_claims {
 			store_ring(2, &keys);
 
 			// The message binds the purse key, so an observed proof cannot be redirected.
-			let (proof, alias) = proof(&secret, &keys, 0, PURSE);
+			let (proof, alias) = proof(&secret, &keys, 1, PURSE);
 			assert_eq!(
-				authorize(0, alias, proof, COLLECTION, PURSE + 1),
+				authorize(1, alias, proof, COLLECTION, PURSE + 1),
 				Err(AuthorizeInvalidity::InvalidRingProof.into())
 			);
 		});
@@ -2916,11 +2957,11 @@ mod private_claims {
 
 			// The dispatch spends the alias the call names, so `authorize` ties it to the proof.
 			// A claim naming an alias of its own mints nothing.
-			let (proof, alias) = proof(&secret, &keys, 0, PURSE);
+			let (proof, alias) = proof(&secret, &keys, 1, PURSE);
 			let other = [9u8; 32];
 			assert_ne!(alias, other);
 			assert_eq!(
-				authorize(0, other, proof, COLLECTION, PURSE),
+				authorize(1, other, proof, COLLECTION, PURSE),
 				Err(AuthorizeInvalidity::InvalidRingProof.into())
 			);
 		});
@@ -2935,9 +2976,9 @@ mod private_claims {
 			// The outsider proves against a ring they are in, but not the one that was delivered.
 			let (outsider_secret, outsider_key) = member(9);
 			let outsider_ring = [outsider_key];
-			let (proof, alias) = proof(&outsider_secret, &outsider_ring, 0, PURSE);
+			let (proof, alias) = proof(&outsider_secret, &outsider_ring, 1, PURSE);
 			assert_eq!(
-				authorize(0, alias, proof, COLLECTION, PURSE),
+				authorize(1, alias, proof, COLLECTION, PURSE),
 				Err(AuthorizeInvalidity::InvalidRingProof.into())
 			);
 		});
@@ -2949,9 +2990,9 @@ mod private_claims {
 			let (secret, key) = member(1);
 			let keys = [key];
 
-			let (proof, alias) = proof(&secret, &keys, 0, PURSE);
+			let (proof, alias) = proof(&secret, &keys, 1, PURSE);
 			assert_eq!(
-				authorize(0, alias, proof, COLLECTION, PURSE),
+				authorize(1, alias, proof, COLLECTION, PURSE),
 				Err(AuthorizeInvalidity::UnknownPrivateRing.into())
 			);
 		});
@@ -2967,15 +3008,15 @@ mod private_claims {
 			// Two per block in the mock, so the third is held back rather than verified.
 			for (index, (secret, _)) in members.iter().take(2).enumerate() {
 				let purse = PURSE + index as u64;
-				let (proof, alias) = proof(secret, &keys, 0, purse);
-				assert_ok!(claim(0, alias, proof, COLLECTION, purse));
+				let (proof, alias) = proof(secret, &keys, 1, purse);
+				assert_ok!(claim(1, alias, proof, COLLECTION, purse));
 			}
 
 			// `Future` and not a custom invalidity. The claim is valid and only waits for a block
 			// with room, so the pool keeps it.
-			let (proof, alias) = proof(&members[2].0, &keys, 0, PURSE + 2);
+			let (proof, alias) = proof(&members[2].0, &keys, 1, PURSE + 2);
 			assert_eq!(
-				authorize(0, alias, proof.clone(), COLLECTION, PURSE + 2),
+				authorize(1, alias, proof.clone(), COLLECTION, PURSE + 2),
 				Err(InvalidTransaction::Future.into())
 			);
 
@@ -2987,7 +3028,7 @@ mod private_claims {
 				PrivateClaimCount { block: now, claims: 2 }
 			);
 			System::set_block_number(now + 1);
-			assert_ok!(claim(0, alias, proof, COLLECTION, PURSE + 2));
+			assert_ok!(claim(1, alias, proof, COLLECTION, PURSE + 2));
 			assert_eq!(
 				PrivateClaimTally::<Test>::get(),
 				PrivateClaimCount { block: now + 1, claims: 1 }
@@ -3010,7 +3051,7 @@ mod private_claims {
 			System::assert_has_event(
 				Event::PrivateRingReceived {
 					game_index: GAME,
-					slots: 1,
+					height: 1,
 					key_count: 2,
 					opens_at: ring.opens_at,
 					closes_at: ring.closes_at,
@@ -3021,21 +3062,21 @@ mod private_claims {
 			// A claim before the window opens waits in the pool: the opening block is what
 			// makes it valid, so it is `Future` and not a custom invalidity.
 			System::set_block_number(ring.opens_at - 1);
-			let (early_proof, early_alias) = proof(&secret, &keys, 0, PURSE);
+			let (early_proof, early_alias) = proof(&secret, &keys, 1, PURSE);
 			assert_eq!(
-				authorize(0, early_alias, early_proof.clone(), COLLECTION, PURSE),
+				authorize(1, early_alias, early_proof.clone(), COLLECTION, PURSE),
 				Err(InvalidTransaction::Future.into())
 			);
 
 			// The last block of the window still takes it.
 			System::set_block_number(ring.closes_at - 1);
-			assert_ok!(claim(0, early_alias, early_proof, COLLECTION, PURSE));
+			assert_ok!(claim(1, early_alias, early_proof, COLLECTION, PURSE));
 
 			// The next one does not, and never will, so it is dropped rather than kept.
 			System::set_block_number(ring.closes_at);
-			let (late_proof, late_alias) = proof(&member(2).0, &keys, 0, PURSE + 1);
+			let (late_proof, late_alias) = proof(&member(2).0, &keys, 1, PURSE + 1);
 			assert_eq!(
-				authorize(0, late_alias, late_proof, COLLECTION, PURSE + 1),
+				authorize(1, late_alias, late_proof, COLLECTION, PURSE + 1),
 				Err(AuthorizeInvalidity::PrivateClaimWindowClosed.into())
 			);
 		});
@@ -3053,7 +3094,7 @@ mod private_claims {
 			System::set_block_number(ring.closes_at - 1);
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![private_ring_delivery(GAME, 1, &keys)])
+				private_ring_batch(vec![private_ladder(GAME, 1, &keys)])
 			));
 
 			assert_eq!(PrivateRings::<Test>::get(GAME).unwrap(), ring);
@@ -3072,8 +3113,8 @@ mod private_claims {
 			store_ring(1, &keys);
 			for (index, (secret, _)) in members.iter().enumerate() {
 				let purse = PURSE + index as u64;
-				let (proof, alias) = proof(secret, &keys, 0, purse);
-				assert_ok!(claim(0, alias, proof, COLLECTION, purse));
+				let (proof, alias) = proof(secret, &keys, 1, purse);
+				assert_ok!(claim(1, alias, proof, COLLECTION, purse));
 			}
 			assert_eq!(SpentPrivateClaims::<Test>::iter_prefix(GAME).count(), 2);
 
@@ -3104,9 +3145,9 @@ mod private_claims {
 			// than on the window.
 			assert_noop!(close(), Error::<Test>::UnknownPrivateRing);
 			assert_eq!(authorize_close(), Err(AuthorizeInvalidity::NoPrivateRingToClose.into()));
-			let (proof, alias) = proof(&members[0].0, &keys, 0, PURSE + 9);
+			let (proof, alias) = proof(&members[0].0, &keys, 1, PURSE + 9);
 			assert_eq!(
-				authorize(0, alias, proof, COLLECTION, PURSE + 9),
+				authorize(1, alias, proof, COLLECTION, PURSE + 9),
 				Err(AuthorizeInvalidity::UnknownPrivateRing.into())
 			);
 		});
@@ -3149,8 +3190,8 @@ mod private_claims {
 			let members = [member(1), member(2)];
 			let keys = members.iter().map(|(_, key)| *key).collect::<Vec<_>>();
 			store_ring(1, &keys);
-			let (proof, alias) = proof(&members[0].0, &keys, 0, PURSE);
-			assert_ok!(claim(0, alias, proof, COLLECTION, PURSE));
+			let (proof, alias) = proof(&members[0].0, &keys, 1, PURSE);
+			assert_ok!(claim(1, alias, proof, COLLECTION, PURSE));
 
 			let closes_at = PrivateRings::<Test>::get(GAME).unwrap().closes_at;
 			System::set_block_number(closes_at);
@@ -3158,10 +3199,10 @@ mod private_claims {
 			assert_eq!(PrivateGameEnds::<Test>::get(GAME), Some(PrivateGameEnd::Closed));
 
 			// The same ring again. Its spent aliases went with it, so a fresh window over the
-			// same keys would mint every slot of the game a second time.
+			// same keys would mint every tier of the game a second time.
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![private_ring_delivery(GAME, 1, &keys)])
+				private_ring_batch(vec![private_ladder(GAME, 1, &keys)])
 			));
 			assert!(PrivateRings::<Test>::get(GAME).is_none());
 			System::assert_has_event(Event::PrivateOutcomeConflict { game_index: GAME }.into());
@@ -3169,7 +3210,7 @@ mod private_claims {
 			// Nor does an abandonment reopen the public path for a game that held a ring.
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![abandoned_delivery(GAME, 1, 2)])
+				private_ring_batch(vec![abandoned_delivery(GAME, 2)])
 			));
 			assert_eq!(PrivateGameEnds::<Test>::get(GAME), Some(PrivateGameEnd::Closed));
 		});
@@ -3204,8 +3245,8 @@ mod private_claims {
 				]
 			);
 
-			// The refusal is on the slots the tree names. A tree that names none is a public
-			// game's and is stored as any other.
+			// The refusal is on the path the tree names. A tree that names the public one is
+			// stored as any other.
 			assert_ok!(NftClaims::receive_credit_trees(
 				game_chain_origin(),
 				batch(vec![update(0, BLOCK + 2)])
@@ -3353,7 +3394,7 @@ mod private_claims {
 			System::set_block_number(System::block_number() + 1);
 			assert_ok!(NftClaims::receive_private_rings(
 				game_chain_origin(),
-				private_ring_batch(vec![private_ring_delivery(LATER_GAME, 1, &keys)])
+				private_ring_batch(vec![private_ladder(LATER_GAME, 1, &keys)])
 			));
 			let later_closes = PrivateRings::<Test>::get(LATER_GAME).unwrap().closes_at;
 			assert!(later_closes > first_closes);
@@ -3417,7 +3458,7 @@ mod private_claims {
 			// The game built no ring, so its trees mint over the public path.
 			let awards = vec![(AccountOrPerson::Account(ALICE), [1u8; 32])];
 			let mut private_tree = tree_of(BLOCK, &awards);
-			private_tree.private_slots = 2;
+			private_tree.claim_path = ClaimPath::Private;
 			CreditTrees::<Test>::insert(BLOCK, private_tree);
 			PrivateGameEnds::<Test>::insert(GAME, PrivateGameEnd::Abandoned);
 			add_collection(COLLECTION, COLLECTION_OWNER, 2);
@@ -3450,7 +3491,7 @@ mod private_claims {
 			// ring arrives.
 			let awards = vec![(AccountOrPerson::Account(ALICE), [1u8; 32])];
 			let mut private_tree = tree_of(BLOCK, &awards);
-			private_tree.private_slots = 2;
+			private_tree.claim_path = ClaimPath::Private;
 			CreditTrees::<Test>::insert(BLOCK, private_tree);
 			add_collection(COLLECTION, COLLECTION_OWNER, 2);
 			CollectionMinters::<Test>::insert(

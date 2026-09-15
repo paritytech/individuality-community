@@ -20,7 +20,7 @@ use frame_support::{pallet_prelude::Get, traits::ConstU32, BoundedVec};
 use indiv_pallet_airdrop::{types::AirdropPrize, RegistrationEntry};
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
-	credit_trees::PrivateClaimSetting,
+	credit_trees::ClaimPath,
 	traits::{Alias, RevisionIndex, RingIndex},
 };
 use scale_info::TypeInfo;
@@ -317,9 +317,8 @@ pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 	/// airdrop indices `0..airdrops_scheduled`. Scheduling stops at the first failure, so this
 	/// can be less than the schedule's airdrop count. Bounded by `MAX_GAME_AIRDROPS`.
 	pub airdrops_scheduled: u8,
-	/// The private claim path this game opts into, copied from its schedule. `None` mints the
-	/// game's credits publicly.
-	pub private_claims: Option<PrivateClaimSetting>,
+	/// Which path this game's NFT claim credits mint on, copied from its schedule.
+	pub claims: ClaimPath,
 }
 
 /// The state of a game.
@@ -521,10 +520,9 @@ pub struct GameSchedule<AssetId, Balance> {
 	/// The airdrop events to schedule for this game, each drawn at its own offset relative to
 	/// the game play time. Empty skips airdrop scheduling for this game.
 	pub airdrops: BoundedVec<GameAirdrop<AssetId, Balance>, ConstU32<{ MAX_GAME_AIRDROPS as u32 }>>,
-	/// The private claim path this game opts into. `None` mints the game's NFT claim credits
-	/// publicly. A game that opts in mints privately only, so every claimant takes the same
-	/// path.
-	pub private_claims: Option<PrivateClaimSetting>,
+	/// Which path this game's NFT claim credits mint on. A private game mints privately only, so
+	/// every claimant of it takes the same path.
+	pub claims: ClaimPath,
 }
 
 /// `GameSchedule` for the runtime.

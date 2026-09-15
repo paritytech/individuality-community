@@ -90,7 +90,7 @@ fn invitation_player_flow() {
 				} else {
 					Default::default()
 				},
-				private_claims: None,
+				claims: indiv_support::credit_trees::ClaimPath::Public,
 			})
 			.collect::<Vec<_>>();
 		Game::schedule_games(RuntimeOrigin::root(), schedules.clone()).unwrap();
@@ -359,7 +359,7 @@ fn invitation_player_flow() {
 				} else {
 					Default::default()
 				},
-				private_claims: None,
+				claims: indiv_support::credit_trees::ClaimPath::Public,
 			})
 			.collect::<Vec<_>>();
 		// Top up the airdrop source for the second event's prize allocation.

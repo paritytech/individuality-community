@@ -32,6 +32,7 @@ use indiv_pallet_game::{
 	GroupsSetting, IndexToPlayer, PlayerProcessStep, PlayerToIndex, Players, Report,
 };
 use indiv_pallet_score::AccountOrPerson;
+use indiv_support::credit_trees::ClaimPath;
 use sp_core::{bounded_vec, H256};
 use sp_runtime::{AccountId32, Percent};
 use std::time::Duration;
@@ -500,7 +501,7 @@ fn awarded_credits_are_committed_to_the_awarding_block_root() {
 				game_index: 1,
 				timestamp: report_open,
 				awards: 2,
-				private_slots: 0
+				claim_path: ClaimPath::Public
 			})
 		);
 		// Nothing is committed until the block is over.
@@ -513,7 +514,7 @@ fn awarded_credits_are_committed_to_the_awarding_block_root() {
 			root: binary_merkle_tree::merkle_root::<BlakeTwo256, _>(leaves).into(),
 			leaf_count: 2,
 			timestamp: report_open,
-			private_slots: 0,
+			claim_path: ClaimPath::Public,
 		};
 		assert_eq!(NftClaimCreditRoots::<Test>::get(tree_block), Some(expected));
 		assert_eq!(CreditBuffers::<Test>::get(tree_block), None);
@@ -978,7 +979,12 @@ fn fill_credit_buffer(game: GameIdx, at: BlockNumberFor<Test>, remaining: u32) -
 	CreditBufferCursor::<Test>::put(buffer);
 	CreditBuffers::<Test>::insert(
 		buffer,
-		CreditBuffer { game_index: game, timestamp: 5_000, awards: filler, private_slots: 0 },
+		CreditBuffer {
+			game_index: game,
+			timestamp: 5_000,
+			awards: filler,
+			claim_path: ClaimPath::Public,
+		},
 	);
 	filler
 }
@@ -1765,7 +1771,7 @@ mod credit_tree_delivery {
 			root: CreditProofNode([block as u8; 32]),
 			leaf_count: 3,
 			timestamp: 1_000 + block as u32,
-			private_slots: 0,
+			claim_path: ClaimPath::Public,
 		};
 		NftClaimCreditRoots::<Test>::insert(block, tree);
 		NftCredits::queue_credit_tree_delivery(block);
@@ -2490,7 +2496,7 @@ mod testnet_granted_credits {
 					root: binary_merkle_tree::merkle_root::<BlakeTwo256, _>(vec![leaf]).into(),
 					leaf_count: 1,
 					timestamp: 5_000,
-					private_slots: 0,
+					claim_path: ClaimPath::Public,
 				})
 			);
 		});
@@ -2771,7 +2777,7 @@ mod root_removal {
 				root: CreditProofNode([block as u8; 32]),
 				leaf_count: 1,
 				timestamp,
-				private_slots: 0,
+				claim_path: ClaimPath::Public,
 			},
 		);
 		crate::Pallet::<Test>::note_root_expiry(block, timestamp);
@@ -3050,7 +3056,7 @@ mod migration {
 				root: CreditProofNode([block as u8; 32]),
 				leaf_count: 1,
 				timestamp,
-				private_slots: 0,
+				claim_path: ClaimPath::Public,
 			},
 		);
 	}
@@ -3123,7 +3129,7 @@ mod migration {
 mod private_claims {
 	use super::*;
 	use crate::private::PRIVATE_RING_BUILD_RETRIES;
-	use indiv_support::{credit_trees::PrivateClaimSetting, offchain::RETRY_WINDOW};
+	use indiv_support::{credit_trees::PrivateGameOutcome, offchain::RETRY_WINDOW};
 	use verifiable::{mock::Mock, GenerateVerifiable};
 
 	/// The index the mock's first game runs under.
@@ -3134,11 +3140,10 @@ mod private_claims {
 		Mock::member_from_secret(&Mock::new_secret([seed; 32]))
 	}
 
-	/// Play a game of the given shape that grants `slots` private claim slots, leaving every
-	/// player with the credits it awarded. The player count has to fill the groups, otherwise
-	/// the game is cancelled before anything is awarded.
+	/// Play a private game of the given shape, leaving every player with the credits it awarded.
+	/// The player count has to fill the groups, otherwise the game is cancelled before anything
+	/// is awarded.
 	fn play_private_game_of_shape(
-		slots: u8,
 		rounds: u8,
 		max_group_size: u32,
 		accounts: &[AccountId32],
@@ -3148,7 +3153,7 @@ mod private_claims {
 			game_play_time: 100,
 			rounds,
 			max_group_size,
-			private_claims: Some(PrivateClaimSetting { slots }),
+			claims: ClaimPath::Private,
 			..Default::default()
 		};
 
@@ -3159,75 +3164,37 @@ mod private_claims {
 		players
 	}
 
-	/// Play a two-round game of four that grants `slots` private claim slots, leaving every
-	/// player with the credits it awarded. Its entry threshold is two.
-	fn play_private_game(slots: u8) -> Vec<AccountOrPerson<AccountId32>> {
-		play_private_game_of_shape(slots, 2, 4, &[ALICE, BOB, CHARLIE, DAVE])
+	/// Play a two-round game of four, leaving every player with the six credits it awarded, so
+	/// its ladder is six tiers tall.
+	fn play_private_game() -> Vec<AccountOrPerson<AccountId32>> {
+		play_private_game_of_shape(2, 4, &[ALICE, BOB, CHARLIE, DAVE])
 	}
 
 	/// The private path of the game the test is playing.
-	fn private_game() -> PrivateGameInfo {
+	fn private_game() -> PrivateGameInfoOf<Test> {
 		PrivateGames::<Test>::get(GAME).expect("the game opted into private claims")
-	}
-
-	#[test]
-	fn the_entry_threshold_follows_the_games_own_shape() {
-		// A third of what a full attendance of the game awards. One round of four awards three
-		// credits, against the six of the two-round game.
-		new_test_ext().execute_with(|| {
-			play_private_game_of_shape(3, 1, 4, &[ALICE, BOB, CHARLIE, DAVE]);
-
-			let info = private_game();
-			assert_eq!(info.entry_threshold, 1, "a third of the game's own full attendance");
-			// Three credits each clears a threshold of one, so every player counts.
-			assert_eq!(info.eligible_claimants, 4);
-
-			open_registration();
-			assert_ok!(NftCredits::register_private_claim_key(
-				RuntimeOrigin::signed(ALICE),
-				GAME,
-				ring_key(1)
-			));
-		});
-	}
-
-	#[test]
-	fn the_entry_threshold_stays_within_what_a_group_of_two_awards() {
-		// `max_group_size` is an upper bound, and a testnet runs a game whatever its groups hold,
-		// so a third of the nominal attendance can be more than a player ever earns. Three rounds
-		// of five cap the threshold at three, against the four that third asks for.
-		new_test_ext().execute_with(|| {
-			play_private_game_of_shape(3, 3, 5, &[ALICE, BOB, CHARLIE, DAVE, EVE]);
-
-			let info = private_game();
-			assert_eq!(info.entry_threshold, 3, "capped at what a group of two awards");
-			assert_eq!(info.eligible_claimants, 5);
-
-			open_registration();
-			assert_ok!(NftCredits::register_private_claim_key(
-				RuntimeOrigin::signed(ALICE),
-				GAME,
-				ring_key(1)
-			));
-		});
 	}
 
 	#[test]
 	fn a_private_game_makes_its_credits_spendable() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(3);
+			let players = play_private_game();
 
-			// Six credits each, one per co-player per round, so every player cleared the
-			// threshold of two. Eligibility outlives the game, unlike the slot mask it is
-			// counted from, which is drained with it.
+			// Six credits each, one per co-player per round, so every player sits in the game's
+			// top tier. The count outlives the game, unlike the slot mask it is counted from.
 			assert_eq!(AwardedNftClaimCredits::<Test>::iter().count(), 0);
 			for player in &players {
 				assert_eq!(
 					PrivateClaimants::<Test>::get(GAME, player),
-					Some(PrivateClaimantState::Eligible)
+					Some(PrivateClaimantState::Eligible { credits: 6 })
 				);
 			}
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().slots, 3);
+			// Six tiers, one per credit a full attendance of this game earns, and every player
+			// counted in the top one.
+			let info = private_game();
+			assert_eq!(info.tiers.len(), 6);
+			assert_eq!(info.eligible_at(6), 4);
+			assert_eq!(info.eligible_at(1), 4);
 		});
 	}
 
@@ -3254,14 +3221,14 @@ mod private_claims {
 	}
 
 	#[test]
-	fn registration_clears_the_threshold_and_takes_one_key() {
+	fn registration_takes_one_key_into_the_tier_the_credits_name() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(3);
+			let players = play_private_game();
 			let alice = players[0].clone();
 			open_registration();
 
-			// The flat threshold is two of Alice's six credits, and clearing it takes every slot
-			// the game grants, as it does for every other claimant.
+			// Alice earned six credits, so her key goes into the sixth bucket, which every tier
+			// from one to six holds.
 			assert_ok!(NftCredits::register_private_claim_key(
 				RuntimeOrigin::signed(ALICE),
 				GAME,
@@ -3270,15 +3237,19 @@ mod private_claims {
 			// The claimant's entry marks the key they took, which is what refuses a second one.
 			assert_eq!(
 				PrivateClaimants::<Test>::get(GAME, &alice),
-				Some(PrivateClaimantState::Registered)
+				Some(PrivateClaimantState::Registered { credits: 6 })
 			);
-			assert_eq!(PrivateRingKeys::<Test>::get(GAME).len(), 1);
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().key_count, 1);
+			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 6).len(), 1);
+			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 1).len(), 0);
+			let info = private_game();
+			assert_eq!(info.key_count, 1);
+			assert_eq!(info.ring_size(6), 1);
+			assert_eq!(info.ring_size(1), 1, "every tier below holds the key too");
 			System::assert_has_event(
 				Event::<Test>::PrivateClaimKeyRegistered {
 					game_index: GAME,
 					claimant: alice,
-					credits: 2,
+					credits: 6,
 				}
 				.into(),
 			);
@@ -3298,7 +3269,7 @@ mod private_claims {
 	#[test]
 	fn registration_is_refused_without_the_credits_it_costs() {
 		new_test_ext().execute_with(|| {
-			play_private_game(3);
+			play_private_game();
 			open_registration();
 
 			// A claimant who earned nothing in the game holds nothing to pay with.
@@ -3311,19 +3282,20 @@ mod private_claims {
 				Error::<Test>::InsufficientCredits
 			);
 
-			// Nor does one credit, short of the threshold of two, so no eligibility entry was
-			// ever written for EVE.
+			// One credit is the ladder's base, so it is what registration costs and what tier 1
+			// admits. A claimant that earned it registers and mints that one tier.
 			let eve = AccountOrPerson::Account(EVE);
 			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
-			assert!(PrivateClaimants::<Test>::get(GAME, &eve).is_none());
-			assert_noop!(
-				NftCredits::register_private_claim_key(
-					RuntimeOrigin::signed(EVE),
-					GAME,
-					ring_key(2)
-				),
-				Error::<Test>::InsufficientCredits
+			assert_eq!(
+				PrivateClaimants::<Test>::get(GAME, &eve),
+				Some(PrivateClaimantState::Eligible { credits: 1 })
 			);
+			assert_ok!(NftCredits::register_private_claim_key(
+				RuntimeOrigin::signed(EVE),
+				GAME,
+				ring_key(2)
+			));
+			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 1).len(), 1);
 		});
 	}
 
@@ -3353,15 +3325,20 @@ mod private_claims {
 		});
 	}
 
-	/// Close registration and run the offchain worker's build steps until the ring is final.
+	/// Close registration and run the offchain worker's steps until the ring is final.
 	fn close_registration_and_build() {
-		let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
+		close_registration();
 
 		// One step per call, as the offchain worker submits them, until nothing is left.
 		while let Some(to_include) = NftCredits::private_ring_build_step(GAME) {
 			assert_ok!(NftCredits::do_build_private_ring(GAME, to_include));
 		}
+	}
+
+	/// Move the clock past the moment registration closes, which is when the ring can be built.
+	fn close_registration() {
+		let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
 	}
 
 	/// Deliver the game's built outcome, which is what releases its cleanup.
@@ -3379,6 +3356,14 @@ mod private_claims {
 		));
 	}
 
+	/// The roots of the game's built ladder, tier 1 first.
+	fn ring_roots() -> Vec<<Mock as GenerateVerifiable>::Members> {
+		match PrivateOutcomes::<Test>::get(GAME).expect("the game reached an outcome") {
+			PrivateGameOutcome::Ring { roots, .. } => roots.into_inner(),
+			outcome => panic!("the game built no ladder, got {outcome:?}"),
+		}
+	}
+
 	/// Move the clock to the moment registration opens, which is when the credits are final.
 	fn open_registration() {
 		let starts = PrivateGames::<Test>::get(GAME).unwrap().key_registration_starts;
@@ -3388,7 +3373,7 @@ mod private_claims {
 	#[test]
 	fn the_ring_is_built_once_registration_closes_and_awaits_delivery() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(2);
+			let players = play_private_game();
 			open_registration();
 			for (seed, player) in players.iter().enumerate() {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
@@ -3399,26 +3384,33 @@ mod private_claims {
 			// proved against it would strand their proof.
 			assert!(NftCredits::private_ring_build_step(GAME).is_none());
 
-			let keys = PrivateRingKeys::<Test>::get(GAME).to_vec();
+			// Every player earned six credits, so every key is in the sixth bucket and every
+			// tier from one to six holds all four of them.
+			let keys = PrivateRingKeys::<Test>::get(GAME, 6).to_vec();
 			close_registration_and_build();
 
 			let info = PrivateGames::<Test>::get(GAME).unwrap();
 			assert_eq!(info.key_count, 4);
 			assert!(matches!(info.phase, PrivateGamePhase::Delivering));
 
-			// One ring over every registrant, whatever slot their claims name, so every claim of
-			// the game hides in the same set.
-			assert_eq!(
-				PrivateOutcomes::<Test>::get(GAME).unwrap(),
-				PrivateGameOutcome::Ring { root: keys.try_into().unwrap(), key_count: 4 }
-			);
-			// The root commits to the keys, so the list goes with the step that finished it and
+			// Six nested rings, tier 1 first. Each is built over the registrants that earned at
+			// least its own credits, and here that is everyone.
+			let roots = ring_roots();
+			assert_eq!(roots.len(), 6);
+			for root in &roots {
+				assert_eq!(*root, keys.clone().try_into().expect("the mock ring holds the keys"));
+			}
+			// A root commits to its bucket, so each goes with the step that closed its tier and
 			// the cleanup that follows never reads it.
-			assert!(PrivateRingKeys::<Test>::decode_len(GAME).is_none());
-			// The intermediate is dropped once the root is final.
+			assert!(PrivateRingKeys::<Test>::iter_prefix(GAME).next().is_none());
+			// The intermediate is dropped once the last tier is closed.
 			assert!(PrivateRingIntermediates::<Test>::get(GAME).is_none());
 			System::assert_has_event(
-				Event::<Test>::PrivateRingBuilt { game_index: GAME, key_count: 4 }.into(),
+				Event::<Test>::PrivateLadderOpened { game_index: GAME, height: 6 }.into(),
+			);
+			System::assert_has_event(
+				Event::<Test>::PrivateLadderBuilt { game_index: GAME, height: 6, key_count: 4 }
+					.into(),
 			);
 		});
 	}
@@ -3427,7 +3419,7 @@ mod private_claims {
 	fn a_ring_below_the_anonymity_floor_is_abandoned() {
 		new_test_ext().execute_with(|| {
 			// `MinPrivateRingKeys` is two in the mock, so one registrant is below the floor.
-			play_private_game(2);
+			play_private_game();
 			open_registration();
 			register(&ALICE, 1);
 
@@ -3446,7 +3438,7 @@ mod private_claims {
 			// No ring was built, so nothing was pushed either. The keys commit to nothing, so
 			// they go with the abandonment rather than waiting for the cleanup.
 			assert!(PrivateRingIntermediates::<Test>::get(GAME).is_none());
-			assert!(PrivateRingKeys::<Test>::decode_len(GAME).is_none());
+			assert!(PrivateRingKeys::<Test>::iter_prefix(GAME).next().is_none());
 			assert!(matches!(
 				PrivateGames::<Test>::get(GAME).unwrap().phase,
 				PrivateGamePhase::Delivering
@@ -3455,28 +3447,222 @@ mod private_claims {
 	}
 
 	#[test]
-	fn only_claimants_that_reach_the_threshold_count_towards_the_floor() {
+	fn a_claimants_credits_decide_the_tier_they_are_counted_in() {
 		new_test_ext().execute_with(|| {
-			// Four players, six credits each, against an entry threshold of two.
-			play_private_game(2);
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 4);
+			// Four players, six credits each, so the top tier holds them all.
+			play_private_game();
+			assert_eq!(private_game().eligible_at(6), 4);
 
-			// A claimant one credit short of the threshold cannot register, so they do not raise
-			// the floor either. The credit that reaches it is what counts them.
+			// Every award moves a claimant up one tier, so a claimant is counted in exactly one
+			// of them and in every tier below it.
 			let eve = AccountOrPerson::Account(EVE);
 			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 4);
-			assert!(PrivateClaimants::<Test>::get(GAME, &eve).is_none());
-			NftCredits::note_private_credit(GAME, &eve, 2, private_game());
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 5);
+			assert_eq!(private_game().eligible_at(1), 5);
+			assert_eq!(private_game().eligible_at(2), 4);
 			assert_eq!(
 				PrivateClaimants::<Test>::get(GAME, &eve),
-				Some(PrivateClaimantState::Eligible)
+				Some(PrivateClaimantState::Eligible { credits: 1 })
 			);
 
-			// Counted once, however many more credits they earn.
-			NftCredits::note_private_credit(GAME, &eve, 3, private_game());
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 5);
+			NftCredits::note_private_credit(GAME, &eve, 2, private_game());
+			assert_eq!(private_game().eligible_at(1), 5, "the claimant is counted once");
+			assert_eq!(private_game().eligible_at(2), 5);
+			assert_eq!(private_game().eligible_at(3), 4);
+			assert_eq!(
+				PrivateClaimants::<Test>::get(GAME, &eve),
+				Some(PrivateClaimantState::Eligible { credits: 2 })
+			);
+		});
+	}
+
+	#[test]
+	fn credits_above_the_runtimes_tiers_are_forfeit() {
+		// The ladder is as tall as the runtime carries tiers for, so a claimant that earns more
+		// stays in the top one and mints what it pays.
+		new_test_ext().execute_with(|| {
+			MaxPrivateRingTiers::set(&2);
+			play_private_game();
+
+			let info = private_game();
+			assert_eq!(info.tiers.len(), 2, "the game's six credits are capped at two tiers");
+			assert_eq!(info.eligible_at(2), 4, "every player is counted in the top tier");
+
+			open_registration();
+			register(&ALICE, 1);
+			register(&BOB, 2);
+			close_registration_and_build();
+
+			assert_eq!(ring_roots().len(), 2);
+		});
+	}
+
+	#[test]
+	fn a_tier_is_the_ring_of_the_registrants_that_reached_it() {
+		// Each tier's snapshot is the ring the tier's own keys and every bucket above it make,
+		// which a claimant of that tier proves against.
+		new_test_ext().execute_with(|| {
+			play_private_game();
+			// ALICE keeps her six credits. EVE earned two, so she registers into tier 2 and no
+			// tier above it holds her key.
+			let eve = AccountOrPerson::Account(EVE);
+			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
+			NftCredits::note_private_credit(GAME, &eve, 2, private_game());
+
+			open_registration();
+			register(&ALICE, 1);
+			register(&BOB, 2);
+			register(&EVE, 3);
+			close_registration_and_build();
+
+			let roots = ring_roots();
+			assert_eq!(roots.len(), 6, "six tiers, one per credit the game awards");
+			// Tiers 3 to 6 hold the two claimants that earned six credits, and tiers 1 and 2 hold
+			// EVE as well. The build pushes the top bucket first, which is the order the mock ring
+			// keeps its members in.
+			let top = vec![ring_key(1), ring_key(2)];
+			let with_eve = top.iter().cloned().chain([ring_key(3)]).collect::<Vec<_>>();
+			for (index, root) in roots.iter().enumerate() {
+				let tier = index + 1;
+				let expected: Vec<_> = if tier <= 2 { with_eve.clone() } else { top.clone() };
+				assert_eq!(
+					*root,
+					expected.try_into().expect("the mock ring holds the keys"),
+					"tier {tier}'s ring",
+				);
+			}
+		});
+	}
+
+	#[test]
+	fn the_ladder_stops_where_the_anonymity_floor_stops_it() {
+		// A tier that too few registrants reached hides nobody, so the ladder ends below it and
+		// the credits above are forfeit.
+		new_test_ext().execute_with(|| {
+			play_private_game();
+			// EVE and the two registrants below her make a tier-1 ring of three, while only the
+			// two six-credit claimants reach tier 3.
+			let eve = AccountOrPerson::Account(EVE);
+			for credits in 1..=2 {
+				NftCredits::note_private_credit(GAME, &eve, credits, private_game());
+			}
+			MinPrivateRingKeys::set(&3);
+
+			open_registration();
+			register(&ALICE, 1);
+			register(&BOB, 2);
+			register(&EVE, 3);
+			close_registration_and_build();
+
+			// Tiers 1 and 2 hold three keys and clear the floor; tier 3 holds two and does not.
+			assert_eq!(ring_roots().len(), 2);
+			System::assert_has_event(
+				Event::<Test>::PrivateLadderOpened { game_index: GAME, height: 2 }.into(),
+			);
+		});
+	}
+
+	#[test]
+	fn the_registration_cap_is_the_games_and_not_one_buckets() {
+		// Tier 1 holds every registrant in one ring, so the cap is on the game. A game that took a
+		// full bucket per tier builds no ring at all and puts every claimant back on the public
+		// path.
+		new_test_ext().execute_with(|| {
+			play_private_game();
+			// EVE earned one credit, so her key belongs in a bucket the others left empty.
+			let eve = AccountOrPerson::Account(EVE);
+			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
+			MaxPrivateRingKeys::set(&2);
+
+			open_registration();
+			register(&ALICE, 1);
+			register(&BOB, 2);
+
+			// Her own bucket is empty, but the game's registration is full.
+			assert_noop!(
+				NftCredits::register_private_claim_key(
+					RuntimeOrigin::signed(EVE),
+					GAME,
+					ring_key(3)
+				),
+				Error::<Test>::PrivateRingFull
+			);
+			assert_eq!(private_game().key_count, 2);
+			assert_eq!(PrivateRingKeys::<Test>::decode_len(GAME, 1).unwrap_or(0), 0);
+		});
+	}
+
+	#[test]
+	fn a_closing_step_refunds_down_to_the_branch_it_took() {
+		// One call carries three closing branches, so it is charged at the dearest and refunds down
+		// to the one the game's state picks.
+		new_test_ext().execute_with(|| {
+			play_private_game();
+			open_registration();
+			register(&ALICE, 1);
+			register(&BOB, 2);
+			close_registration();
+
+			let call = Call::<Test>::build_private_ring {
+				game_index: GAME,
+				to_include: 0,
+				discriminator: 0,
+			};
+			let charged =
+				frame_support::dispatch::GetDispatchInfo::get_dispatch_info(&call).call_weight;
+
+			// Opening the ladder is the cheapest of the three.
+			let post = NftCredits::build_private_ring(
+				frame_system::RawOrigin::Authorized.into(),
+				GAME,
+				0,
+				0,
+			)
+			.expect("the ladder opens");
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::open_private_ring_ladder()));
+			assert!(
+				MockWeightInfo::open_private_ring_ladder().all_lt(charged),
+				"opening is below what a closing step is charged for",
+			);
+		});
+	}
+
+	#[test]
+	fn an_abandoned_game_refunds_down_to_the_buckets_it_dropped() {
+		new_test_ext().execute_with(|| {
+			play_private_game();
+			MinPrivateRingKeys::set(&2);
+
+			// One registrant, below the floor, so the opening step gives the game up.
+			open_registration();
+			register(&ALICE, 1);
+			close_registration();
+
+			let call = Call::<Test>::build_private_ring {
+				game_index: GAME,
+				to_include: 0,
+				discriminator: 0,
+			};
+			let charged =
+				frame_support::dispatch::GetDispatchInfo::get_dispatch_info(&call).call_weight;
+			let post = NftCredits::build_private_ring(
+				frame_system::RawOrigin::Authorized.into(),
+				GAME,
+				0,
+				0,
+			)
+			.expect("the game is abandoned");
+
+			// One bucket held a key, so the step cleared one bucket and is charged for one.
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::abandon_private_ring(1)));
+			assert!(
+				MockWeightInfo::abandon_private_ring(1).all_lt(charged),
+				"one bucket is below what a closing step is charged for",
+			);
+			assert!(matches!(
+				PrivateOutcomes::<Test>::get(GAME).unwrap(),
+				PrivateGameOutcome::Abandoned { key_count: 1 }
+			));
+			assert_eq!(PrivateRingKeys::<Test>::iter_key_prefix(GAME).count(), 0);
 		});
 	}
 
@@ -3486,7 +3672,7 @@ mod private_claims {
 			// Three quarters of the four claimants that can pay the price, which is three keys,
 			// well above the absolute floor of two.
 			MinPrivateRingParticipation::set(&Percent::from_percent(75));
-			play_private_game(2);
+			play_private_game();
 			open_registration();
 			register(&ALICE, 1);
 			register(&BOB, 2);
@@ -3508,7 +3694,7 @@ mod private_claims {
 	fn the_share_lets_the_ring_build_once_enough_claimants_register() {
 		new_test_ext().execute_with(|| {
 			MinPrivateRingParticipation::set(&Percent::from_percent(75));
-			play_private_game(2);
+			play_private_game();
 			open_registration();
 			register(&ALICE, 1);
 			register(&BOB, 2);
@@ -3530,7 +3716,7 @@ mod private_claims {
 			// takes. Without the cap the game could never reach its own floor.
 			MinPrivateRingParticipation::set(&Percent::from_percent(100));
 			MaxPrivateRingKeys::set(&3);
-			play_private_game(2);
+			play_private_game();
 			open_registration();
 			register(&ALICE, 1);
 			register(&BOB, 2);
@@ -3557,7 +3743,7 @@ mod private_claims {
 	#[test]
 	fn the_cleanup_drops_the_games_registration_state_in_steps() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(1);
+			let players = play_private_game();
 			open_registration();
 			for (seed, player) in players.iter().enumerate() {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
@@ -3593,14 +3779,13 @@ mod private_claims {
 	#[test]
 	fn the_offchain_worker_paces_the_repeating_steps_by_block() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(1);
+			let players = play_private_game();
 			open_registration();
 			for (seed, player) in players.iter().enumerate() {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
 				register(account, seed as u8);
 			}
-			let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
-			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
+			close_registration();
 			clear_pool();
 
 			// A build step pushes `PrivateKeysPerBuild` keys every time but the last, so two
@@ -3652,7 +3837,7 @@ mod private_claims {
 	#[test]
 	fn an_undelivered_outcome_holds_off_the_cleanup_that_would_strand_it() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(1);
+			let players = play_private_game();
 			open_registration();
 			for (seed, player) in players.iter().enumerate() {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
@@ -3661,7 +3846,7 @@ mod private_claims {
 			close_registration_and_build();
 			assert!(PrivateOutcomes::<Test>::get(GAME).is_some());
 
-			// The last cleanup step removes the record `do_send_private_ring` reads the slots
+			// The last cleanup step removes the record `do_send_private_ring` reads the phase
 			// from. Running it first would leave an outcome that can never be sent.
 			assert_eq!(
 				NftCredits::authorize_clean_up_private_game(TransactionSource::Local, &GAME)
@@ -3687,7 +3872,7 @@ mod private_claims {
 	#[test]
 	fn a_game_with_no_outcome_has_no_delivery_to_authorize() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(1);
+			let players = play_private_game();
 			open_registration();
 			for (seed, player) in players.iter().enumerate() {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
@@ -3734,7 +3919,7 @@ mod private_claims {
 	#[test]
 	fn a_cleanup_step_refunds_the_entries_it_did_not_remove() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(1);
+			let players = play_private_game();
 			open_registration();
 			for (seed, player) in players.iter().enumerate() {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
@@ -3766,7 +3951,7 @@ mod private_claims {
 	#[test]
 	fn a_key_another_claimant_registered_is_refused() {
 		new_test_ext().execute_with(|| {
-			play_private_game(2);
+			play_private_game();
 			open_registration();
 			register(&ALICE, 1);
 
@@ -3780,19 +3965,19 @@ mod private_claims {
 				),
 				Error::<Test>::DuplicateRingKey
 			);
-			assert_eq!(PrivateRingKeys::<Test>::get(GAME).len(), 1);
+			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 6).len(), 1);
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().key_count, 1);
 
 			// A key of their own is taken.
 			register(&BOB, 2);
-			assert_eq!(PrivateRingKeys::<Test>::get(GAME).len(), 2);
+			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 6).len(), 2);
 		});
 	}
 
 	#[test]
 	fn a_ring_that_keeps_failing_to_build_is_abandoned() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(2);
+			let players = play_private_game();
 			open_registration();
 			for (seed, player) in players.iter().enumerate() {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
@@ -3802,17 +3987,18 @@ mod private_claims {
 			// The chunks the ring is built from are unusable, which the next block does not
 			// repair.
 			RingPushFails::set(&true);
-			let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
-			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
+			close_registration();
+			// The ladder opens before any key is pushed, so the failures below are push failures.
+			assert_ok!(NftCredits::do_build_private_ring(GAME, 0));
 
-			// The failing steps keep the game, so a chain that recovers still builds its ring.
+			// The failing steps keep the game, so a chain that recovers still builds its ladder.
 			for failures in 1..=PRIVATE_RING_BUILD_RETRIES {
 				let to_include =
 					NftCredits::private_ring_build_step(GAME).expect("a step is still due");
 				assert_ok!(NftCredits::do_build_private_ring(GAME, to_include));
 				assert!(matches!(
 					PrivateGames::<Test>::get(GAME).unwrap().phase,
-					PrivateGamePhase::Building { included: 0, failures: counted }
+					PrivateGamePhase::Building { included: 0, failures: counted, .. }
 						if counted == failures
 				));
 				System::assert_has_event(
@@ -3844,21 +4030,21 @@ mod private_claims {
 	#[test]
 	fn a_build_step_that_recovers_starts_its_retries_over() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(2);
+			let players = play_private_game();
 			open_registration();
 			for (seed, player) in players.iter().enumerate() {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
 				register(account, seed as u8);
 			}
-			let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
-			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
+			close_registration();
 
 			RingPushFails::set(&true);
+			assert_ok!(NftCredits::do_build_private_ring(GAME, 0));
 			let to_include = NftCredits::private_ring_build_step(GAME).expect("a step is due");
 			assert_ok!(NftCredits::do_build_private_ring(GAME, to_include));
 			assert!(matches!(
 				PrivateGames::<Test>::get(GAME).unwrap().phase,
-				PrivateGamePhase::Building { included: 0, failures: 1 }
+				PrivateGamePhase::Building { included: 0, failures: 1, .. }
 			));
 
 			RingPushFails::set(&false);
@@ -3874,7 +4060,7 @@ mod private_claims {
 	#[test]
 	fn an_abandoned_game_delivers_its_abandonment_to_the_claims_chain() {
 		new_test_ext().execute_with(|| {
-			play_private_game(2);
+			play_private_game();
 			open_registration();
 			register(&ALICE, 1);
 			close_registration_and_build();
@@ -3886,7 +4072,6 @@ mod private_claims {
 			let batch = last_sent_private_ring_batch();
 			assert_eq!(batch.rings.len(), 1);
 			assert_eq!(batch.rings[0].game_index, GAME);
-			assert_eq!(batch.rings[0].slots, 2);
 			assert_eq!(batch.rings[0].outcome, PrivateGameOutcome::Abandoned { key_count: 1 });
 		});
 	}
@@ -3894,7 +4079,7 @@ mod private_claims {
 	#[test]
 	fn nothing_is_built_while_the_game_is_still_being_played() {
 		new_test_ext().execute_with(|| {
-			play_private_game(2);
+			play_private_game();
 			let info = PrivateGames::<Test>::get(GAME).unwrap();
 			MOCK_UNIX_TIME.with(|t| {
 				*t.borrow_mut() = Duration::from_secs((info.key_registration_starts - 1) as u64)
@@ -3910,7 +4095,7 @@ mod private_claims {
 	#[test]
 	fn a_delivery_the_channel_cannot_carry_is_retried_rather_than_dropped() {
 		new_test_ext().execute_with(|| {
-			let players = play_private_game(1);
+			let players = play_private_game();
 			open_registration();
 			for (seed, player) in players.iter().enumerate() {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
@@ -3951,7 +4136,7 @@ mod private_claims {
 	#[test]
 	fn registration_is_closed_until_the_credits_are_final() {
 		new_test_ext().execute_with(|| {
-			play_private_game(2);
+			play_private_game();
 			let info = PrivateGames::<Test>::get(GAME).unwrap();
 			MOCK_UNIX_TIME.with(|t| {
 				*t.borrow_mut() = Duration::from_secs((info.key_registration_starts - 1) as u64)
@@ -3973,7 +4158,7 @@ mod private_claims {
 	#[test]
 	fn registration_closes_with_the_window() {
 		new_test_ext().execute_with(|| {
-			play_private_game(2);
+			play_private_game();
 			let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
 			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(ends as u64));
 

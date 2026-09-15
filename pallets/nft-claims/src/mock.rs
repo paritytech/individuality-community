@@ -35,9 +35,9 @@ use indiv_pallet_scarcity::{
 };
 use indiv_support::{
 	credit_trees::{
-		credit_leaf, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, NftClaimCredit,
-		NftClaimCreditLeaf, NftClaimCreditTree, PrivateClaimSlot, PrivateGameOutcome,
-		PrivateRingDelivery, TreeSequence,
+		credit_leaf, ClaimPath, CreditProofNode, CreditTreeBlock, CreditTreeDelivery,
+		NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, PrivateClaimTier,
+		PrivateGameOutcome, PrivateRingDelivery, TreeSequence,
 	},
 	identity::AccountOrPerson,
 	traits::Alias,
@@ -170,6 +170,10 @@ parameter_types! {
 	/// Short, so a test steps over the delay and through the window in a few blocks.
 	pub storage PrivateClaimDelay: u64 = 2;
 	pub storage PrivateClaimWindow: u64 = 10;
+	/// Two, so a game's claims fit the mock's narrow window at its claim allowance.
+	pub storage MaxPrivateRingKeys: u32 = 2;
+	/// Two, so a game's claims fit the mock's narrow window at its claim allowance.
+	pub storage MaxPrivateRingTiers: u32 = 2;
 	pub const PrivateRingExponent: indiv_support::traits::RingExponent =
 		indiv_support::traits::RingExponent::R2e9;
 	pub PrivateClaimNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
@@ -459,15 +463,16 @@ impl pallet_nft_claims::BenchmarkHelper<u64, verifiable::mock::Mock> for MockBen
 	) {
 		let secret = verifiable::mock::Mock::new_secret([1u8; 32]);
 		let member = verifiable::mock::Mock::member_from_secret(&secret);
-		let delivery = private_ring_delivery(0, 1, core::slice::from_ref(&member));
+		let delivery = private_ladder(0, 1, core::slice::from_ref(&member));
 		let commitment =
 			verifiable::mock::Mock::open(Default::default(), &member, core::iter::once(member))
 				.expect("the member is in the ring");
 		let (proof, alias) = verifiable::mock::Mock::create(commitment, &secret, context, message)
 			.expect("the mock creates a proof");
-		let PrivateGameOutcome::Ring { root, .. } = delivery.outcome else {
-			unreachable!("the helper builds a ring")
+		let PrivateGameOutcome::Ring { roots, .. } = delivery.outcome else {
+			unreachable!("the helper builds a ladder")
 		};
+		let root = roots.into_iter().next().expect("the ladder holds its one tier");
 		(root, proof, alias)
 	}
 
@@ -496,6 +501,8 @@ impl pallet_nft_claims::Config for Test {
 	type MaxPrivateClaimsPerBlock = MaxPrivateClaimsPerBlock;
 	type PrivateClaimDelay = PrivateClaimDelay;
 	type PrivateClaimWindow = PrivateClaimWindow;
+	type MaxPrivateRingKeys = MaxPrivateRingKeys;
+	type MaxPrivateRingTiers = MaxPrivateRingTiers;
 	type UnixTime = MockTime;
 	type TreeTtl = TreeTtl;
 	type MaxQueuedTreeDeletions = MaxQueuedTreeDeletions;
@@ -552,8 +559,10 @@ impl pallet_nft_claims::WeightInfo for MockWeightInfo {
 		Weight::from_parts(60, 6)
 	}
 
-	fn receive_private_rings(n: u32) -> Weight {
-		Weight::from_parts(800 + 10 * n as u64, 80 + n as u64)
+	/// Scales with the ladders and with the roots they carry, so a test sees the roots priced apart
+	/// from the games.
+	fn receive_private_rings(n: u32, r: u32) -> Weight {
+		Weight::from_parts(800 + 10 * n as u64 + 5 * r as u64, 80 + n as u64 + r as u64)
 	}
 
 	fn claim_private() -> Weight {
@@ -629,7 +638,7 @@ pub fn tree(block: CreditTreeBlock) -> NftClaimCreditTree {
 		root: CreditProofNode([block as u8; 32]),
 		leaf_count: 3,
 		timestamp: 1_000 + block,
-		private_slots: 0,
+		claim_path: ClaimPath::Public,
 	}
 }
 
@@ -666,7 +675,7 @@ pub fn tree_of(block: CreditTreeBlock, awards: &[Award]) -> NftClaimCreditTree {
 		root: binary_merkle_tree::merkle_root::<BlakeTwo256, _>(leaves(awards)).into(),
 		leaf_count: awards.len() as u32,
 		timestamp: 1_000 + block,
-		private_slots: 0,
+		claim_path: ClaimPath::Public,
 	}
 }
 
@@ -693,36 +702,61 @@ pub fn nft_claims_events() -> Vec<Event<Test>> {
 		.collect()
 }
 
-/// The ring of `game_index` over `keys`, granting `slots` slots to each, as the game chain builds
-/// and delivers it.
-pub fn private_ring_delivery(
+/// The ladder of `game_index` over the buckets `tiers` names, one per tier, as the game chain
+/// builds and delivers it.
+///
+/// `tiers[t]` is the keys of tier `t + 1`'s own bucket. Tier `t`'s ring is that bucket and every
+/// one above it, which is the order the game chain pushes them in.
+pub fn private_ladder_of(
 	game_index: crate::GameIdx,
-	slots: PrivateClaimSlot,
-	keys: &[<verifiable::mock::Mock as GenerateVerifiable>::Member],
-) -> PrivateRingDelivery<<verifiable::mock::Mock as GenerateVerifiable>::Members> {
+	tiers: &[Vec<<verifiable::mock::Mock as GenerateVerifiable>::Member>],
+) -> crate::PrivateRingDeliveryOf<Test> {
 	let mut intermediate = verifiable::mock::Mock::start_members(
 		PrivateRingExponent::get()
 			.try_into()
 			.expect("the mock accepts the test exponent"),
 	);
-	verifiable::mock::Mock::push_members(&mut intermediate, keys.iter().cloned(), |range| {
-		Ok(vec![(); range.len()])
-	})
-	.expect("the mock pushes every key");
+
+	// Built from the top tier down, as the game chain builds it, with the roots put back in tier
+	// order.
+	let mut roots = Vec::new();
+	for bucket in tiers.iter().rev() {
+		verifiable::mock::Mock::push_members(&mut intermediate, bucket.iter().cloned(), |range| {
+			Ok(vec![(); range.len()])
+		})
+		.expect("the mock pushes every key");
+		roots.insert(0, verifiable::mock::Mock::finish_members(intermediate.clone()));
+	}
 
 	PrivateRingDelivery {
 		game_index,
-		slots,
 		outcome: PrivateGameOutcome::Ring {
-			root: verifiable::mock::Mock::finish_members(intermediate),
-			key_count: keys.len() as u32,
+			roots: roots.try_into().expect("the ladder fits MaxPrivateRingTiers"),
+			key_count: tiers.iter().map(|bucket| bucket.len() as u32).sum(),
 		},
 	}
 }
 
+/// The ladder of `game_index` over `keys`, `height` tiers tall.
+///
+/// Every key is in the top bucket, so every tier's ring is the whole set. That is a game whose
+/// registrants all earned the most it pays.
+pub fn private_ladder(
+	game_index: crate::GameIdx,
+	height: PrivateClaimTier,
+	keys: &[<verifiable::mock::Mock as GenerateVerifiable>::Member],
+) -> crate::PrivateRingDeliveryOf<Test> {
+	let mut tiers = vec![Vec::new(); usize::from(height)];
+	if let Some(top) = tiers.last_mut() {
+		*top = keys.to_vec();
+	}
+
+	private_ladder_of(game_index, &tiers)
+}
+
 /// A batch of `rings`, as the game pallet assembles it.
 pub fn private_ring_batch(
-	rings: Vec<PrivateRingDelivery<<verifiable::mock::Mock as GenerateVerifiable>::Members>>,
+	rings: Vec<crate::PrivateRingDeliveryOf<Test>>,
 ) -> crate::PrivateRingBatchOf<Test> {
 	crate::PrivateRingBatchOf::<Test> {
 		source_time: 1_000,

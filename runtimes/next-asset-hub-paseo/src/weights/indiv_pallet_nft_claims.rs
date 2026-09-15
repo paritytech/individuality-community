@@ -311,8 +311,10 @@ impl<T: frame_system::Config> indiv_pallet_nft_claims::WeightInfo for WeightInfo
 	}
 	/// Storage: `NftClaims::PrivateRings` (r:1 w:1)
 	/// Storage: `NftClaims::PrivateRingCloses` (r:0 w:1)
+	/// Storage: `NftClaims::PrivateRingRoots` (r:0 w:60)
+	/// The range of component `r` is `[0, 60]`.
 	/// The range of component `n` is `[1, 4]`.
-	fn receive_private_rings(n: u32, ) -> Weight {
+	fn receive_private_rings(n: u32, r: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `76`
 		//  Estimated: `70000`
@@ -323,6 +325,8 @@ impl<T: frame_system::Config> indiv_pallet_nft_claims::WeightInfo for WeightInfo
 			.saturating_add(Weight::from_parts(15_000_000, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
+			.saturating_add(Weight::from_parts(1_000_000, 288).saturating_mul(r.into()))
+			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(r.into())))
 	}
 	/// Storage: `NftClaims::PrivateClaimTally` (r:0 w:1)
 	/// Storage: `NftClaims::SpentPrivateClaims` (r:0 w:1)

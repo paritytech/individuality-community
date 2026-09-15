@@ -279,11 +279,9 @@ pub struct NftClaimCreditTree {
 	/// The Unix timestamp of the buffer's first award, in seconds.
 	/// Each chain calculates expiry from this timestamp and its configured TTL.
 	pub timestamp: u32,
-	/// How many private claim slots the tree's game grants every registrant, `0` for a public
-	/// game. The claim chain refuses a public claim against a tree that names a non-zero count.
-	/// The tree carries the count because the game's ring arrives later, and a public claim made
-	/// in between would mint a credit its owner can also spend privately.
-	pub private_slots: PrivateClaimSlot,
+	/// Which path the tree's game mints on. The claim chain refuses a public claim against a
+	/// private tree until the game is abandoned, the ladder arriving after the tree does.
+	pub claim_path: ClaimPath,
 }
 
 /// One credit tree's delivery to the claim chain, with its block and sequence.
@@ -334,23 +332,18 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 	pub trees: BoundedVec<CreditTreeDelivery, MaxTrees>,
 }
 
-/// One claim slot of a private game, which is one context a registered key proves under.
+/// One tier of a private game's ring ladder, which is one context a registered key proves under.
 ///
-/// Every registrant of a game holds all of its slots. One key yields one alias per slot, so each
-/// slot is one mint that cannot be tied to the others.
-pub type PrivateClaimSlot = u8;
+/// Ring `t` holds every registrant that earned at least `t` credits. A claimant proves tiers 1 to
+/// their credit count, once each, and each proof is one mint. Tiers are one-based, so tier 1 is
+/// every registrant.
+pub type PrivateClaimTier = u8;
 
-/// The most private claim slots a game may grant one claimant.
+/// Which path a game's NFT claim credits mint on.
 ///
-/// A slot is one private mint, so this bounds what a claimant takes from one game. Both chains
-/// check it: the game chain when a game is scheduled, the claims chain when the game's outcome
-/// arrives, so a delivered slot count out of this range is rejected rather than served.
-pub const MAX_PRIVATE_CLAIM_SLOTS: PrivateClaimSlot = 5;
-
-/// A game's opt-in to the private claim path, as scheduled.
-///
-/// Registration costs one flat credit price and grants `slots` slots to every claimant, which is
-/// how many NFTs a registrant mints privately from the game.
+/// A game's schedule names it and every tree the game's credits form carries it, so the claim
+/// chain reads the operator's choice from the tree. It names no payout: a registrant mints the
+/// credits they earned, which are not final when the tree is built.
 #[derive(
 	Encode,
 	Decode,
@@ -360,36 +353,51 @@ pub const MAX_PRIVATE_CLAIM_SLOTS: PrivateClaimSlot = 5;
 	Debug,
 	Clone,
 	Copy,
+	Default,
 	PartialEq,
 	Eq,
 )]
-pub struct PrivateClaimSetting {
-	/// The slots every registrant of the game holds. Zero is not valid, a game that grants no
-	/// slot being a public game.
-	pub slots: PrivateClaimSlot,
+pub enum ClaimPath {
+	/// The credits mint through [`NftClaimCreditTree::root`], one NFT per credit, to the claimant
+	/// the leaf names.
+	#[default]
+	Public,
+	/// The credits mint through the game's ring ladder, which names nobody. The claim chain
+	/// refuses a public claim against such a tree until the game is abandoned.
+	Private,
 }
 
-/// How a private game ended: with a ring its claimants prove membership in, or without one.
+/// How a private game ended: with a ring ladder its claimants prove membership in, or without one.
 ///
-/// A game reaches exactly one of the two, and the claim chain needs both: the ring opens the
-/// private path, and the abandonment reopens the public one. `Members` is the crypto's ring root
+/// A game reaches exactly one of the two. The claim chain needs both: the ladder opens the
+/// private path and the abandonment reopens the public one. `Members` is the crypto's ring root
 /// type, which only the runtime knows.
 #[derive(
-	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Debug, Clone, PartialEq, Eq,
+	CloneNoBound,
+	PartialEqNoBound,
+	EqNoBound,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	DebugNoBound,
+	TypeInfo,
 )]
-pub enum PrivateGameOutcome<Members> {
-	/// The game's ring is built over the keys of every claimant that registered, so each of its
-	/// slots is proven against the same anonymity set.
+#[scale_info(skip_type_params(MaxTiers))]
+pub enum PrivateGameOutcome<Members: Clone + Eq + PartialEq + core::fmt::Debug, MaxTiers: Get<u32>>
+{
+	/// The game built a ladder of nested rings: root `t - 1` of `roots` is the ring of every
+	/// registrant that earned at least `t` credits, so ring 1 contains ring 2 contains ring 3.
 	Ring {
-		/// The ring root a private claim proves membership in.
-		root: Members,
-		/// The number of keys in the ring, which is the anonymity set a claim hides in. It is
-		/// reported only, the proof not needing it.
+		/// The ring root of each tier, tier 1 first. Its length is the ladder's height, which is
+		/// the most any one claimant mints.
+		roots: BoundedVec<Members, MaxTiers>,
+		/// The number of keys in tier 1, which is the widest anonymity set the game offers. It is
+		/// reported only: a proof does not need it.
 		key_count: u32,
 	},
-	/// The game has no ring, so no claim can be made against it privately and its credits are
-	/// claimed over the public path instead. Too few claimants registered for a ring to hide
-	/// anyone, or the ring failed to build.
+	/// The game built no ladder, so its credits mint over the public path instead. Either too few
+	/// claimants registered for tier 1 to hide anyone, or the build failed.
 	Abandoned {
 		/// The number of keys that were registered, which is what fell short.
 		key_count: u32,
@@ -398,23 +406,32 @@ pub enum PrivateGameOutcome<Members> {
 
 /// One private game's outcome as it is delivered to the claim chain.
 #[derive(
-	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Debug, Clone, PartialEq, Eq,
+	CloneNoBound,
+	PartialEqNoBound,
+	EqNoBound,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	DebugNoBound,
+	TypeInfo,
 )]
-pub struct PrivateRingDelivery<Members> {
+#[scale_info(skip_type_params(MaxTiers))]
+pub struct PrivateRingDelivery<
+	Members: Clone + Eq + PartialEq + core::fmt::Debug,
+	MaxTiers: Get<u32>,
+> {
 	/// The game the outcome belongs to.
 	pub game_index: GameIdx,
-	/// The slots every member of the ring holds, which bounds the slot a claim may name. The
-	/// delivery carries the count because any of the game's trees may be missing.
-	pub slots: PrivateClaimSlot,
-	/// The ring the game built, or its abandonment.
-	pub outcome: PrivateGameOutcome<Members>,
+	/// The ladder the game built, or its abandonment.
+	pub outcome: PrivateGameOutcome<Members, MaxTiers>,
 }
 
 /// A batch of private game outcomes sent from the game chain to the claim chain in one XCM
 /// message.
 ///
-/// It is kept apart from [`CreditTreeBatch`]. A ring root is far larger than a Merkle root, so a
-/// ring cannot share a message with a block's trees.
+/// It is kept apart from [`CreditTreeBatch`]. A ring root is far larger than a Merkle root and a
+/// ladder carries one per tier, so a game's outcome cannot share a message with a block's trees.
 #[derive(
 	CloneNoBound,
 	PartialEqNoBound,
@@ -426,13 +443,16 @@ pub struct PrivateRingDelivery<Members> {
 	TypeInfo,
 	MaxEncodedLen,
 )]
-#[scale_info(skip_type_params(MaxRings))]
-pub struct PrivateRingBatch<Members: Clone + Eq + PartialEq + core::fmt::Debug, MaxRings: Get<u32>>
-{
+#[scale_info(skip_type_params(MaxTiers, MaxRings))]
+pub struct PrivateRingBatch<
+	Members: Clone + Eq + PartialEq + core::fmt::Debug,
+	MaxTiers: Get<u32>,
+	MaxRings: Get<u32>,
+> {
 	/// Unix timestamp in seconds when the batch was assembled on the game chain.
 	pub source_time: u64,
 	/// The outcomes in the batch, in ascending game order.
-	pub rings: BoundedVec<PrivateRingDelivery<Members>, MaxRings>,
+	pub rings: BoundedVec<PrivateRingDelivery<Members, MaxTiers>, MaxRings>,
 }
 
 /// What the game needs from the pallet that owns the NFT claim credits.

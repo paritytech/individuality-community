@@ -255,7 +255,7 @@ use indiv_pallet_airdrop::types::{
 };
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
-	credit_trees::{AwardCredits, MAX_PRIVATE_CLAIM_SLOTS},
+	credit_trees::AwardCredits,
 	traits::{Alias, CommunicationIdentifier, Context},
 	weight_budget::OcwWeightBudget,
 };
@@ -1553,15 +1553,6 @@ pub mod pallet {
 					Error::<T>::InvalidGameSetup
 				);
 
-				// A game that grants no slot is a public game. `Some(0)` is rejected rather than
-				// read as `None`, because it schedules a private game nobody can claim from.
-				if let Some(private) = schedule.private_claims {
-					ensure!(
-						private.slots > 0 && private.slots <= MAX_PRIVATE_CLAIM_SLOTS,
-						Error::<T>::InvalidGameSetup
-					);
-				}
-
 				last_game_end_time =
 					Duration::from_secs(GameTimes::<T>::player_process_end(schedule) as u64);
 			}
@@ -1886,7 +1877,7 @@ pub mod pallet {
 				rounds: schedule.rounds,
 				pending_attendance: 0,
 				airdrops_scheduled,
-				private_claims: schedule.private_claims,
+				claims: schedule.claims,
 			});
 			GameHistory::<T>::insert(index, game_play_time);
 

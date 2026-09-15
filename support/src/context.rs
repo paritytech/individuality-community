@@ -159,15 +159,15 @@ pub mod private_nft_claims {
 	/// The private NFT claim product name shared by all networks.
 	pub const PRODUCT_NAME: &[u8] = b"nftcl";
 
-	/// The context a claimant proves under to spend slot `slot` of game `game_index`.
+	/// The context a claimant proves under to spend tier `tier` of game `game_index`.
 	///
-	/// The suffix is `u32_le(game_index) ++ slot ++ zero padding`. A member yields one alias per
-	/// context, so a claimant gets one claim per slot and the aliases of two slots cannot be tied
-	/// to each other.
-	pub fn slot(game_index: u32, slot: u8) -> ProductContextSuffix {
+	/// The suffix is `u32_le(game_index) ++ tier ++ zero padding`. A member yields one alias per
+	/// context, so a claimant gets one claim per tier and no two of those aliases can be tied to
+	/// each other.
+	pub fn tier(game_index: u32, tier: u8) -> ProductContextSuffix {
 		let mut suffix = [0u8; 32];
 		suffix[..4].copy_from_slice(&game_index.to_le_bytes());
-		suffix[4] = slot;
+		suffix[4] = tier;
 		ProductContextSuffix::Raw(suffix)
 	}
 }

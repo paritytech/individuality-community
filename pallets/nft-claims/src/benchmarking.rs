@@ -33,7 +33,7 @@ use frame_support::{
 	BoundedVec,
 };
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
-use indiv_support::credit_trees::CreditTreeDelivery;
+use indiv_support::credit_trees::{ClaimPath, CreditTreeDelivery};
 use sp_runtime::traits::{Bounded, Zero};
 
 /// The `i`-th distinct credit a benchmarked tree commits to.
@@ -49,7 +49,7 @@ fn credit(i: u32) -> NftClaimCredit {
 /// ahead of the stream.
 ///
 /// Every tree names a private game of its own, which is the dearest batch to store: a tree that
-/// names slots reads the game's ring and its closure, and a game per tree gives each of those a
+/// names tiers reads the game's ring and its closure, and a game per tree gives each of those a
 /// key of its own.
 fn batch<T: Config>(n: u32) -> CreditTreeBatch<T> {
 	let mut trees = BoundedVec::new();
@@ -59,7 +59,7 @@ fn batch<T: Config>(n: u32) -> CreditTreeBatch<T> {
 				sequence: Some(i.saturating_add(1) as TreeSequence),
 				block: i,
 				tree: NftClaimCreditTree {
-					private_slots: 1,
+					claim_path: ClaimPath::Public,
 					game_index: i.saturating_add(1),
 					// Distinct per tree and never the zero root the pallet skips as invalid.
 					root: CreditProofNode([i.saturating_add(1) as u8; 32]),
@@ -316,20 +316,31 @@ mod benches {
 		Ok(())
 	}
 
-	/// Worst case: every ring in the batch is new, so each one is written.
+	/// Worst case: every ladder in the batch is new, so each one is written.
+	///
+	/// `n` is the ladders and `r` the roots they carry between them, which is what the delivery
+	/// writes. They are separate components because a batch of tall ladders and one of short ones
+	/// cost the same per game and differ only by their rows. `r` is spread evenly, only the total
+	/// being written whatever ladder each root belongs to, and it starts at zero because a batch
+	/// of abandonments carries no root.
 	#[benchmark]
 	fn receive_private_rings(
 		n: Linear<1, { T::MaxPrivateRingsPerMessage::get() }>,
+		r: Linear<0, { T::MaxPrivateRingsPerMessage::get() * T::MaxPrivateRingTiers::get() }>,
 	) -> Result<(), BenchmarkError> {
 		let (root, _proof, _alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
-			&pallet::Pallet::<T>::private_claim_context(1, 0),
+			&pallet::Pallet::<T>::private_claim_context(1, 1),
 			&pallet::Pallet::<T>::private_claim_message(0, &whitelisted_caller()),
 		);
+		let per_ladder = r.div_ceil(n).min(T::MaxPrivateRingTiers::get()).max(1);
 		let rings = (0..n)
 			.map(|game_index| PrivateRingDelivery {
 				game_index,
-				slots: 1,
-				outcome: PrivateGameOutcome::Ring { root: root.clone(), key_count: 1 },
+				outcome: PrivateGameOutcome::Ring {
+					roots: BoundedVec::try_from(alloc::vec![root.clone(); per_ladder as usize])
+						.expect("the height is bounded by MaxPrivateRingTiers"),
+					key_count: 1,
+				},
 			})
 			.collect::<Vec<_>>();
 		let batch = crate::PrivateRingBatchOf::<T> {
@@ -344,6 +355,7 @@ mod benches {
 		_(origin as T::RuntimeOrigin, batch);
 
 		assert_eq!(PrivateRings::<T>::iter().count(), n as usize);
+		assert_eq!(crate::PrivateRingRoots::<T>::iter().count(), (n * per_ladder) as usize);
 
 		Ok(())
 	}
@@ -357,20 +369,20 @@ mod benches {
 	#[benchmark]
 	fn claim_private() -> Result<(), BenchmarkError> {
 		let game_index = 1;
-		let slot = 0;
+		let tier = 1;
 		let mint_to: T::AccountId = account("mint_to", 0, 0);
 
 		let owner: T::AccountId = account("collection-owner", 0, 0);
 		let collection: CollectionId = 0;
 		let (root, proof, alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
-			&pallet::Pallet::<T>::private_claim_context(game_index, slot),
+			&pallet::Pallet::<T>::private_claim_context(game_index, tier),
 			&pallet::Pallet::<T>::private_claim_message(collection, &mint_to),
 		);
+		crate::PrivateRingRoots::<T>::insert(game_index, tier, root);
 		PrivateRings::<T>::insert(
 			game_index,
 			crate::PrivateRing {
-				root,
-				slots: 1,
+				height: tier,
 				key_count: 1,
 				opens_at: BlockNumberFor::<T>::zero(),
 				closes_at: BlockNumberFor::<T>::max_value(),
@@ -384,7 +396,7 @@ mod benches {
 		);
 
 		#[extrinsic_call]
-		_(RawOrigin::Authorized, game_index, slot, alias, proof, collection, mint_to);
+		_(RawOrigin::Authorized, game_index, tier, alias, proof, collection, mint_to);
 
 		assert_eq!(SpentPrivateClaims::<T>::iter_prefix(game_index).count(), 1);
 
@@ -396,18 +408,18 @@ mod benches {
 	#[benchmark]
 	fn authorize_claim_private() -> Result<(), BenchmarkError> {
 		let game_index = 1;
-		let slot = 0;
+		let tier = 1;
 		let mint_to: T::AccountId = account("mint_to", 0, 0);
 		let collection: CollectionId = 0;
 		let (root, proof, alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
-			&pallet::Pallet::<T>::private_claim_context(game_index, slot),
+			&pallet::Pallet::<T>::private_claim_context(game_index, tier),
 			&pallet::Pallet::<T>::private_claim_message(collection, &mint_to),
 		);
+		crate::PrivateRingRoots::<T>::insert(game_index, tier, root);
 		PrivateRings::<T>::insert(
 			game_index,
 			crate::PrivateRing {
-				root,
-				slots: 1,
+				height: tier,
 				key_count: 1,
 				opens_at: BlockNumberFor::<T>::zero(),
 				closes_at: BlockNumberFor::<T>::max_value(),
@@ -419,7 +431,7 @@ mod benches {
 			pallet::Pallet::<T>::authorize_claim_private(
 				TransactionSource::External,
 				&game_index,
-				&slot,
+				&tier,
 				&alias,
 				&proof,
 				&collection,
@@ -441,16 +453,20 @@ mod benches {
 		let game_index = 1;
 		let caller: T::AccountId = account("caller", 0, 0);
 		let (root, _proof, _alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
-			&pallet::Pallet::<T>::private_claim_context(game_index, 0),
+			&pallet::Pallet::<T>::private_claim_context(game_index, 1),
 			&pallet::Pallet::<T>::private_claim_message(0, &caller),
 		);
-		// A window that closed in the block the ring arrived in, which is the state the call is
-		// allowed in.
+		// A window that closed in the block the ladder arrived in, which is the state the call is
+		// allowed in. The ladder is as tall as the runtime carries tiers for, its rows going with
+		// the step that removes the last alias.
+		let height = T::MaxPrivateRingTiers::get() as u8;
+		for tier in 1..=height {
+			crate::PrivateRingRoots::<T>::insert(game_index, tier, root.clone());
+		}
 		PrivateRings::<T>::insert(
 			game_index,
 			crate::PrivateRing {
-				root,
-				slots: 1,
+				height,
 				key_count: 1,
 				opens_at: BlockNumberFor::<T>::zero(),
 				closes_at: BlockNumberFor::<T>::zero(),
@@ -484,14 +500,14 @@ mod benches {
 		let game_index = 1;
 		let caller: T::AccountId = account("caller", 0, 0);
 		let (root, _proof, _alias) = <T as Config>::BenchmarkHelper::private_ring_and_proof(
-			&pallet::Pallet::<T>::private_claim_context(game_index, 0),
+			&pallet::Pallet::<T>::private_claim_context(game_index, 1),
 			&pallet::Pallet::<T>::private_claim_message(0, &caller),
 		);
+		crate::PrivateRingRoots::<T>::insert(game_index, 1, root);
 		PrivateRings::<T>::insert(
 			game_index,
 			crate::PrivateRing {
-				root,
-				slots: 1,
+				height: 1,
 				key_count: 1,
 				opens_at: BlockNumberFor::<T>::zero(),
 				closes_at: BlockNumberFor::<T>::zero(),
@@ -584,7 +600,7 @@ fn claimable_tree<T: Config>(
 			root: proof.root.into(),
 			leaf_count,
 			timestamp,
-			private_slots: 1,
+			claim_path: ClaimPath::Public,
 		},
 	);
 	TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), BLOCK, ());
@@ -620,7 +636,7 @@ fn fill_due_expiries<T: Config>(n: u32) {
 				root: CreditProofNode([block as u8; 32]),
 				leaf_count: 2,
 				timestamp,
-				private_slots: 0,
+				claim_path: ClaimPath::Public,
 			},
 		);
 		TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());

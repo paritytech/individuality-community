@@ -106,18 +106,18 @@
 //! ## Claiming privately
 //!
 //! A game opts into the private path when it is scheduled. Such a game mints through that path
-//! only: every tree its credits form carries the slot count, and the claims chain refuses a public
-//! claim against a tree that does.
+//! only: every tree its credits form names the private path and the claims chain refuses a public
+//! claim against such a tree.
 //!
-//! A claimant who reached the game's entry threshold in credits calls
-//! [`Pallet::register_private_claim_key`] and hands over a ring VRF key their wallet made for this
-//! game alone. When registration closes, the offchain worker builds one ring over every registered
-//! key and sends it to the claims chain. A proof under the context of a game and a slot mints
-//! there without naming its maker.
+//! A claimant who earned a credit of the game calls [`Pallet::register_private_claim_key`] and
+//! hands over a ring VRF key their wallet made for this game alone. When registration closes, the
+//! offchain worker builds the game's ladder of nested rings, one per credit a claimant can earn,
+//! and sends it to the claims chain. A proof under the context of a game and a tier mints there
+//! without naming its maker.
 //!
-//! Every registrant holds the same slots, so one ring serves them all. An entitlement that varied
-//! with credits would need a different ring per entitlement, and the set a claimant proved in
-//! would name them.
+//! A registrant mints one NFT per credit they earned, one per tier. The tiers are nested, so a
+//! proof against a tier implies every tier below it. The tiers a claimant proved against therefore
+//! narrow them down no further than the highest one does.
 //!
 //! The ring holds the keys the claimants supply, not the keys the game knows them by. A person
 //! plays under an alias, and the chain cannot read the personhood key behind it.
@@ -177,9 +177,9 @@ use indiv_support::weight_budget::OcwWeightBudget;
 use indiv_support::{
 	credit_trees::{
 		authorize_expiry_sweep, drain_due_expiries, expiry_deadline, oldest_expiry, AwardCredits,
-		CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpirySweepTx, ExpiryTimestamp,
-		NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, PrivateGameOutcome, TreeSequence,
-		ROOT_TTL_GRACE,
+		ClaimPath, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpirySweepTx,
+		ExpiryTimestamp, NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, PrivateClaimTier,
+		TreeSequence, ROOT_TTL_GRACE,
 	},
 	identity::AccountOrPerson,
 	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
@@ -336,6 +336,17 @@ pub mod pallet {
 		#[pallet::constant]
 		type PrivateKeysPerBuild: Get<u32>;
 
+		/// The most tiers one game's ring ladder carries, which is the most any one claimant
+		/// mints from it.
+		///
+		/// A claimant mints one NFT per credit, so a game whose claimants can earn more credits
+		/// than this forfeits the top ones. Set it at least as high as a full attendance earns,
+		/// `MaxRounds * (MaxGroupSize - 1)`. It also bounds the delivery, one ring root per tier,
+		/// so the claims chain's own bound must be at least as high or the deliveries fail to
+		/// decode there.
+		#[pallet::constant]
+		type MaxPrivateRingTiers: Get<u32>;
+
 		/// How long key registration stays open after a game's player process ends, in seconds.
 		///
 		/// A claimant who misses the window mints nothing, unless the game is abandoned and its
@@ -474,12 +485,29 @@ pub mod pallet {
 		ReceivePrivateRings { batch: PrivateRingBatchOf<T> },
 	}
 
-	/// A batch of private claim rings as it is sent to the NFT claims chain.
+	/// A batch of private claim ladders as it is sent to the NFT claims chain.
 	///
-	/// One ring root fills a message, so the bound is one.
+	/// One ladder fills a message, so the bound is one.
 	pub type PrivateRingBatchOf<T> = indiv_support::credit_trees::PrivateRingBatch<
 		PrivateRingRoot<T>,
+		<T as Config>::MaxPrivateRingTiers,
 		frame_support::traits::ConstU32<1>,
+	>;
+
+	/// One private game's record for the runtime.
+	pub type PrivateGameInfoOf<T> =
+		crate::types::PrivateGameInfo<<T as Config>::MaxPrivateRingTiers>;
+
+	/// One private game's outcome for the runtime: its ladder of roots, or its abandonment.
+	pub type PrivateGameOutcomeOf<T> = indiv_support::credit_trees::PrivateGameOutcome<
+		PrivateRingRoot<T>,
+		<T as Config>::MaxPrivateRingTiers,
+	>;
+
+	/// One private game's outcome as it is delivered to the claims chain.
+	pub type PrivateRingDeliveryOf<T> = indiv_support::credit_trees::PrivateRingDelivery<
+		PrivateRingRoot<T>,
+		<T as Config>::MaxPrivateRingTiers,
 	>;
 
 	/// Which credits a game has already awarded a claimant, keyed by game index and claimant.
@@ -651,16 +679,16 @@ pub mod pallet {
 	/// registration opens and its schedule is unreadable by then. Removed by the last
 	/// [`Pallet::clean_up_private_game`] step, once the ring is built and delivered.
 	#[pallet::storage]
-	pub type PrivateGames<T: Config> = StorageMap<_, Twox64Concat, GameIdx, PrivateGameInfo>;
+	pub type PrivateGames<T: Config> = StorageMap<_, Twox64Concat, GameIdx, PrivateGameInfoOf<T>>;
 
-	/// The claimants of a private game that reached its entry threshold, and what each did with
-	/// it.
+	/// The claimants of a private game that earned a credit of it, and what each did with them.
 	///
-	/// An entry is written once, when the award that reaches the threshold lands, and turns to
-	/// [`PrivateClaimantState::Registered`] when the claimant registers a key. One entry per
-	/// claimant is what refuses a second registration: a claimant holding two keys of one ring is
-	/// distinguishable by how much the ring grew for them. The map outlives the game because
-	/// [`AwardedNftClaimCredits`], the mask its count comes from, is drained when the game ends.
+	/// The claimant's first award writes the entry and every award after it raises the count, so
+	/// the count is final when the player process ends and names the tier the claimant's key goes
+	/// into. One entry per claimant is what refuses a second registration: a claimant holding two
+	/// keys of one ring is distinguishable by how much the ring grew for them. The map outlives
+	/// the game because [`AwardedNftClaimCredits`], the mask its count comes from, is drained when
+	/// the game ends.
 	#[pallet::storage]
 	pub type PrivateClaimants<T: Config> = StorageDoubleMap<
 		_,
@@ -671,36 +699,54 @@ pub mod pallet {
 		PrivateClaimantState,
 	>;
 
-	/// The keys registered for a game's private claim ring, in registration order.
+	/// The keys registered for one tier of a game's ladder, in registration order, keyed by game
+	/// and by the credit count their owner earned.
 	///
-	/// The ring commits to each key at its position in this list. Every build step reads the list
-	/// in full, so it is charged at its maximum encoded length.
+	/// A key sits in the bucket of its owner's credit count alone, so tier `t`'s ring is every
+	/// bucket from `t` upwards. The build pushes the buckets in descending order, which puts the
+	/// members of each ring together and lets one pass build every tier. A build step reads one
+	/// bucket, so it is charged at one bucket's maximum encoded length rather than the game's
+	/// whole registration. [`Config::MaxPrivateRingKeys`] bounds the buckets together as well as
+	/// each one alone, tier 1's ring being all of them.
 	#[pallet::storage]
-	pub type PrivateRingKeys<T: Config> = StorageMap<
+	pub type PrivateRingKeys<T: Config> = StorageDoubleMap<
 		_,
 		Twox64Concat,
 		GameIdx,
+		Twox64Concat,
+		PrivateClaimTier,
 		BoundedVec<PrivateRingKey<T>, T::MaxPrivateRingKeys>,
 		ValueQuery,
 	>;
 
+	/// Every key registered for a game, whatever tier it went into.
+	///
+	/// Registrations are public, so a claimant can read another's key and enrol it, which would
+	/// have a ring count a member it does not have. The check is a lookup here because scanning
+	/// the buckets reads every one of them. Dropped with the game's registration state.
+	#[pallet::storage]
+	pub type PrivateRingKeyIndex<T: Config> =
+		StorageDoubleMap<_, Twox64Concat, GameIdx, Blake2_128Concat, PrivateRingKey<T>, ()>;
+
 	/// The half-built ring of a game whose keys are still being pushed.
 	///
-	/// Removed once the root is finished. A private ring takes no key after that.
+	/// One intermediate serves the whole ladder: closing a tier clones it, finishes the clone into
+	/// that tier's root and pushes the next bucket onto the original. Removed once the last tier
+	/// is closed.
 	#[pallet::storage]
 	pub type PrivateRingIntermediates<T: Config> =
 		StorageMap<_, Twox64Concat, GameIdx, PrivateRingIntermediateOf<T>>;
 
 	/// The outcome of every private game whose claims chain does not hold it yet, keyed by game.
 	///
-	/// Both outcomes are delivered: a ring opens the private path on the claims chain, and an
-	/// abandonment reopens the public one. It is removed once the message is sent, together with
-	/// [`PrivateGamePhase::Delivering`], which is what says a delivery is owed. A root is far
-	/// larger than the game's record, so the phase carries the flag and this map is read only
-	/// where the outcome itself is needed.
+	/// Both outcomes are delivered: a ladder opens the private path on the claims chain and an
+	/// abandonment reopens the public one. A ladder is filled in as its tiers close, tier 1 first,
+	/// and goes once the message is sent, together with [`PrivateGamePhase::Delivering`], which is
+	/// what says a delivery is owed. A root is far larger than the game's record, so the phase
+	/// carries the flag and this map is read only where the outcome itself is needed.
 	#[pallet::storage]
 	pub type PrivateOutcomes<T: Config> =
-		StorageMap<_, Twox64Concat, GameIdx, PrivateGameOutcome<PrivateRingRoot<T>>>;
+		StorageMap<_, Twox64Concat, GameIdx, PrivateGameOutcomeOf<T>>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -722,8 +768,9 @@ pub mod pallet {
 			block: BlockNumberFor<T>,
 			leaf_index: u32,
 		},
-		/// A claimant registered a key for a game's private claim ring, taking the game's slots.
-		/// `credits` is the threshold they met, the same for every registrant.
+		/// A claimant registered a key for a game's ring ladder. `credits` is what they earned,
+		/// which is the tier their key went into and the most tiers they can mint. It is capped at
+		/// [`Config::MaxPrivateRingTiers`], the credits above the ladder's top being forfeit.
 		///
 		/// The key is left out. An event that tied the key to the claimant would identify every
 		/// claim made under it.
@@ -732,12 +779,18 @@ pub mod pallet {
 			claimant: AccountOrPerson<T::AccountId>,
 			credits: u32,
 		},
-		/// A game's ring is final and awaits delivery. `key_count` is the anonymity set every
-		/// claim of the game hides in.
-		PrivateRingBuilt { game_index: GameIdx, key_count: u32 },
-		/// The game has no ring, so its credits are claimed over the public path once the claims
+		/// A game's ladder is open and `height` tiers tall, which is the most any one claimant
+		/// mints from it. The tiers above held too few keys to hide a claimant.
+		PrivateLadderOpened { game_index: GameIdx, height: PrivateClaimTier },
+		/// One tier of a game's ladder is final. Its root is the ring of every registrant that
+		/// earned at least `tier` credits.
+		PrivateRingBuilt { game_index: GameIdx, tier: PrivateClaimTier },
+		/// A game's ladder is whole and awaits delivery. `key_count` is the tier-1 ring, which is
+		/// the widest anonymity set the game offers.
+		PrivateLadderBuilt { game_index: GameIdx, height: PrivateClaimTier, key_count: u32 },
+		/// The game has no ladder, so its credits are claimed over the public path once the claims
 		/// chain has the abandonment. `key_count` is how many claimants registered and
-		/// `required` is the anonymity floor they fell short of.
+		/// `required` is tier 1's anonymity floor they fell short of.
 		///
 		/// Either the registration stayed below `required`, or the ring failed to build
 		/// `PRIVATE_RING_BUILD_RETRIES` times. `key_count` at or above `required` means the
@@ -824,10 +877,10 @@ pub mod pallet {
 		/// Key registration for the game's private claim ring is not open. It opens once the
 		/// game's credits are final and closes after [`Config::PrivateKeyRegistrationSeconds`].
 		PrivateKeyRegistrationClosed,
-		/// The claimant does not hold the credits a registration costs.
+		/// The claimant earned no credit of this game, so no tier of its ladder admits them.
 		InsufficientCredits,
-		/// The claimant already registered a key for this game. One key holds every slot the game
-		/// grants, so a second key adds nothing but a way to recognise its owner.
+		/// The claimant already registered a key for this game. One key holds every tier the
+		/// claimant earned, so a second key adds nothing but a way to recognise its owner.
 		AlreadyRegistered,
 		/// The key is not a valid ring VRF member key.
 		InvalidRingKey,
@@ -837,7 +890,8 @@ pub mod pallet {
 		/// The runtime's ring exponent is not one the crypto accepts, so no ring can be built.
 		InvalidRingExponent,
 		/// The game's registration is full, so it takes no further key. Registration is
-		/// first-come, first-served: [`Config::MaxPrivateRingKeys`] is the whole game's room.
+		/// first-come, first-served: [`Config::MaxPrivateRingKeys`] is the whole game's room,
+		/// because tier 1 holds every registrant in one ring.
 		PrivateRingFull,
 		/// The game owes no build step.
 		NoPrivateRingToBuild,
@@ -1015,12 +1069,13 @@ pub mod pallet {
 		/// Registers the key that a claimant's private claims of `game_index` are made under.
 		///
 		/// The origin is the claimant the credits were awarded to, resolved as `report` resolves
-		/// a player, so both an account and a person can register. `key` goes into the game's
-		/// ring, and a claim on the claims chain proves membership of that ring without naming
-		/// the key.
+		/// a player, so both an account and a person can register. `key` goes into the bucket of
+		/// the claimant's credit count, which puts it in every tier at or below that count. A
+		/// claim on the claims chain proves membership of one of those rings without naming the
+		/// key.
 		///
-		/// A registration needs a share of the game's full attendance earned in credits, and
-		/// grants every slot the game holds. A claimant registers once per game.
+		/// A registration needs one credit of the game, the ladder's base, and grants one tier per
+		/// credit the claimant earned. A claimant registers once per game.
 		///
 		/// ## Parameters
 		/// - `game_index`: The private game the registration is for.
@@ -1038,26 +1093,28 @@ pub mod pallet {
 			Self::do_register_private_claim_key(game_index, claimant, key)
 		}
 
-		/// Pushes the next keys of `game_index`'s private claim ring, or closes the ring when
+		/// Pushes the next keys of `game_index`'s ring ladder, or closes what is open when
 		/// `to_include` is zero.
 		///
 		/// Authorized call submitted by this pallet's offchain worker: it is accepted from a
 		/// local or in-block source only, so it cannot be submitted externally.
 		///
-		/// `to_include` is what `authorize` found still to push, capped at
-		/// [`Config::PrivateKeysPerBuild`]. A retry that raced an earlier build carries a stale
-		/// count and is rejected, so no key is pushed twice. Zero closes the ring: it finishes the
-		/// root, or abandons a ring too few claimants registered for, and moves the game on to
-		/// its cleanup.
+		/// `to_include` is what `authorize` found still to push into the tier being built, capped
+		/// at [`Config::PrivateKeysPerBuild`]. A retry that raced an earlier build carries a stale
+		/// count and is rejected, so no key is pushed twice. Zero closes what is open: it opens
+		/// the ladder and decides its height, snapshots the tier being built and drops to the tier
+		/// below, or abandons a game whose tier 1 is too small or whose retries are spent.
 		#[pallet::authorize(|source, game_index, to_include, _discriminator| {
 			Self::authorize_build_private_ring(source, game_index, to_include)
 		})]
 		#[pallet::call_index(23)]
-		// `to_include` alone decides the branch, so the charge reads it: pushing scales with the
-		// keys, closing does not. Closing is charged at what finishing a root costs, the dearer
-		// of its two shapes.
+		// `to_include` alone tells pushing from closing: pushing scales with the keys, closing
+		// does not. The game's state and not the call picks which of the three closing branches
+		// runs, so closing is charged at the dearest of them and refunded down to the one taken.
 		#[pallet::weight(if *to_include == 0 {
-			<T as Config>::WeightInfo::finish_private_ring()
+			<T as Config>::WeightInfo::finish_private_ring(T::MaxPrivateRingTiers::get())
+				.max(<T as Config>::WeightInfo::open_private_ring_ladder())
+				.max(<T as Config>::WeightInfo::abandon_private_ring(T::MaxPrivateRingTiers::get()))
 		} else {
 			<T as Config>::WeightInfo::build_private_ring(*to_include)
 		})]
@@ -1069,10 +1126,10 @@ pub mod pallet {
 			// Per-window discriminator, as in `send_credit_trees`, so that a stalled retry
 			// eventually produces a fresh transaction hash.
 			_discriminator: BlockNumberFor<T>,
-		) -> DispatchResult {
+		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
 
-			Self::do_build_private_ring(game_index, to_include)
+			Ok(Some(Self::do_build_private_ring(game_index, to_include)?).into())
 		}
 
 		/// Delivers the outcome one private game reached, which [`PrivateOutcomes`] holds until
@@ -1302,10 +1359,11 @@ impl<T: Config> Pallet<T> {
 			return Self::drop_credit(claimant, credit);
 		}
 
-		// The private claim path of the game, if it has one. Its slot count goes into the tree,
-		// and the claims chain refuses a public claim against a tree that carries one.
+		// Which path the game mints on goes into the tree. The claims chain refuses a public claim
+		// against a private one.
 		let private_game = Self::note_private_game(game_index);
-		let private_slots = private_game.map_or(0, |info| info.slots);
+		let claim_path =
+			if private_game.is_some() { ClaimPath::Private } else { ClaimPath::Public };
 
 		CreditBuffers::<T>::insert(
 			block,
@@ -1313,7 +1371,7 @@ impl<T: Config> Pallet<T> {
 				// The buffer's first award dates its tree; later awards leave the date alone.
 				timestamp: if leaf_index == 0 { award_time } else { buffer.timestamp },
 				awards: leaf_index.saturating_add(1),
-				private_slots,
+				claim_path,
 				..buffer
 			},
 		);
@@ -1366,7 +1424,8 @@ impl<T: Config> Pallet<T> {
 		cursor: BlockNumberFor<T>,
 		game_index: GameIdx,
 	) -> Option<(BlockNumberFor<T>, CreditBuffer)> {
-		let fresh = CreditBuffer { game_index, timestamp: 0, awards: 0, private_slots: 0 };
+		let fresh =
+			CreditBuffer { game_index, timestamp: 0, awards: 0, claim_path: ClaimPath::Public };
 		let buffer = cursor.max(now);
 		let (buffer, pending) = match CreditBuffers::<T>::get(buffer) {
 			Some(pending)
@@ -1468,7 +1527,7 @@ impl<T: Config> Pallet<T> {
 	/// no award chunk.
 	pub fn build_credit_tree(now: BlockNumberFor<T>) -> Weight {
 		let block = now.saturating_sub(One::one());
-		let Some(CreditBuffer { game_index, timestamp, awards: buffered, private_slots }) =
+		let Some(CreditBuffer { game_index, timestamp, awards: buffered, claim_path }) =
 			CreditBuffers::<T>::take(block)
 		else {
 			return <T as Config>::WeightInfo::build_credit_tree_empty();
@@ -1489,7 +1548,7 @@ impl<T: Config> Pallet<T> {
 		let leaves = Self::nft_claim_credit_leaves(&awards);
 		let root = binary_merkle_tree::merkle_root::<BlakeTwo256, _>(leaves).into();
 		let credit_root =
-			NftClaimCreditTree { game_index, root, leaf_count, timestamp, private_slots };
+			NftClaimCreditTree { game_index, root, leaf_count, timestamp, claim_path };
 		NftClaimCreditRoots::<T>::insert(block, credit_root);
 		Self::note_root_expiry(block, timestamp);
 		Self::retain_credit_awards(block);

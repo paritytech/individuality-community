@@ -18,7 +18,7 @@
 
 use crate::Config;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
-use indiv_support::{credit_trees::PrivateClaimSlot, utils::BigEndianU64};
+use indiv_support::{credit_trees::PrivateClaimTier, utils::BigEndianU64};
 use scale_info::TypeInfo;
 use sp_core::H160;
 
@@ -128,21 +128,31 @@ impl<BlockNumber: Eq> PrivateClaimCount<BlockNumber> {
 	}
 }
 
-/// One game's private claim ring, as the game chain delivered it, with the window its claims are
-/// made in.
+/// One game's private claim ladder, as the game chain delivered it, with the window its claims
+/// are made in.
 ///
-/// A claim's proof is checked against the root. The root never changes, a ring being built once
-/// after registration closed, and it holds every key registered for the game. The window is fixed
-/// when the ring arrives and a redelivery does not move it.
+/// The roots are in [`crate::PrivateRingRoots`], one row per tier, so a claim reads the one root
+/// it proves against rather than the whole ladder. This holds what a claim needs besides a root:
+/// how tall the ladder is and when its claims are taken. A ladder is built once after registration
+/// closes and the window is fixed when it arrives, so a redelivery moves neither.
 #[derive(
-	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Debug, Clone, PartialEq, Eq,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
 )]
-pub struct PrivateRing<Members, BlockNumber> {
-	/// The ring root a claim proves membership in.
-	pub root: Members,
-	/// The slots every member of the ring holds, which bounds the slot a claim may name.
-	pub slots: PrivateClaimSlot,
-	/// The number of keys in the ring, which is the anonymity set of every claim against it.
+pub struct PrivateRing<BlockNumber> {
+	/// The number of tiers, which bounds the tier a claim may name and is the most any one
+	/// claimant mints.
+	pub height: PrivateClaimTier,
+	/// The number of keys in tier 1, which is the widest anonymity set the game offers. A higher
+	/// tier holds fewer.
 	pub key_count: u32,
 	/// The first block a claim of the game is taken in. Every member's claims open together, so
 	/// the wallets that watch the chain closest are not the ones that claim first. A claim before

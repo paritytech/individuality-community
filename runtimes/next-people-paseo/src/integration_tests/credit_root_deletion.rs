@@ -38,7 +38,7 @@ fn record_root() {
 			root: CreditProofNode([1u8; 32]),
 			leaf_count: 3,
 			timestamp: TIMESTAMP,
-			private_slots: 0,
+			claim_path: indiv_support::credit_trees::ClaimPath::Public,
 		},
 	);
 }

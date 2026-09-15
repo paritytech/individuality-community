@@ -217,8 +217,8 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 			.saturating_add(T::DbWeight::get().reads(2))
 	}
 	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
-	/// Storage: `NftCredits::PrivateCreditBalances` (r:1 w:1)
-	/// Storage: `NftCredits::PrivateRegistrations` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateClaimants` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateRingKeyIndex` (r:1 w:1)
 	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:1)
 	fn register_private_claim_key() -> Weight {
 		// Proof Size summary in bytes:
@@ -251,15 +251,49 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:1)
 	/// Storage: `NftCredits::PrivateRingIntermediates` (r:1 w:1)
 	/// Storage: `NftCredits::PrivateRings` (r:0 w:1)
-	fn finish_private_ring() -> Weight {
+	/// The range of component `n` is `[1, 15]`.
+	fn finish_private_ring(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `20000`
 		//  Estimated: `80000`
 		// Minimum execution time: 150_000_000 picoseconds.
 		Weight::from_parts(150_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 80000))
+			// Standard Error: 100_000
+			.saturating_add(Weight::from_parts(1_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(Weight::from_parts(0, 288).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(4))
+	}
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
+	fn open_private_ring_ladder() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `20000`
+		//  Estimated: `80000`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 80000))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	/// Storage: `NftCredits::PrivateGames` (r:1 w:1)
+	/// Storage: `NftCredits::PrivateRingIntermediates` (r:0 w:1)
+	/// Storage: `NftCredits::PrivateOutcomes` (r:0 w:1)
+	/// Storage: `NftCredits::PrivateRingKeys` (r:0 w:15)
+	/// The range of component `n` is `[0, 15]`.
+	fn abandon_private_ring(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `20000`
+		//  Estimated: `80000`
+		// Minimum execution time: 30_000_000 picoseconds.
+		Weight::from_parts(30_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 80000))
+			// Standard Error: 200_000
+			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
+			.saturating_add(Weight::from_parts(0, 36816).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(3))
+			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
 	}
 	/// Storage: `NftCredits::PrivateGames` (r:1 w:0)
 	/// Storage: `NftCredits::PrivateRingKeys` (r:1 w:0)

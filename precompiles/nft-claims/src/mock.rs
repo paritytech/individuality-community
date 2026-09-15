@@ -281,6 +281,9 @@ impl indiv_pallet_nft_claims::Config for Test {
 	type MaxPrivateClaimsPerBlock = ConstU32<8>;
 	type PrivateClaimDelay = ConstU64<1>;
 	type PrivateClaimWindow = ConstU64<100>;
+	// Small, so a game's claims fit the mock's narrow claim window.
+	type MaxPrivateRingKeys = ConstU32<8>;
+	type MaxPrivateRingTiers = ConstU32<15>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockBenchmarkHelper;
 }

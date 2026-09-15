@@ -21,7 +21,7 @@ use super::*;
 use codec::Encode;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
-use indiv_support::credit_trees::MAX_PRIVATE_CLAIM_SLOTS;
+use indiv_support::credit_trees::PrivateClaimTier;
 use sp_runtime::{traits::One, transaction_validity::TransactionSource};
 
 /// What the benchmarks cannot set up themselves, because only the runtime knows how its XCM
@@ -47,36 +47,56 @@ fn private_ring_key<T: Config>(seed: u32) -> crate::PrivateRingKey<T> {
 	T::RingVrf::member_from_secret(&secret)
 }
 
-/// Open the private claim path of `game_index`, as a private game's first award does.
+/// Open the private claim path of `game_index` with `tiers` tiers, as a private game's first
+/// award does.
 #[cfg(feature = "runtime-benchmarks")]
-fn open_private_game<T: Config>(game_index: GameIdx, slots: u8) {
+fn open_private_game<T: Config>(game_index: GameIdx, tiers: u32) {
 	PrivateGames::<T>::insert(
 		game_index,
-		PrivateGameInfo {
-			slots,
+		PrivateGameInfoOf::<T> {
 			key_registration_starts: 0,
 			key_registration_ends: u32::MAX,
 			key_count: 0,
-			// The largest threshold a runtime's bounds allow, which a game of `MaxRounds` rounds
-			// reaches whatever its groups hold.
-			entry_threshold: T::MaxRounds::get(),
-			eligible_claimants: 0,
-			phase: PrivateGamePhase::Building { included: 0, failures: 0 },
+			tiers: BoundedVec::try_from(vec![
+				crate::PrivateTierCounts::default();
+				tiers.min(T::MaxPrivateRingTiers::get()) as usize
+			])
+			.expect("the count is bounded by MaxPrivateRingTiers"),
+			phase: PrivateGamePhase::Registering,
 		},
 	);
 }
 
-/// Register `count` keys for `game_index`, as that many claimants would.
+/// Seed one key bucket for each of `buckets` tiers of `game_index`, as registrants spread over
+/// that many credit counts would.
+///
+/// An abandonment clears one bucket at a time and each is a storage key of its own, so the count
+/// has to vary the keys and not the total alone.
 #[cfg(feature = "runtime-benchmarks")]
-fn fill_private_ring<T: Config>(game_index: GameIdx, count: u32) {
-	let keys = (0..count).map(private_ring_key::<T>).collect::<Vec<_>>();
+fn spread_private_ring_keys<T: Config>(game_index: GameIdx, buckets: u32) {
+	for tier in 1..=buckets {
+		fill_private_ring::<T>(game_index, tier as PrivateClaimTier, 1);
+	}
+}
+
+/// Register `count` keys into tier `tier` of `game_index`, as that many claimants would.
+#[cfg(feature = "runtime-benchmarks")]
+fn fill_private_ring<T: Config>(game_index: GameIdx, tier: PrivateClaimTier, count: u32) {
+	// Seeded from the tier as well as the index, so buckets never share a key.
+	let base = u32::from(tier).saturating_mul(T::MaxPrivateRingKeys::get());
+	let keys = (0..count).map(|index| private_ring_key::<T>(base + index)).collect::<Vec<_>>();
 	PrivateRingKeys::<T>::insert(
 		game_index,
+		tier,
 		BoundedVec::try_from(keys).expect("count is bounded by MaxPrivateRingKeys"),
 	);
 	PrivateGames::<T>::mutate(game_index, |game| {
 		if let Some(game) = game {
-			game.key_count = count;
+			game.key_count = game.key_count.saturating_add(count);
+			if let Some(counts) = game.tiers.get_mut(usize::from(tier).saturating_sub(1)) {
+				counts.registered = count;
+				counts.eligible = count;
+			}
 		}
 	});
 }
@@ -91,9 +111,13 @@ fn close_private_key_registration<T: Config>(game_index: GameIdx) {
 	});
 }
 
-/// Push `count` of `game_index`'s keys, so a measured step starts from a part-built ring.
+/// Open `game_index`'s ladder and push `count` of the tier it opens on, so a measured step starts
+/// from a part-built ring.
 #[cfg(feature = "runtime-benchmarks")]
 fn push_private_keys<T: Config>(game_index: GameIdx, count: u32) {
+	pallet::Pallet::<T>::do_build_private_ring(game_index, 0)
+		.expect("registration is closed, so the ladder opens");
+
 	let mut pushed = 0;
 	while pushed < count {
 		let step = (count - pushed).min(T::PrivateKeysPerBuild::get());
@@ -103,16 +127,36 @@ fn push_private_keys<T: Config>(game_index: GameIdx, count: u32) {
 	}
 }
 
+/// Fill `game_index`'s outcome with `count` roots, as that many closed tiers would.
+#[cfg(feature = "runtime-benchmarks")]
+fn seed_closed_tiers<T: Config>(game_index: GameIdx, count: u32) {
+	use verifiable::GenerateVerifiable;
+
+	let Ok(capacity) = T::PrivateRingExponent::get().try_into() else { return };
+	let root = T::RingVrf::finish_members(T::RingVrf::start_members(capacity));
+	let roots = BoundedVec::try_from(vec![root; count as usize])
+		.expect("the count is bounded by MaxPrivateRingTiers");
+	PrivateOutcomes::<T>::insert(
+		game_index,
+		indiv_support::credit_trees::PrivateGameOutcome::Ring { roots, key_count: 0 },
+	);
+}
+
 /// Put `game_index` in its cleanup phase with `entries` claimants left to drop.
 #[cfg(feature = "runtime-benchmarks")]
 fn seed_private_clean_up<T: Config>(game_index: GameIdx, entries: u32) {
 	open_private_game::<T>(game_index, 1);
-	fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
-	// The step that ended the build removed the keys, so a game in its cleanup holds none.
-	PrivateRingKeys::<T>::remove(game_index);
+	fill_private_ring::<T>(game_index, 1, T::MinPrivateRingKeys::get());
+	// The step that closed each tier removed its bucket, so a game in its cleanup holds none.
+	let _ = PrivateRingKeys::<T>::clear_prefix(game_index, T::MaxPrivateRingTiers::get(), None);
 	for index in 0..entries {
 		let claimant = AccountOrPerson::Person(sp_io::hashing::blake2_256(&index.encode()));
-		PrivateClaimants::<T>::insert(game_index, &claimant, PrivateClaimantState::Registered);
+		PrivateClaimants::<T>::insert(
+			game_index,
+			&claimant,
+			PrivateClaimantState::Registered { credits: 1 },
+		);
+		PrivateRingKeyIndex::<T>::insert(game_index, private_ring_key::<T>(index), ());
 	}
 	PrivateGames::<T>::mutate(game_index, |game| {
 		if let Some(game) = game {
@@ -165,7 +209,12 @@ mod benches {
 
 		CreditBuffers::<T>::insert(
 			block,
-			CreditBuffer { game_index: 7, timestamp: 1_234, awards: n, private_slots: 0 },
+			CreditBuffer {
+				game_index: 7,
+				timestamp: 1_234,
+				awards: n,
+				claim_path: indiv_support::credit_trees::ClaimPath::Public,
+			},
 		);
 
 		#[block]
@@ -322,14 +371,20 @@ mod benches {
 		let game_index = 1;
 		let caller: T::AccountId = whitelisted_caller();
 		let claimant = AccountOrPerson::Account(caller.clone());
-		open_private_game::<T>(game_index, MAX_PRIVATE_CLAIM_SLOTS);
-		PrivateClaimants::<T>::insert(game_index, &claimant, PrivateClaimantState::Eligible);
-		fill_private_ring::<T>(game_index, T::MaxPrivateRingKeys::get() - 1);
+		open_private_game::<T>(game_index, 1);
+		PrivateClaimants::<T>::insert(
+			game_index,
+			&claimant,
+			PrivateClaimantState::Eligible { credits: 1 },
+		);
+		fill_private_ring::<T>(game_index, 1, T::MaxPrivateRingKeys::get() - 1);
 
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller), game_index, private_ring_key::<T>(u32::MAX));
 
-		assert!(PrivateRingKeys::<T>::get(game_index).len() as u32 == T::MaxPrivateRingKeys::get());
+		assert!(
+			PrivateRingKeys::<T>::get(game_index, 1).len() as u32 == T::MaxPrivateRingKeys::get()
+		);
 
 		Ok(())
 	}
@@ -346,7 +401,7 @@ mod benches {
 		let game_index = 1;
 		let keys = T::MinPrivateRingKeys::get().max(n);
 		open_private_game::<T>(game_index, 1);
-		fill_private_ring::<T>(game_index, keys);
+		fill_private_ring::<T>(game_index, 1, keys);
 		close_private_key_registration::<T>(game_index);
 		push_private_keys::<T>(game_index, keys - n);
 
@@ -364,24 +419,100 @@ mod benches {
 		Ok(())
 	}
 
-	// The step that closes the ring, which is the same call with no keys to push. Finishing the
-	// root, storing it, dropping the keys it commits to and queueing it for delivery is the worst
-	// of its two shapes; abandoning a ring writes the same entries with no root to compute.
+	// The step that closes one tier, which is the same call with no keys to push. `n` is the tiers
+	// already closed: one outcome holds every root and each close rewrites it. The step clones the
+	// intermediate and finishes the clone, which is the ladder's whole extra cost against a single
+	// ring.
 	#[benchmark]
-	fn finish_private_ring() -> Result<(), BenchmarkError> {
+	fn finish_private_ring(
+		n: Linear<1, { T::MaxPrivateRingTiers::get() }>,
+	) -> Result<(), BenchmarkError> {
 		let game_index = 1;
 		let keys = T::MinPrivateRingKeys::get();
-		open_private_game::<T>(game_index, 1);
-		fill_private_ring::<T>(game_index, keys);
+		// One tier per closed root and one more for the measured close, so the ladder is `n` tiers
+		// tall and the measured step is its last.
+		open_private_game::<T>(game_index, n);
+		fill_private_ring::<T>(game_index, 1, keys);
 		close_private_key_registration::<T>(game_index);
 		push_private_keys::<T>(game_index, keys);
+		seed_closed_tiers::<T>(game_index, n.saturating_sub(1));
 
 		#[extrinsic_call]
 		build_private_ring(RawOrigin::Authorized, game_index, 0, BlockNumberFor::<T>::zero());
 
-		assert!(PrivateOutcomes::<T>::get(game_index).is_some(), "the root is final");
-		assert!(PrivateRingIntermediates::<T>::get(game_index).is_none());
-		assert!(PrivateRingKeys::<T>::decode_len(game_index).is_none(), "the keys go with it");
+		assert!(PrivateOutcomes::<T>::get(game_index).is_some(), "the tier's root is final");
+		assert!(
+			PrivateRingKeys::<T>::decode_len(game_index, 1).is_none(),
+			"the tier's keys go with it"
+		);
+
+		Ok(())
+	}
+
+	// The step that opens the ladder, which is the same call against a game that has not started
+	// one. It reads the game's tier counts to decide the height and writes the phase back.
+	#[benchmark]
+	fn open_private_ring_ladder() -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		open_private_game::<T>(game_index, T::MaxPrivateRingTiers::get());
+		fill_private_ring::<T>(game_index, 1, T::MinPrivateRingKeys::get());
+		close_private_key_registration::<T>(game_index);
+
+		#[extrinsic_call]
+		build_private_ring(RawOrigin::Authorized, game_index, 0, BlockNumberFor::<T>::zero());
+
+		assert!(
+			matches!(
+				PrivateGames::<T>::get(game_index).expect("the game is private").phase,
+				PrivateGamePhase::Building { .. }
+			),
+			"the ladder is open"
+		);
+
+		Ok(())
+	}
+
+	// The step that gives the game up, which is the same call against a game whose retries are
+	// spent. `n` is the key buckets it clears, one storage key each, which is the step's cost
+	// beyond recording the abandonment.
+	//
+	// It runs on the retries and not the anonymity floor. A game abandoned on the floor holds few
+	// keys, while one abandoned on the retries can hold a full registration spread over every
+	// tier, which is the dearer of the two.
+	#[benchmark]
+	fn abandon_private_ring(
+		n: Linear<0, { T::MaxPrivateRingTiers::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let game_index = 1;
+		open_private_game::<T>(game_index, T::MaxPrivateRingTiers::get());
+		spread_private_ring_keys::<T>(game_index, n);
+		close_private_key_registration::<T>(game_index);
+		// The retries spent, so the zero-key step abandons the game whatever its rings hold.
+		PrivateGames::<T>::mutate(game_index, |game| {
+			if let Some(game) = game {
+				game.phase = PrivateGamePhase::Building {
+					tier: 1,
+					included: 0,
+					failures: crate::private::PRIVATE_RING_BUILD_RETRIES,
+				};
+			}
+		});
+
+		#[extrinsic_call]
+		build_private_ring(RawOrigin::Authorized, game_index, 0, BlockNumberFor::<T>::zero());
+
+		assert!(
+			matches!(
+				PrivateOutcomes::<T>::get(game_index),
+				Some(indiv_support::credit_trees::PrivateGameOutcome::Abandoned { .. })
+			),
+			"the game gave up its ladder"
+		);
+		assert_eq!(
+			PrivateRingKeys::<T>::iter_key_prefix(game_index).count(),
+			0,
+			"every bucket goes with it"
+		);
 
 		Ok(())
 	}
@@ -410,7 +541,7 @@ mod benches {
 	fn authorize_build_private_ring() -> Result<(), BenchmarkError> {
 		let game_index = 1;
 		open_private_game::<T>(game_index, 1);
-		fill_private_ring::<T>(game_index, T::MaxPrivateRingKeys::get());
+		fill_private_ring::<T>(game_index, 1, T::MaxPrivateRingKeys::get());
 		close_private_key_registration::<T>(game_index);
 		let to_include =
 			pallet::Pallet::<T>::private_ring_build_step(game_index).expect("a step is due");
@@ -437,7 +568,7 @@ mod benches {
 			pallet::Pallet::<T>::private_ring_channel_size(),
 		);
 		open_private_game::<T>(game_index, 1);
-		fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
+		fill_private_ring::<T>(game_index, 1, T::MinPrivateRingKeys::get());
 		close_private_key_registration::<T>(game_index);
 		while let Some(to_include) = pallet::Pallet::<T>::private_ring_build_step(game_index) {
 			pallet::Pallet::<T>::do_build_private_ring(game_index, to_include)
@@ -456,7 +587,7 @@ mod benches {
 	fn authorize_send_private_ring() -> Result<(), BenchmarkError> {
 		let game_index = 1;
 		open_private_game::<T>(game_index, 1);
-		fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
+		fill_private_ring::<T>(game_index, 1, T::MinPrivateRingKeys::get());
 		close_private_key_registration::<T>(game_index);
 		while let Some(to_include) = pallet::Pallet::<T>::private_ring_build_step(game_index) {
 			pallet::Pallet::<T>::do_build_private_ring(game_index, to_include)
@@ -471,8 +602,10 @@ mod benches {
 		Ok(())
 	}
 
-	// One cleanup step, over `n` of the claimant entries a private game leaves behind. The ring
-	// keys went with the build step that closed the ring, so no step here touches them.
+	// One cleanup step, over `n` of the claimant entries a private game leaves behind. Each one
+	// carries a key-index entry of its own, which is the worst case: a step removes no more key
+	// entries than claimants, so `n` prices both. The key buckets went with the build steps that
+	// closed the tiers, so no step here touches them.
 	#[benchmark]
 	fn clean_up_private_game(
 		n: Linear<0, { crate::PRIVATE_CLEAN_UP_ITEMS }>,
@@ -484,6 +617,7 @@ mod benches {
 		_(RawOrigin::Authorized, game_index, BlockNumberFor::<T>::zero());
 
 		assert_eq!(PrivateClaimants::<T>::iter_prefix(game_index).count(), 0);
+		assert_eq!(PrivateRingKeyIndex::<T>::iter_prefix(game_index).count(), 0);
 
 		Ok(())
 	}
@@ -536,7 +670,7 @@ fn record_roots<T: Config>(n: u32) -> Vec<BlockNumberFor<T>> {
 				root: CreditProofNode([index as u8; 32]),
 				leaf_count: 1,
 				timestamp,
-				private_slots: 0,
+				claim_path: indiv_support::credit_trees::ClaimPath::Public,
 			},
 		);
 		pallet::Pallet::<T>::note_root_expiry(*block, timestamp);
@@ -565,7 +699,7 @@ fn queue_credit_trees<T: Config>(n: u32) -> Vec<BlockNumberFor<T>> {
 		NftClaimCreditRoots::<T>::insert(
 			block,
 			NftClaimCreditTree {
-				private_slots: 0,
+				claim_path: indiv_support::credit_trees::ClaimPath::Public,
 				game_index: 7,
 				root: CreditProofNode([index as u8; 32]),
 				leaf_count: 1,

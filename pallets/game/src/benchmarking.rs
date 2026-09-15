@@ -60,7 +60,6 @@ pub trait BenchmarkHelper<AccountSignature, TicketSignature, Ticket, AccountId, 
 )]
 mod benches {
 	use super::*;
-	use indiv_support::credit_trees::{PrivateClaimSetting, MAX_PRIVATE_CLAIM_SLOTS};
 
 	/// Sampling range for `remove_available_and_pending_invites`'s Linear
 	/// regression. `PendingInvites` is user-controlled and unbounded; the runtime
@@ -83,7 +82,10 @@ mod benches {
 		AbsenceGraceSchedule, AbsenceGraceTier, AbsenceGraceTiers, PersonhoodThresholdSchedule,
 		PersonhoodThresholdTier, MAX_PERSONHOOD_THRESHOLD_TIERS,
 	};
-	use indiv_support::traits::{AddOnlyPeopleTrait, CountedMembers, PersonalId};
+	use indiv_support::{
+		credit_trees::ClaimPath,
+		traits::{AddOnlyPeopleTrait, CountedMembers, PersonalId},
+	};
 	use sp_core::Get;
 	use sp_runtime::{
 		traits::{
@@ -293,7 +295,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 
 		<T as Config>::BenchmarkHelper::set_valid_time();
@@ -324,7 +326,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -362,7 +364,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
-				private_claims: None,
+				claims: ClaimPath::Public,
 			};
 			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
 
@@ -412,7 +414,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				pending_attendance: 0,
 				airdrops_scheduled: 0,
-				private_claims: None,
+				claims: ClaimPath::Public,
 			})
 		}
 		Ok(())
@@ -427,7 +429,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
-				private_claims: None,
+				claims: ClaimPath::Public,
 			});
 		}
 
@@ -454,7 +456,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 
 		let mut meter = WeightMeter::new();
@@ -482,7 +484,7 @@ mod benches {
 			rounds,
 			max_group_size: 2,
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -562,7 +564,7 @@ mod benches {
 			rounds,
 			max_group_size: 2,
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -683,7 +685,7 @@ mod benches {
 			rounds,
 			max_group_size: group_size,
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -854,7 +856,7 @@ mod benches {
 			rounds,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 
 		let mut meter = WeightMeter::new();
@@ -911,7 +913,7 @@ mod benches {
 			airdrops_scheduled: 0,
 			// A private game is the worst case: every attendance credit is also written to the
 			// claimant's spendable balance for the private claim path.
-			private_claims: Some(PrivateClaimSetting { slots: MAX_PRIVATE_CLAIM_SLOTS }),
+			claims: ClaimPath::Private,
 		};
 		// The credits read the running game to learn that it is private, so it is in storage as
 		// it would be during a player process.
@@ -1037,7 +1039,7 @@ mod benches {
 			rounds,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
-			private_claims: None,
+			claims: ClaimPath::Public,
 		});
 
 		let mut meter = WeightMeter::new();
@@ -1121,7 +1123,7 @@ mod benches {
 			// transition in `on_game_cancelled` (benchmarked separately). `airdrops_scheduled` is
 			// inert here; if refund logic ever moves into this path, set up a funded event.
 			airdrops_scheduled: 0,
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 
 		// No players exists for the game so `process_cancelling_step_player` should do minimal
@@ -1189,7 +1191,7 @@ mod benches {
 			rounds,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -1277,7 +1279,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1313,7 +1315,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1349,7 +1351,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1418,7 +1420,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		Pallet::<T>::new_game(&game_schedule)?;
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1488,7 +1490,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		Pallet::<T>::new_game(&schedule)?;
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1567,7 +1569,7 @@ mod benches {
 			rounds: rounds as u8,
 			max_group_size,
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: Some(PrivateClaimSetting { slots: MAX_PRIVATE_CLAIM_SLOTS }),
+			claims: ClaimPath::Private,
 		};
 		assert_ok!(Pallet::<T>::new_game(&game_schedule));
 
@@ -1791,7 +1793,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
-			private_claims: None,
+			claims: ClaimPath::Public,
 		});
 
 		// Seed attendance history at max depth so the removal proof is worst case.
@@ -1983,7 +1985,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&game_schedule));
 
@@ -1998,7 +2000,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
-				private_claims: None,
+				claims: ClaimPath::Public,
 			};
 			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
 
@@ -2031,7 +2033,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
-				private_claims: None,
+				claims: ClaimPath::Public,
 			};
 			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
 
@@ -2079,7 +2081,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -2149,7 +2151,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
-			private_claims: None,
+			claims: ClaimPath::Public,
 		});
 
 		let mut meter = WeightMeter::new();
@@ -2207,7 +2209,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		assert!(matches!(
@@ -2247,7 +2249,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		assert!(matches!(
@@ -2281,7 +2283,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game = Game::<T>::get().expect("game exists after new_game");
@@ -2322,7 +2324,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
-			private_claims: None,
+			claims: ClaimPath::Public,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game = Game::<T>::get().expect("game exists after new_game");

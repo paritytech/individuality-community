@@ -788,6 +788,10 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// Pushing is the expensive half of the path, so a ring is built over several blocks. The
 	// `integrity_test` holds one call's worst case to the block budget.
 	type PrivateKeysPerBuild = ConstU32<8>;
+	// A full attendance of a game of `MaxRounds` rounds and `MaxGroupSize` groups earns
+	// `3 * (6 - 1) = 15` credits, so fifteen tiers pay it in full. Each tier adds one 288-byte
+	// ring root to the delivery, which the claims channel carries with room to spare.
+	type MaxPrivateRingTiers = ConstU32<15>;
 	// Two hours, counted from the end of the game's player process, when its credits are final.
 	// A claimant who misses the window mints nothing, unless the game turns out to build no ring
 	// at all, which puts its credits back on the public path.

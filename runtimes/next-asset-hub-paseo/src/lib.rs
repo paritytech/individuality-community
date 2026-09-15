@@ -2227,6 +2227,12 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	// yet as its anonymity set. A member who lets it pass mints nothing and does not get the
 	// registration price back, so it is wide enough that missing it takes a month of inaction.
 	type PrivateClaimWindow = PrivateClaimWindow;
+	// Must match the game chain's `MaxPrivateRingKeys`. The `integrity_test` holds a game's
+	// claims, its keys times its tiers, to what the window serves.
+	type MaxPrivateRingKeys = ConstU32<767>;
+	// Must be at least the game chain's `MaxPrivateRingTiers`, or its deliveries fail to decode
+	// here and no ladder arrives.
+	type MaxPrivateRingTiers = ConstU32<15>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftClaimsBenchmarkHelper;
 }

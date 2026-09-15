@@ -83,6 +83,7 @@ impl crate::Config for Test {
 	type MinPrivateRingKeys = MinPrivateRingKeys;
 	type MinPrivateRingParticipation = MinPrivateRingParticipation;
 	type PrivateKeysPerBuild = PrivateKeysPerBuild;
+	type MaxPrivateRingTiers = MaxPrivateRingTiers;
 	type PrivateKeyRegistrationSeconds = PrivateKeyRegistrationSeconds;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockCreditsBenchmarkHelper;
@@ -152,9 +153,19 @@ impl CreditsWeightInfo for MockWeightInfo {
 	fn build_private_ring(n: u32) -> Weight {
 		Weight::from_parts(400 + 10 * n as u64, 40 + n as u64)
 	}
-	/// Above the cost of any push step, so a test tells the two branches apart.
-	fn finish_private_ring() -> Weight {
-		Weight::from_parts(900, 90)
+	/// Above the cost of any push step, so a test tells the branches apart, and scaling with the
+	/// tiers already closed.
+	fn finish_private_ring(n: u32) -> Weight {
+		Weight::from_parts(900 + 10 * n as u64, 90 + n as u64)
+	}
+	/// Distinct and below a tier close, so a test sees the refund the opening step reports.
+	fn open_private_ring_ladder() -> Weight {
+		Weight::from_parts(300, 30)
+	}
+	/// Distinct from both of the other closing branches and scaling with the key buckets it drops,
+	/// so a test sees the refund an abandonment reports.
+	fn abandon_private_ring(n: u32) -> Weight {
+		Weight::from_parts(700 + 10 * n as u64, 70 + n as u64)
 	}
 	fn authorize_build_private_ring() -> Weight {
 		Weight::from_parts(50, 0)
@@ -191,6 +202,9 @@ parameter_types! {
 	/// Off by default, so that a test of the absolute floor is not also a test of the share.
 	pub storage MinPrivateRingParticipation: Percent = Percent::zero();
 	pub storage PrivateKeysPerBuild: u32 = 2;
+	/// Tall enough for a game of the mock's shape to pay a full attendance, short enough that a
+	/// test can reach the cap.
+	pub storage MaxPrivateRingTiers: u32 = 8;
 	pub storage PrivateKeyRegistrationSeconds: u32 = 3_600;
 	/// Whether [`FailableRingVrf`] refuses to push keys, which is what a chunk store the ring
 	/// cannot be built from does on a live chain.
@@ -321,6 +335,12 @@ pub fn close_claims_channel() {
 	MOCK_HAS_CLAIMS_CHANNEL.with_borrow_mut(|open| *open = false);
 }
 
+/// The per-message room the claims channel reports unless a test names another.
+///
+/// Wide, because the mock's ring root is a whole key list rather than the fixed-size commitment a
+/// real suite produces, and a ladder carries one root per tier.
+pub const DEFAULT_CLAIMS_MAX_MESSAGE_SIZE: u32 = 10_000_000;
+
 /// Shrinks the HRMP channel to the NFT claims chain to `size` bytes per message.
 pub fn set_claims_max_message_size(size: u32) {
 	MOCK_CLAIMS_MAX_MESSAGE_SIZE.with_borrow_mut(|current| *current = size);
@@ -335,7 +355,8 @@ thread_local! {
 	/// See [`MockChannelInfo`].
 	static MOCK_HAS_CLAIMS_CHANNEL: RefCell<bool> = const { RefCell::new(true) };
 	/// See [`MockChannelInfo`].
-	static MOCK_CLAIMS_MAX_MESSAGE_SIZE: RefCell<u32> = const { RefCell::new(100_000) };
+	static MOCK_CLAIMS_MAX_MESSAGE_SIZE: RefCell<u32> =
+		const { RefCell::new(DEFAULT_CLAIMS_MAX_MESSAGE_SIZE) };
 }
 
 /// The shared runtime's externalities, with what only the credits keep in thread-local state reset
@@ -344,7 +365,7 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	SENT_XCMS.with_borrow_mut(|sent| sent.clear());
 	XCM_SEND_SHOULD_FAIL.with_borrow_mut(|fail| *fail = false);
 	MOCK_HAS_CLAIMS_CHANNEL.with_borrow_mut(|open| *open = true);
-	MOCK_CLAIMS_MAX_MESSAGE_SIZE.with_borrow_mut(|size| *size = 100_000);
+	MOCK_CLAIMS_MAX_MESSAGE_SIZE.with_borrow_mut(|size| *size = DEFAULT_CLAIMS_MAX_MESSAGE_SIZE);
 	runtime::new_test_ext()
 }
 
