@@ -29,13 +29,14 @@ sp-io = { workspace = true }
 sp-runtime = { workspace = true }
 xcm = { workspace = true }
 
+indiv-pallet-chunks-manager = { workspace = true }
 indiv-pallet-game = { workspace = true }
 indiv-pallet-score = { workspace = true }
 indiv-support = { workspace = true }
+verifiable = { workspace = true }
 
 [dev-dependencies]
 indiv-pallet-airdrop = { workspace = true }
-indiv-pallet-chunks-manager = { workspace = true }
 indiv-pallet-members = { workspace = true }
 indiv-pallet-people = { workspace = true }
 indiv-pallet-people-lite = { workspace = true }

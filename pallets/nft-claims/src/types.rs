@@ -18,6 +18,7 @@
 
 use crate::Config;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use indiv_support::{credit_trees::PrivateClaimTier, utils::BigEndianU64};
 use scale_info::TypeInfo;
 use sp_core::H160;
 
@@ -84,4 +85,104 @@ pub struct CollectionMinter<AccountId> {
 	pub owner: AccountId,
 	/// How claims choose the item to mint.
 	pub selection: ItemSelection,
+}
+
+/// The block a private game's claim window closes in, as `PrivateRingCloses` keys its entries by
+/// it.
+///
+/// Encoded big-endian, so an `Identity`-hashed map of these keys iterates from the earliest
+/// closing block to the latest.
+pub type ClosingBlock = BigEndianU64;
+
+/// How many private claims `block` ran, up to `MaxPrivateClaimsPerBlock`.
+///
+/// A count filed under an earlier block stands for zero, so every block opens a fresh allowance
+/// without a reset writing to it.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	Clone,
+	PartialEq,
+	Eq,
+	Default,
+)]
+pub struct PrivateClaimCount<BlockNumber> {
+	/// The block the claims ran in.
+	pub block: BlockNumber,
+	/// How many private claims that block ran.
+	pub claims: u32,
+}
+
+impl<BlockNumber: Eq> PrivateClaimCount<BlockNumber> {
+	/// How many private claims `block` has run so far.
+	pub fn claims_in(&self, block: &BlockNumber) -> u32 {
+		if self.block == *block {
+			self.claims
+		} else {
+			0
+		}
+	}
+}
+
+/// One game's private claim ladder, as the game chain delivered it, with the window its claims
+/// are made in.
+///
+/// The roots are in [`crate::PrivateRingRoots`], one row per tier, so a claim reads the one root
+/// it proves against rather than the whole ladder. This holds what a claim needs besides a root:
+/// how tall the ladder is and when its claims are taken. A ladder is built once after registration
+/// closes and the window is fixed when it arrives, so a redelivery moves neither.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+)]
+pub struct PrivateRing<BlockNumber> {
+	/// The number of tiers, which bounds the tier a claim may name and is the most any one
+	/// claimant mints.
+	pub height: PrivateClaimTier,
+	/// The number of keys in tier 1, which is the widest anonymity set the game offers. A higher
+	/// tier holds fewer.
+	pub key_count: u32,
+	/// The first block a claim of the game is taken in. Every member's claims open together, so
+	/// the wallets that watch the chain closest are not the ones that claim first. A claim before
+	/// it waits in the pool.
+	pub opens_at: BlockNumber,
+	/// The first block a claim of the game is refused in. Claims spread over one window cover
+	/// each other, whereas a claim in an open-ended tail stands alone in time. A member who lets
+	/// it pass mints nothing.
+	pub closes_at: BlockNumber,
+}
+
+/// How a private game ended, once no private claim of it can be made any more.
+///
+/// A game reaches at most one end and keeps it, so one entry holds both outcomes. A later
+/// delivery for the game is refused against it.
+#[derive(
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+	Debug,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+)]
+pub enum PrivateGameEnd {
+	/// The game chain built no ring, so the game's credits mint over the public path.
+	Abandoned,
+	/// The claim window closed and the ring is dropped with the aliases spent against it.
+	Closed,
 }

@@ -41,6 +41,9 @@
 //!
 //! `BACKGROUND_PROGRESS` sits below `USER_HIGH` so deadline-bound user work beats deferrable
 //! maintenance; `PROTOCOL_LIVENESS` is highest because it covers protocol liveness.
+//!
+//! A retry that has to outrank the attempt holding its `provides` tag adds a tie-break through
+//! [`add_tie_break`], which keeps the sum inside the tier's own band.
 
 use sp_runtime::transaction_validity::TransactionPriority;
 
@@ -68,9 +71,31 @@ pub const USER_HIGH: TransactionPriority = 1_000_000_000;
 /// need). Highest tier.
 pub const PROTOCOL_LIVENESS: TransactionPriority = 1_000_000_000_000;
 
+/// The width of the narrowest band between two tiers, which bounds a tie-break added to one.
+pub const BAND: TransactionPriority = USER_DEFAULT - CLEANUP;
+
+/// `tier` raised by `n`, kept inside `tier`'s own band.
+///
+/// A resubmission needs a strictly higher priority to replace the attempt holding the same
+/// `provides` tag, and callers pass the block number to get that. The reduction is what stops an
+/// unbounded block number climbing into the tier above, which matters most for [`CLEANUP`]: it is
+/// zero, so the block number alone would be the whole priority. The tie-break repeats every
+/// [`BAND`] blocks, and the pool keeps the older attempt over the resubmission of the block that
+/// wraps.
+pub const fn add_tie_break(tier: TransactionPriority, n: u64) -> TransactionPriority {
+	tier.saturating_add(n % BAND)
+}
+
 const _: () = {
 	assert!(CLEANUP < USER_DEFAULT);
 	assert!(USER_DEFAULT < BACKGROUND_PROGRESS);
 	assert!(BACKGROUND_PROGRESS < USER_HIGH);
 	assert!(USER_HIGH < PROTOCOL_LIVENESS);
+
+	// A tie-break moves a priority inside its tier and never up to the next one, whatever block
+	// number a caller passes.
+	assert!(add_tie_break(CLEANUP, 0) == CLEANUP);
+	assert!(add_tie_break(CLEANUP, 1) > CLEANUP);
+	assert!(add_tie_break(CLEANUP, u64::MAX) < USER_DEFAULT);
+	assert!(add_tie_break(BACKGROUND_PROGRESS, u64::MAX) < USER_HIGH);
 };
