@@ -87,6 +87,7 @@ mod score_game_invitation_flow;
 mod score_game_person_flow;
 mod statement_allowance;
 mod transaction_era;
+mod tx_extension_pipeline;
 mod tx_payment_external_asset;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
@@ -978,6 +979,15 @@ fn exec_signed_as_alias_with_account(who: &sr25519::Pair, call: RuntimeCall) {
 }
 
 fn build_signed_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsic {
+	build_signed_ext_at_version(who, call, INDIVIDUALITY_EXTENSION_VERSION)
+}
+
+/// Builds a V1 transaction with a signature over the supplied implication version.
+fn build_signed_ext_at_version(
+	who: &sr25519::Pair,
+	call: RuntimeCall,
+	implication_version: u8,
+) -> UncheckedExtrinsic {
 	let mut tx_ext = base_tx_ext(call.clone());
 
 	let who_account = pair_to_account_id(who);
@@ -1015,7 +1025,7 @@ fn build_signed_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsi
 		);
 
 		let msg = {
-			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
+			let implication_base = (implication_version, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
