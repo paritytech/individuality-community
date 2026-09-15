@@ -2230,9 +2230,9 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	// Must match the game chain's `MaxPrivateRingKeys`. The `integrity_test` holds a game's
 	// claims, its keys times its tiers, to what the window serves.
 	type MaxPrivateRingKeys = ConstU32<767>;
-	// Must be at least the game chain's `MaxPrivateRingTiers`, or its deliveries fail to decode
-	// here and no ladder arrives.
-	type MaxPrivateRingTiers = ConstU32<15>;
+	// Shared with the game chain, which builds no more tiers than this. A lower bound here fails
+	// to decode its deliveries and no ladder arrives.
+	type MaxPrivateRingTiers = ConstU32<{ indiv_support::credit_trees::PRIVATE_RING_TIERS }>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftClaimsBenchmarkHelper;
 }

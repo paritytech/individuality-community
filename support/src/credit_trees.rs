@@ -339,6 +339,14 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 /// every registrant.
 pub type PrivateClaimTier = u8;
 
+/// The most tiers one game's ring ladder carries, which both chains bound.
+///
+/// The game chain builds no more tiers than this and the claims chain decodes no more, so each
+/// runtime configuring it from here puts the two in that order. A full attendance of a game of
+/// `MaxRounds` rounds and `MaxGroupSize` groups earns `MaxRounds * (MaxGroupSize - 1)` credits,
+/// which this has to reach to pay one claimant in full.
+pub const PRIVATE_RING_TIERS: u32 = 15;
+
 /// Which path a game's NFT claim credits mint on.
 ///
 /// A game's schedule names it and every tree the game's credits form carries it, so the claim

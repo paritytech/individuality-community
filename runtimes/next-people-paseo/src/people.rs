@@ -34,6 +34,7 @@ use indiv_support::traits::PersonalId;
 #[cfg(feature = "runtime-benchmarks")]
 use indiv_support::traits::{Alias, RingIndex};
 use indiv_support::{
+	credit_trees::PRIVATE_RING_TIERS,
 	fungibles::CombineAssetsWithHolder,
 	traits::{AllocateStorage, Context, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER},
 	utils::TypedGetToGet,
@@ -788,10 +789,11 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// Pushing is the expensive half of the path, so a ring is built over several blocks. The
 	// `integrity_test` holds one call's worst case to the block budget.
 	type PrivateKeysPerBuild = ConstU32<8>;
-	// A full attendance of a game of `MaxRounds` rounds and `MaxGroupSize` groups earns
-	// `3 * (6 - 1) = 15` credits, so fifteen tiers pay it in full. Each tier adds one 288-byte
-	// ring root to the delivery, which the claims channel carries with room to spare.
-	type MaxPrivateRingTiers = ConstU32<15>;
+	// Shared with the claims chain, which decodes no fewer tiers than this. A full attendance of
+	// a game of `MaxRounds` rounds and `MaxGroupSize` groups earns `3 * (6 - 1) = 15` credits, so
+	// the shared bound pays it in full. Each tier adds one 288-byte ring root to the delivery,
+	// which the claims channel carries with room to spare.
+	type MaxPrivateRingTiers = ConstU32<PRIVATE_RING_TIERS>;
 	// Two hours, counted from the end of the game's player process, when its credits are final.
 	// A claimant who misses the window mints nothing, unless the game turns out to build no ring
 	// at all, which puts its credits back on the public path.
