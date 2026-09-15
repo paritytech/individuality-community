@@ -24,7 +24,7 @@ sequenceDiagram
     C->>P: register_private_claim_key(game, one-time ring key)
     Note over P: key registration closes
     alt registered keys below the anonymity floor
-        P->>P: abandon the game
+        O->>P: build_private_ring (zero keys, abandons the game)
     else registered keys at or above the floor
         loop PrivateKeysPerBuild keys per call
             O->>P: build_private_ring
