@@ -792,7 +792,6 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// A claimant who misses the window mints nothing, unless the game turns out to build no ring
 	// at all, which puts its credits back on the public path.
 	type PrivateRegistrationSeconds = ConstU32<7200>;
-	type PrivateRingRemoteWeight = PrivateRingRemoteWeight;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
 }
@@ -811,9 +810,6 @@ parameter_types! {
 	/// The ring capacity every private claim ring is built at.
 	pub const PrivateClaimRingExponent: indiv_support::traits::RingExponent =
 		indiv_support::traits::RingExponent::R2e10;
-	/// What executing `receive_private_rings` costs on the claims chain. It is charged here, so a
-	/// delivery pays for the work it causes there.
-	pub const PrivateRingRemoteWeight: Weight = Weight::from_parts(500_000_000, 10_000);
 }
 
 /// Origin check for the parachain the credit trees are delivered to. Only that chain may name the

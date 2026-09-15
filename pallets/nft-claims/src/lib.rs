@@ -1381,6 +1381,13 @@ pub mod pallet {
 				"receive_credit_trees",
 				T::WeightInfo::receive_credit_trees(T::MaxTreesPerMessage::get()),
 			);
+			// The game chain sends one ring per message, but this runtime has to execute whatever
+			// a full batch carries. A ring root is far larger than a Merkle root, so this is the
+			// proof size the delivery really costs.
+			budget.assert_fits(
+				"receive_private_rings",
+				T::WeightInfo::receive_private_rings(T::MaxPrivateRingsPerMessage::get()),
+			);
 
 			// A claim reserves the selector's ceiling on top of its own worst case, whether or not
 			// the collection uses a contract. A worst case above the limit therefore blocks

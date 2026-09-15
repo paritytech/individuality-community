@@ -343,14 +343,6 @@ pub mod pallet {
 		#[pallet::constant]
 		type PrivateRegistrationSeconds: Get<u32>;
 
-		/// Per-ring weight that `receive_private_rings` costs on [`Config::NftClaimsParaId`].
-		///
-		/// Delivery is offchain-worker driven and asks for unpaid execution, so no caller is
-		/// charged it. The `integrity_test` reserves it in the offchain-worker block budget,
-		/// which keeps out a ring this chain can send but the claims chain cannot execute.
-		#[pallet::constant]
-		type PrivateRingRemoteWeight: Get<Weight>;
-
 		/// XCM sender used to deliver the credit trees to [`Config::NftClaimsParaId`].
 		type XcmRouter: SendXcm;
 

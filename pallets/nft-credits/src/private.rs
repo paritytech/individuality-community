@@ -706,8 +706,7 @@ impl<T: Config> Pallet<T> {
 		budget.assert_fits(
 			"send_private_ring",
 			<T as Config>::WeightInfo::send_private_ring()
-				.saturating_add(<T as Config>::WeightInfo::authorize_send_private_ring())
-				.saturating_add(T::PrivateRingRemoteWeight::get()),
+				.saturating_add(<T as Config>::WeightInfo::authorize_send_private_ring()),
 		);
 		budget.assert_fits(
 			"clean_up_private_game",

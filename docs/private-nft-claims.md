@@ -159,10 +159,11 @@ one proved against narrows them down. The cost is that a player who earned 15 cr
 NFTs as one who earned 5.
 
 Eligibility is recorded once, by the award that reaches the threshold:
-`PrivateEligibleClaimants: (GameIdx, Claimant) -> ()`. The count it is tested against comes from
-the awarded-credit mask the same award writes, so nothing counts credits twice. The entry is
-dropped when the claimant registers, because a claimant registers once per game and the ring is
-the only path the game's credits mint on.
+`PrivateClaimants: (GameIdx, Claimant) -> PrivateClaimantState`. The count it is tested against
+comes from the awarded-credit mask the same award writes, so nothing counts credits twice. The
+entry turns from `Eligible` to `Registered` when the claimant registers a key, which is what
+refuses a second registration: a claimant holding two keys of one ring is distinguishable by how
+much the ring grew for them. `clean_up_private_game` drops the entries.
 
 The threshold needs no integrity test: it is derived from the game's own shape, so no runtime
 configures it. Integrity tests assert that the claim window is at least one block, that ring
