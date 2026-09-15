@@ -693,6 +693,38 @@ impl<T: Config> Pallet<T> {
 	#[cfg(feature = "std")]
 	pub(crate) fn private_integrity_test(budget: &indiv_support::weight_budget::OcwWeightBudget) {
 		use crate::WeightInfo as _;
+
+		// A ring that cannot hold every key it accepts fails to build after registration closes,
+		// so the game is abandoned and every claimant falls back to a public claim.
+		let ring_capacity = T::PrivateRingExponent::get().ring_capacity();
+		assert!(
+			T::MaxPrivateRingKeys::get() <= ring_capacity,
+			"`MaxPrivateRingKeys` ({keys}) exceeds the ring capacity ({ring_capacity})",
+			keys = T::MaxPrivateRingKeys::get(),
+		);
+
+		// A ring of one names its claimant. A floor above the ring capacity builds no ring at
+		// all.
+		assert!(
+			T::MinPrivateRingKeys::get() >= 2 &&
+				T::MinPrivateRingKeys::get() <= T::MaxPrivateRingKeys::get(),
+			"`MinPrivateRingKeys` ({min}) must be between two and `MaxPrivateRingKeys` ({max})",
+			min = T::MinPrivateRingKeys::get(),
+			max = T::MaxPrivateRingKeys::get(),
+		);
+
+		// A build step that pushes nothing never finishes a ring.
+		assert!(
+			!T::PrivateKeysPerBuild::get().is_zero(),
+			"`PrivateKeysPerBuild` must be at least one",
+		);
+
+		// Registration has to outlast the block a game ends in, or no claimant can register.
+		assert!(
+			!T::PrivateRegistrationSeconds::get().is_zero(),
+			"`PrivateRegistrationSeconds` must be at least one",
+		);
+
 		budget.assert_fits(
 			"build_private_ring",
 			<T as Config>::WeightInfo::build_private_ring(T::PrivateKeysPerBuild::get())
