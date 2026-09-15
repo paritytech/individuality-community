@@ -6,8 +6,7 @@
 # (`indiv_pallet_resources::migration::MigrateV0ToV1`). The rows size that impact and, if a
 # reconciliation is decided on, are its input.
 #
-# One-off: delete this script together with the follow-up release that clears the orphaned username
-# storage.
+# One-off: delete this script once the release carrying `MigrateV0ToV1` is live.
 #
 # Usage:
 #   RPC_PEOPLE=wss://... RPC_ASSET_HUB=wss://... scripts/check-username-sync.sh

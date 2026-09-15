@@ -34,8 +34,8 @@ use sp_runtime::Saturating;
 const LOG_TARGET: &str = "runtime::indiv-pallet-resources::migration";
 const PALLET_MIGRATIONS_ID: &[u8; 22] = b"indiv-pallet-resources";
 
-/// A raw storage key returned by `clear` as the position to resume from. Keys of the cleared maps
-/// are at most 81 bytes: two `twox128` prefixes, a `blake2_128` hash and the encoded key.
+/// The raw storage key of the last removed entry, the position to resume from. Keys of the cleared
+/// maps are at most 81 bytes: two `twox128` prefixes, a `blake2_128` hash and the encoded key.
 pub type RawCursor = BoundedVec<u8, ConstU32<128>>;
 
 /// Storage as it was while the pallet managed usernames.
@@ -96,11 +96,11 @@ pub mod v0 {
 pub enum Cursor<AccountId> {
 	/// Translating `Consumers`; holds the last translated account.
 	Consumers(Option<AccountId>),
-	/// Clearing `UsernameOwnerOf`; holds the position `clear` returned.
+	/// Clearing `UsernameOwnerOf`; holds the last removed key.
 	UsernameOwnerOf(Option<RawCursor>),
-	/// Clearing `UsernameReservationQueue`; holds the position `clear` returned.
+	/// Clearing `UsernameReservationQueue`; holds the last removed key.
 	UsernameReservationQueue(Option<RawCursor>),
-	/// Clearing `ReservationOf`; holds the position `clear` returned.
+	/// Clearing `ReservationOf`; holds the last removed key.
 	ReservationOf(Option<RawCursor>),
 }
 
@@ -108,7 +108,13 @@ pub enum Cursor<AccountId> {
 ///
 /// Translates every [`Consumers`] record to the shape without username fields, then clears the
 /// four username storage items that no longer exist in the pallet and bumps the storage version
-/// to 1. Each step does as much work as the weight meter allows, one item at a time.
+/// to 1. Each step does as much work as the weight meter allows, one item at a time. Every
+/// `ReservationOf` item also charges the two writes of the final step, which kills the reservation
+/// duration and bumps the storage version.
+///
+/// Map entries are removed one key at a time with `next_key` and `clear`. `clear_prefix` with a
+/// limit is not usable here: it ignores the cursor and does not see removals made earlier in the
+/// same block, so repeated calls remove the same entry again.
 ///
 /// Single use: remove from the runtime once the upgrade carrying it is live.
 pub struct MigrateV0ToV1<T>(PhantomData<T>);
@@ -129,19 +135,23 @@ impl<T: Config> MigrateV0ToV1<T> {
 		Some(account)
 	}
 
-	/// Removes one entry of `M` starting at `cursor`. Returns the position to resume from, or
-	/// `None` when the map is empty.
+	/// Removes the first entry of `M` after `last`. Returns its key, or `None` when no entry
+	/// remains.
 	pub(crate) fn clear_next<V: FullCodec, M: StoragePrefixedMap<V>>(
-		cursor: Option<&RawCursor>,
+		last: Option<&RawCursor>,
 	) -> Option<RawCursor> {
-		let removed = M::clear(1, cursor.map(|c| c.as_slice()));
-		let next = removed.maybe_cursor?;
-		match RawCursor::try_from(next) {
-			Ok(next) => Some(next),
+		let prefix = M::final_prefix();
+		let key = sp_io::storage::next_key(last.map_or(&prefix[..], |c| c.as_slice()))?;
+		if !key.starts_with(&prefix) {
+			return None;
+		}
+		sp_io::storage::clear(&key);
+		match RawCursor::try_from(key) {
+			Ok(key) => Some(key),
 			Err(_) => {
 				log::error!(
 					target: LOG_TARGET,
-					"clear cursor exceeds {} bytes, leaving the rest of the map in place",
+					"removed key exceeds {} bytes, leaving the rest of the map in place",
 					<ConstU32<128> as Get<u32>>::get()
 				);
 				None
@@ -152,7 +162,10 @@ impl<T: Config> MigrateV0ToV1<T> {
 	fn required_weight(cursor: &Cursor<T::AccountId>) -> Weight {
 		match cursor {
 			Cursor::Consumers(_) => T::WeightInfo::migrate_v1_translate_consumer(),
-			_ => T::WeightInfo::migrate_v1_clear_username_entry(),
+			Cursor::UsernameOwnerOf(_) | Cursor::UsernameReservationQueue(_) =>
+				T::WeightInfo::migrate_v1_clear_username_entry(),
+			Cursor::ReservationOf(_) => T::WeightInfo::migrate_v1_clear_username_entry()
+				.saturating_add(<T as frame_system::Config>::DbWeight::get().writes(2)),
 		}
 	}
 }
@@ -224,8 +237,9 @@ impl<T: Config> SteppedMigration for MigrateV0ToV1<T> {
 
 	#[cfg(feature = "try-runtime")]
 	fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
-		// Keys, not entries: an old record does not decode under the current type, so `iter`
-		// would skip it and report it as missing.
+		// Keys, not entries: an old lite record decodes under the current type by accident, as
+		// `None` and `Credibility::Lite` share the discriminant, while an old person record decodes
+		// to wrong values or fails. Only the key count is reliable before the migration runs.
 		Ok((Consumers::<T>::iter_keys().count() as u32).encode())
 	}
 

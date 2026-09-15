@@ -56,8 +56,7 @@ proof, enacted by governance as a batch built from the script's rows. Those call
 names live only in the dotNS contract and cannot be compared from storage; the script lists them for
 manual follow-up.
 
-This section and the script are removed with the follow-up release that clears the orphaned
-username storage.
+This section and the script are removed once the release carrying `MigrateV0ToV1` is live.
 
 ## Cutting a release
 

@@ -647,40 +647,75 @@ mod migration {
 	use crate::migration::{v0, Cursor};
 	use frame_support::{
 		migrations::{SteppedMigration, SteppedMigrationError},
-		weights::{Weight, WeightMeter},
+		weights::{RuntimeDbWeight, Weight, WeightMeter},
 	};
 
 	fn old_username(s: &[u8]) -> v0::Username {
 		s.to_vec().try_into().unwrap()
 	}
 
-	/// Stores a consumer record for `who` in the shape used while the pallet managed usernames.
+	/// Stores a consumer record for `who` in the shape used while the pallet managed usernames. A
+	/// full username is present only for a person, as on chain.
 	fn seed_old_consumer(who: &AccountId32, credibility: Credibility) {
+		let full_username = match credibility {
+			Credibility::Lite => None,
+			Credibility::Person { .. } => Some(old_username(b"fullperson")),
+		};
 		v0::Consumers::<Test>::insert(
 			who,
 			v0::ConsumerInfo {
 				identifier_key: comm_id(b"key1"),
-				full_username: Some(old_username(b"fullperson")),
+				full_username,
 				lite_username: old_username(b"liteuser.12"),
 				credibility,
 			},
 		);
 	}
 
-	fn seed_username_storage(owner: &AccountId32) {
-		v0::UsernameOwnerOf::<Test>::insert(old_username(b"liteuser.12"), owner);
+	/// Stores one entry per owner in every username map, so that clearing a map takes several
+	/// `clear` calls.
+	fn seed_username_storage(owners: &[AccountId32]) {
 		v0::UsernameReservationDuration::<Test>::put(60);
-		v0::UsernameReservationQueue::<Test>::insert(old_username(b"reserved"), ());
-		v0::ReservationOf::<Test>::insert(owner, old_username(b"reserved"));
+		for (i, owner) in owners.iter().enumerate() {
+			let lite = old_username(format!("liteuser.{i}").as_bytes());
+			let reserved = old_username(format!("reserved{i}").as_bytes());
+			v0::UsernameOwnerOf::<Test>::insert(lite, owner);
+			v0::UsernameReservationQueue::<Test>::insert(reserved.clone(), ());
+			v0::ReservationOf::<Test>::insert(owner, reserved);
+		}
+	}
+
+	/// Runs `seed` at storage version 0 and commits the result to the backend, so that the
+	/// migration reads and removes backend entries as on a live chain, not overlay entries.
+	fn seeded(seed: impl FnOnce()) -> sp_io::TestExternalities {
+		let mut ext = new_test_ext();
+		ext.execute_with(|| {
+			StorageVersion::new(0).put::<Resources>();
+			seed();
+		});
+		ext.commit_all().expect("seeded state commits");
+		ext
 	}
 
 	fn translate_weight() -> Weight {
 		<Test as Config>::WeightInfo::migrate_v1_translate_consumer()
 	}
 
-	/// Drives the migration to completion with `limit` per step and returns the step count.
-	fn run(limit: Weight) -> u32 {
-		let mut cursor = None;
+	fn clear_weight() -> Weight {
+		<Test as Config>::WeightInfo::migrate_v1_clear_username_entry()
+	}
+
+	fn assert_username_storage_empty() {
+		assert_eq!(v0::UsernameOwnerOf::<Test>::iter_keys().count(), 0);
+		assert!(!v0::UsernameReservationDuration::<Test>::exists());
+		assert_eq!(v0::UsernameReservationQueue::<Test>::iter_keys().count(), 0);
+		assert_eq!(v0::ReservationOf::<Test>::iter_keys().count(), 0);
+		assert_eq!(Resources::on_chain_storage_version(), StorageVersion::new(1));
+	}
+
+	/// Drives the migration from `cursor` to completion with `limit` per step and returns the
+	/// step count.
+	fn run(mut cursor: Option<Cursor<AccountId32>>, limit: Weight) -> u32 {
 		let mut steps = 0;
 		loop {
 			steps += 1;
@@ -694,21 +729,18 @@ mod migration {
 
 	#[test]
 	fn v1_translates_consumers_and_clears_username_storage() {
-		new_test_ext().execute_with(|| {
-			StorageVersion::new(0).put::<Resources>();
-			let lite = id_to_account(1);
-			let person = id_to_account(2);
-			let alias = id_to_alias(10);
-			let person_credibility =
-				Credibility::Person { alias, last_update: 100, demoted: false };
+		let lite = id_to_account(1);
+		let person = id_to_account(2);
+		let alias = id_to_alias(10);
+		let person_credibility = Credibility::Person { alias, last_update: 100, demoted: false };
+		seeded(|| {
 			seed_old_consumer(&lite, Credibility::Lite);
 			seed_old_consumer(&person, person_credibility.clone());
-			seed_username_storage(&lite);
-			// An old record does not decode under the current type until migrated.
-			assert_eq!(Consumers::<Test>::get(&lite), None);
-
+			seed_username_storage(&[lite.clone(), person.clone(), id_to_account(3)]);
+		})
+		.execute_with(|| {
 			// Three items per step, so the migration resumes from its cursor several times.
-			let steps = run(translate_weight().saturating_mul(3));
+			let steps = run(None, translate_weight().saturating_mul(3));
 
 			assert!(steps > 1, "migration should span several steps, took {steps}");
 			assert_eq!(
@@ -725,23 +757,65 @@ mod migration {
 					credibility: person_credibility
 				})
 			);
-			assert_eq!(v0::UsernameOwnerOf::<Test>::iter_keys().count(), 0);
-			assert!(!v0::UsernameReservationDuration::<Test>::exists());
-			assert_eq!(v0::UsernameReservationQueue::<Test>::iter_keys().count(), 0);
-			assert_eq!(v0::ReservationOf::<Test>::iter_keys().count(), 0);
-			assert_eq!(Resources::on_chain_storage_version(), StorageVersion::new(1));
+			assert_username_storage_empty();
+		});
+	}
+
+	#[test]
+	fn v1_resumes_clearing_a_map_across_steps() {
+		let owners = [id_to_account(1), id_to_account(2), id_to_account(3)];
+		seeded(|| seed_username_storage(&owners)).execute_with(|| {
+			// No consumers, so the first step moves on to `UsernameOwnerOf` and clears two of its
+			// three entries before the meter runs out.
+			let limit = translate_weight().saturating_add(clear_weight().saturating_mul(2));
+
+			let cursor = MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::with_limit(limit))
+				.expect("step succeeds");
+
+			assert!(
+				matches!(cursor, Some(Cursor::UsernameOwnerOf(Some(_)))),
+				"expected a position inside UsernameOwnerOf, got {cursor:?}"
+			);
+			assert_eq!(v0::UsernameOwnerOf::<Test>::iter_keys().count(), 1);
+
+			let steps = run(cursor, limit);
+
+			assert!(steps > 1, "clearing should span several steps, took {steps}");
+			assert_username_storage_empty();
+		});
+	}
+
+	#[test]
+	fn v1_completes_in_one_step_on_empty_state() {
+		seeded(|| ()).execute_with(|| {
+			let mut meter = WeightMeter::new();
+
+			let cursor = MigrateV0ToV1::<Test>::step(None, &mut meter).expect("step succeeds");
+
+			assert_eq!(cursor, None);
+			assert_username_storage_empty();
+			// One transition per stage, plus the two writes of the final step.
+			assert_eq!(
+				meter.consumed(),
+				translate_weight()
+					.saturating_add(clear_weight().saturating_mul(3))
+					.saturating_add(
+						<<Test as frame_system::Config>::DbWeight as Get<RuntimeDbWeight>>::get()
+							.writes(2)
+					)
+			);
 		});
 	}
 
 	#[test]
 	fn v1_first_step_translates_only_what_the_meter_allows() {
-		new_test_ext().execute_with(|| {
-			StorageVersion::new(0).put::<Resources>();
-			let accounts = [id_to_account(1), id_to_account(2)];
+		let accounts = [id_to_account(1), id_to_account(2)];
+		seeded(|| {
 			for account in &accounts {
 				seed_old_consumer(account, Credibility::Lite);
 			}
-
+		})
+		.execute_with(|| {
 			let cursor =
 				MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::with_limit(translate_weight()))
 					.expect("step succeeds");
@@ -750,18 +824,17 @@ mod migration {
 				panic!("expected a consumer cursor, got {cursor:?}");
 			};
 			let untranslated = accounts.iter().find(|a| **a != translated).unwrap();
-			assert!(Consumers::<Test>::get(&translated).is_some());
-			assert_eq!(Consumers::<Test>::get(untranslated), None);
+			// A translated record no longer decodes under the old type, an untranslated one does.
+			assert!(v0::Consumers::<Test>::get(&translated).is_none());
+			assert!(v0::Consumers::<Test>::get(untranslated).is_some());
 			assert_eq!(Resources::on_chain_storage_version(), StorageVersion::new(0));
 		});
 	}
 
 	#[test]
 	fn v1_reports_insufficient_weight() {
-		new_test_ext().execute_with(|| {
-			StorageVersion::new(0).put::<Resources>();
-			let lite = id_to_account(1);
-			seed_old_consumer(&lite, Credibility::Lite);
+		let lite = id_to_account(1);
+		seeded(|| seed_old_consumer(&lite, Credibility::Lite)).execute_with(|| {
 			let too_small = translate_weight().saturating_sub(Weight::from_parts(1, 0));
 
 			let result = MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::with_limit(too_small));
@@ -770,7 +843,7 @@ mod migration {
 				result,
 				Err(SteppedMigrationError::InsufficientWeight { required: translate_weight() })
 			);
-			assert_eq!(Consumers::<Test>::get(&lite), None);
+			assert!(v0::Consumers::<Test>::get(&lite).is_some());
 		});
 	}
 
@@ -779,7 +852,7 @@ mod migration {
 		new_test_ext().execute_with(|| {
 			StorageVersion::new(1).put::<Resources>();
 			let lite = register_lite(1);
-			seed_username_storage(&lite);
+			seed_username_storage(&[lite.clone()]);
 
 			let cursor =
 				MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::new()).expect("step succeeds");
