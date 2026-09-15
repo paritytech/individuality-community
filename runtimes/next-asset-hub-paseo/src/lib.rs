@@ -2824,7 +2824,8 @@ pub type BlockId = generic::BlockId<Block>;
 /// The Individuality transaction extension pipeline version.
 pub const INDIVIDUALITY_EXTENSION_VERSION: u8 = 1;
 
-/// The frozen standard transaction extension pipeline.
+/// The standard transaction extension pipeline version 0. **Frozen.**
+/// Matches [Fellowship Asset Hub Polkadot V0](https://github.com/polkadot-fellows/runtimes/blob/370a20cf6916b0c059a5d5d72b8432af82e2002d/system-parachains/asset-hubs/asset-hub-polkadot/src/lib.rs#L1814-L1866).
 pub type TxExtensionV0 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	Runtime,
 	(
@@ -2843,13 +2844,18 @@ pub type TxExtensionV0 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	),
 >;
 
-/// The latest Individuality transaction extension pipeline.
+/// The transaction extension pipeline version 1 carries the Individuality extensions.
+/// Follows [Fellowship Asset Hub Polkadot V1](https://github.com/polkadot-fellows/runtimes/blob/370a20cf6916b0c059a5d5d72b8432af82e2002d/system-parachains/asset-hubs/asset-hub-polkadot/src/lib.rs#L1814-L1866)
+/// with the Paseo scarcity extension.
 pub type TxExtensionV1 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	Runtime,
 	(
 		// Origin modifiers
 		(
 			(),
+			// Only general transactions can select V1.
+			// A general transaction has no signed origin.
+			// VerifySignature supplies one for ChargePGAS and signed calls.
 			pallet_verify_signature::VerifySignature<Runtime>,
 			indiv_pallet_scarcity::extension::AsScarcity<Runtime>,
 			frame_system::AuthorizeCall<Runtime>,
@@ -2922,6 +2928,8 @@ where
 		TxExtensionV1::from((
 			(
 				(),
+				// The OCW has no signer and AuthorizeCall authorizes the call, so signature
+				// verification is disabled.
 				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
 				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
 				frame_system::AuthorizeCall::<Runtime>::new(),

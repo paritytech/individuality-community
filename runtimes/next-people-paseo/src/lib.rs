@@ -202,7 +202,8 @@ pub type BlockId = generic::BlockId<Block>;
 /// The Individuality transaction extension pipeline version.
 pub const INDIVIDUALITY_EXTENSION_VERSION: u8 = 1;
 
-/// The frozen standard transaction extension pipeline.
+/// The standard transaction extension pipeline version 0. **Frozen.**
+/// Matches [Fellowship People Polkadot V0](https://github.com/polkadot-fellows/runtimes/blob/370a20cf6916b0c059a5d5d72b8432af82e2002d/system-parachains/people/people-polkadot/src/lib.rs#L122-L166).
 pub type TxExtensionV0 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	Runtime,
 	(
@@ -219,7 +220,9 @@ pub type TxExtensionV0 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	),
 >;
 
-/// The latest Individuality transaction extension pipeline.
+/// The transaction extension pipeline version 1 carries the Individuality extensions.
+/// Follows [Fellowship People Polkadot V1](https://github.com/polkadot-fellows/runtimes/blob/370a20cf6916b0c059a5d5d72b8432af82e2002d/system-parachains/people/people-polkadot/src/lib.rs#L122-L166)
+/// with the Paseo authorization extensions.
 pub type TxExtensionV1 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	Runtime,
 	(
