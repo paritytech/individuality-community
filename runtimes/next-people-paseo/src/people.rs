@@ -792,11 +792,6 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// A claimant who misses the window mints nothing, unless the game turns out to build no ring
 	// at all, which puts its credits back on the public path.
 	type PrivateRegistrationSeconds = ConstU32<7200>;
-	// A third of the 15 credits one game awards (`MaxRounds * (MaxGroupSize - 1)`), so a partial
-	// attendance still reaches it. Everyone pays the same price: a price that varied with what a
-	// claimant earned would put them in a different ring, and the ring a claim proves against
-	// names its maker. The pallet's `integrity_test` rejects a price above what a game awards.
-	type PrivateClaimEntryCredits = ConstU32<5>;
 	type PrivateRingRemoteWeight = PrivateRingRemoteWeight;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;

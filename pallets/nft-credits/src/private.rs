@@ -20,10 +20,10 @@
 //! which record who earned what, but the claims chain refuses a public claim against such a tree
 //! and takes the ring instead.
 //!
-//! A game builds one ring over the keys of every claimant that registered. Registration costs one
-//! flat price and grants the game's slots to everyone who pays it, so no claim is provable against
-//! a set narrower than the whole registration. Registration is first-come, first-served up to
-//! [`Config::MaxPrivateRingKeys`], which is the room one ring of
+//! A game builds one ring over the keys of every claimant that registered. Registration takes the
+//! game's entry threshold in credits and grants its slots to everyone that reaches it, so no claim
+//! is provable against a set narrower than the whole registration. Registration is first-come,
+//! first-served up to [`Config::MaxPrivateRingKeys`], which is the room one ring of
 //! [`Config::PrivateRingExponent`] holds.
 //!
 //! A claim reveals the alias of one context and nothing else. The anonymity set of every claim is
@@ -36,7 +36,7 @@
 //! so no credit is claimed twice.
 //!
 //! The floor is [`Config::MinPrivateRingKeys`], raised to
-//! [`Config::MinPrivateRingParticipation`] of the claimants that earned the entry price. An
+//! [`Config::MinPrivateRingParticipation`] of the claimants that reached the entry threshold. An
 //! absolute floor alone is a fixed number of keys to buy: a group that registers with keys it
 //! never claims with fills the set of one target, and a floor of sixteen in a game of hundreds is
 //! sixteen keys. The share ties the cost of that to the size of the game.
@@ -49,7 +49,7 @@ use frame_system::pallet_prelude::BlockNumberFor;
 use indiv_pallet_chunks_manager::ChunksApi;
 use indiv_pallet_game::{GameIdx, GameTimes};
 use indiv_support::{
-	credit_trees::{PrivateClaimSlot, PrivateGameOutcome, PrivateRingDelivery},
+	credit_trees::{PrivateGameOutcome, PrivateRingDelivery},
 	identity::AccountOrPerson,
 	offchain::{RETRY_WINDOW, TX_LONGEVITY},
 };
@@ -64,8 +64,9 @@ use crate::{
 
 /// How many registration entries one [`Pallet::clean_up_private_game`] call removes.
 ///
-/// A game holds one registration and one credit balance per credited player, so the cleanup runs
-/// in bounded steps. It is a pallet constant because only the weight of one call depends on it.
+/// A game holds one registration and one eligibility entry per credited player, so the cleanup
+/// runs in bounded steps. It is a pallet constant because only the weight of one call depends on
+/// it.
 pub const PRIVATE_CLEAN_UP_ITEMS: u32 = 32;
 
 /// How many failed build steps a private game takes before it is abandoned.
@@ -76,74 +77,84 @@ pub const PRIVATE_CLEAN_UP_ITEMS: u32 = 32;
 /// constant because no runtime has a reason to pick a different number.
 pub const PRIVATE_RING_BUILD_RETRIES: u8 = 8;
 
+/// The share of a game's full attendance that one registration takes, as a divisor.
+///
+/// One credit is one attestation, so the threshold is what a ring key costs in other
+/// participants' attestations, which is what padding an anonymity set has to pay. A third leaves
+/// a partial attendance able to register.
+const ENTRY_ATTENDANCE_DIVISOR: u32 = 3;
+
 impl<T: Config> Pallet<T> {
-	/// Open the private claim path of `game_index` if its game opted into one, and report how many
-	/// slots it grants. Zero is a public game.
+	/// Open the private claim path of `game_index` if its game opted into one, and report the
+	/// path. [`None`] is a public game.
 	///
 	/// Call it when the game's first credit is awarded. That is the last moment the game is
 	/// readable, because it is killed once its player process ends.
-	pub(crate) fn note_private_game(game_index: GameIdx) -> PrivateClaimSlot {
+	pub(crate) fn note_private_game(game_index: GameIdx) -> Option<PrivateGameInfo> {
 		if let Some(info) = PrivateGames::<T>::get(game_index) {
-			return info.slots;
+			return Some(info);
 		}
 
 		// The running game is the only one whose schedule is still readable, so a credit awarded
 		// for another game opens no private path. Play awards reach the running game only, while
 		// the testnet grant can name another.
-		let Some(game) =
-			indiv_pallet_game::Game::<T>::get().filter(|game| game.index == game_index)
-		else {
-			return 0;
-		};
-		let Some(setting) = game.private_claims else {
-			return 0;
-		};
+		let game = indiv_pallet_game::Game::<T>::get().filter(|game| game.index == game_index)?;
+		let setting = game.private_claims?;
 
 		// Registration opens when the credits are final, at the end of the player process, and
 		// runs for the configured window.
 		let player_process_end = GameTimes::<T>::player_process_end(&game);
-		PrivateGames::<T>::insert(
-			game_index,
-			PrivateGameInfo {
-				slots: setting.slots,
-				registration_starts: player_process_end,
-				registration_ends: player_process_end
-					.saturating_add(T::PrivateRegistrationSeconds::get()),
-				key_count: 0,
-				eligible_claimants: 0,
-				phase: PrivateGamePhase::Building { included: 0, failures: 0 },
-			},
-		);
+		let info = PrivateGameInfo {
+			slots: setting.slots,
+			registration_starts: player_process_end,
+			registration_ends: player_process_end
+				.saturating_add(T::PrivateRegistrationSeconds::get()),
+			key_count: 0,
+			entry_threshold: Self::private_entry_threshold(game.rounds, game.max_group_size),
+			eligible_claimants: 0,
+			phase: PrivateGamePhase::Building { included: 0, failures: 0 },
+		};
+		PrivateGames::<T>::insert(game_index, info);
 
-		setting.slots
+		Some(info)
 	}
 
-	/// Credit `claimant` with one spendable credit of a private game.
+	/// The credits a registration for a game of this shape takes.
 	///
-	/// The caller has read the game's slots from [`Pallet::note_private_game`], so this does not
-	/// read the game again.
+	/// It is a share of what a full attendance awards, so it tracks the game's own shape rather
+	/// than the runtime's bounds. `max_group_size` is an upper bound and a group can fall short
+	/// of it, so the share is capped at what a group of two awards, which is `rounds`. A game too
+	/// small to award even that asks for one credit, so registration always costs an attestation.
+	fn private_entry_threshold(rounds: u8, max_group_size: u32) -> u32 {
+		let rounds = u32::from(rounds);
+		// One credit per co-player that reports the claimant a person, in each round.
+		let full_attendance = rounds.saturating_mul(max_group_size.saturating_sub(1));
+
+		(full_attendance / ENTRY_ATTENDANCE_DIVISOR).min(rounds).max(1)
+	}
+
+	/// Note that `claimant` now holds `credits` of the private game `info` describes, and record
+	/// them as eligible once that reaches its entry threshold.
+	///
+	/// `credits` is the count of [`AwardedNftClaimCredits`], which the caller has just written,
+	/// so this counts nothing of its own. The equality holds on the one award that reaches the
+	/// threshold, so the entry and the tally are each written once.
 	pub(crate) fn note_private_credit(
 		game_index: GameIdx,
 		claimant: &AccountOrPerson<T::AccountId>,
+		credits: u32,
+		mut info: PrivateGameInfo,
 	) {
-		let balance = PrivateCreditBalances::<T>::mutate(game_index, claimant, |balance| {
-			*balance = balance.saturating_add(1);
-			*balance
-		});
-
-		// A claimant below the entry price cannot register, so the anonymity floor counts each
-		// one as their credits reach it. Every award lands before registration opens, which is
-		// what makes the count final by then.
-		if balance != T::PrivateClaimEntryCredits::get() {
+		// A claimant below the entry threshold cannot register, so the anonymity floor counts
+		// each one as their credits reach it. Every award lands before registration opens, which is
+		// what makes the count final by then. Only the award that reaches the threshold writes,
+		// so the rest of a claimant's awards leave both records alone.
+		if credits != info.entry_threshold {
 			return;
 		}
-		PrivateGames::<T>::mutate(game_index, |info| match info {
-			Some(info) => info.eligible_claimants = info.eligible_claimants.saturating_add(1),
-			None => log::error!(
-				target: LOG_TARGET,
-				"Private credit noted for game {game_index}, which has no private path",
-			),
-		});
+		info.eligible_claimants = info.eligible_claimants.saturating_add(1);
+		PrivateGames::<T>::insert(game_index, info);
+		PrivateEligibleClaimants::<T>::insert(game_index, claimant, ());
 	}
 
 	/// The keys `info`'s ring has to hold, which is the anonymity set each of its claims gets.
@@ -162,7 +173,7 @@ impl<T: Config> Pallet<T> {
 	/// Whether registration for `game_index` is open right now.
 	///
 	/// Both ends matter. Before the player process is over the credits are not final, so a
-	/// claimant's balance need not yet cover the entry price.
+	/// claimant's balance need not yet reach the entry threshold.
 	fn private_registration_open(info: &PrivateGameInfo) -> bool {
 		let now = T::UnixTime::now().as_secs().saturated_into::<u32>();
 		info.accepts_keys(now)
@@ -193,9 +204,10 @@ impl<T: Config> Pallet<T> {
 			Error::<T>::AlreadyRegistered
 		);
 
-		let price = T::PrivateClaimEntryCredits::get();
-		let balance = PrivateCreditBalances::<T>::get(game_index, &claimant);
-		ensure!(balance >= price, Error::<T>::InsufficientCredits);
+		ensure!(
+			PrivateEligibleClaimants::<T>::contains_key(game_index, &claimant),
+			Error::<T>::InsufficientCredits
+		);
 
 		PrivateRingKeys::<T>::try_mutate(game_index, |keys| {
 			// Registrations are public, so a claimant can read another's key and enrol it. The
@@ -206,12 +218,9 @@ impl<T: Config> Pallet<T> {
 			Ok::<(), Error<T>>(())
 		})?;
 
-		let remaining = balance.saturating_sub(price);
-		if remaining.is_zero() {
-			PrivateCreditBalances::<T>::remove(game_index, &claimant);
-		} else {
-			PrivateCreditBalances::<T>::insert(game_index, &claimant, remaining);
-		}
+		// Eligibility has served its purpose: a claimant registers once per game, so no later
+		// read of it is possible. The entry goes now rather than in the cleanup sweep.
+		PrivateEligibleClaimants::<T>::remove(game_index, &claimant);
 		PrivateRegistrations::<T>::insert(game_index, &claimant, ());
 
 		info.key_count = info.key_count.saturating_add(1);
@@ -220,7 +229,7 @@ impl<T: Config> Pallet<T> {
 		Self::deposit_event(Event::<T>::PrivateClaimKeyRegistered {
 			game_index,
 			claimant,
-			credits: price,
+			credits: info.entry_threshold,
 		});
 
 		Ok(())
@@ -499,15 +508,15 @@ impl<T: Config> Pallet<T> {
 			return Ok(registrations);
 		}
 
-		// The credits nobody spent on a registration. They are the private path's own
+		// The claimants that were eligible and never registered. They are the private path's own
 		// bookkeeping: a game that built its ring mints through it alone, and an abandoned game
 		// mints through the credit trees, which this does not touch.
-		let claimants = PrivateCreditBalances::<T>::iter_key_prefix(game_index)
+		let claimants = PrivateEligibleClaimants::<T>::iter_key_prefix(game_index)
 			.take(budget as usize)
 			.collect::<Vec<_>>();
 		let balances = claimants.len() as u32;
 		for claimant in &claimants {
-			PrivateCreditBalances::<T>::remove(game_index, claimant);
+			PrivateEligibleClaimants::<T>::remove(game_index, claimant);
 		}
 
 		if balances < budget {
@@ -699,23 +708,13 @@ impl<T: Config> Pallet<T> {
 		}
 	}
 
-	/// Assert that the private claim path's calls fit the offchain-worker block budget, and that
-	/// its entry price stays inside what one game awards.
+	/// Assert that the private claim path's calls fit the offchain-worker block budget.
+	///
+	/// The entry threshold needs no check: it is derived from the game's own shape, so no runtime
+	/// configures it.
 	#[cfg(feature = "std")]
 	pub(crate) fn private_integrity_test(budget: &indiv_support::weight_budget::OcwWeightBudget) {
 		use crate::WeightInfo as _;
-		// One game awards a claimant one credit per co-player that reports them a person in each
-		// round, so a full attendance holds this many. Nobody can pay an entry price above it,
-		// and every game's ring is then abandoned.
-		let price = T::PrivateClaimEntryCredits::get();
-		let max_credits =
-			T::MaxRounds::get().saturating_mul(T::MaxGroupSize::get().saturating_sub(1));
-		assert!(
-			price <= max_credits,
-			"`PrivateClaimEntryCredits` ({price}) is above the {max_credits} credits one game \
-			 awards",
-		);
-
 		budget.assert_fits(
 			"build_private_ring",
 			<T as Config>::WeightInfo::build_private_ring(T::PrivateKeysPerBuild::get())

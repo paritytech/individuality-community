@@ -109,7 +109,7 @@
 //! only: every tree its credits form carries the slot count, and the claims chain refuses a public
 //! claim against a tree that does.
 //!
-//! A claimant pays [`Config::PrivateClaimEntryCredits`] to
+//! A claimant who reached the game's entry threshold in credits calls
 //! [`Pallet::register_private_claim_key`] and hands over a ring VRF key their wallet made for this
 //! game alone. When registration closes, the offchain worker builds one ring over every registered
 //! key and sends it to the claims chain. A proof under the context of a game and a slot mints
@@ -348,14 +348,6 @@ pub mod pallet {
 		/// nothing, unless the game is abandoned and its credits go back to the public path.
 		#[pallet::constant]
 		type PrivateRegistrationSeconds: Get<u32>;
-
-		/// The credits one private claim registration costs.
-		///
-		/// Every claimant pays the same price and receives the same slots, so what they paid tells
-		/// them apart in no way. The `integrity_test` checks that the price stays within what one
-		/// game awards.
-		#[pallet::constant]
-		type PrivateClaimEntryCredits: Get<u32>;
 
 		/// Per-ring weight that `receive_private_rings` costs on [`Config::NftClaimsParaId`].
 		///
@@ -676,19 +668,19 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type PrivateGames<T: Config> = StorageMap<_, Twox64Concat, GameIdx, PrivateGameInfo>;
 
-	/// The credits a claimant earned in a private game and has not yet spent on registering.
+	/// The claimants of a private game that reached its entry threshold and may register.
 	///
-	/// A registration spends these, so they outlive the game. [`AwardedNftClaimCredits`] cannot
-	/// serve: it records which slots were awarded and is drained when the game ends.
+	/// An entry is written once, when the award that reaches the threshold lands, and dropped
+	/// when the claimant registers. It outlives the game because [`AwardedNftClaimCredits`], the
+	/// mask its count comes from, is drained when the game ends.
 	#[pallet::storage]
-	pub type PrivateCreditBalances<T: Config> = StorageDoubleMap<
+	pub type PrivateEligibleClaimants<T: Config> = StorageDoubleMap<
 		_,
 		Twox64Concat,
 		GameIdx,
 		Blake2_128Concat,
 		AccountOrPerson<T::AccountId>,
-		u32,
-		ValueQuery,
+		(),
 	>;
 
 	/// The claimants that registered for a private game.
@@ -754,8 +746,8 @@ pub mod pallet {
 			block: BlockNumberFor<T>,
 			leaf_index: u32,
 		},
-		/// A claimant registered a key for a game's private claim ring, spending `credits` on the
-		/// game's slots.
+		/// A claimant registered a key for a game's private claim ring, taking the game's slots.
+		/// `credits` is the threshold they met, the same for every registrant.
 		///
 		/// The key is left out. An event that tied the key to the claimant would identify every
 		/// claim made under it.
@@ -1051,8 +1043,8 @@ pub mod pallet {
 		/// ring, and a claim on the claims chain proves membership of that ring without naming
 		/// the key.
 		///
-		/// A registration costs [`Config::PrivateClaimEntryCredits`] and grants every slot the
-		/// game holds. A claimant registers once per game.
+		/// A registration needs a share of the game's full attendance earned in credits, and
+		/// grants every slot the game holds. A claimant registers once per game.
 		///
 		/// ## Parameters
 		/// - `game_index`: The private game the registration is for.
@@ -1333,9 +1325,10 @@ impl<T: Config> Pallet<T> {
 			return Self::drop_credit(claimant, credit);
 		}
 
-		// Zero for a public game, and the slot count for a private one. The tree carries the
-		// count, and the claims chain refuses a public claim against a tree that has one.
-		let private_slots = Self::note_private_game(game_index);
+		// The private claim path of the game, if it has one. Its slot count goes into the tree,
+		// and the claims chain refuses a public claim against a tree that carries one.
+		let private_game = Self::note_private_game(game_index);
+		let private_slots = private_game.map_or(0, |info| info.slots);
 
 		CreditBuffers::<T>::insert(
 			block,
@@ -1351,11 +1344,12 @@ impl<T: Config> Pallet<T> {
 			CreditBufferCursor::<T>::put(block);
 		}
 
-		AwardedNftClaimCredits::<T>::mutate(game_index, claimant, |awarded| {
-			awarded.insert(credit_slot)
+		let credits = AwardedNftClaimCredits::<T>::mutate(game_index, claimant, |awarded| {
+			awarded.insert(credit_slot);
+			awarded.count()
 		});
-		if private_slots > 0 {
-			Self::note_private_credit(game_index, claimant);
+		if let Some(info) = private_game {
+			Self::note_private_credit(game_index, claimant, credits, info);
 		}
 		Self::note_credit_block(claimant, block);
 		Self::deposit_event(Event::<T>::NftClaimCreditAwarded {
@@ -2394,13 +2388,6 @@ impl<T: Config> Pallet<T> {
 		assert!(
 			!T::PrivateRegistrationSeconds::get().is_zero(),
 			"`PrivateRegistrationSeconds` must be at least one",
-		);
-
-		// The entry price is what a registration spends. Without one, a single credit would buy
-		// every slot of a game the claimant barely played.
-		assert!(
-			!T::PrivateClaimEntryCredits::get().is_zero(),
-			"`PrivateClaimEntryCredits` must be at least one",
 		);
 
 		assert!(

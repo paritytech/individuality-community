@@ -196,16 +196,19 @@ pub struct PrivateGameInfo {
 	pub slots: PrivateClaimSlot,
 	/// When registration opens, in seconds since the UNIX epoch. It is the end of the game's
 	/// player process, when the credits are final. Before that, a claimant's balance need not
-	/// cover the entry price.
+	/// reach the entry threshold.
 	pub registration_starts: u32,
 	/// When registration closes, in seconds since the UNIX epoch. Building starts after it, so a
 	/// ring never grows under a claimant who already proved against it.
 	pub registration_ends: u32,
 	/// The number of keys registered, which is the anonymity set of every claim of the game.
 	pub key_count: u32,
-	/// How many claimants earned the credits one registration costs. It is the population the
-	/// game's registration is measured against, and it is final once the player process ends.
-	/// A claimant below the price cannot register, so counting every claimant that holds any
+	/// The credits a claimant must have earned in this game to register for its ring. It is
+	/// derived from the game's own shape, which is unreadable by the time registration opens.
+	pub entry_threshold: u32,
+	/// How many claimants reached [`Self::entry_threshold`]. It is the population the game's
+	/// registration is measured against, and it is final once the player process ends. A
+	/// claimant below the threshold cannot register, so counting every claimant that holds any
 	/// credit instead would put the floor out of reach.
 	pub eligible_claimants: u32,
 	/// What the game still owes: its ring to build, or its registration state to drop.

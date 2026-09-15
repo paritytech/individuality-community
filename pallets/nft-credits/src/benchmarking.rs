@@ -57,6 +57,9 @@ fn open_private_game<T: Config>(game_index: GameIdx, slots: u8) {
 			registration_starts: 0,
 			registration_ends: u32::MAX,
 			key_count: 0,
+			// The largest threshold a runtime's bounds allow, which a game of `MaxRounds` rounds
+			// reaches whatever its groups hold.
+			entry_threshold: T::MaxRounds::get(),
 			eligible_claimants: 0,
 			phase: PrivateGamePhase::Building { included: 0, failures: 0 },
 		},
@@ -110,7 +113,7 @@ fn seed_private_clean_up<T: Config>(game_index: GameIdx, entries: u32) {
 	for index in 0..entries {
 		let claimant = AccountOrPerson::Person(sp_io::hashing::blake2_256(&index.encode()));
 		PrivateRegistrations::<T>::insert(game_index, &claimant, ());
-		PrivateCreditBalances::<T>::insert(game_index, &claimant, 1);
+		PrivateEligibleClaimants::<T>::insert(game_index, &claimant, ());
 	}
 	PrivateGames::<T>::mutate(game_index, |game| {
 		if let Some(game) = game {
@@ -321,11 +324,7 @@ mod benches {
 		let caller: T::AccountId = whitelisted_caller();
 		let claimant = AccountOrPerson::Account(caller.clone());
 		open_private_game::<T>(game_index, MAX_PRIVATE_CLAIM_SLOTS);
-		PrivateCreditBalances::<T>::insert(
-			game_index,
-			&claimant,
-			T::PrivateClaimEntryCredits::get(),
-		);
+		PrivateEligibleClaimants::<T>::insert(game_index, &claimant, ());
 		fill_private_ring::<T>(game_index, T::MaxPrivateRingKeys::get() - 1);
 
 		#[extrinsic_call]

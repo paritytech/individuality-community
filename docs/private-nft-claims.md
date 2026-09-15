@@ -1,13 +1,10 @@
 # Private NFT claims
 
-A claim path that breaks the link between the player who earned an NFT claim credit and the
-account that mints the NFT. A game opts into private claims at scheduling time.
+A claim path that breaks the link between the player who earned an NFT claim credit and the account that mints it. A game opts into private claims at scheduling time.
 
-On the public path a claim proves a Merkle leaf built from the claimant, so the mint is tied to the
-player. On the private path a claim instead proves ring VRF membership of the set of claimants that
-registered for one game: the proof shows that some registrant made it, but not which.
-
-Status: experimental.
+NFT claim credits are committed to Merkle trees, one per award block. On the public path a claim
+proves a leaf built from the claimant, so the mint is tied to the player. On the private path a
+claim instead proves ring VRF membership of one game's registrants, so the proof does not reveal the player.
 
 ## How a private game runs
 
@@ -15,7 +12,7 @@ Status: experimental.
    `slots` a registrant gets. A game that opts in is private only.
 2. **Register.** Once the game's player process ends and credits are final, registration opens for
    `PrivateRegistrationSeconds`. Each claimant calls `register_private_claim_key` on the People
-   chain, spending `PrivateClaimEntryCredits` and handing over a one-time ring VRF public key their
+   chain, having earned the game's entry threshold in it, and hands over a one-time ring VRF key their
    wallet made for this game. Every registrant gets the same slots, so a registration says only that
    they took part. The registration is public, and has to be: the ring is built from the registered
    keys, so the set a proof names is public too. A registered key discloses none of the aliases a
@@ -29,7 +26,7 @@ Status: experimental.
    game's claim window.
 6. **Clean up.** Offchain workers clean up both chains automatically: on the game chain, the
    offchain worker drives `clean_up_private_game` to remove the game's keys, registrations and
-   unspent credits in bounded steps. It waits for step 4: its last step drops the record
+   unused eligibility entries in bounded steps. It waits for step 4: its last step drops the record
    `send_private_ring` reads the game's slots from, so cleaning up first would leave a queue front
    that can never be sent. On the claims chain, once the window is closed, its offchain worker
    drives `close_private_ring` to remove the ring and its spent aliases.
@@ -38,8 +35,9 @@ Status: experimental.
 
 **NftCredits** (`pallets/nft-credits`, People chain)
 
-- `register_private_claim_key(game_index, key)` — open call, made by the claimant. Costs
-  `PrivateClaimEntryCredits`, once per game, and refuses a key already registered for it.
+- `register_private_claim_key(game_index, key)` — open call, made by the claimant. Needs the
+  game's entry threshold earned in it, once per game, and refuses a key already registered for
+  it.
 - `build_private_ring` / `send_private_ring` / `clean_up_private_game` — authorized calls submitted
   by the pallet's offchain worker. Local or in-block source only, so they cannot be submitted
   externally.
@@ -90,7 +88,7 @@ fall in: without one they trail off indefinitely, and a late claim has only the 
 claimed yet as its anonymity set, however large the ring is.
 
 The cost is forfeiture. A member who does not claim inside the window mints nothing, and the
-credits their registration spent are gone: the ring is the only path a private game's credits mint
+credits behind their registration are gone: the ring is the only path a private game's credits mint
 on, and abandonment is decided long before the window opens. The reference window is a month for
 that reason.
 
@@ -107,14 +105,14 @@ ring cannot be built from, which no retry repairs. Without the limit the game wo
 registrations and credits forever with nothing able to claim them.
 
 The floor is `MinPrivateRingKeys`, raised to `MinPrivateRingParticipation` of the claimants that
-earned the entry price, and capped at `MaxPrivateRingKeys` so a full registration always reaches
-it. A claimant is counted the moment their credits reach the price, which is the population that
+earned the entry threshold, and capped at `MaxPrivateRingKeys` so a full registration always
+reaches it. A claimant is counted the moment their credits reach it, which is the population that
 can register at all; every award lands before registration opens, so the count is final by then.
 `PrivateRingAbandoned` names both the keys registered and the floor they fell short of.
 
 An absolute floor on its own is a fixed number of keys to buy. A group that registers with keys it
 never claims with fills the anonymity set of one target, and sixteen keys in a game of hundreds
-buys the whole set. The share ties that price to the size of the game.
+buys the whole set. The share ties that cost to the size of the game.
 
 The abandonment is delivered like a ring and recorded in `PrivateGameEnds`, which reopens
 `claim` for the game's credit trees, so every player mints publicly as they would have without the
@@ -128,10 +126,9 @@ chain refuses an abandonment for a game holding a ring, and a ring for one alrea
 | Item | Where | Reference value |
 |---|---|---|
 | `MAX_PRIVATE_CLAIM_SLOTS` | `indiv-support` | 5 — upper bound on the slots a game may schedule, checked on both chains |
-| `PrivateClaimEntryCredits` | `pallet-nft-credits` | 5 — flat registration price, in credits |
 | `PrivateRegistrationSeconds` | `pallet-nft-credits` | 2 hours — how long key registration stays open |
 | `MinPrivateRingKeys` | `pallet-nft-credits` | 16 — absolute floor, below which the game is abandoned |
-| `MinPrivateRingParticipation` | `pallet-nft-credits` | 25% — share of the claimants that can pay the entry price which has to register |
+| `MinPrivateRingParticipation` | `pallet-nft-credits` | 25% — share of the claimants that reach the entry threshold which has to register |
 | `MaxPrivateRingKeys` | `pallet-nft-credits` | 767 — registrants one game takes |
 | `PrivateRingExponent` | both | `R2e10` — ring capacity, 767 keys |
 | `PrivateKeysPerBuild` | `pallet-nft-credits` | 8 — keys pushed per offchain-worker call |
@@ -143,15 +140,34 @@ chain refuses an abandonment for a game holding a ring, and a ring for one alrea
 be in `chunks-manager` before any ring builds. The initial-setup scripts upload `R2e9` and `R2e10`;
 a larger exponent takes a chunk set of its own.
 
-The entry price is in credits, not PGAS, because a person claimant has no account on the People
-chain to burn PGAS from. It is flat rather than scaled with what a claimant earned, so that one
-ring serves the whole game: a price ladder would put claimants in rings of their own tier, and
-intersecting the tiers a payer proved against narrows them down. The cost is that a player who
-earned 15 credits mints as many NFTs as one who earned 5.
+## Entry threshold
 
-Integrity tests assert that the entry price stays within what one game awards, that the claim
-window is at least one block, that ring construction fits the offchain-worker budget and that a
-private claim and a `close_private_ring` step each fit the block's extrinsic budget.
+The threshold is a third of what a full attendance of the game awards, `rounds * (group size - 1)`,
+capped at `rounds` and floored at one credit. It is computed when the game's first credit is
+awarded, which is the last moment the game is readable, so each game carries its own threshold
+rather than one the runtime configures. A third leaves a partial attendance able to register, and
+the cap is what a group of two awards: `max_group_size` is an upper bound, and a testnet runs a
+game whatever its groups hold, so without it a player in small groups could never register.
+
+It is in credits, not PGAS, because a person claimant has no account on the People chain to burn
+PGAS from. One credit is one attestation, so the threshold is what a ring key costs in other
+participants' attestations, which is what padding an anonymity set has to pay.
+
+It is flat within a game rather than scaled with what a claimant earned, so that one ring serves
+the whole game: a ladder would put claimants in rings of their own tier, and intersecting the tiers
+one proved against narrows them down. The cost is that a player who earned 15 credits mints as many
+NFTs as one who earned 5.
+
+Eligibility is recorded once, by the award that reaches the threshold:
+`PrivateEligibleClaimants: (GameIdx, Claimant) -> ()`. The count it is tested against comes from
+the awarded-credit mask the same award writes, so nothing counts credits twice. The entry is
+dropped when the claimant registers, because a claimant registers once per game and the ring is
+the only path the game's credits mint on.
+
+The threshold needs no integrity test: it is derived from the game's own shape, so no runtime
+configures it. Integrity tests assert that the claim window is at least one block, that ring
+construction fits the offchain-worker budget and that a private claim and a `close_private_ring`
+step each fit the block's extrinsic budget.
 
 ## Privacy limits
 
@@ -163,7 +179,7 @@ private claim and a `close_private_ring` step each fit the block's extrinsic bud
 - **The set is keys, not people.** Registrants who collude, or who register a key they never claim
   with, count towards the anonymity floor without hiding anyone. Duplicate keys are refused, but an
   unused key is indistinguishable from a used one. Registration costs credits the claimant earned
-  in that game, so padding the set takes real players, and `MinPrivateRingParticipation` makes the
+  in that game, so padding the set takes real attestations, and `MinPrivateRingParticipation` makes the
   number of them scale with the game. Neither turns keys into people.
 - **Timing is a side channel.** The window bounds it but does not close it: a claim in the block
   the window opens, or one made at a fixed interval after registering, narrows the set whatever the
@@ -192,5 +208,5 @@ or a submission time that only the claimant controls.
   alone afterwards.
 - **Vary nothing else that is public.** `collection` is a call argument: minting every slot into
   one niche collection links those claims as surely as a shared purse key would.
-- **Claim before the window closes.** A missed window mints nothing and the registration price is
-  not returned.
+- **Claim before the window closes.** A missed window mints nothing and the credits behind the
+  registration are not returned.

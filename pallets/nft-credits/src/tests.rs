@@ -1747,17 +1747,6 @@ fn integrity_test_rejects_queue_wider_than_retained_awards() {
 	});
 }
 
-/// An entry price above what one game awards is rejected. Nobody can pay it, and every game's
-/// ring is then abandoned.
-#[test]
-#[should_panic(expected = "`PrivateClaimEntryCredits` (128) is above the 90 credits")]
-fn integrity_test_rejects_an_entry_price_above_what_a_game_awards() {
-	new_test_ext().execute_with(|| {
-		PrivateClaimEntryCredits::set(&128);
-		<Pallet<Test> as Hooks<u64>>::integrity_test();
-	});
-}
-
 /// The credit tree delivery to the NFT claims chain: the queue the `on_initialize` commit feeds,
 /// the offchain-worker-driven `send_credit_trees` and the `replay_credit_trees` repair.
 mod credit_tree_delivery {
@@ -3145,17 +3134,20 @@ mod private_claims {
 		Mock::member_from_secret(&Mock::new_secret([seed; 32]))
 	}
 
-	/// Play a two-round game of four that grants `slots` private claim slots, leaving every
-	/// player with the credits it awarded.
-	fn play_private_game(slots: u8) -> Vec<AccountOrPerson<AccountId32>> {
-		let players = [ALICE, BOB, CHARLIE, DAVE]
-			.map(AccountOrPerson::Account)
-			.into_iter()
-			.collect::<Vec<_>>();
+	/// Play a game of the given shape that grants `slots` private claim slots, leaving every
+	/// player with the credits it awarded. The player count has to fill the groups, otherwise
+	/// the game is cancelled before anything is awarded.
+	fn play_private_game_of_shape(
+		slots: u8,
+		rounds: u8,
+		max_group_size: u32,
+		accounts: &[AccountId32],
+	) -> Vec<AccountOrPerson<AccountId32>> {
+		let players = accounts.iter().cloned().map(AccountOrPerson::Account).collect::<Vec<_>>();
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 100,
-			rounds: 2,
-			max_group_size: 4,
+			rounds,
+			max_group_size,
 			private_claims: Some(PrivateClaimSetting { slots }),
 			..Default::default()
 		};
@@ -3167,16 +3159,70 @@ mod private_claims {
 		players
 	}
 
+	/// Play a two-round game of four that grants `slots` private claim slots, leaving every
+	/// player with the credits it awarded. Its entry threshold is two.
+	fn play_private_game(slots: u8) -> Vec<AccountOrPerson<AccountId32>> {
+		play_private_game_of_shape(slots, 2, 4, &[ALICE, BOB, CHARLIE, DAVE])
+	}
+
+	/// The private path of the game the test is playing.
+	fn private_game() -> PrivateGameInfo {
+		PrivateGames::<Test>::get(GAME).expect("the game opted into private claims")
+	}
+
+	#[test]
+	fn the_entry_threshold_follows_the_games_own_shape() {
+		// A third of what a full attendance of the game awards. One round of four awards three
+		// credits, against the six of the two-round game.
+		new_test_ext().execute_with(|| {
+			play_private_game_of_shape(3, 1, 4, &[ALICE, BOB, CHARLIE, DAVE]);
+
+			let info = private_game();
+			assert_eq!(info.entry_threshold, 1, "a third of the game's own full attendance");
+			// Three credits each clears a threshold of one, so every player counts.
+			assert_eq!(info.eligible_claimants, 4);
+
+			open_registration();
+			assert_ok!(NftCredits::register_private_claim_key(
+				RuntimeOrigin::signed(ALICE),
+				GAME,
+				ring_key(1)
+			));
+		});
+	}
+
+	#[test]
+	fn the_entry_threshold_stays_within_what_a_group_of_two_awards() {
+		// `max_group_size` is an upper bound, and a testnet runs a game whatever its groups hold,
+		// so a third of the nominal attendance can be more than a player ever earns. Three rounds
+		// of five cap the threshold at three, against the four that third asks for.
+		new_test_ext().execute_with(|| {
+			play_private_game_of_shape(3, 3, 5, &[ALICE, BOB, CHARLIE, DAVE, EVE]);
+
+			let info = private_game();
+			assert_eq!(info.entry_threshold, 3, "capped at what a group of two awards");
+			assert_eq!(info.eligible_claimants, 5);
+
+			open_registration();
+			assert_ok!(NftCredits::register_private_claim_key(
+				RuntimeOrigin::signed(ALICE),
+				GAME,
+				ring_key(1)
+			));
+		});
+	}
+
 	#[test]
 	fn a_private_game_makes_its_credits_spendable() {
 		new_test_ext().execute_with(|| {
 			let players = play_private_game(3);
 
-			// Six credits each, one per co-player per round. They outlive the game, unlike the
-			// slot mask, which is drained with it.
+			// Six credits each, one per co-player per round, so every player cleared the
+			// threshold of two. Eligibility outlives the game, unlike the slot mask it is
+			// counted from, which is drained with it.
 			assert_eq!(AwardedNftClaimCredits::<Test>::iter().count(), 0);
 			for player in &players {
-				assert_eq!(PrivateCreditBalances::<Test>::get(GAME, player), 6);
+				assert!(PrivateEligibleClaimants::<Test>::contains_key(GAME, player));
 			}
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().slots, 3);
 		});
@@ -3200,25 +3246,26 @@ mod private_claims {
 
 			assert_eq!(awarded_credit_count(), 2, "the game did award credits");
 			assert!(PrivateGames::<Test>::get(GAME).is_none());
-			assert_eq!(PrivateCreditBalances::<Test>::iter().count(), 0);
+			assert_eq!(PrivateEligibleClaimants::<Test>::iter().count(), 0);
 		});
 	}
 
 	#[test]
-	fn registration_spends_the_entry_price_and_takes_one_key() {
+	fn registration_clears_the_threshold_and_takes_one_key() {
 		new_test_ext().execute_with(|| {
 			let players = play_private_game(3);
 			let alice = players[0].clone();
 			open_registration();
 
-			// The flat price is two of Alice's six credits, and it buys every slot the game
-			// grants, as it does for every other claimant.
+			// The flat threshold is two of Alice's six credits, and clearing it takes every slot
+			// the game grants, as it does for every other claimant.
 			assert_ok!(NftCredits::register_private_claim_key(
 				RuntimeOrigin::signed(ALICE),
 				GAME,
 				ring_key(1)
 			));
-			assert_eq!(PrivateCreditBalances::<Test>::get(GAME, &alice), 4);
+			// Registration drops the eligibility entry: nothing reads it again.
+			assert!(!PrivateEligibleClaimants::<Test>::contains_key(GAME, &alice));
 			assert_eq!(PrivateRegistrations::<Test>::get(GAME, &alice), Some(()));
 			assert_eq!(PrivateRingKeys::<Test>::get(GAME).len(), 1);
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().key_count, 1);
@@ -3259,8 +3306,11 @@ mod private_claims {
 				Error::<Test>::InsufficientCredits
 			);
 
-			// Nor does one credit cover a price of two.
-			PrivateCreditBalances::<Test>::insert(GAME, AccountOrPerson::Account(EVE), 1);
+			// Nor does one credit, short of the threshold of two, so no eligibility entry was
+			// ever written for EVE.
+			let eve = AccountOrPerson::Account(EVE);
+			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
+			assert!(!PrivateEligibleClaimants::<Test>::contains_key(GAME, &eve));
 			assert_noop!(
 				NftCredits::register_private_claim_key(
 					RuntimeOrigin::signed(EVE),
@@ -3400,22 +3450,24 @@ mod private_claims {
 	}
 
 	#[test]
-	fn only_claimants_that_can_afford_the_price_count_towards_the_floor() {
+	fn only_claimants_that_reach_the_threshold_count_towards_the_floor() {
 		new_test_ext().execute_with(|| {
-			// Four players, six credits each, against an entry price of two.
+			// Four players, six credits each, against an entry threshold of two.
 			play_private_game(2);
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 4);
 
-			// A claimant one credit short of the price cannot register, so they do not raise the
-			// floor either. The credit that reaches the price is what counts them.
+			// A claimant one credit short of the threshold cannot register, so they do not raise
+			// the floor either. The credit that reaches it is what counts them.
 			let eve = AccountOrPerson::Account(EVE);
-			NftCredits::note_private_credit(GAME, &eve);
+			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 4);
-			NftCredits::note_private_credit(GAME, &eve);
+			assert!(!PrivateEligibleClaimants::<Test>::contains_key(GAME, &eve));
+			NftCredits::note_private_credit(GAME, &eve, 2, private_game());
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 5);
+			assert!(PrivateEligibleClaimants::<Test>::contains_key(GAME, &eve));
 
 			// Counted once, however many more credits they earn.
-			NftCredits::note_private_credit(GAME, &eve);
+			NftCredits::note_private_credit(GAME, &eve, 3, private_game());
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 5);
 		});
 	}
@@ -3511,15 +3563,16 @@ mod private_claims {
 			deliver_outcome();
 
 			assert!(NftCredits::private_clean_up_due(GAME));
-			// Four credits each are left over, the entry price having cost two of six.
-			assert_eq!(PrivateCreditBalances::<Test>::iter().count(), 4);
+			// Every claimant registered, and a registration drops its eligibility entry, so the
+			// cleanup finds none left.
+			assert_eq!(PrivateEligibleClaimants::<Test>::iter().count(), 0);
 
 			let removed = NftCredits::do_clean_up_private_game(GAME).unwrap();
-			assert_eq!(removed, 8, "four registrations and four credit balances");
+			assert_eq!(removed, 4, "four registrations and no eligible claimants");
 
 			assert!(PrivateGames::<Test>::get(GAME).is_none());
 			assert_eq!(PrivateRegistrations::<Test>::iter().count(), 0);
-			assert_eq!(PrivateCreditBalances::<Test>::iter().count(), 0);
+			assert_eq!(PrivateEligibleClaimants::<Test>::iter().count(), 0);
 			System::assert_has_event(
 				Event::<Test>::PrivateGameCleanedUp { game_index: GAME }.into(),
 			);
@@ -3695,10 +3748,11 @@ mod private_claims {
 			.expect("the game is in its cleanup phase");
 			let actual = post.actual_weight.expect("the call reports its weight");
 
-			assert_eq!(actual, MockWeightInfo::clean_up_private_game(8));
+			// Four registrations and no balances: a registration drops the balance it read.
+			assert_eq!(actual, MockWeightInfo::clean_up_private_game(4));
 			assert!(
 				actual.all_lt(charged),
-				"eight entries is below what a full step is charged for",
+				"four entries is below what a full step is charged for",
 			);
 		});
 	}

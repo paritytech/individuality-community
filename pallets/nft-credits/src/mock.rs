@@ -84,7 +84,6 @@ impl crate::Config for Test {
 	type MinPrivateRingParticipation = MinPrivateRingParticipation;
 	type PrivateKeysPerBuild = PrivateKeysPerBuild;
 	type PrivateRegistrationSeconds = PrivateRegistrationSeconds;
-	type PrivateClaimEntryCredits = PrivateClaimEntryCredits;
 	type PrivateRingRemoteWeight = PrivateRingRemoteWeight;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockCreditsBenchmarkHelper;
@@ -194,7 +193,6 @@ parameter_types! {
 	pub storage MinPrivateRingParticipation: Percent = Percent::zero();
 	pub storage PrivateKeysPerBuild: u32 = 2;
 	pub storage PrivateRegistrationSeconds: u32 = 3_600;
-	pub storage PrivateClaimEntryCredits: u32 = 2;
 	pub const PrivateRingRemoteWeight: Weight = Weight::from_parts(1_000, 1_000);
 	/// Whether [`FailableRingVrf`] refuses to push keys, which is what a chunk store the ring
 	/// cannot be built from does on a live chain.
