@@ -336,12 +336,12 @@ pub mod pallet {
 		#[pallet::constant]
 		type PrivateKeysPerBuild: Get<u32>;
 
-		/// How long registration stays open after a game's player process ends, in seconds.
+		/// How long key registration stays open after a game's player process ends, in seconds.
 		///
 		/// A claimant who misses the window mints nothing, unless the game is abandoned and its
 		/// credits go back to the public path.
 		#[pallet::constant]
-		type PrivateRegistrationSeconds: Get<u32>;
+		type PrivateKeyRegistrationSeconds: Get<u32>;
 
 		/// XCM sender used to deliver the credit trees to [`Config::NftClaimsParaId`].
 		type XcmRouter: SendXcm;
@@ -821,9 +821,9 @@ pub mod pallet {
 		CreditTreeXcmFailed,
 		/// The game never opted into the private claim path, or its credits are already dropped.
 		NotAPrivateGame,
-		/// Registration for the game's private claim ring is not open. It opens once the game's
-		/// credits are final and closes after [`Config::PrivateRegistrationSeconds`].
-		PrivateRegistrationClosed,
+		/// Key registration for the game's private claim ring is not open. It opens once the
+		/// game's credits are final and closes after [`Config::PrivateKeyRegistrationSeconds`].
+		PrivateKeyRegistrationClosed,
 		/// The claimant does not hold the credits a registration costs.
 		InsufficientCredits,
 		/// The claimant already registered a key for this game. One key holds every slot the game

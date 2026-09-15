@@ -54,8 +54,8 @@ fn open_private_game<T: Config>(game_index: GameIdx, slots: u8) {
 		game_index,
 		PrivateGameInfo {
 			slots,
-			registration_starts: 0,
-			registration_ends: u32::MAX,
+			key_registration_starts: 0,
+			key_registration_ends: u32::MAX,
 			key_count: 0,
 			// The largest threshold a runtime's bounds allow, which a game of `MaxRounds` rounds
 			// reaches whatever its groups hold.
@@ -83,10 +83,10 @@ fn fill_private_ring<T: Config>(game_index: GameIdx, count: u32) {
 
 /// Close `game_index`'s registration, which is what lets its rings be built.
 #[cfg(feature = "runtime-benchmarks")]
-fn close_private_registration<T: Config>(game_index: GameIdx) {
+fn close_private_key_registration<T: Config>(game_index: GameIdx) {
 	PrivateGames::<T>::mutate(game_index, |game| {
 		if let Some(game) = game {
-			game.registration_ends = 0;
+			game.key_registration_ends = 0;
 		}
 	});
 }
@@ -347,7 +347,7 @@ mod benches {
 		let keys = T::MinPrivateRingKeys::get().max(n);
 		open_private_game::<T>(game_index, 1);
 		fill_private_ring::<T>(game_index, keys);
-		close_private_registration::<T>(game_index);
+		close_private_key_registration::<T>(game_index);
 		push_private_keys::<T>(game_index, keys - n);
 
 		#[extrinsic_call]
@@ -373,7 +373,7 @@ mod benches {
 		let keys = T::MinPrivateRingKeys::get();
 		open_private_game::<T>(game_index, 1);
 		fill_private_ring::<T>(game_index, keys);
-		close_private_registration::<T>(game_index);
+		close_private_key_registration::<T>(game_index);
 		push_private_keys::<T>(game_index, keys);
 
 		#[extrinsic_call]
@@ -411,7 +411,7 @@ mod benches {
 		let game_index = 1;
 		open_private_game::<T>(game_index, 1);
 		fill_private_ring::<T>(game_index, T::MaxPrivateRingKeys::get());
-		close_private_registration::<T>(game_index);
+		close_private_key_registration::<T>(game_index);
 		let to_include =
 			pallet::Pallet::<T>::private_ring_build_step(game_index).expect("a step is due");
 
@@ -438,7 +438,7 @@ mod benches {
 		);
 		open_private_game::<T>(game_index, 1);
 		fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
-		close_private_registration::<T>(game_index);
+		close_private_key_registration::<T>(game_index);
 		while let Some(to_include) = pallet::Pallet::<T>::private_ring_build_step(game_index) {
 			pallet::Pallet::<T>::do_build_private_ring(game_index, to_include)
 				.expect("the ring builds");
@@ -457,7 +457,7 @@ mod benches {
 		let game_index = 1;
 		open_private_game::<T>(game_index, 1);
 		fill_private_ring::<T>(game_index, T::MinPrivateRingKeys::get());
-		close_private_registration::<T>(game_index);
+		close_private_key_registration::<T>(game_index);
 		while let Some(to_include) = pallet::Pallet::<T>::private_ring_build_step(game_index) {
 			pallet::Pallet::<T>::do_build_private_ring(game_index, to_include)
 				.expect("the ring builds");

@@ -10,14 +10,14 @@ claim instead proves ring VRF membership of one game's registrants, so the proof
 
 1. **Schedule.** An operator sets `private_claims` on the `GameSchedule` entry, with the number of
    `slots` a registrant gets. A game that opts in is private only.
-2. **Register.** Once the game's player process ends and credits are final, registration opens for
-   `PrivateRegistrationSeconds`. Each claimant calls `register_private_claim_key` on the People
+2. **Register a key.** Once the game's player process ends and credits are final, key registration opens for
+   `PrivateKeyRegistrationSeconds`. Each claimant calls `register_private_claim_key` on the People
    chain, having earned the game's entry threshold in it, and hands over a one-time ring VRF key their
    wallet made for this game. Every registrant gets the same slots, so a registration says only that
    they took part. The registration is public, and has to be: the ring is built from the registered
    keys, so the set a proof names is public too. A registered key discloses none of the aliases a
    proof of it yields. What the ring hides is which mint is whose.
-3. **Build the ring.** Once registration closes, the offchain worker drives `build_private_ring`
+3. **Build the ring.** Once key registration closes, the offchain worker drives `build_private_ring`
    over the registered keys in bounded chunks.
 4. **Deliver.** The offchain worker submits `send_private_ring` to ship the game's outcome to the
    claims chain in one XCM message. The claims chain keeps the first outcome it receives for a game,
@@ -25,8 +25,8 @@ claim instead proves ring VRF membership of one game's registrants, so the proof
 5. **Claim.** A claimant submits `claim_private` on the claims chain, one per slot, inside the
    game's claim window.
 6. **Clean up.** Offchain workers clean up both chains automatically: on the game chain, the
-   offchain worker drives `clean_up_private_game` to remove the game's keys, registrations and
-   unused eligibility entries in bounded steps. It waits for step 4: its last step drops the record
+   offchain worker drives `clean_up_private_game` to remove the game's claimant records, eligible
+   and registered alike, in bounded steps. It waits for step 4: its last step drops the record
    `send_private_ring` reads the game's slots from, so cleaning up first would leave a queue front
    that can never be sent. On the claims chain, once the window is closed, its offchain worker
    drives `close_private_ring` to remove the ring and its spent aliases.
@@ -126,7 +126,7 @@ chain refuses an abandonment for a game holding a ring, and a ring for one alrea
 | Item | Where | Reference value |
 |---|---|---|
 | `MAX_PRIVATE_CLAIM_SLOTS` | `indiv-support` | 5 — upper bound on the slots a game may schedule, checked on both chains |
-| `PrivateRegistrationSeconds` | `pallet-nft-credits` | 2 hours — how long key registration stays open |
+| `PrivateKeyRegistrationSeconds` | `pallet-nft-credits` | 2 hours — how long key registration stays open |
 | `MinPrivateRingKeys` | `pallet-nft-credits` | 16 — absolute floor, below which the game is abandoned |
 | `MinPrivateRingParticipation` | `pallet-nft-credits` | 25% — share of the claimants that reach the entry threshold which has to register |
 | `MaxPrivateRingKeys` | `pallet-nft-credits` | 767 — registrants one game takes |

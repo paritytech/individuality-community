@@ -83,7 +83,7 @@ impl crate::Config for Test {
 	type MinPrivateRingKeys = MinPrivateRingKeys;
 	type MinPrivateRingParticipation = MinPrivateRingParticipation;
 	type PrivateKeysPerBuild = PrivateKeysPerBuild;
-	type PrivateRegistrationSeconds = PrivateRegistrationSeconds;
+	type PrivateKeyRegistrationSeconds = PrivateKeyRegistrationSeconds;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockCreditsBenchmarkHelper;
 }
@@ -191,7 +191,7 @@ parameter_types! {
 	/// Off by default, so that a test of the absolute floor is not also a test of the share.
 	pub storage MinPrivateRingParticipation: Percent = Percent::zero();
 	pub storage PrivateKeysPerBuild: u32 = 2;
-	pub storage PrivateRegistrationSeconds: u32 = 3_600;
+	pub storage PrivateKeyRegistrationSeconds: u32 = 3_600;
 	/// Whether [`FailableRingVrf`] refuses to push keys, which is what a chunk store the ring
 	/// cannot be built from does on a live chain.
 	pub storage RingPushFails: bool = false;

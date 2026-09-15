@@ -20,7 +20,7 @@ use crate::{
 	mock::*, ClaimantKind, Config, CreditTrees, Event, NextExpectedSequence, PendingTreeDeletions,
 	TreeExpiries, WeightInfo,
 };
-use frame_support::{assert_noop, assert_ok, dispatch::GetDispatchInfo, BoundedVec};
+use frame_support::{assert_noop, assert_ok, dispatch::GetDispatchInfo, traits::Hooks, BoundedVec};
 use indiv_support::credit_trees::{
 	CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpiryTimestamp, NftClaimCreditTree,
 };
@@ -2389,6 +2389,22 @@ mod migration {
 			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
 
 			assert!(!filed(11), "the version gate must keep the migration from running twice");
+		});
+	}
+}
+
+/// The configuration invariants the pallet holds a runtime to.
+mod integrity {
+	use super::*;
+	use crate::Pallet;
+
+	/// Every call the pallet bounds has to fit the block budget, `receive_private_rings`
+	/// included: a batch this chain cannot execute loses every ring in it, the game chain having
+	/// already dropped the outcome it sent.
+	#[test]
+	fn the_mock_configuration_holds() {
+		new_test_ext().execute_with(|| {
+			<Pallet<Test> as Hooks<u64>>::integrity_test();
 		});
 	}
 }

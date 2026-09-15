@@ -101,14 +101,14 @@ impl<T: Config> Pallet<T> {
 		let game = indiv_pallet_game::Game::<T>::get().filter(|game| game.index == game_index)?;
 		let setting = game.private_claims?;
 
-		// Registration opens when the credits are final, at the end of the player process, and
+		// Key registration opens when the credits are final, at the end of the player process, and
 		// runs for the configured window.
 		let player_process_end = GameTimes::<T>::player_process_end(&game);
 		let info = PrivateGameInfo {
 			slots: setting.slots,
-			registration_starts: player_process_end,
-			registration_ends: player_process_end
-				.saturating_add(T::PrivateRegistrationSeconds::get()),
+			key_registration_starts: player_process_end,
+			key_registration_ends: player_process_end
+				.saturating_add(T::PrivateKeyRegistrationSeconds::get()),
 			key_count: 0,
 			entry_threshold: Self::private_entry_threshold(game.rounds, game.max_group_size),
 			eligible_claimants: 0,
@@ -170,22 +170,22 @@ impl<T: Config> Pallet<T> {
 		T::MinPrivateRingKeys::get().max(share).min(T::MaxPrivateRingKeys::get())
 	}
 
-	/// Whether registration for `game_index` is open right now.
+	/// Whether key registration for `game_index` is open right now.
 	///
 	/// Both ends matter. Before the player process is over the credits are not final, so a
 	/// claimant's balance need not yet reach the entry threshold.
-	fn private_registration_open(info: &PrivateGameInfo) -> bool {
+	fn private_key_registration_open(info: &PrivateGameInfo) -> bool {
 		let now = T::UnixTime::now().as_secs().saturated_into::<u32>();
 		info.accepts_keys(now)
 	}
 
-	/// Whether registration for `game_index` is over, which is when its ring can be built.
+	/// Whether key registration for `game_index` is over, which is when its ring can be built.
 	///
-	/// This is not the opposite of [`Pallet::private_registration_open`]. A game whose player
-	/// process still runs has opened no registration, and its ring must not be built either.
-	fn private_registration_closed(info: &PrivateGameInfo) -> bool {
+	/// This is not the opposite of [`Pallet::private_key_registration_open`]. A game whose player
+	/// process still runs has opened no key registration, and its ring must not be built either.
+	fn private_key_registration_closed(info: &PrivateGameInfo) -> bool {
 		let now = T::UnixTime::now().as_secs().saturated_into::<u32>();
-		now >= info.registration_ends
+		now >= info.key_registration_ends
 	}
 
 	/// The body of [`Pallet::register_private_claim_key`].
@@ -196,7 +196,10 @@ impl<T: Config> Pallet<T> {
 	) -> DispatchResult {
 		let mut info = PrivateGames::<T>::get(game_index).ok_or(Error::<T>::NotAPrivateGame)?;
 
-		ensure!(Self::private_registration_open(&info), Error::<T>::PrivateRegistrationClosed);
+		ensure!(
+			Self::private_key_registration_open(&info),
+			Error::<T>::PrivateKeyRegistrationClosed
+		);
 		ensure!(T::RingVrf::is_member_valid(&key), Error::<T>::InvalidRingKey);
 
 		match PrivateClaimants::<T>::get(game_index, &claimant) {
@@ -242,7 +245,7 @@ impl<T: Config> Pallet<T> {
 		let PrivateGamePhase::Building { included, failures } = info.phase else {
 			return None;
 		};
-		if !Self::private_registration_closed(&info) {
+		if !Self::private_key_registration_closed(&info) {
 			return None;
 		}
 
@@ -721,8 +724,8 @@ impl<T: Config> Pallet<T> {
 
 		// Registration has to outlast the block a game ends in, or no claimant can register.
 		assert!(
-			!T::PrivateRegistrationSeconds::get().is_zero(),
-			"`PrivateRegistrationSeconds` must be at least one",
+			!T::PrivateKeyRegistrationSeconds::get().is_zero(),
+			"`PrivateKeyRegistrationSeconds` must be at least one",
 		);
 
 		budget.assert_fits(

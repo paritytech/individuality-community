@@ -194,17 +194,17 @@ pub struct PrivateGameInfo {
 	/// The slots every registrant holds, from the game's schedule. Each slot is one mint hidden
 	/// by the game's ring.
 	pub slots: PrivateClaimSlot,
-	/// When registration opens, in seconds since the UNIX epoch. It is the end of the game's
+	/// When key registration opens, in seconds since the UNIX epoch. It is the end of the game's
 	/// player process, when the credits are final. Before that, a claimant's balance need not
 	/// reach the entry threshold.
-	pub registration_starts: u32,
-	/// When registration closes, in seconds since the UNIX epoch. Building starts after it, so a
-	/// ring never grows under a claimant who already proved against it.
-	pub registration_ends: u32,
+	pub key_registration_starts: u32,
+	/// When key registration closes, in seconds since the UNIX epoch. Building starts after it, so
+	/// a ring never grows under a claimant who already proved against it.
+	pub key_registration_ends: u32,
 	/// The number of keys registered, which is the anonymity set of every claim of the game.
 	pub key_count: u32,
 	/// The credits a claimant must have earned in this game to register for its ring. It is
-	/// derived from the game's own shape, which is unreadable by the time registration opens.
+	/// derived from the game's own shape, which is unreadable by the time key registration opens.
 	pub entry_threshold: u32,
 	/// How many claimants reached [`Self::entry_threshold`]. It is the population the game's
 	/// registration is measured against, and it is final once the player process ends. A
@@ -268,8 +268,8 @@ pub enum PrivateClaimantState {
 }
 
 impl PrivateGameInfo {
-	/// Whether registration is still open at `now`.
+	/// Whether key registration is still open at `now`.
 	pub fn accepts_keys(&self, now: u32) -> bool {
-		now >= self.registration_starts && now < self.registration_ends
+		now >= self.key_registration_starts && now < self.key_registration_ends
 	}
 }

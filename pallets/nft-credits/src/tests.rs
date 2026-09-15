@@ -3355,7 +3355,7 @@ mod private_claims {
 
 	/// Close registration and run the offchain worker's build steps until the ring is final.
 	fn close_registration_and_build() {
-		let ends = PrivateGames::<Test>::get(GAME).unwrap().registration_ends;
+		let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
 		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
 
 		// One step per call, as the offchain worker submits them, until nothing is left.
@@ -3381,7 +3381,7 @@ mod private_claims {
 
 	/// Move the clock to the moment registration opens, which is when the credits are final.
 	fn open_registration() {
-		let starts = PrivateGames::<Test>::get(GAME).unwrap().registration_starts;
+		let starts = PrivateGames::<Test>::get(GAME).unwrap().key_registration_starts;
 		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(starts as u64));
 	}
 
@@ -3599,7 +3599,7 @@ mod private_claims {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
 				register(account, seed as u8);
 			}
-			let ends = PrivateGames::<Test>::get(GAME).unwrap().registration_ends;
+			let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
 			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
 			clear_pool();
 
@@ -3802,7 +3802,7 @@ mod private_claims {
 			// The chunks the ring is built from are unusable, which the next block does not
 			// repair.
 			RingPushFails::set(&true);
-			let ends = PrivateGames::<Test>::get(GAME).unwrap().registration_ends;
+			let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
 			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
 
 			// The failing steps keep the game, so a chain that recovers still builds its ring.
@@ -3850,7 +3850,7 @@ mod private_claims {
 				let AccountOrPerson::Account(account) = player else { unreachable!() };
 				register(account, seed as u8);
 			}
-			let ends = PrivateGames::<Test>::get(GAME).unwrap().registration_ends;
+			let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
 			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((ends + 1) as u64));
 
 			RingPushFails::set(&true);
@@ -3897,7 +3897,7 @@ mod private_claims {
 			play_private_game(2);
 			let info = PrivateGames::<Test>::get(GAME).unwrap();
 			MOCK_UNIX_TIME.with(|t| {
-				*t.borrow_mut() = Duration::from_secs((info.registration_starts - 1) as u64)
+				*t.borrow_mut() = Duration::from_secs((info.key_registration_starts - 1) as u64)
 			});
 
 			// Registration has not opened, so no key is registered yet. A build now would
@@ -3954,7 +3954,7 @@ mod private_claims {
 			play_private_game(2);
 			let info = PrivateGames::<Test>::get(GAME).unwrap();
 			MOCK_UNIX_TIME.with(|t| {
-				*t.borrow_mut() = Duration::from_secs((info.registration_starts - 1) as u64)
+				*t.borrow_mut() = Duration::from_secs((info.key_registration_starts - 1) as u64)
 			});
 
 			// The player process is still running, so the credits a registration spends are not
@@ -3965,7 +3965,7 @@ mod private_claims {
 					GAME,
 					ring_key(1)
 				),
-				Error::<Test>::PrivateRegistrationClosed
+				Error::<Test>::PrivateKeyRegistrationClosed
 			);
 		});
 	}
@@ -3974,7 +3974,7 @@ mod private_claims {
 	fn registration_closes_with_the_window() {
 		new_test_ext().execute_with(|| {
 			play_private_game(2);
-			let ends = PrivateGames::<Test>::get(GAME).unwrap().registration_ends;
+			let ends = PrivateGames::<Test>::get(GAME).unwrap().key_registration_ends;
 			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(ends as u64));
 
 			assert_noop!(
@@ -3983,7 +3983,7 @@ mod private_claims {
 					GAME,
 					ring_key(1)
 				),
-				Error::<Test>::PrivateRegistrationClosed
+				Error::<Test>::PrivateKeyRegistrationClosed
 			);
 		});
 	}

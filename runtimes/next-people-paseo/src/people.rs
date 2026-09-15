@@ -791,7 +791,7 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// Two hours, counted from the end of the game's player process, when its credits are final.
 	// A claimant who misses the window mints nothing, unless the game turns out to build no ring
 	// at all, which puts its credits back on the public path.
-	type PrivateRegistrationSeconds = ConstU32<7200>;
+	type PrivateKeyRegistrationSeconds = ConstU32<7200>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
 }
