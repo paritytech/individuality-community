@@ -44,3 +44,5 @@ zombienet/.tools
 
 # Debug
 src/**/debug
+
+*.wasm

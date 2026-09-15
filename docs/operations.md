@@ -75,9 +75,9 @@ These are sensible starting points, not the only valid flows.
 The chain absorbs the load-side costs, so creating one takes the admin origin.
 
 1. Create an asset (`Assets::force_create`) and mint the supply.
-2. Prepare the pallet account — `Coinage::pallet_account()`, for the instance's asset id.
-   For a non-sufficient instance it must be touched first so the pallet account can hold funds for
-   this asset id, and funded with minimum balance of this asset id.
+2. Prepare `Coinage::pallet_account()` for the underlying asset. For a non-sufficient asset, call
+   `Assets::touch` for the pallet account first. Fund the account with the asset's minimum balance in
+   either case.
 3. `create_sufficient_instance` with the asset and the amount of a coin of denomination zero.
 
 ### A sponsored instance
