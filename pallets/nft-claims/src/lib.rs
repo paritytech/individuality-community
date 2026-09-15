@@ -221,7 +221,6 @@ use indiv_support::{
 	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
 	traits::{Alias, RingExponent},
 	tx_priority,
-	utils::BigEndianU64,
 	weight_budget::OcwWeightBudget,
 };
 use sp_core::{H160, H256};
@@ -626,14 +625,13 @@ pub mod pallet {
 	/// entry is filed with the ring and removed with it.
 	#[pallet::storage]
 	pub type PrivateRingCloses<T: Config> =
-		StorageDoubleMap<_, Identity, BigEndianU64, Twox64Concat, GameIdx, (), OptionQuery>;
+		StorageDoubleMap<_, Identity, ClosingBlock, Twox64Concat, GameIdx, (), OptionQuery>;
 
-	/// The block a private claim last ran in, and how many that block ran, against
-	/// [`Config::MaxPrivateClaimsPerBlock`]. A count filed under an earlier block is spent and
-	/// stands for zero, so every block opens a fresh allowance without a reset writing to it.
+	/// How many private claims the last block to run one ran, against
+	/// [`Config::MaxPrivateClaimsPerBlock`].
 	#[pallet::storage]
-	pub type PrivateClaimsAtBlock<T: Config> =
-		StorageValue<_, (BlockNumberFor<T>, u32), ValueQuery>;
+	pub type PrivateClaimTally<T: Config> =
+		StorageValue<_, PrivateClaimCount<BlockNumberFor<T>>, ValueQuery>;
 
 	/// The collections whose owners accept claims, each bound to the registering owner and the
 	/// [`ItemSelection`] deciding the item. A collection with no entry cannot be claimed into.
@@ -1170,26 +1168,25 @@ pub mod pallet {
 			let base = T::WeightInfo::claim_private();
 			ensure_authorized(origin).map_err(|e| e.with_weight(base))?;
 
-			// `authorize` ran on this state in the same block. It verified the proof against the
+			// `authorize` ran on this state in the same block: it verified the proof against the
 			// game's ring, matched `alias` to it, held the claim to the block's allowance and
-			// found the alias unspent. Only spending the alias is left.
+			// found the alias unspent. Spending the alias is all that is left.
 			let _ = proof;
 
-			// Spent before the selection, so that a minter contract that reenters with the same
-			// proof finds the alias gone. A failure below unwinds the whole dispatch.
+			// Both writes land before the contract calls below, so a claim that reenters with
+			// the same proof meets them in `authorize` and is refused. A failure below unwinds
+			// them with the rest of the dispatch.
 			SpentPrivateClaims::<T>::insert(game_index, alias, ());
 			let now = frame_system::Pallet::<T>::block_number();
-			PrivateClaimsAtBlock::<T>::mutate(|(at, executed)| {
-				if *at == now {
-					*executed = executed.saturating_add(1);
-				} else {
-					*at = now;
-					*executed = 1;
-				}
+			PrivateClaimTally::<T>::mutate(|count| {
+				*count = PrivateClaimCount {
+					claims: count.claims_in(&now).saturating_add(1),
+					block: now,
+				};
 			});
 
-			// A private claim spends its credit on the game chain, at registration, so there is
-			// no credit here to draw the item from. The alias stands in for it.
+			// The credit was spent on the game chain at registration, so the alias stands in for
+			// it as the entropy the item is picked with.
 			let selection = Self::select_item(collection, alias).map_err(|error| {
 				let error = error.into_claim_error::<T>();
 				error.error.with_weight(base.saturating_add(error.weight_consumed))
@@ -1903,8 +1900,8 @@ pub mod pallet {
 			// one its full allowance. `Future` keeps the claim in the pool, a later block being
 			// what makes it valid.
 			let now = frame_system::Pallet::<T>::block_number();
-			let (at, executed) = PrivateClaimsAtBlock::<T>::get();
-			if at == now && executed >= T::MaxPrivateClaimsPerBlock::get() {
+			let executed = PrivateClaimTally::<T>::get().claims_in(&now);
+			if executed >= T::MaxPrivateClaimsPerBlock::get() {
 				return Err(InvalidTransaction::Future.into());
 			}
 
@@ -2351,8 +2348,8 @@ pub mod pallet {
 		///
 		/// The block is widened to `u64`, so the key covers every block number a runtime may use
 		/// and orders them as it orders the smaller ones.
-		fn close_key(closes_at: BlockNumberFor<T>) -> BigEndianU64 {
-			BigEndianU64(closes_at.saturated_into::<u64>())
+		fn close_key(closes_at: BlockNumberFor<T>) -> ClosingBlock {
+			ClosingBlock::from(closes_at.saturated_into::<u64>())
 		}
 
 		/// Submits a [`Pallet::close_private_ring`] for the game whose claim window closed first.

@@ -2397,16 +2397,15 @@ mod migration {
 mod private_claims {
 	use super::*;
 	use crate::{
-		AuthorizeInvalidity, CollectionMinter, CollectionMinters, Error, ItemSelection,
-		PrivateClaimsAtBlock, PrivateGameEnd, PrivateGameEnds, PrivateRingCloses, PrivateRings,
-		SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
+		AuthorizeInvalidity, ClosingBlock, CollectionMinter, CollectionMinters, Error,
+		ItemSelection, PrivateClaimCount, PrivateClaimTally, PrivateGameEnd, PrivateGameEnds,
+		PrivateRingCloses, PrivateRings, SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
 	};
 	use indiv_pallet_scarcity::CollectionId;
 	use indiv_support::{
 		credit_trees::{PrivateGameOutcome, PrivateRingDelivery, MAX_PRIVATE_CLAIM_SLOTS},
 		identity::AccountOrPerson,
 		traits::Alias,
-		utils::BigEndianU64,
 	};
 	use sp_runtime::transaction_validity::{
 		InvalidTransaction, TransactionSource, TransactionValidityError,
@@ -2967,10 +2966,16 @@ mod private_claims {
 			// The allowance reopens with the next block. The count stays filed under the block
 			// that ran it, which is what makes it spent.
 			let now = System::block_number();
-			assert_eq!(PrivateClaimsAtBlock::<Test>::get(), (now, 2));
+			assert_eq!(
+				PrivateClaimTally::<Test>::get(),
+				PrivateClaimCount { block: now, claims: 2 }
+			);
 			System::set_block_number(now + 1);
 			assert_ok!(claim(0, alias, proof, COLLECTION, PURSE + 2));
-			assert_eq!(PrivateClaimsAtBlock::<Test>::get(), (now + 1, 1));
+			assert_eq!(
+				PrivateClaimTally::<Test>::get(),
+				PrivateClaimCount { block: now + 1, claims: 1 }
+			);
 		});
 	}
 
@@ -3302,7 +3307,7 @@ mod private_claims {
 			// under its own closing block for as long as it is held.
 			assert_eq!(
 				PrivateRingCloses::<Test>::iter().collect::<Vec<_>>(),
-				vec![(BigEndianU64(closes_at), GAME, ())]
+				vec![(ClosingBlock::from(closes_at), GAME, ())]
 			);
 			assert_ok!(NftClaims::do_try_state());
 
@@ -3351,7 +3356,10 @@ mod private_claims {
 			// With the first game closed the index hands the worker the next one.
 			System::set_block_number(later_closes);
 			assert_ok!(close());
-			assert!(!PrivateRingCloses::<Test>::contains_key(BigEndianU64(first_closes), GAME));
+			assert!(!PrivateRingCloses::<Test>::contains_key(
+				ClosingBlock::from(first_closes),
+				GAME
+			));
 			run_offchain_worker(later_closes);
 			assert_eq!(
 				submitted_calls().last(),
@@ -3371,18 +3379,18 @@ mod private_claims {
 			let closes_at = PrivateRings::<Test>::get(GAME).unwrap().closes_at;
 
 			// Without the entry the worker never finds the game, so its ring is never closed.
-			PrivateRingCloses::<Test>::remove(BigEndianU64(closes_at), GAME);
+			PrivateRingCloses::<Test>::remove(ClosingBlock::from(closes_at), GAME);
 			assert!(NftClaims::do_try_state().is_err());
 
 			// Filed under the wrong block, the worker submits the close too early or too late.
-			PrivateRingCloses::<Test>::insert(BigEndianU64(closes_at + 1), GAME, ());
+			PrivateRingCloses::<Test>::insert(ClosingBlock::from(closes_at + 1), GAME, ());
 			assert!(NftClaims::do_try_state().is_err());
-			PrivateRingCloses::<Test>::remove(BigEndianU64(closes_at + 1), GAME);
-			PrivateRingCloses::<Test>::insert(BigEndianU64(closes_at), GAME, ());
+			PrivateRingCloses::<Test>::remove(ClosingBlock::from(closes_at + 1), GAME);
+			PrivateRingCloses::<Test>::insert(ClosingBlock::from(closes_at), GAME, ());
 			assert_ok!(NftClaims::do_try_state());
 
 			// An entry naming no ring leaves the worker submitting a close `authorize` refuses.
-			PrivateRingCloses::<Test>::insert(BigEndianU64(closes_at), GAME + 1, ());
+			PrivateRingCloses::<Test>::insert(ClosingBlock::from(closes_at), GAME + 1, ());
 			assert!(NftClaims::do_try_state().is_err());
 		});
 	}

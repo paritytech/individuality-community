@@ -33,7 +33,7 @@ use frame_support::{
 	BoundedVec,
 };
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
-use indiv_support::{credit_trees::CreditTreeDelivery, utils::BigEndianU64};
+use indiv_support::credit_trees::CreditTreeDelivery;
 use sp_runtime::traits::{Bounded, Zero};
 
 /// The `i`-th distinct credit a benchmarked tree commits to.
@@ -458,7 +458,7 @@ mod benches {
 		);
 		// Filed as `receive_private_rings` files it, so the step that drops the ring pays for
 		// clearing the entry the offchain worker found it by.
-		PrivateRingCloses::<T>::insert(BigEndianU64(0), game_index, ());
+		PrivateRingCloses::<T>::insert(ClosingBlock::from(0), game_index, ());
 		for i in 0..n {
 			let mut alias = [0u8; 32];
 			alias[..4].copy_from_slice(&i.to_le_bytes());
