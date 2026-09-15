@@ -948,6 +948,7 @@ mod dap {
 	};
 	use parachains_common::{AccountId, AuraId};
 	use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
+	use polkadot_runtime_common::claims as pallet_claims;
 	use sp_keyring::Sr25519Keyring;
 	use sp_runtime::{generic, MultiSignature};
 
@@ -970,6 +971,7 @@ mod dap {
 			frame_system::CheckNonce::<Runtime>::from(nonce),
 			frame_system::CheckWeight::<Runtime>::new(),
 			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
+			pallet_claims::PrevalidateAttests::<Runtime>::new(),
 			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
 		));
@@ -1097,6 +1099,7 @@ mod pgas_fees {
 	};
 	use parachains_common::{AccountId, AuraId};
 	use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
+	use polkadot_runtime_common::claims as pallet_claims;
 	use sp_keyring::Sr25519Keyring;
 	use sp_runtime::{
 		generic,
@@ -1138,8 +1141,11 @@ mod pgas_fees {
 			>::from(pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
 				0, None,
 			)),
-			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
-			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
+			pallet_claims::PrevalidateAttests::<Runtime>::new(),
+			(
+				frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
+				pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
+			),
 		));
 		let rest_ext = (
 			(
@@ -1158,7 +1164,7 @@ mod pgas_fees {
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
 			tx_ext.0 .10.clone(),
-			tx_ext.0 .11.clone(),
+			(tx_ext.0 .11 .0.clone(), tx_ext.0 .11 .1.clone()),
 		);
 		let message = (
 			next_asset_hub_paseo_runtime::INDIVIDUALITY_EXTENSION_VERSION,
@@ -1524,7 +1530,7 @@ mod tx_extension_pipeline {
 	/// payment extensions do not charge therefore needs an allowance in
 	/// `pallet-origin-restriction` to bound it, which is why an addition anywhere in this list is
 	/// a deliberate change rather than an implementation detail.
-	const PIPELINE: [&str; 18] = [
+	const PIPELINE: [&str; 19] = [
 		"UnitTransactionExtension",
 		"VerifyMultiSignature",
 		"AsScarcity",
@@ -1540,6 +1546,7 @@ mod tx_extension_pipeline {
 		"CheckNonce",
 		"CheckWeight",
 		"ChargeAssetTxPayment",
+		"PrevalidateAttests",
 		"CheckMetadataHash",
 		"EthSetOrigin",
 		"StorageWeightReclaim",
