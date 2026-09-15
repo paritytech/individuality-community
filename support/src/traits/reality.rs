@@ -884,8 +884,9 @@ pub enum Statement {
 	/// Ask for whether evidence exists to confirm that a particular tattoo uniquely exists at a
 	/// particular place on somebody's body.
 	///
-	/// The particular tattoo is that which is defined by `design`. The place on the body it must
-	/// exist is yet to be specified — see TODO(paritytech/individuality#1118).
+	/// The particular tattoo is that which is defined by `design`.
+	/// TODO(<https://github.com/paritytech/individuality/issues/1118>): Specify the place on the
+	/// body where it must exist.
 	///
 	/// The statement comes with `evidence` to provide a hint of what evidence should be considered
 	/// in the decision making. This may not be comprehensive.

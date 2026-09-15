@@ -831,7 +831,7 @@ impl cumulus_pallet_weight_reclaim::Config for Runtime {
 	type WeightInfo = weights::cumulus_pallet_weight_reclaim::WeightInfo<Runtime>;
 }
 
-// TODO(paritytech/individuality#1124): choose good value.
+// TODO(<https://github.com/paritytech/individuality/issues/1124>): choose good value.
 const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_MAX: Balance = UNITS;
 const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = CENTS * 3;
 const POI_CANDIDATE_RECOVERY: Balance = CENTS * 3;
