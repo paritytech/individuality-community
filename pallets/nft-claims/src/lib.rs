@@ -907,14 +907,12 @@ pub mod pallet {
 					continue;
 				}
 
-				// A game that built a ring reaches no second outcome, so `claim` refuses this
-				// tree for good and a private claim proves against the ring, never against a
-				// tree. Storing it would leave state that nothing but the sweep removes. A closed
-				// game held a ring too, whatever it holds now.
+				// The tree is unclaimable for its whole time to live, and storing it would leave
+				// state that nothing but the sweep removes. `replay_credit_trees` is open to
+				// anyone on the game chain, which is what makes that worth refusing here rather
+				// than leaving to `claim`, which refuses it anyway.
 				if update.tree.private_slots != 0 &&
-					(PrivateRings::<T>::contains_key(update.tree.game_index) ||
-						PrivateGameEnds::<T>::get(update.tree.game_index) ==
-							Some(PrivateGameEnd::Closed))
+					Self::game_has_or_had_ring(update.tree.game_index)
 				{
 					Self::deposit_event(Event::CreditTreeSupersededByRing { block: update.block });
 					continue;
@@ -1019,15 +1017,7 @@ pub mod pallet {
 
 			let tree = CreditTrees::<T>::get(block)
 				.ok_or(Error::<T>::UnknownCreditTree.with_weight(base))?;
-			// A private game mints through its ring only. The tree carries the slot count, so a
-			// public claim is refused before the game's ring arrives. A game that built no ring
-			// mints here instead, its abandonment being what says so.
-			ensure!(
-				tree.private_slots == 0 ||
-					PrivateGameEnds::<T>::get(tree.game_index) ==
-						Some(PrivateGameEnd::Abandoned),
-				Error::<T>::PrivateGame.with_weight(base)
-			);
+			ensure!(Self::tree_mints_publicly(&tree), Error::<T>::PrivateGame.with_weight(base));
 			ensure!(
 				leaf_index < tree.leaf_count,
 				Error::<T>::LeafIndexOutOfBounds.with_weight(base)
@@ -1718,8 +1708,6 @@ pub mod pallet {
 							// game mean the chains disagree about who registered.
 							Self::note_private_outcome_conflict(update.game_index);
 						},
-						// A redelivery keeps the window the first one set: extending it would
-						// leave the last claims of a game standing alone in time.
 						Some(_) => {},
 						None => {
 							// The window runs from this block, so every member of the ring gets
@@ -1855,6 +1843,26 @@ pub mod pallet {
 				.expect("tag prefix is not empty; qed");
 
 			Ok((validity, Weight::zero()))
+		}
+
+		/// Whether `tree`'s credits mint over the public path.
+		///
+		/// A public game's tree names no slot and always does. A private game's tree does once
+		/// the game is abandoned, that end being what reopens the path for it. A tree that names
+		/// slots is refused until then, ring or no ring: the ring arrives after the trees do.
+		fn tree_mints_publicly(tree: &NftClaimCreditTree) -> bool {
+			tree.private_slots == 0 ||
+				PrivateGameEnds::<T>::get(tree.game_index) == Some(PrivateGameEnd::Abandoned)
+		}
+
+		/// Whether the private game `game_index` built a ring, whether or not it still holds it.
+		///
+		/// A private claim proves against the ring, never against a tree, so the game's trees
+		/// mint nothing. The remaining end, [`PrivateGameEnd::Abandoned`], is the opposite case:
+		/// there the trees are the only path the game's credits mint on.
+		fn game_has_or_had_ring(game_index: GameIdx) -> bool {
+			PrivateRings::<T>::contains_key(game_index) ||
+				PrivateGameEnds::<T>::get(game_index) == Some(PrivateGameEnd::Closed)
 		}
 
 		/// Report a second, different outcome for a game. The stored one is kept.
