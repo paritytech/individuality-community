@@ -14,9 +14,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The per-claimant award-block index against the window a credit stays mintable in.
+//! The per-claimant tree-block index against the window a credit stays mintable in.
 //!
-//! `MaxCreditBlocksPerClaimant` counts award blocks while `AwardRetentionTtl` counts seconds, so
+//! `MaxCreditBlocksPerClaimant` counts tree blocks while `AwardRetentionTtl` counts seconds, so
 //! the two only agree at an assumed game cadence. This pins that assumption: change the schedule,
 //! the retention window or the group and round bounds, and it fails rather than the index quietly
 //! evicting blocks whose credits are still mintable.
@@ -47,7 +47,7 @@ fn credit_blocks_index_spans_the_award_retention_window() {
 
 	assert!(
 		bound >= needed,
-		"`MaxCreditBlocksPerClaimant` ({bound}) is below the {needed} award blocks a claimant \
+		"`MaxCreditBlocksPerClaimant` ({bound}) is below the {needed} tree blocks a claimant \
 		 reaches over `AwardRetentionTtl`: {games} games of up to {per_game} blocks each, so the \
 		 index would evict a block whose credit is still mintable",
 	);

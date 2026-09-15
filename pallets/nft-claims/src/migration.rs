@@ -22,7 +22,7 @@ use frame_support::{
 	migrations::VersionedMigration, pallet_prelude::*, storage_alias,
 	traits::UncheckedOnRuntimeUpgrade,
 };
-use indiv_support::credit_trees::{AwardBlock, NftClaimCreditLeaf};
+use indiv_support::credit_trees::{CreditTreeBlock, NftClaimCreditLeaf};
 use sp_runtime::Saturating;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-claims::migration";
@@ -43,23 +43,23 @@ pub type MigrateV0ToV1<T> = VersionedMigration<
 pub mod v1 {
 	use super::*;
 
-	/// The claimed leaves of an award block, as recorded before the bitmap. The leaf hash keys the
+	/// The claimed leaves of a tree block, as recorded before the bitmap. The leaf hash keys the
 	/// entry, so it does not name the leaf's index.
 	#[storage_alias]
 	pub type ClaimedCredits<T: Config> = StorageDoubleMap<
 		Pallet<T>,
 		Twox64Concat,
-		AwardBlock,
+		CreditTreeBlock,
 		Identity,
 		NftClaimCreditLeaf,
 		(),
 		OptionQuery,
 	>;
 
-	/// How many of an award block's leaves had been claimed, as counted before the bitmap.
+	/// How many of a tree block's leaves had been claimed, as counted before the bitmap.
 	#[storage_alias]
 	pub type ClaimedCounts<T: Config> =
-		StorageMap<Pallet<T>, Twox64Concat, AwardBlock, u32, ValueQuery>;
+		StorageMap<Pallet<T>, Twox64Concat, CreditTreeBlock, u32, ValueQuery>;
 
 	/// Use [`MigrateV0ToV1`] rather than this directly.
 	///
@@ -72,7 +72,7 @@ pub mod v1 {
 
 	impl<T: Config> UncheckedOnRuntimeUpgrade for MigrateToClaimedLeaves<T> {
 		fn on_runtime_upgrade() -> Weight {
-			let max_leaves = T::MaxCreditsPerAwardBlock::get();
+			let max_leaves = T::MaxCreditsPerTree::get();
 			let mut reads = 1u64;
 			let mut writes = 0u64;
 			let mut indexed = 0u64;
@@ -164,7 +164,7 @@ pub mod v1 {
 
 			for (block, tree) in CreditTrees::<T>::iter() {
 				ensure!(
-					tree.leaf_count <= T::MaxCreditsPerAwardBlock::get(),
+					tree.leaf_count <= T::MaxCreditsPerTree::get(),
 					"an oversized tree survived the migration"
 				);
 				ensure!(
