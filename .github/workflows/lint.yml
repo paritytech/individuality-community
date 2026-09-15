@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: parity-ubuntu
+    runs-on: parity-large-new
     # Must exceed a cold-cache build: the Clippy step runs two full `--all-targets` passes, which
     # takes ~20 minutes with nothing in the cache. Rust caches are evicted routinely, since a full
     # set is ~4 GB per branch against GitHub's 10 GB per-repository budget. A timeout that a cold

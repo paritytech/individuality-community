@@ -107,7 +107,7 @@ jobs:
       environment: previewnet,paseo-next-v2
       runtime_asset_hub: artifact:e2e-runtime-wasm
       runtime_people: artifact:e2e-runtime-wasm
-      runs_on: parity-large
+      runs_on: parity-large-new
       # Only the two chains named above are upgraded. Every other chain stays at
       # whatever the fork took from the live network, which is what this build
       # would meet in a real deployment. To move more, set any of these:
@@ -146,7 +146,7 @@ jobs:
       - name: Run runtime upgrade Chopsticks suite
         uses: ./.github/actions/test-runtime-upgrade
   benchmark-runtime:
-    runs-on: parity-large
+    runs-on: ${{ matrix.runtime.runner }}
     timeout-minutes: 60
     if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
     strategy:
@@ -154,8 +154,10 @@ jobs:
         runtime:
           - name: next-people-paseo-runtime
             package: next-people-paseo-runtime
+            runner: parity-large-new
           - name: next-asset-hub-paseo-runtime
             package: next-asset-hub-paseo-runtime
+            runner: parity-large
 
     steps:
       - name: Install updates and protobuf-compiler
@@ -209,16 +211,27 @@ jobs:
           ./frame-omni-bencher --version
         shell: bash
 
+      - name: Report benchmark runner resources
+        run: |
+          nproc
+          free -h
+          df -h .
+
+      - name: Build benchmark runtime ${{ matrix.runtime.name }}
+        run: cargo build --release -p ${{ matrix.runtime.package }} --features=runtime-benchmarks --locked
+        env:
+          RUSTFLAGS: "-C debug-assertions -D warnings"
+
       - name: Test benchmarks ${{ matrix.runtime.name }}
         run: |
           PACKAGE_NAME=${{ matrix.runtime.package }}
           RUNTIME_BLOB_NAME=$(echo $PACKAGE_NAME | sed 's/-/_/g').compact.compressed.wasm
           RUNTIME_BLOB_PATH=./target/release/wbuild/$PACKAGE_NAME/$RUNTIME_BLOB_NAME
-          # build wasm
-          echo "Preparing wasm for benchmarking RUNTIME_BLOB_PATH=$RUNTIME_BLOB_PATH"
-          cargo build --release -p ${{ matrix.runtime.package }} --features=runtime-benchmarks -q --locked
-          # run benchmarking
           echo "Running benchmarking for RUNTIME_BLOB_PATH=$RUNTIME_BLOB_PATH"
-          ./frame-omni-bencher v1 benchmark pallet --runtime $RUNTIME_BLOB_PATH --all --steps 2 --repeat 1 --min-duration 0 --genesis-builder runtime --exclude-pallets=pallet_xcm_benchmarks::fungible,pallet_xcm_benchmarks::generic,pallet_xcm --quiet
+          ./frame-omni-bencher v1 benchmark pallet \
+            --runtime "$RUNTIME_BLOB_PATH" \
+            --all --steps 2 --repeat 1 --min-duration 0 \
+            --genesis-builder runtime \
+            --exclude-pallets=pallet_xcm_benchmarks::fungible,pallet_xcm_benchmarks::generic,pallet_xcm --quiet
         env:
           RUSTFLAGS: "-C debug-assertions -D warnings"
