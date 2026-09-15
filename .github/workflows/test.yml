@@ -107,7 +107,7 @@ jobs:
       environment: previewnet,paseo-next-v2
       runtime_asset_hub: artifact:e2e-runtime-wasm
       runtime_people: artifact:e2e-runtime-wasm
-      runs_on: parity-large
+      runs_on: parity-large-new
       # Only the two chains named above are upgraded. Every other chain stays at
       # whatever the fork took from the live network, which is what this build
       # would meet in a real deployment. To move more, set any of these:
