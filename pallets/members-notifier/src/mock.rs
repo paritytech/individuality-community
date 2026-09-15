@@ -443,9 +443,8 @@ fn updates_sent_events() -> Vec<(ParaId, u32)> {
 	System::events()
 		.into_iter()
 		.filter_map(|record| match record.event {
-			RuntimeEvent::MembersNotifier(Event::UpdatesSent { para_id, update_count }) => {
-				Some((para_id, update_count))
-			},
+			RuntimeEvent::MembersNotifier(Event::UpdatesSent { para_id, update_count }) =>
+				Some((para_id, update_count)),
 			_ => None,
 		})
 		.collect()
@@ -605,9 +604,8 @@ impl UpdateSendFailedEvents {
 			System::events()
 				.into_iter()
 				.filter_map(|record| match record.event {
-					RuntimeEvent::MembersNotifier(Event::UpdateSendFailed { para_id }) => {
-						Some(para_id)
-					},
+					RuntimeEvent::MembersNotifier(Event::UpdateSendFailed { para_id }) =>
+						Some(para_id),
 					_ => None,
 				})
 				.collect(),
@@ -742,9 +740,8 @@ impl BatchAbandonedEvents {
 			System::events()
 				.into_iter()
 				.filter_map(|record| match record.event {
-					RuntimeEvent::MembersNotifier(Event::BatchAbandoned { sequence }) => {
-						Some(sequence)
-					},
+					RuntimeEvent::MembersNotifier(Event::BatchAbandoned { sequence }) =>
+						Some(sequence),
 					_ => None,
 				})
 				.collect(),

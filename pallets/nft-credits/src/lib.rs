@@ -1007,9 +1007,7 @@ impl<T: Config> Pallet<T> {
 		let (buffer, pending) = match CreditBuffers::<T>::get(buffer) {
 			Some(pending)
 				if pending.awards < AWARDS_PER_TREE && pending.game_index == game_index =>
-			{
-				(buffer, pending)
-			},
+				(buffer, pending),
 			// This buffer is full or belongs to another game.
 			// Nothing is buffered past the cursor, so the next block's buffer is a fresh one.
 			Some(_) => (buffer.saturating_add(One::one()), fresh),
@@ -1284,9 +1282,9 @@ impl<T: Config> Pallet<T> {
 
 		// The call once the batch holds `trees` deliveries: the empty vector's length prefix gives
 		// way to the one for `trees`.
-		let call_len = empty_call.len() - Compact(0u32).encoded_size()
-			+ Compact(trees).encoded_size()
-			+ trees as usize * CreditTreeDelivery::max_encoded_len();
+		let call_len = empty_call.len() - Compact(0u32).encoded_size() +
+			Compact(trees).encoded_size() +
+			trees as usize * CreditTreeDelivery::max_encoded_len();
 		// The XCM around the call, whose size is measured with the empty call in it and taken
 		// apart again, since only the router knows what the envelope itself encodes to.
 		let envelope = VersionedXcm::<()>::from(Self::credit_tree_xcm(empty_call.clone()))

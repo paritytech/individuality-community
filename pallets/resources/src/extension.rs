@@ -207,9 +207,8 @@ impl<T: Config> AsResources<T> {
 
 		match collection {
 			MembershipCollection::People => Pallet::<T>::validate_notification_seq(reference.seq),
-			MembershipCollection::LitePeople => {
-				Pallet::<T>::validate_lite_notification_seq(reference.seq)
-			},
+			MembershipCollection::LitePeople =>
+				Pallet::<T>::validate_lite_notification_seq(reference.seq),
 		}
 		.map_err(|_| CustomValidity::InvalidNotificationSequence)?;
 
@@ -277,12 +276,10 @@ impl<T: Config> AsResources<T> {
 		ensure!(*period == current_period, CustomValidity::InvalidStmtStorePeriod);
 
 		let (identifier, seq_limit) = match collection {
-			MembershipCollection::People => {
-				(*PEOPLE_MEMBER_IDENTIFIER, T::StmtStoreSlotsPerPeriod::get())
-			},
-			MembershipCollection::LitePeople => {
-				(*LITE_PEOPLE_MEMBER_IDENTIFIER, T::LiteStmtStoreSlotsPerPeriod::get())
-			},
+			MembershipCollection::People =>
+				(*PEOPLE_MEMBER_IDENTIFIER, T::StmtStoreSlotsPerPeriod::get()),
+			MembershipCollection::LitePeople =>
+				(*LITE_PEOPLE_MEMBER_IDENTIFIER, T::LiteStmtStoreSlotsPerPeriod::get()),
 		};
 		ensure!(*seq < seq_limit, CustomValidity::InvalidStmtStoreSequence);
 
@@ -402,18 +399,14 @@ impl<T: Config> TransactionExtension<<T as frame_system::Config>::RuntimeCall> f
 
 	fn weight(&self, _call: &<T as frame_system::Config>::RuntimeCall) -> Weight {
 		match self.0 {
-			Some(AsResourcesInfo::RegisterNotificationWithProof(..)) => {
-				<T as Config>::WeightInfo::as_register_with_proof_tx_ext()
-			},
-			Some(AsResourcesInfo::RegisterNotificationForCollection(..)) => {
-				<T as Config>::WeightInfo::as_register_for_collection_tx_ext()
-			},
-			Some(AsResourcesInfo::RegisterStatementStoreAllowance(..)) => {
-				<T as Config>::WeightInfo::as_stmt_store_allowance_tx_ext()
-			},
-			Some(AsResourcesInfo::ClaimLongTermStorage(..)) => {
-				<T as Config>::WeightInfo::claim_long_term_storage_tx_ext()
-			},
+			Some(AsResourcesInfo::RegisterNotificationWithProof(..)) =>
+				<T as Config>::WeightInfo::as_register_with_proof_tx_ext(),
+			Some(AsResourcesInfo::RegisterNotificationForCollection(..)) =>
+				<T as Config>::WeightInfo::as_register_for_collection_tx_ext(),
+			Some(AsResourcesInfo::RegisterStatementStoreAllowance(..)) =>
+				<T as Config>::WeightInfo::as_stmt_store_allowance_tx_ext(),
+			Some(AsResourcesInfo::ClaimLongTermStorage(..)) =>
+				<T as Config>::WeightInfo::claim_long_term_storage_tx_ext(),
 			None => Weight::zero(),
 		}
 	}
@@ -429,7 +422,7 @@ impl<T: Config> TransactionExtension<<T as frame_system::Config>::RuntimeCall> f
 		_source: TransactionSource,
 	) -> ValidateResult<Self::Val, <T as frame_system::Config>::RuntimeCall> {
 		match &self.0 {
-			Some(AsResourcesInfo::RegisterNotificationWithProof(proof, ring_index, revision)) => {
+			Some(AsResourcesInfo::RegisterNotificationWithProof(proof, ring_index, revision)) =>
 				Self::validate_notification(
 					origin,
 					call,
@@ -438,8 +431,7 @@ impl<T: Config> TransactionExtension<<T as frame_system::Config>::RuntimeCall> f
 					*ring_index,
 					*revision,
 					&MembershipCollection::People,
-				)
-			},
+				),
 			Some(AsResourcesInfo::RegisterNotificationForCollection(
 				proof,
 				ring_index,

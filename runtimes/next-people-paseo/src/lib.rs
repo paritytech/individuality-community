@@ -708,26 +708,26 @@ impl InstanceFilter<RuntimeCall> for ProxyType {
 			ProxyType::Any => true,
 			ProxyType::NonTransfer => !matches!(
 				c,
-				RuntimeCall::Balances { .. }
-					| RuntimeCall::Assets { .. }
-					| RuntimeCall::AssetConversion { .. }
-					| RuntimeCall::PoolAssets { .. }
-					| RuntimeCall::PolkadotXcm { .. }
-					| RuntimeCall::Coinage { .. }
+				RuntimeCall::Balances { .. } |
+					RuntimeCall::Assets { .. } |
+					RuntimeCall::AssetConversion { .. } |
+					RuntimeCall::PoolAssets { .. } |
+					RuntimeCall::PolkadotXcm { .. } |
+					RuntimeCall::Coinage { .. }
 			),
 			ProxyType::CancelProxy => matches!(
 				c,
-				RuntimeCall::Proxy(pallet_proxy::Call::reject_announcement { .. })
-					| RuntimeCall::Utility { .. }
-					| RuntimeCall::Multisig { .. }
+				RuntimeCall::Proxy(pallet_proxy::Call::reject_announcement { .. }) |
+					RuntimeCall::Utility { .. } |
+					RuntimeCall::Multisig { .. }
 			),
 			ProxyType::Identity => false,
 			ProxyType::IdentityJudgement => false,
 			ProxyType::Collator => matches!(
 				c,
-				RuntimeCall::CollatorSelection { .. }
-					| RuntimeCall::Utility { .. }
-					| RuntimeCall::Multisig { .. }
+				RuntimeCall::CollatorSelection { .. } |
+					RuntimeCall::Utility { .. } |
+					RuntimeCall::Multisig { .. }
 			),
 		}
 	}
@@ -832,21 +832,17 @@ pub enum RestrictedEntity {
 impl indiv_pallet_origin_restriction::RestrictedEntity<OriginCaller, Balance> for RestrictedEntity {
 	fn allowance(&self) -> indiv_pallet_origin_restriction::Allowance<Balance> {
 		match self {
-			RestrictedEntity::PersonalAlias(_) | RestrictedEntity::PersonalIdentity(_) => {
+			RestrictedEntity::PersonalAlias(_) | RestrictedEntity::PersonalIdentity(_) =>
 				Allowance {
 					max: PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_MAX,
 					recovery_per_block: PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_RECOVERY,
-				}
-			},
-			RestrictedEntity::ReferredCandidate(_) => {
-				Allowance { max: 0, recovery_per_block: POI_CANDIDATE_RECOVERY }
-			},
-			RestrictedEntity::InvitedCandidate(_) => {
-				Allowance { max: 0, recovery_per_block: POI_CANDIDATE_RECOVERY }
-			},
-			RestrictedEntity::AccountParticipant(_) => {
-				Allowance { max: 0, recovery_per_block: ACCOUNT_PARTICIPANT_RECOVERY }
-			},
+				},
+			RestrictedEntity::ReferredCandidate(_) =>
+				Allowance { max: 0, recovery_per_block: POI_CANDIDATE_RECOVERY },
+			RestrictedEntity::InvitedCandidate(_) =>
+				Allowance { max: 0, recovery_per_block: POI_CANDIDATE_RECOVERY },
+			RestrictedEntity::AccountParticipant(_) =>
+				Allowance { max: 0, recovery_per_block: ACCOUNT_PARTICIPANT_RECOVERY },
 			RestrictedEntity::LitePerson(_) | RestrictedEntity::LiteAlias(_) => Allowance {
 				max: LITE_PERSON_AND_ALIAS_ALLOWANCE_MAX,
 				recovery_per_block: LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY,
@@ -862,15 +858,12 @@ impl indiv_pallet_origin_restriction::RestrictedEntity<OriginCaller, Balance> fo
 		match origin_caller {
 			People(PersonalIdentity(id)) => Some(RestrictedEntity::PersonalIdentity(*id)),
 			People(PersonalAlias(rev_ca)) => Some(RestrictedEntity::PersonalAlias(rev_ca.ca.alias)),
-			ProofOfInk(ReferredCandidate(account_id)) => {
-				Some(RestrictedEntity::ReferredCandidate(account_id.clone()))
-			},
-			Score(AccountParticipant(account_id)) => {
-				Some(RestrictedEntity::AccountParticipant(account_id.clone()))
-			},
-			PeopleLite(LitePerson(account_id)) => {
-				Some(RestrictedEntity::LitePerson(account_id.clone()))
-			},
+			ProofOfInk(ReferredCandidate(account_id)) =>
+				Some(RestrictedEntity::ReferredCandidate(account_id.clone())),
+			Score(AccountParticipant(account_id)) =>
+				Some(RestrictedEntity::AccountParticipant(account_id.clone())),
+			PeopleLite(LitePerson(account_id)) =>
+				Some(RestrictedEntity::LitePerson(account_id.clone())),
 			PeopleLite(LiteAlias(rev_ca)) => Some(RestrictedEntity::LiteAlias(rev_ca.ca.alias)),
 			_ => None,
 		}
@@ -887,33 +880,33 @@ impl ContainsPair<RestrictedEntity, RuntimeCall> for OperationAllowedOneTimeExce
 			RestrictedEntity::ReferredCandidate(_) => {
 				matches!(
 					call,
-					RuntimeCall::ProofOfInk(submit_evidence { .. })
-						| RuntimeCall::ProofOfInk(commit { .. })
-						| RuntimeCall::ProofOfInk(allocate_full { .. })
-						| RuntimeCall::ProofOfInk(flakeout { .. })
-						| RuntimeCall::ProofOfInk(register_referred { .. })
+					RuntimeCall::ProofOfInk(submit_evidence { .. }) |
+						RuntimeCall::ProofOfInk(commit { .. }) |
+						RuntimeCall::ProofOfInk(allocate_full { .. }) |
+						RuntimeCall::ProofOfInk(flakeout { .. }) |
+						RuntimeCall::ProofOfInk(register_referred { .. })
 				)
 			},
 			RestrictedEntity::InvitedCandidate(_) => {
 				matches!(
 					call,
-					RuntimeCall::ProofOfInk(submit_evidence { .. })
-						| RuntimeCall::ProofOfInk(commit { .. })
-						| RuntimeCall::ProofOfInk(allocate_full { .. })
-						| RuntimeCall::ProofOfInk(flakeout { .. })
-						| RuntimeCall::ProofOfInk(register_non_referred { .. })
+					RuntimeCall::ProofOfInk(submit_evidence { .. }) |
+						RuntimeCall::ProofOfInk(commit { .. }) |
+						RuntimeCall::ProofOfInk(allocate_full { .. }) |
+						RuntimeCall::ProofOfInk(flakeout { .. }) |
+						RuntimeCall::ProofOfInk(register_non_referred { .. })
 				)
 			},
 			RestrictedEntity::AccountParticipant(_) => {
 				matches!(
 					call,
-					RuntimeCall::Score(cash_out { .. })
-						| RuntimeCall::Score(redeem_credit { .. })
-						| RuntimeCall::Score(register { .. })
-						| RuntimeCall::Game(sign_up_with_account { .. })
-						| RuntimeCall::Game(report { .. })
-						| RuntimeCall::Game(offboard { .. })
-						| RuntimeCall::Game(claim_airdrop { .. })
+					RuntimeCall::Score(cash_out { .. }) |
+						RuntimeCall::Score(redeem_credit { .. }) |
+						RuntimeCall::Score(register { .. }) |
+						RuntimeCall::Game(sign_up_with_account { .. }) |
+						RuntimeCall::Game(report { .. }) |
+						RuntimeCall::Game(offboard { .. }) |
+						RuntimeCall::Game(claim_airdrop { .. })
 				)
 			},
 			RestrictedEntity::PersonalAlias(_) | RestrictedEntity::PersonalIdentity(_) => false,

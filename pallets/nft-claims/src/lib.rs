@@ -1099,9 +1099,8 @@ pub mod pallet {
 				Self::UnknownCollection => PreviewFailure::UnknownCollection,
 				Self::CollectionOwnerChanged => PreviewFailure::CollectionOwnerChanged,
 				Self::NoItems => PreviewFailure::NoItems,
-				Self::Contract(error) => {
-					PreviewFailure::ContractSelectionFailed { error: error.error }
-				},
+				Self::Contract(error) =>
+					PreviewFailure::ContractSelectionFailed { error: error.error },
 			}
 		}
 	}
@@ -1174,15 +1173,14 @@ pub mod pallet {
 						weight_consumed: Weight::zero(),
 					})
 				},
-				ItemSelection::Contract(contract) => {
+				ItemSelection::Contract(contract) =>
 					T::CollectionSelector::select(owner, contract, collection, credit)
 						.map(|selection| SelectedItem {
 							item: selection.item,
 							kind: crate::runtime_api::SelectionKind::Contract(contract),
 							weight_consumed: selection.weight_consumed,
 						})
-						.map_err(ItemSelectionError::Contract)
-				},
+						.map_err(ItemSelectionError::Contract),
 			}
 		}
 

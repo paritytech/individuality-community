@@ -1203,16 +1203,14 @@ pub mod pallet {
 							.defensive_proof("indiv-pallet-game: player should exist")
 							.ok_or(Error::<T>::InternalErrorInvalidState)?;
 						match report {
-							Report::Person => {
+							Report::Person =>
 								reported_player_info.yes_person = reported_player_info
 									.yes_person
-									.saturating_add(reporter_vote_weight)
-							},
-							Report::NotPerson => {
+									.saturating_add(reporter_vote_weight),
+							Report::NotPerson =>
 								reported_player_info.no_not_person = reported_player_info
 									.no_not_person
-									.saturating_add(reporter_vote_weight)
-							},
+									.saturating_add(reporter_vote_weight),
 						}
 						Result::<_, Error<T>>::Ok(())
 					})?;
@@ -1507,8 +1505,8 @@ pub mod pallet {
 			<T as Config>::ManagerOrigin::ensure_origin_or_root(origin)?;
 
 			ensure!(
-				GameSchedules::<T>::get().len().saturating_add(games_schedules.len()) as u32
-					<= T::MaxGameSchedules::get(),
+				GameSchedules::<T>::get().len().saturating_add(games_schedules.len()) as u32 <=
+					T::MaxGameSchedules::get(),
 				Error::<T>::TooManyGameSchedules
 			);
 
@@ -1532,8 +1530,8 @@ pub mod pallet {
 				// chronological order.
 
 				ensure!(
-					last_game_end_time
-						<= Duration::from_secs(GameTimes::<T>::registration_start(schedule) as u64),
+					last_game_end_time <=
+						Duration::from_secs(GameTimes::<T>::registration_start(schedule) as u64),
 					Error::<T>::InvalidGameSetup
 				);
 
@@ -1646,16 +1644,15 @@ pub mod pallet {
 
 			let event_id = Self::airdrop_event_id(game_index, airdrop_index);
 			let eligible = indiv_pallet_score::Participants::<T>::get(&claimant).is_some_and(|p| {
-				(p.recognition.is_recognized() || p.reached_personhood)
-					&& p.last_attended_game == Some(game_index)
+				(p.recognition.is_recognized() || p.reached_personhood) &&
+					p.last_attended_game == Some(game_index)
 			});
 			ensure!(eligible, Error::<T>::NotEligibleForAirdrop);
 
 			let registrant = match claimant {
 				AccountOrPerson::Person(alias) => AirdropRegistrationEntry::Alias { alias },
-				AccountOrPerson::Account(account_id) => {
-					AirdropRegistrationEntry::Account { account_id }
-				},
+				AccountOrPerson::Account(account_id) =>
+					AirdropRegistrationEntry::Account { account_id },
 			};
 
 			T::Airdrop::claim(event_id, registrant, beneficiary)?;
@@ -2044,8 +2041,8 @@ pub mod pallet {
 
 						// We prevent any overlap between statement accounts and player.
 						ensure!(
-							!StmtAccountToAlias::<T>::contains_key(&statement_account)
-								&& !Players::<T>::contains_key(AccountOrPerson::Account(
+							!StmtAccountToAlias::<T>::contains_key(&statement_account) &&
+								!Players::<T>::contains_key(AccountOrPerson::Account(
 									statement_account.clone()
 								)) && !ArchivedPlayers::<T>::contains_key(AccountOrPerson::Account(
 								statement_account.clone()
@@ -2389,24 +2386,20 @@ pub mod pallet {
 
 				// Resuming after the last key drained.
 				let player_iter = match (&*phase, last_key) {
-					(ShuffleRetrievePhase::NotRecognized { .. }, Some(key)) => {
+					(ShuffleRetrievePhase::NotRecognized { .. }, Some(key)) =>
 						ShuffleNotRecognized::<T>::iter_prefix_from(
 							round,
 							ShuffleNotRecognized::<T>::hashed_key_for(round, key),
-						)
-					},
-					(ShuffleRetrievePhase::NotRecognized { .. }, None) => {
-						ShuffleNotRecognized::<T>::iter_prefix(round)
-					},
-					(ShuffleRetrievePhase::Recognized, Some(key)) => {
+						),
+					(ShuffleRetrievePhase::NotRecognized { .. }, None) =>
+						ShuffleNotRecognized::<T>::iter_prefix(round),
+					(ShuffleRetrievePhase::Recognized, Some(key)) =>
 						ShuffleRecognized::<T>::iter_prefix_from(
 							round,
 							ShuffleRecognized::<T>::hashed_key_for(round, key),
-						)
-					},
-					(ShuffleRetrievePhase::Recognized, None) => {
-						ShuffleRecognized::<T>::iter_prefix(round)
-					},
+						),
+					(ShuffleRetrievePhase::Recognized, None) =>
+						ShuffleRecognized::<T>::iter_prefix(round),
 				};
 
 				// Drain the next entry.
@@ -2607,9 +2600,8 @@ pub mod pallet {
 								// Retrieve reports `Finished` after the not-recognized phase,
 								// so `recognized_count` is available.
 								let recognized_count = match phase {
-									ShuffleRetrievePhase::NotRecognized { recognized_count } => {
-										*recognized_count
-									},
+									ShuffleRetrievePhase::NotRecognized { recognized_count } =>
+										*recognized_count,
 									ShuffleRetrievePhase::Recognized => {
 										defensive!(
 											"indiv-pallet-game: retrieve finished before the \
@@ -2925,9 +2917,8 @@ pub mod pallet {
 					first_game: player.first_game,
 					archived_since: frame_system::Pallet::<T>::block_number(),
 				}),
-				PlayerDisposition::ArchiveUnkickable => {
-					Some(ArchivedPlayer::Unkickable { first_game: player.first_game })
-				},
+				PlayerDisposition::ArchiveUnkickable =>
+					Some(ArchivedPlayer::Unkickable { first_game: player.first_game }),
 				PlayerDisposition::Keep => None,
 			};
 

@@ -139,12 +139,10 @@ impl EnsureOriginWithArg<RuntimeOrigin, ClaimantKind> for MockEnsureClaimant {
 
 	fn try_origin(o: RuntimeOrigin, kind: &ClaimantKind) -> Result<Self::Success, RuntimeOrigin> {
 		match (o.clone().into(), kind) {
-			(Ok(frame_system::RawOrigin::Signed(who)), ClaimantKind::Account) => {
-				Ok(AccountOrPerson::Account(who))
-			},
-			(Ok(frame_system::RawOrigin::Signed(PERSON)), ClaimantKind::Person) => {
-				Ok(AccountOrPerson::Person(PERSON_ALIAS))
-			},
+			(Ok(frame_system::RawOrigin::Signed(who)), ClaimantKind::Account) =>
+				Ok(AccountOrPerson::Account(who)),
+			(Ok(frame_system::RawOrigin::Signed(PERSON)), ClaimantKind::Person) =>
+				Ok(AccountOrPerson::Person(PERSON_ALIAS)),
 			// A signer with no alias binding cannot claim as a person.
 			_ => Err(o),
 		}
@@ -342,8 +340,8 @@ impl InspectCollection<u64> for MockNfts {
 	}
 
 	fn item_exists(collection: CollectionId, item: ItemIndex) -> bool {
-		Self::next_item_index(collection).is_some_and(|next_item| item < next_item)
-			&& !MissingItems::get().contains(&(collection, item))
+		Self::next_item_index(collection).is_some_and(|next_item| item < next_item) &&
+			!MissingItems::get().contains(&(collection, item))
 	}
 }
 

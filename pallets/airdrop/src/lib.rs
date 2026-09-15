@@ -418,12 +418,10 @@ pub mod pallet {
 				};
 				let discriminator = indiv_support::utils::ocw_random_u32();
 				let call = match event.status {
-					Status::Scheduled => {
-						Call::start_registration_authorized { event_id, discriminator }
-					},
-					Status::Registering { .. } => {
-						Call::close_registration_authorized { event_id, discriminator }
-					},
+					Status::Scheduled =>
+						Call::start_registration_authorized { event_id, discriminator },
+					Status::Registering { .. } =>
+						Call::close_registration_authorized { event_id, discriminator },
 					Status::AwaitingEntropy { last_moment, .. } => {
 						// Submit only once the randomness source reports a value fresher than
 						// the watermark; `authorize` rejects the transaction otherwise.
@@ -441,18 +439,14 @@ pub mod pallet {
 							Call::draw_winners_authorized { event_id, discriminator }
 						}
 					},
-					Status::Claiming { .. } => {
-						Call::close_claiming_authorized { event_id, discriminator }
-					},
-					Status::ClearingRegistrations { .. } => {
-						Call::clean_up_registrations_authorized { event_id, discriminator }
-					},
-					Status::ClearingWinners { .. } => {
-						Call::clean_up_winners_authorized { event_id, discriminator }
-					},
-					Status::Finalizing { .. } => {
-						Call::finalize_authorized { event_id, discriminator }
-					},
+					Status::Claiming { .. } =>
+						Call::close_claiming_authorized { event_id, discriminator },
+					Status::ClearingRegistrations { .. } =>
+						Call::clean_up_registrations_authorized { event_id, discriminator },
+					Status::ClearingWinners { .. } =>
+						Call::clean_up_winners_authorized { event_id, discriminator },
+					Status::Finalizing { .. } =>
+						Call::finalize_authorized { event_id, discriminator },
 				};
 				Self::submit_authorized_transaction(call);
 			}
@@ -1073,8 +1067,8 @@ pub mod pallet {
 				Error::<T>::AssetNotEnabled,
 			);
 			ensure!(
-				info.prize.asset_amount
-					>= T::Fungibles::minimum_balance(info.prize.asset_id.clone()),
+				info.prize.asset_amount >=
+					T::Fungibles::minimum_balance(info.prize.asset_id.clone()),
 				Error::<T>::PrizeBelowMinBalance,
 			);
 			ensure!(!Events::<T>::contains_key(event_id), Error::<T>::DuplicateEventId);
@@ -1138,9 +1132,9 @@ pub mod pallet {
 					Self::deposit_event(Event::<T>::EventCancelled { event_id });
 					return Ok(());
 				},
-				Status::ClearingRegistrations { .. }
-				| Status::ClearingWinners { .. }
-				| Status::Finalizing { .. } => return Ok(()),
+				Status::ClearingRegistrations { .. } |
+				Status::ClearingWinners { .. } |
+				Status::Finalizing { .. } => return Ok(()),
 				// `close_registration` never ran — release the full allocation here so funds are
 				// freed promptly rather than waiting on the clean-up pipeline.
 				Status::Registering { total_participants } => {
@@ -1156,23 +1150,21 @@ pub mod pallet {
 						cleaned_registrations: 0,
 					}
 				},
-				Status::AwaitingEntropy { total_participants, effective_winners, .. }
-				| Status::DrawWinners { total_participants, effective_winners, .. } => {
+				Status::AwaitingEntropy { total_participants, effective_winners, .. } |
+				Status::DrawWinners { total_participants, effective_winners, .. } =>
 					Status::ClearingRegistrations {
 						total_participants,
 						effective_winners,
 						claimed: 0,
 						cleaned_registrations: 0,
-					}
-				},
-				Status::Claiming { total_participants, effective_winners, claimed } => {
+					},
+				Status::Claiming { total_participants, effective_winners, claimed } =>
 					Status::ClearingRegistrations {
 						total_participants,
 						effective_winners,
 						claimed,
 						cleaned_registrations: 0,
-					}
-				},
+					},
 			};
 
 			Self::transition(&mut event, clearing);
@@ -1202,13 +1194,13 @@ pub mod pallet {
 		pub(crate) fn next_action_scheduled_at(status: &Status, info: &EventInfoOf<T>) -> u64 {
 			match status {
 				Status::Scheduled => info.registration_starts,
-				Status::Registering { .. }
-				| Status::AwaitingEntropy { .. }
-				| Status::DrawWinners { .. } => info.draw_time,
-				Status::Claiming { .. }
-				| Status::ClearingRegistrations { .. }
-				| Status::ClearingWinners { .. }
-				| Status::Finalizing { .. } => info.end_time,
+				Status::Registering { .. } |
+				Status::AwaitingEntropy { .. } |
+				Status::DrawWinners { .. } => info.draw_time,
+				Status::Claiming { .. } |
+				Status::ClearingRegistrations { .. } |
+				Status::ClearingWinners { .. } |
+				Status::Finalizing { .. } => info.end_time,
 			}
 		}
 
@@ -1585,30 +1577,22 @@ pub mod pallet {
 
 		pub(crate) fn submit_authorized_transaction(call: Call<T>) {
 			let (name, event_id) = match &call {
-				Call::start_registration_authorized { event_id, .. } => {
-					("start_registration_authorized", *event_id)
-				},
-				Call::close_registration_authorized { event_id, .. } => {
-					("close_registration_authorized", *event_id)
-				},
-				Call::capture_entropy_authorized { event_id, .. } => {
-					("capture_entropy_authorized", *event_id)
-				},
-				Call::draw_winners_authorized { event_id, .. } => {
-					("draw_winners_authorized", *event_id)
-				},
-				Call::close_drawing_authorized { event_id, .. } => {
-					("close_drawing_authorized", *event_id)
-				},
-				Call::close_claiming_authorized { event_id, .. } => {
-					("close_claiming_authorized", *event_id)
-				},
-				Call::clean_up_registrations_authorized { event_id, .. } => {
-					("clean_up_registrations_authorized", *event_id)
-				},
-				Call::clean_up_winners_authorized { event_id, .. } => {
-					("clean_up_winners_authorized", *event_id)
-				},
+				Call::start_registration_authorized { event_id, .. } =>
+					("start_registration_authorized", *event_id),
+				Call::close_registration_authorized { event_id, .. } =>
+					("close_registration_authorized", *event_id),
+				Call::capture_entropy_authorized { event_id, .. } =>
+					("capture_entropy_authorized", *event_id),
+				Call::draw_winners_authorized { event_id, .. } =>
+					("draw_winners_authorized", *event_id),
+				Call::close_drawing_authorized { event_id, .. } =>
+					("close_drawing_authorized", *event_id),
+				Call::close_claiming_authorized { event_id, .. } =>
+					("close_claiming_authorized", *event_id),
+				Call::clean_up_registrations_authorized { event_id, .. } =>
+					("clean_up_registrations_authorized", *event_id),
+				Call::clean_up_winners_authorized { event_id, .. } =>
+					("clean_up_winners_authorized", *event_id),
 				Call::finalize_authorized { event_id, .. } => ("finalize_authorized", *event_id),
 				_ => {
 					defensive!("submit_authorized_transaction received a non-OCW call");

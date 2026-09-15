@@ -554,8 +554,8 @@ pub mod pallet {
 
 				// 6b. Delete onboarding queue pages (only if all rings and ring pages
 				// are already gone).
-				if RingKeysStatus::<T>::iter_prefix(identifier).next().is_none()
-					&& RingDeletionQueue::<T>::iter_prefix((identifier,)).next().is_none()
+				if RingKeysStatus::<T>::iter_prefix(identifier).next().is_none() &&
+					RingDeletionQueue::<T>::iter_prefix((identifier,)).next().is_none()
 				{
 					for page_index in OnboardingQueue::<T>::iter_key_prefix(identifier) {
 						let call = Call::delete_onboarding_queue_page_authorized {
@@ -727,9 +727,9 @@ pub mod pallet {
 			// merged.
 			let current_ring_index = CurrentRingIndex::<T>::get(identifier);
 			ensure!(
-				base_ring_index != target_ring_index
-					&& base_ring_index != current_ring_index
-					&& target_ring_index != current_ring_index,
+				base_ring_index != target_ring_index &&
+					base_ring_index != current_ring_index &&
+					target_ring_index != current_ring_index,
 				Error::<T>::InvalidRing
 			);
 
@@ -746,8 +746,8 @@ pub mod pallet {
 			ensure!(!target_keys.is_empty(), Error::<T>::InvalidRing);
 			ensure!(target_keys.len() < max_ring_size / 2, Error::<T>::RingAboveMergeThreshold);
 			ensure!(
-				PendingSuspensions::<T>::decode_len(identifier, target_ring_index).unwrap_or(0)
-					== 0,
+				PendingSuspensions::<T>::decode_len(identifier, target_ring_index).unwrap_or(0) ==
+					0,
 				Error::<T>::SuspensionsPending
 			);
 
@@ -1390,8 +1390,8 @@ pub mod pallet {
 				}
 
 				// 6b. Delete onboarding queue pages.
-				if RingKeysStatus::<T>::iter_prefix(identifier).next().is_none()
-					&& RingDeletionQueue::<T>::iter_prefix((identifier,)).next().is_none()
+				if RingKeysStatus::<T>::iter_prefix(identifier).next().is_none() &&
+					RingDeletionQueue::<T>::iter_prefix((identifier,)).next().is_none()
 				{
 					let pages: Vec<_> = OnboardingQueue::<T>::iter_key_prefix(identifier).collect();
 					for page_index in pages {
@@ -1479,9 +1479,9 @@ pub mod pallet {
 			// Here we check we have enough items in the queue so that the onboarding group size is
 			// respected, but also that we can support another queue of at least onboarding size
 			// in a future call.
-			let can_onboard_with_cohort = to_include >= onboarding_size
-				&& ring_status.total.saturating_add(to_include.saturated_into())
-					<= max_ring_size.saturating_sub(onboarding_size);
+			let can_onboard_with_cohort = to_include >= onboarding_size &&
+				ring_status.total.saturating_add(to_include.saturated_into()) <=
+					max_ring_size.saturating_sub(onboarding_size);
 			// If this call completely fills the ring, no onboarding rule enforcement will be
 			// necessary.
 			let ring_filled = open_slots == to_include;
@@ -1597,8 +1597,8 @@ pub mod pallet {
 					page_size.saturating_sub(included_in_page),
 				);
 				defensive_assert!(
-					unincluded_left_in_page as usize
-						== keys.len().saturating_sub(included_in_page as usize),
+					unincluded_left_in_page as usize ==
+						keys.len().saturating_sub(included_in_page as usize),
 					"Inconsistent ring page state"
 				);
 				let to_push = core::cmp::min(to_include, unincluded_left_in_page);
@@ -1626,8 +1626,8 @@ pub mod pallet {
 			.map_err(|_| Error::<T>::CouldNotPush)?;
 
 			if ring_status.included == ring_status.total {
-				if collection_info.mode == RingMode::AppendOnly
-					&& ring_status.total == collection_info.ring_size.ring_capacity()
+				if collection_info.mode == RingMode::AppendOnly &&
+					ring_status.total == collection_info.ring_size.ring_capacity()
 				{
 					ring_status.immutable_since = Some(T::Clock::now().as_secs());
 				}
@@ -1675,9 +1675,7 @@ pub mod pallet {
 			with_transaction::<bool, DispatchError, _>(|| {
 				// Get the collection's ring size.
 				let Some(collection_info) = Collections::<T>::get(identifier) else {
-					return TransactionOutcome::Rollback(
-						Err(Error::<T>::CollectionNotFound.into()),
-					);
+					return TransactionOutcome::Rollback(Err(Error::<T>::CollectionNotFound.into()));
 				};
 				let max_ring_size = collection_info.ring_size.ring_capacity();
 				let ring_page_size = Self::flexible_ring_capacity();
@@ -1687,8 +1685,8 @@ pub mod pallet {
 				let (top_ring_index, mut ring_page_index, mut keys, mut ring_status) =
 					Self::available_ring(identifier, max_ring_size);
 				defensive_assert!(
-					(ring_page_index * ring_page_size) as usize + keys.len()
-						== ring_status.total as usize,
+					(ring_page_index * ring_page_size) as usize + keys.len() ==
+						ring_status.total as usize,
 					"Stored key count doesn't match the actual length"
 				);
 
@@ -1742,9 +1740,7 @@ pub mod pallet {
 					};
 					Members::<T>::insert(identifier, &key, position);
 					let Ok(_) = keys.try_push(key).defensive() else {
-						return TransactionOutcome::Rollback(
-							Err(Error::<T>::TooManyMembers.into()),
-						);
+						return TransactionOutcome::Rollback(Err(Error::<T>::TooManyMembers.into()));
 					};
 					if keys.len() >= ring_page_size as usize {
 						RingKeys::<T>::insert((*identifier, top_ring_index, ring_page_index), keys);
@@ -2196,8 +2192,8 @@ pub mod pallet {
 				*active = active.saturating_sub(ring_status.total)
 			});
 			let page_size = Self::flexible_ring_capacity();
-			let page_count = ring_status.total / page_size
-				+ if !ring_status.total.is_multiple_of(page_size) { 1 } else { 0 };
+			let page_count = ring_status.total / page_size +
+				if !ring_status.total.is_multiple_of(page_size) { 1 } else { 0 };
 			for i in 0..page_count {
 				RingDeletionQueue::<T>::insert((*identifier, ring_index, i), ());
 			}
@@ -2964,8 +2960,8 @@ pub mod pallet {
 			self_inclusion_delay: Option<u64>,
 		) -> DispatchResult {
 			ensure!(
-				!Collections::<T>::contains_key(identifier)
-					&& !SuspendedCollections::<T>::contains_key(identifier),
+				!Collections::<T>::contains_key(identifier) &&
+					!SuspendedCollections::<T>::contains_key(identifier),
 				Error::<T>::CollectionAlreadyExists
 			);
 			// Flexible collections can only use sizes less than or equal to the
@@ -2975,8 +2971,8 @@ pub mod pallet {
 				let max_flexible_ring_exponent = T::MaxFlexibleRingExponent::get();
 				// Check both the exponent itself as well as its size, just to be safe.
 				ensure!(
-					ring_size <= max_flexible_ring_exponent
-						&& ring_size.ring_capacity() <= max_flexible_ring_exponent.ring_capacity(),
+					ring_size <= max_flexible_ring_exponent &&
+						ring_size.ring_capacity() <= max_flexible_ring_exponent.ring_capacity(),
 					Error::<T>::InvalidRingSizeForFlexible
 				);
 			}
@@ -3016,9 +3012,8 @@ pub mod pallet {
 						ensure!(T::Crypto::is_member_valid(&member), Error::<T>::InvalidMemberKey);
 						Self::push_to_onboarding_queue(*identifier, member)?;
 					},
-					Some(position) if position.suspended() => {
-						Self::push_to_onboarding_queue(*identifier, member)?
-					},
+					Some(position) if position.suspended() =>
+						Self::push_to_onboarding_queue(*identifier, member)?,
 					_ => return Err(Error::<T>::KeyAlreadyInUse.into()),
 				}
 			}

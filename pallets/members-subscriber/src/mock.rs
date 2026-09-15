@@ -324,10 +324,10 @@ impl GenerateVerifiable for TestVerifiable {
 		contexts: &[&[u8]],
 		message: &[u8],
 	) -> Result<AliasVec, VerifiableError> {
-		if contexts.len() == 1
-			&& proof.context == contexts[0]
-			&& proof.members[..] == members[..]
-			&& proof.message == message
+		if contexts.len() == 1 &&
+			proof.context == contexts[0] &&
+			proof.members[..] == members[..] &&
+			proof.message == message
 		{
 			Ok(core::iter::once(proof.alias()).collect())
 		} else {

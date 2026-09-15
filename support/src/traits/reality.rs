@@ -392,9 +392,8 @@ impl RingMembersState {
 	pub fn start_mutation_session(mut self) -> Result<Self, Self> {
 		self.mode = match self.mode {
 			RingMutationMode::AppendOnly => RingMutationMode::Mutating(1),
-			RingMutationMode::Mutating(n) => {
-				RingMutationMode::Mutating(n.checked_add(1).ok_or(self.clone())?)
-			},
+			RingMutationMode::Mutating(n) =>
+				RingMutationMode::Mutating(n.checked_add(1).ok_or(self.clone())?),
 		};
 		Ok(self)
 	}
@@ -840,9 +839,9 @@ pub mod identity {
 		pub fn eq_platform(&self, other: &Social) -> bool {
 			matches!(
 				(&self, &other),
-				(Social::Twitter { .. }, Social::Twitter { .. })
-					| (Social::Github { .. }, Social::Github { .. })
-					| (Social::Discord { .. }, Social::Discord { .. })
+				(Social::Twitter { .. }, Social::Twitter { .. }) |
+					(Social::Github { .. }, Social::Github { .. }) |
+					(Social::Discord { .. }, Social::Discord { .. })
 			)
 		}
 	}

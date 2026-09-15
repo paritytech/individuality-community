@@ -175,8 +175,8 @@ impl xcm::latest::SendXcm for MockXcmRouter {
 		let mut message = message.take().unwrap_or_default();
 		message.0.push(xcm::latest::Instruction::SetTopic([0u8; 32]));
 
-		let fragment = xcm::VersionedXcm::<()>::from(message.clone()).encode().len()
-			+ cumulus_primitives_core::XcmpMessageFormat::ConcatenatedVersionedXcm.encoded_size();
+		let fragment = xcm::VersionedXcm::<()>::from(message.clone()).encode().len() +
+			cumulus_primitives_core::XcmpMessageFormat::ConcatenatedVersionedXcm.encoded_size();
 		if fragment > MOCK_CLAIMS_MAX_MESSAGE_SIZE.with_borrow(|size| *size) as usize {
 			return Err(xcm::latest::SendError::ExceedsMaxMessageSize);
 		}

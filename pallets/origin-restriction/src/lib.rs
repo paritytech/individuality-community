@@ -336,8 +336,8 @@ impl<T: Config> TransactionExtension<T::RuntimeCall> for RestrictOrigin<T> {
 		usage.used = usage.used.saturating_add(fee);
 
 		let allowed_one_time_excess = || {
-			usage_without_new_xt == 0u32.into()
-				&& T::OperationAllowedOneTimeExcess::contains(&entity, call)
+			usage_without_new_xt == 0u32.into() &&
+				T::OperationAllowedOneTimeExcess::contains(&entity, call)
 		};
 		if usage.used <= allowance.max || allowed_one_time_excess() {
 			Ok((ValidTransaction::default(), Val::Charge { fee, entity, usage }, origin))

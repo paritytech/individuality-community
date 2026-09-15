@@ -325,8 +325,8 @@ fn mixed_output_from_output_success() {
 			external_asset_amount - fee_amount
 		);
 		assert_eq!(
-			pallet_hold_before
-				- AssetsWithHolder::total_balance_on_hold(TEST_ASSET_ID, &pallet_acc,),
+			pallet_hold_before -
+				AssetsWithHolder::total_balance_on_hold(TEST_ASSET_ID, &pallet_acc,),
 			external_asset_amount
 		);
 		System::assert_has_event(
@@ -759,10 +759,9 @@ fn sponsored_mixed_output_deposit_flow(make_variant: impl FnOnce() -> UnloadToke
 		));
 
 		let max_fee = match variant {
-			UnloadTokenVariant::FromOutput => {
+			UnloadTokenVariant::FromOutput =>
 				Coinage::get_paid_unload_token_fee_in_asset(instance_id)
-					.expect("the mock fee conversion is available")
-			},
+					.expect("the mock fee conversion is available"),
 			_ => 0,
 		};
 		let member_1 = CryptoOf::<Test>::member_from_secret(&get_unique_secret());
