@@ -211,7 +211,8 @@ pub struct PrivateGameInfo {
 	/// claimant below the threshold cannot register, so counting every claimant that holds any
 	/// credit instead would put the floor out of reach.
 	pub eligible_claimants: u32,
-	/// What the game still owes: its ring to build, or its registration state to drop.
+	/// What the game still owes: its ring to build, its outcome to deliver, or its registration
+	/// state to drop.
 	pub phase: PrivateGamePhase,
 }
 
@@ -238,9 +239,32 @@ pub enum PrivateGamePhase {
 		/// `PRIVATE_RING_BUILD_RETRIES`.
 		failures: u8,
 	},
-	/// The game reached its outcome, so the keys, the registrations and the unspent credits are
-	/// left to drop.
+	/// The game reached its outcome and the claims chain does not hold it yet.
+	/// [`crate::PrivateOutcomes`] holds what is owed.
+	Delivering,
+	/// The claims chain holds the game's outcome, so the keys, the registrations and the unspent
+	/// credits are left to drop.
 	CleaningUp,
+}
+
+/// What a claimant of a private game has done with the eligibility their credits earned.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+)]
+pub enum PrivateClaimantState {
+	/// The claimant holds the game's entry threshold in credits and may register a key.
+	Eligible,
+	/// The claimant registered a key, so a second registration of theirs is refused.
+	Registered,
 }
 
 impl PrivateGameInfo {

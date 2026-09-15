@@ -103,7 +103,7 @@ fn push_private_keys<T: Config>(game_index: GameIdx, count: u32) {
 	}
 }
 
-/// Put `game_index` in its cleanup phase with `entries` claimants registered.
+/// Put `game_index` in its cleanup phase with `entries` claimants left to drop.
 #[cfg(feature = "runtime-benchmarks")]
 fn seed_private_clean_up<T: Config>(game_index: GameIdx, entries: u32) {
 	open_private_game::<T>(game_index, 1);
@@ -112,8 +112,7 @@ fn seed_private_clean_up<T: Config>(game_index: GameIdx, entries: u32) {
 	PrivateRingKeys::<T>::remove(game_index);
 	for index in 0..entries {
 		let claimant = AccountOrPerson::Person(sp_io::hashing::blake2_256(&index.encode()));
-		PrivateRegistrations::<T>::insert(game_index, &claimant, ());
-		PrivateEligibleClaimants::<T>::insert(game_index, &claimant, ());
+		PrivateClaimants::<T>::insert(game_index, &claimant, PrivateClaimantState::Registered);
 	}
 	PrivateGames::<T>::mutate(game_index, |game| {
 		if let Some(game) = game {
@@ -324,7 +323,7 @@ mod benches {
 		let caller: T::AccountId = whitelisted_caller();
 		let claimant = AccountOrPerson::Account(caller.clone());
 		open_private_game::<T>(game_index, MAX_PRIVATE_CLAIM_SLOTS);
-		PrivateEligibleClaimants::<T>::insert(game_index, &claimant, ());
+		PrivateClaimants::<T>::insert(game_index, &claimant, PrivateClaimantState::Eligible);
 		fill_private_ring::<T>(game_index, T::MaxPrivateRingKeys::get() - 1);
 
 		#[extrinsic_call]
@@ -472,8 +471,8 @@ mod benches {
 		Ok(())
 	}
 
-	// One cleanup step, over `n` of the registrations a private game leaves behind. The ring keys
-	// went with the build step that closed the ring, so no step here touches them.
+	// One cleanup step, over `n` of the claimant entries a private game leaves behind. The ring
+	// keys went with the build step that closed the ring, so no step here touches them.
 	#[benchmark]
 	fn clean_up_private_game(
 		n: Linear<0, { crate::PRIVATE_CLEAN_UP_ITEMS }>,
@@ -484,13 +483,12 @@ mod benches {
 		#[extrinsic_call]
 		_(RawOrigin::Authorized, game_index, BlockNumberFor::<T>::zero());
 
-		assert_eq!(PrivateRegistrations::<T>::iter_prefix(game_index).count(), 0);
+		assert_eq!(PrivateClaimants::<T>::iter_prefix(game_index).count(), 0);
 
 		Ok(())
 	}
 
-	// Authorizing a cleanup step reads the game's record and its undelivered outcome, so it is a
-	// fixed cost.
+	// Authorizing a cleanup step reads the game's record, so it is a fixed cost.
 	#[benchmark]
 	fn authorize_clean_up_private_game() -> Result<(), BenchmarkError> {
 		let game_index = 1;

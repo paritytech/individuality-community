@@ -58,15 +58,15 @@ use verifiable::GenerateVerifiable;
 use xcm::{latest::prelude::*, VersionedXcm};
 
 use crate::{
-	pallet::*, AuthorizeInvalidity, Config, Error, Event, NftClaimsCall, Pallet, PrivateGameInfo,
-	PrivateGamePhase, PrivateRingBatchOf, LOG_TARGET,
+	pallet::*, AuthorizeInvalidity, Config, Error, Event, NftClaimsCall, Pallet,
+	PrivateClaimantState, PrivateGameInfo, PrivateGamePhase, PrivateRingBatchOf, LOG_TARGET,
 };
 
 /// How many registration entries one [`Pallet::clean_up_private_game`] call removes.
 ///
-/// A game holds one registration and one eligibility entry per credited player, so the cleanup
-/// runs in bounded steps. It is a pallet constant because only the weight of one call depends on
-/// it.
+/// A game holds one claimant entry per credited player that reached its entry threshold, so the
+/// cleanup runs in bounded steps. It is a pallet constant because only the weight of one call
+/// depends on it.
 pub const PRIVATE_CLEAN_UP_ITEMS: u32 = 32;
 
 /// How many failed build steps a private game takes before it is abandoned.
@@ -154,7 +154,7 @@ impl<T: Config> Pallet<T> {
 		}
 		info.eligible_claimants = info.eligible_claimants.saturating_add(1);
 		PrivateGames::<T>::insert(game_index, info);
-		PrivateEligibleClaimants::<T>::insert(game_index, claimant, ());
+		PrivateClaimants::<T>::insert(game_index, claimant, PrivateClaimantState::Eligible);
 	}
 
 	/// The keys `info`'s ring has to hold, which is the anonymity set each of its claims gets.
@@ -199,15 +199,12 @@ impl<T: Config> Pallet<T> {
 		ensure!(Self::private_registration_open(&info), Error::<T>::PrivateRegistrationClosed);
 		ensure!(T::RingVrf::is_member_valid(&key), Error::<T>::InvalidRingKey);
 
-		ensure!(
-			!PrivateRegistrations::<T>::contains_key(game_index, &claimant),
-			Error::<T>::AlreadyRegistered
-		);
-
-		ensure!(
-			PrivateEligibleClaimants::<T>::contains_key(game_index, &claimant),
-			Error::<T>::InsufficientCredits
-		);
+		match PrivateClaimants::<T>::get(game_index, &claimant) {
+			Some(PrivateClaimantState::Eligible) => {},
+			Some(PrivateClaimantState::Registered) =>
+				return Err(Error::<T>::AlreadyRegistered.into()),
+			None => return Err(Error::<T>::InsufficientCredits.into()),
+		}
 
 		PrivateRingKeys::<T>::try_mutate(game_index, |keys| {
 			// Registrations are public, so a claimant can read another's key and enrol it. The
@@ -218,10 +215,7 @@ impl<T: Config> Pallet<T> {
 			Ok::<(), Error<T>>(())
 		})?;
 
-		// Eligibility has served its purpose: a claimant registers once per game, so no later
-		// read of it is possible. The entry goes now rather than in the cleanup sweep.
-		PrivateEligibleClaimants::<T>::remove(game_index, &claimant);
-		PrivateRegistrations::<T>::insert(game_index, &claimant, ());
+		PrivateClaimants::<T>::insert(game_index, &claimant, PrivateClaimantState::Registered);
 
 		info.key_count = info.key_count.saturating_add(1);
 		PrivateGames::<T>::insert(game_index, info);
@@ -346,7 +340,7 @@ impl<T: Config> Pallet<T> {
 			// again. They go here rather than in the cleanup, which would carry the whole list
 			// into the proof of every one of its steps.
 			PrivateRingKeys::<T>::remove(game_index);
-			info.phase = PrivateGamePhase::CleaningUp;
+			info.phase = PrivateGamePhase::Delivering;
 			PrivateGames::<T>::insert(game_index, info);
 			Self::deposit_event(Event::<T>::PrivateRingBuilt { game_index, key_count });
 
@@ -437,7 +431,7 @@ impl<T: Config> Pallet<T> {
 		PrivateRingIntermediates::<T>::remove(game_index);
 		PrivateRingKeys::<T>::remove(game_index);
 		PrivateOutcomes::<T>::insert(game_index, PrivateGameOutcome::Abandoned { key_count });
-		info.phase = PrivateGamePhase::CleaningUp;
+		info.phase = PrivateGamePhase::Delivering;
 		PrivateGames::<T>::insert(game_index, info);
 		Self::deposit_event(Event::<T>::PrivateRingAbandoned { game_index, key_count, required });
 	}
@@ -469,14 +463,10 @@ impl<T: Config> Pallet<T> {
 
 	/// Whether `game_index` has registration state left to drop.
 	///
-	/// A game whose outcome is not delivered owes none: the last step removes its record, and
-	/// [`Pallet::do_send_private_ring`] reads the slots from it. Cleaning up first would leave an
-	/// outcome that can never be sent.
+	/// A game whose outcome is not delivered owes none, so the phase says it: the last step
+	/// removes the game's record, and [`Pallet::do_send_private_ring`] reads the slots from it.
+	/// Cleaning up first would leave an outcome that can never be sent.
 	pub(crate) fn private_clean_up_due(game_index: GameIdx) -> bool {
-		if PrivateOutcomes::<T>::contains_key(game_index) {
-			return false;
-		}
-
 		PrivateGames::<T>::get(game_index)
 			.is_some_and(|info| matches!(info.phase, PrivateGamePhase::CleaningUp))
 	}
@@ -485,46 +475,29 @@ impl<T: Config> Pallet<T> {
 	///
 	/// One call removes at most [`PRIVATE_CLEAN_UP_ITEMS`] entries, so a game is dropped over as
 	/// many calls as it takes. The game's record goes last, because it is what says the cleanup is
-	/// still owed. The outcome is already delivered by then, its delivery being what releases the
-	/// cleanup, so nothing here reads it. The ring keys went with the build step that closed the
-	/// ring, so no step here touches the list either.
+	/// still owed. The claimant entries are the private path's own bookkeeping: a game that built
+	/// its ring mints through it alone, and an abandoned game mints through the credit trees,
+	/// which this does not touch. The ring keys went with the build step that closed the ring, so
+	/// no step here touches the list either.
 	pub(crate) fn do_clean_up_private_game(game_index: GameIdx) -> Result<u32, DispatchError> {
 		ensure!(Self::private_clean_up_due(game_index), Error::<T>::NoPrivateGameToCleanUp);
 
 		// The claimants are read before they are removed, rather than cleared by prefix, so that
 		// the count the refund is measured in is exact.
-		let claimants = PrivateRegistrations::<T>::iter_key_prefix(game_index)
+		let claimants = PrivateClaimants::<T>::iter_key_prefix(game_index)
 			.take(PRIVATE_CLEAN_UP_ITEMS as usize)
 			.collect::<Vec<_>>();
-		let registrations = claimants.len() as u32;
+		let removed = claimants.len() as u32;
 		for claimant in &claimants {
-			PrivateRegistrations::<T>::remove(game_index, claimant);
+			PrivateClaimants::<T>::remove(game_index, claimant);
 		}
 
-		// A step that spent its budget on the registrations leaves the credits to the next one,
-		// which keeps every step's cost bounded.
-		let budget = PRIVATE_CLEAN_UP_ITEMS.saturating_sub(registrations);
-		if budget.is_zero() {
-			return Ok(registrations);
-		}
-
-		// The claimants that were eligible and never registered. They are the private path's own
-		// bookkeeping: a game that built its ring mints through it alone, and an abandoned game
-		// mints through the credit trees, which this does not touch.
-		let claimants = PrivateEligibleClaimants::<T>::iter_key_prefix(game_index)
-			.take(budget as usize)
-			.collect::<Vec<_>>();
-		let balances = claimants.len() as u32;
-		for claimant in &claimants {
-			PrivateEligibleClaimants::<T>::remove(game_index, claimant);
-		}
-
-		if balances < budget {
+		if removed < PRIVATE_CLEAN_UP_ITEMS {
 			PrivateGames::<T>::remove(game_index);
 			Self::deposit_event(Event::<T>::PrivateGameCleanedUp { game_index });
 		}
 
-		Ok(registrations.saturating_add(balances))
+		Ok(removed)
 	}
 
 	/// Validate a [`Pallet::send_private_ring`] submission.
@@ -536,8 +509,11 @@ impl<T: Config> Pallet<T> {
 			return Err(AuthorizeInvalidity::TransactionNotLocal.into());
 		}
 
-		// The game's outcome is what says the delivery is owed.
-		if !PrivateOutcomes::<T>::contains_key(game_index) {
+		// The game's phase is what says the delivery is owed. It is read rather than the outcome
+		// itself, which carries a ring root into the proof.
+		let owed = PrivateGames::<T>::get(game_index)
+			.is_some_and(|info| matches!(info.phase, PrivateGamePhase::Delivering));
+		if !owed {
 			return Err(AuthorizeInvalidity::NoPrivateRingToSend.into());
 		}
 
@@ -595,7 +571,7 @@ impl<T: Config> Pallet<T> {
 	/// `PrivateRingSendFailed`, so the next offchain-worker cycle retries the same ring. The call
 	/// succeeds either way, because a failing dispatch would revert that event.
 	pub(crate) fn do_send_private_ring(game_index: GameIdx) -> DispatchResult {
-		let info = PrivateGames::<T>::get(game_index).ok_or(Error::<T>::NotAPrivateGame)?;
+		let mut info = PrivateGames::<T>::get(game_index).ok_or(Error::<T>::NotAPrivateGame)?;
 		let outcome = PrivateOutcomes::<T>::get(game_index).ok_or(Error::<T>::NotAPrivateGame)?;
 
 		if !Self::private_ring_fits_channel() {
@@ -631,6 +607,8 @@ impl<T: Config> Pallet<T> {
 		}
 
 		PrivateOutcomes::<T>::remove(game_index);
+		info.phase = PrivateGamePhase::CleaningUp;
+		PrivateGames::<T>::insert(game_index, info);
 		Self::deposit_event(Event::<T>::PrivateRingSent { game_index });
 
 		Ok(())
@@ -645,7 +623,7 @@ impl<T: Config> Pallet<T> {
 	pub(crate) fn submit_private_ring_work(block_number: BlockNumberFor<T>) {
 		let mut cleanup = None;
 		let mut delivery = None;
-		for (game_index, _) in PrivateGames::<T>::iter() {
+		for (game_index, info) in PrivateGames::<T>::iter() {
 			if let Some(to_include) = Self::private_ring_build_step(game_index) {
 				Self::submit_private_call(
 					Call::<T>::build_private_ring {
@@ -661,10 +639,10 @@ impl<T: Config> Pallet<T> {
 				);
 				return;
 			}
-			if delivery.is_none() && PrivateOutcomes::<T>::contains_key(game_index) {
+			if delivery.is_none() && matches!(info.phase, PrivateGamePhase::Delivering) {
 				delivery = Some(game_index);
 			}
-			if cleanup.is_none() && Self::private_clean_up_due(game_index) {
+			if cleanup.is_none() && matches!(info.phase, PrivateGamePhase::CleaningUp) {
 				cleanup = Some(game_index);
 			}
 		}

@@ -3222,7 +3222,10 @@ mod private_claims {
 			// counted from, which is drained with it.
 			assert_eq!(AwardedNftClaimCredits::<Test>::iter().count(), 0);
 			for player in &players {
-				assert!(PrivateEligibleClaimants::<Test>::contains_key(GAME, player));
+				assert_eq!(
+					PrivateClaimants::<Test>::get(GAME, player),
+					Some(PrivateClaimantState::Eligible)
+				);
 			}
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().slots, 3);
 		});
@@ -3246,7 +3249,7 @@ mod private_claims {
 
 			assert_eq!(awarded_credit_count(), 2, "the game did award credits");
 			assert!(PrivateGames::<Test>::get(GAME).is_none());
-			assert_eq!(PrivateEligibleClaimants::<Test>::iter().count(), 0);
+			assert_eq!(PrivateClaimants::<Test>::iter().count(), 0);
 		});
 	}
 
@@ -3264,9 +3267,11 @@ mod private_claims {
 				GAME,
 				ring_key(1)
 			));
-			// Registration drops the eligibility entry: nothing reads it again.
-			assert!(!PrivateEligibleClaimants::<Test>::contains_key(GAME, &alice));
-			assert_eq!(PrivateRegistrations::<Test>::get(GAME, &alice), Some(()));
+			// The claimant's entry marks the key they took, which is what refuses a second one.
+			assert_eq!(
+				PrivateClaimants::<Test>::get(GAME, &alice),
+				Some(PrivateClaimantState::Registered)
+			);
 			assert_eq!(PrivateRingKeys::<Test>::get(GAME).len(), 1);
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().key_count, 1);
 			System::assert_has_event(
@@ -3310,7 +3315,7 @@ mod private_claims {
 			// ever written for EVE.
 			let eve = AccountOrPerson::Account(EVE);
 			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
-			assert!(!PrivateEligibleClaimants::<Test>::contains_key(GAME, &eve));
+			assert!(PrivateClaimants::<Test>::get(GAME, &eve).is_none());
 			assert_noop!(
 				NftCredits::register_private_claim_key(
 					RuntimeOrigin::signed(EVE),
@@ -3399,7 +3404,7 @@ mod private_claims {
 
 			let info = PrivateGames::<Test>::get(GAME).unwrap();
 			assert_eq!(info.key_count, 4);
-			assert!(matches!(info.phase, PrivateGamePhase::CleaningUp));
+			assert!(matches!(info.phase, PrivateGamePhase::Delivering));
 
 			// One ring over every registrant, whatever slot their claims name, so every claim of
 			// the game hides in the same set.
@@ -3444,7 +3449,7 @@ mod private_claims {
 			assert!(PrivateRingKeys::<Test>::decode_len(GAME).is_none());
 			assert!(matches!(
 				PrivateGames::<Test>::get(GAME).unwrap().phase,
-				PrivateGamePhase::CleaningUp
+				PrivateGamePhase::Delivering
 			));
 		});
 	}
@@ -3461,10 +3466,13 @@ mod private_claims {
 			let eve = AccountOrPerson::Account(EVE);
 			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 4);
-			assert!(!PrivateEligibleClaimants::<Test>::contains_key(GAME, &eve));
+			assert!(PrivateClaimants::<Test>::get(GAME, &eve).is_none());
 			NftCredits::note_private_credit(GAME, &eve, 2, private_game());
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 5);
-			assert!(PrivateEligibleClaimants::<Test>::contains_key(GAME, &eve));
+			assert_eq!(
+				PrivateClaimants::<Test>::get(GAME, &eve),
+				Some(PrivateClaimantState::Eligible)
+			);
 
 			// Counted once, however many more credits they earn.
 			NftCredits::note_private_credit(GAME, &eve, 3, private_game());
@@ -3563,16 +3571,14 @@ mod private_claims {
 			deliver_outcome();
 
 			assert!(NftCredits::private_clean_up_due(GAME));
-			// Every claimant registered, and a registration drops its eligibility entry, so the
-			// cleanup finds none left.
-			assert_eq!(PrivateEligibleClaimants::<Test>::iter().count(), 0);
+			// Every claimant registered, so every entry left is a registered one.
+			assert_eq!(PrivateClaimants::<Test>::iter().count(), 4);
 
 			let removed = NftCredits::do_clean_up_private_game(GAME).unwrap();
-			assert_eq!(removed, 4, "four registrations and no eligible claimants");
+			assert_eq!(removed, 4, "one entry per claimant of the game");
 
 			assert!(PrivateGames::<Test>::get(GAME).is_none());
-			assert_eq!(PrivateRegistrations::<Test>::iter().count(), 0);
-			assert_eq!(PrivateEligibleClaimants::<Test>::iter().count(), 0);
+			assert_eq!(PrivateClaimants::<Test>::iter().count(), 0);
 			System::assert_has_event(
 				Event::<Test>::PrivateGameCleanedUp { game_index: GAME }.into(),
 			);
@@ -3748,7 +3754,7 @@ mod private_claims {
 			.expect("the game is in its cleanup phase");
 			let actual = post.actual_weight.expect("the call reports its weight");
 
-			// Four registrations and no balances: a registration drops the balance it read.
+			// One entry per claimant of the game, which is four.
 			assert_eq!(actual, MockWeightInfo::clean_up_private_game(4));
 			assert!(
 				actual.all_lt(charged),
@@ -3821,7 +3827,7 @@ mod private_claims {
 
 			assert!(matches!(
 				PrivateGames::<Test>::get(GAME).unwrap().phase,
-				PrivateGamePhase::CleaningUp
+				PrivateGamePhase::Delivering
 			));
 			assert_eq!(
 				PrivateOutcomes::<Test>::get(GAME).unwrap(),
@@ -3919,8 +3925,14 @@ mod private_claims {
 			System::assert_has_event(
 				Event::<Test>::PrivateRingSendFailed { game_index: GAME }.into(),
 			);
-			// The outcome survives, so the next offchain worker cycle retries it.
+			// The outcome survives, so the next offchain worker cycle retries it. The phase
+			// stays where it was, which is what holds off the cleanup that would strand it.
 			assert!(PrivateOutcomes::<Test>::get(GAME).is_some());
+			assert!(matches!(
+				PrivateGames::<Test>::get(GAME).unwrap().phase,
+				PrivateGamePhase::Delivering
+			));
+			assert!(!NftCredits::private_clean_up_due(GAME));
 
 			// With room for the message the same delivery goes out.
 			set_claims_max_message_size(NftCredits::private_ring_channel_size());
@@ -3928,6 +3940,11 @@ mod private_claims {
 
 			System::assert_has_event(Event::<Test>::PrivateRingSent { game_index: GAME }.into());
 			assert!(PrivateOutcomes::<Test>::get(GAME).is_none());
+			// The sent outcome moves the game on to its cleanup.
+			assert!(matches!(
+				PrivateGames::<Test>::get(GAME).unwrap().phase,
+				PrivateGamePhase::CleaningUp
+			));
 		});
 	}
 

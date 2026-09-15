@@ -661,33 +661,22 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type PrivateGames<T: Config> = StorageMap<_, Twox64Concat, GameIdx, PrivateGameInfo>;
 
-	/// The claimants of a private game that reached its entry threshold and may register.
+	/// The claimants of a private game that reached its entry threshold, and what each did with
+	/// it.
 	///
-	/// An entry is written once, when the award that reaches the threshold lands, and dropped
-	/// when the claimant registers. It outlives the game because [`AwardedNftClaimCredits`], the
-	/// mask its count comes from, is drained when the game ends.
+	/// An entry is written once, when the award that reaches the threshold lands, and turns to
+	/// [`PrivateClaimantState::Registered`] when the claimant registers a key. One entry per
+	/// claimant is what refuses a second registration: a claimant holding two keys of one ring is
+	/// distinguishable by how much the ring grew for them. The map outlives the game because
+	/// [`AwardedNftClaimCredits`], the mask its count comes from, is drained when the game ends.
 	#[pallet::storage]
-	pub type PrivateEligibleClaimants<T: Config> = StorageDoubleMap<
+	pub type PrivateClaimants<T: Config> = StorageDoubleMap<
 		_,
 		Twox64Concat,
 		GameIdx,
 		Blake2_128Concat,
 		AccountOrPerson<T::AccountId>,
-		(),
-	>;
-
-	/// The claimants that registered for a private game.
-	///
-	/// One entry per claimant, so a second registration is refused. A claimant holding two keys
-	/// of one ring is distinguishable by how much the ring grew for them.
-	#[pallet::storage]
-	pub type PrivateRegistrations<T: Config> = StorageDoubleMap<
-		_,
-		Twox64Concat,
-		GameIdx,
-		Blake2_128Concat,
-		AccountOrPerson<T::AccountId>,
-		(),
+		PrivateClaimantState,
 	>;
 
 	/// The keys registered for a game's private claim ring, in registration order.
@@ -713,8 +702,10 @@ pub mod pallet {
 	/// The outcome of every private game whose claims chain does not hold it yet, keyed by game.
 	///
 	/// Both outcomes are delivered: a ring opens the private path on the claims chain, and an
-	/// abandonment reopens the public one. An entry is what says a delivery is owed, so it is
-	/// removed once the message is sent and the game's cleanup waits for that.
+	/// abandonment reopens the public one. It is removed once the message is sent, together with
+	/// [`PrivateGamePhase::Delivering`], which is what says a delivery is owed. A root is far
+	/// larger than the game's record, so the phase carries the flag and this map is read only
+	/// where the outcome itself is needed.
 	#[pallet::storage]
 	pub type PrivateOutcomes<T: Config> =
 		StorageMap<_, Twox64Concat, GameIdx, PrivateGameOutcome<PrivateRingRoot<T>>>;
@@ -1122,8 +1113,9 @@ pub mod pallet {
 		/// local or in-block source only, so it cannot be submitted externally.
 		///
 		/// One call removes at most [`PRIVATE_CLEAN_UP_ITEMS`] entries and refunds the surplus
-		/// charge. A game holds one registration per credited player, which is more than one
-		/// block should delete. The last call removes the game's own record.
+		/// charge. A game holds one claimant entry per credited player that reached its entry
+		/// threshold, which is more than one block should delete. The last call removes the
+		/// game's own record.
 		#[pallet::authorize(|source, game_index, _discriminator| {
 			Self::authorize_clean_up_private_game(source, game_index)
 		})]
