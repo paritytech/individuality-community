@@ -702,11 +702,11 @@ pub fn nft_claims_events() -> Vec<Event<Test>> {
 		.collect()
 }
 
-/// The ladder of `game_index` over the buckets `tiers` names, one per tier, as the game chain
+/// The ladder of `game_index` over the keys `tiers` names, one entry per tier, as the game chain
 /// builds and delivers it.
 ///
-/// `tiers[t]` is the keys of tier `t + 1`'s own bucket. Tier `t`'s ring is that bucket and every
-/// one above it, which is the order the game chain pushes them in.
+/// `tiers[t]` is the keys of tier `t + 1` alone. Tier `t`'s ring is those keys and every tier
+/// above, which is the order the game chain pushes them in.
 pub fn private_ladder_of(
 	game_index: crate::GameIdx,
 	tiers: &[Vec<<verifiable::mock::Mock as GenerateVerifiable>::Member>],
@@ -720,10 +720,12 @@ pub fn private_ladder_of(
 	// Built from the top tier down, as the game chain builds it, with the roots put back in tier
 	// order.
 	let mut roots = Vec::new();
-	for bucket in tiers.iter().rev() {
-		verifiable::mock::Mock::push_members(&mut intermediate, bucket.iter().cloned(), |range| {
-			Ok(vec![(); range.len()])
-		})
+	for own_keys in tiers.iter().rev() {
+		verifiable::mock::Mock::push_members(
+			&mut intermediate,
+			own_keys.iter().cloned(),
+			|range| Ok(vec![(); range.len()]),
+		)
 		.expect("the mock pushes every key");
 		roots.insert(0, verifiable::mock::Mock::finish_members(intermediate.clone()));
 	}
@@ -732,14 +734,14 @@ pub fn private_ladder_of(
 		game_index,
 		outcome: PrivateGameOutcome::Ring {
 			roots: roots.try_into().expect("the ladder fits MaxPrivateRingTiers"),
-			key_count: tiers.iter().map(|bucket| bucket.len() as u32).sum(),
+			key_count: tiers.iter().map(|own_keys| own_keys.len() as u32).sum(),
 		},
 	}
 }
 
 /// The ladder of `game_index` over `keys`, `height` tiers tall.
 ///
-/// Every key is in the top bucket, so every tier's ring is the whole set. That is a game whose
+/// Every key is at the top tier, so every tier's ring is the whole set. That is a game whose
 /// registrants all earned the most it pays.
 pub fn private_ladder(
 	game_index: crate::GameIdx,

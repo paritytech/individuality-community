@@ -200,8 +200,8 @@ pub struct PrivateTierCounts {
 	/// Claimants that earned exactly this tier's credit count. The population of tier `t` is the
 	/// sum of this from `t` upwards.
 	pub eligible: u32,
-	/// Registrants whose credit count is exactly this tier's, which is the length of the tier's
-	/// key bucket. The ring of tier `t` is the sum of this from `t` upwards.
+	/// Registrants whose credit count is exactly this tier's. The ring of tier `t` is the sum of
+	/// this from `t` upwards, which is also where tier `t`'s keys end in the registration list.
 	pub registered: u32,
 }
 
@@ -233,8 +233,11 @@ pub struct PrivateGameInfo<MaxTiers: Get<u32>> {
 	/// The number of keys registered, which is the ring of tier 1 and the widest anonymity set the
 	/// game offers.
 	pub key_count: u32,
-	/// One entry per credit count, tier 1 first. A claimant that earns more credits than the
-	/// vector holds is counted in its last tier.
+	/// The claimants that earned exactly `t` credits, at index `t - 1`, counted twice over: those
+	/// that may register a key and those that did. A tier's own ring and population are the sums
+	/// from it upwards, which [`Self::ring_size`] and [`Self::eligible_at`] take. The length is
+	/// the tallest ladder the game can build, and a claimant above it is counted in the last
+	/// entry.
 	pub tiers: BoundedVec<PrivateTierCounts, MaxTiers>,
 	/// The stage the game has reached, from `Registering` to `CleaningUp`. It only moves forward,
 	/// and the entry is removed once `CleaningUp` finishes.
@@ -259,11 +262,12 @@ pub enum PrivateGamePhase {
 	/// ladder from here, which is where its height is decided.
 	Registering,
 	/// The game's ladder is being built, from its top tier down. Each tier is the tier above it
-	/// plus its own bucket of keys, so one pass over the keys builds every ring.
+	/// plus its own keys, so one pass over the registration list builds every ring.
 	Building {
 		/// The tier being pushed. The ladder is finished when tier 1 is closed.
 		tier: PrivateClaimTier,
-		/// How many of the tier's own keys are already pushed.
+		/// How many of the registration list are already pushed. It is one cursor over the whole
+		/// ladder, because a tier's keys follow the tiers above it in the list.
 		included: u32,
 		/// How many build steps failed in a row. A push fails on a chunk the ring cannot be built
 		/// from, which no retry repairs, so the game is abandoned once the count reaches
@@ -292,20 +296,19 @@ pub enum PrivateGamePhase {
 	Eq,
 )]
 pub enum PrivateClaimantState {
-	/// The claimant holds credits of the game and may register a key. The count names the tier
-	/// their key goes into and is final once the player process ends. It stops at the ladder's
-	/// top, the credits above it being forfeit.
-	Eligible { credits: u32 },
-	/// The claimant registered a key into the tier their credits named, so a second registration
-	/// of theirs is refused.
-	Registered { credits: u32 },
+	/// The claimant holds credits of the game and may register a key. The tier is their credit
+	/// count capped at the ladder's top, and it is final once the player process ends.
+	Eligible { tier: PrivateClaimTier },
+	/// The claimant registered a key at the tier their credits named, so a second registration of
+	/// theirs is refused.
+	Registered { tier: PrivateClaimTier },
 }
 
 impl PrivateClaimantState {
-	/// The credits the claimant earned, whether or not they have registered.
-	pub fn credits(&self) -> u32 {
+	/// The tier the claimant reached, whether or not they have registered.
+	pub fn tier(&self) -> PrivateClaimTier {
 		match self {
-			Self::Eligible { credits } | Self::Registered { credits } => *credits,
+			Self::Eligible { tier } | Self::Registered { tier } => *tier,
 		}
 	}
 }
@@ -343,31 +346,29 @@ impl<MaxTiers: Get<u32>> PrivateGameInfo<MaxTiers> {
 			.fold(0u32, |sum, held| sum.saturating_add(held))
 	}
 
-	/// Record one more claimant that earned exactly `credits` and one fewer at `credits - 1`.
+	/// Move the claimant that now holds `credits` up one tier and report the tier they reached.
 	///
-	/// A credit count above what the vector holds is counted in its last tier. Returns whether the
-	/// counts changed.
-	pub fn note_tier_credit(&mut self, credits: u32) -> bool {
-		let Some(reached) = self.tier_index(credits) else {
-			return false;
-		};
-		// A claimant that earned more credits than the vector holds stays in its last tier, so the
-		// award moves nobody.
-		if self.tier_index(credits.saturating_sub(1)) == Some(reached) {
-			return false;
+	/// [`None`] leaves the counts alone, which is a claimant already in the last tier: a credit
+	/// count above what the vector holds is counted there.
+	pub fn note_tier_credit(&mut self, credits: u32) -> Option<PrivateClaimTier> {
+		let reached = self.tier_index(credits)?;
+		let left = self.tier_index(credits.saturating_sub(1));
+		if left == Some(reached) {
+			return None;
 		}
 
 		self.tiers[reached].eligible.saturating_inc();
-		if let Some(left) = self.tier_index(credits.saturating_sub(1)) {
+		if let Some(left) = left {
 			self.tiers[left].eligible = self.tiers[left].eligible.saturating_sub(1);
 		}
-		true
+
+		Some(reached.saturating_add(1) as PrivateClaimTier)
 	}
 
-	/// Record one more registrant that earned exactly `credits`.
-	pub fn note_tier_registration(&mut self, credits: u32) {
-		if let Some(tier) = self.tier_index(credits) {
-			self.tiers[tier].registered.saturating_inc();
+	/// Record one more registrant at `tier`.
+	pub fn note_tier_registration(&mut self, tier: PrivateClaimTier) {
+		if let Some(counts) = self.tiers.get_mut(usize::from(tier).saturating_sub(1)) {
+			counts.registered.saturating_inc();
 		}
 	}
 

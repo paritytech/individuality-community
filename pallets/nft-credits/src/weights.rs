@@ -65,7 +65,7 @@ pub trait WeightInfo {
 	fn register_private_claim_key() -> Weight;
 	fn build_private_ring(n: u32, ) -> Weight;
 	fn open_private_ring_ladder() -> Weight;
-	fn abandon_private_ring(n: u32, ) -> Weight;
+	fn abandon_private_ring() -> Weight;
 	fn finish_private_ring(n: u32, ) -> Weight;
 	fn authorize_build_private_ring() -> Weight;
 	fn send_private_ring() -> Weight;
@@ -275,19 +275,14 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(1_u64))
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
-	/// The range of component `n` is `[0, 15]`.
-	fn abandon_private_ring(n: u32, ) -> Weight {
+	fn abandon_private_ring() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `4096`
 		//  Estimated: `70000`
 		// Minimum execution time: 30_000_000 picoseconds.
 		Weight::from_parts(30_000_000, 70000)
-			// Standard Error: 200_000
-			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
-			.saturating_add(Weight::from_parts(0, 36816).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(2_u64))
-			.saturating_add(T::DbWeight::get().writes(3_u64))
-			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().writes(4_u64))
 	}
 	fn authorize_build_private_ring() -> Weight {
 		// Proof Size summary in bytes:
@@ -539,19 +534,14 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads(1_u64))
 			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
-	/// The range of component `n` is `[0, 15]`.
-	fn abandon_private_ring(n: u32, ) -> Weight {
+	fn abandon_private_ring() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `4096`
 		//  Estimated: `70000`
 		// Minimum execution time: 30_000_000 picoseconds.
 		Weight::from_parts(30_000_000, 70000)
-			// Standard Error: 200_000
-			.saturating_add(Weight::from_parts(2_000_000, 0).saturating_mul(n.into()))
-			.saturating_add(Weight::from_parts(0, 36816).saturating_mul(n.into()))
 			.saturating_add(RocksDbWeight::get().reads(2_u64))
-			.saturating_add(RocksDbWeight::get().writes(3_u64))
-			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
+			.saturating_add(RocksDbWeight::get().writes(4_u64))
 	}
 	fn authorize_build_private_ring() -> Weight {
 		// Proof Size summary in bytes:

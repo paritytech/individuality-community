@@ -699,40 +699,30 @@ pub mod pallet {
 		PrivateClaimantState,
 	>;
 
-	/// The keys registered for one tier of a game's ladder, in registration order, keyed by game
-	/// and by the credit count their owner earned.
+	/// The keys registered for a game's ring ladder, in descending tier order.
 	///
-	/// A key sits in the bucket of its owner's credit count alone, so tier `t`'s ring is every
-	/// bucket from `t` upwards. The build pushes the buckets in descending order, which puts the
-	/// members of each ring together and lets one pass build every tier. A build step reads one
-	/// bucket, so it is charged at one bucket's maximum encoded length rather than the game's
-	/// whole registration. [`Config::MaxPrivateRingKeys`] bounds the buckets together as well as
-	/// each one alone, tier 1's ring being all of them.
+	/// A key sits at the tier of its owner's credit count, which is the tallest ring it belongs
+	/// to. Tier `t`'s ring is the list's prefix of length `PrivateGameInfo::ring_size(t)`, so the
+	/// build pushes the list front to back and snapshots a root at each of those lengths. One pass
+	/// over the list builds every ring.
+	///
+	/// A registration decodes the list to place its key, so the duplicate check is a scan of it
+	/// and costs no storage of its own. The build step that closes tier 1 removes the list, rather
+	/// than the cleanup, which would carry it into the proof of one of its steps.
 	#[pallet::storage]
-	pub type PrivateRingKeys<T: Config> = StorageDoubleMap<
+	pub type PrivateRingKeys<T: Config> = StorageMap<
 		_,
 		Twox64Concat,
 		GameIdx,
-		Twox64Concat,
-		PrivateClaimTier,
-		BoundedVec<PrivateRingKey<T>, T::MaxPrivateRingKeys>,
+		BoundedVec<(PrivateClaimTier, PrivateRingKey<T>), T::MaxPrivateRingKeys>,
 		ValueQuery,
 	>;
-
-	/// Every key registered for a game, whatever tier it went into.
-	///
-	/// Registrations are public, so a claimant can read another's key and enrol it, which would
-	/// have a ring count a member it does not have. The check is a lookup here because scanning
-	/// the buckets reads every one of them. Dropped with the game's registration state.
-	#[pallet::storage]
-	pub type PrivateRingKeyIndex<T: Config> =
-		StorageDoubleMap<_, Twox64Concat, GameIdx, Blake2_128Concat, PrivateRingKey<T>, ()>;
 
 	/// The half-built ring of a game whose keys are still being pushed.
 	///
 	/// One intermediate serves the whole ladder: closing a tier clones it, finishes the clone into
-	/// that tier's root and pushes the next bucket onto the original. Removed once the last tier
-	/// is closed.
+	/// that tier's root and pushes the tier below onto the original. Removed once tier 1 is
+	/// closed.
 	#[pallet::storage]
 	pub type PrivateRingIntermediates<T: Config> =
 		StorageMap<_, Twox64Concat, GameIdx, PrivateRingIntermediateOf<T>>;
@@ -768,16 +758,16 @@ pub mod pallet {
 			block: BlockNumberFor<T>,
 			leaf_index: u32,
 		},
-		/// A claimant registered a key for a game's ring ladder. `credits` is what they earned,
-		/// which is the tier their key went into and the most tiers they can mint. It is capped at
-		/// [`Config::MaxPrivateRingTiers`], the credits above the ladder's top being forfeit.
+		/// A claimant registered a key for a game's ring ladder. `tier` is the credits they
+		/// earned, capped at [`Config::MaxPrivateRingTiers`], which is the tier their key went
+		/// into and the most tiers they can mint.
 		///
 		/// The key is left out. An event that tied the key to the claimant would identify every
 		/// claim made under it.
 		PrivateClaimKeyRegistered {
 			game_index: GameIdx,
 			claimant: AccountOrPerson<T::AccountId>,
-			credits: u32,
+			tier: PrivateClaimTier,
 		},
 		/// A game's ladder is open and `height` tiers tall, which is the most any one claimant
 		/// mints from it. The tiers above held too few keys to hide a claimant.
@@ -1069,10 +1059,9 @@ pub mod pallet {
 		/// Registers the key that a claimant's private claims of `game_index` are made under.
 		///
 		/// The origin is the claimant the credits were awarded to, resolved as `report` resolves
-		/// a player, so both an account and a person can register. `key` goes into the bucket of
-		/// the claimant's credit count, which puts it in every tier at or below that count. A
-		/// claim on the claims chain proves membership of one of those rings without naming the
-		/// key.
+		/// a player, so both an account and a person can register. `key` goes in at the tier of
+		/// the claimant's credit count, which puts it in every ring at or below that tier. A claim
+		/// on the claims chain proves membership of one of those rings without naming the key.
 		///
 		/// A registration needs one credit of the game, the ladder's base, and grants one tier per
 		/// credit the claimant earned. A claimant registers once per game.
@@ -1114,7 +1103,7 @@ pub mod pallet {
 		#[pallet::weight(if *to_include == 0 {
 			<T as Config>::WeightInfo::finish_private_ring(T::MaxPrivateRingTiers::get())
 				.max(<T as Config>::WeightInfo::open_private_ring_ladder())
-				.max(<T as Config>::WeightInfo::abandon_private_ring(T::MaxPrivateRingTiers::get()))
+				.max(<T as Config>::WeightInfo::abandon_private_ring())
 		} else {
 			<T as Config>::WeightInfo::build_private_ring(*to_include)
 		})]

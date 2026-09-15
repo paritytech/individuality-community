@@ -23,14 +23,14 @@ sequenceDiagram
     P->>P: first credit award writes the game's private record, one tier counter per credit it can award
     P->>P: each award moves the claimant up one tier, which is the tier their key registers into
     Note over P: player process ends, credits final, key registration opens for PrivateKeyRegistrationSeconds
-    C->>P: register_private_claim_key(game, one-time ring key), into the bucket of their credit count
+    C->>P: register_private_claim_key(game, one-time ring key), at the tier of their credit count
     Note over P: key registration closes
     O->>P: build_private_ring (zero keys, opens the ladder and decides its height)
     alt tier 1 below the anonymity floor
         O->>P: build_private_ring (zero keys, abandons the game)
     else tier 1 at or above the floor
         loop for each tier, from the top down
-            loop PrivateKeysPerBuild keys of the tier's own bucket per call
+            loop PrivateKeysPerBuild of the tier's own keys per call
                 O->>P: build_private_ring
             end
             O->>P: build_private_ring (zero keys, snapshots the tier's root)
@@ -62,24 +62,25 @@ sequenceDiagram
 2. **Register a key.** Once the game's player process ends and credits are final, key registration
    opens for `PrivateKeyRegistrationSeconds`. Each claimant calls `register_private_claim_key` on
    the People chain, having earned at least one credit in it, and hands over a one-time ring VRF
-   key their wallet made for this game. The key goes into the bucket of the claimant's credit
-   count, which is the tallest tier they can prove against. The registration is public and has to
+   key their wallet made for this game. The key goes in at the tier of the claimant's credit
+   count, which is the tallest ring they can prove against. The registration is public and has to
    be: the rings are built from the registered keys, so the sets a proof names are public too. A
    registered key discloses none of the aliases a proof of it yields. What a ring hides is which
    mint is whose.
 3. **Build the ladder.** Once key registration closes, the offchain worker drives
-   `build_private_ring`. Its first step decides the ladder's height. It then pushes the buckets in
-   descending order, in bounded chunks, and snapshots the intermediate at each bucket boundary. At
-   that point the intermediate holds exactly the tier's ring, so finishing a clone of it yields
-   that tier's root while the original carries on. One pass over the keys builds every ring.
+   `build_private_ring`. Its first step decides the ladder's height. The registration list is in
+   descending tier order, so it then pushes the list front to back, in bounded chunks, and
+   snapshots the intermediate where each tier's keys end. At that point the intermediate holds
+   exactly the tier's ring, so finishing a clone of it yields that tier's root while the original
+   carries on. One pass over the list builds every ring.
 4. **Deliver.** The offchain worker submits `send_private_ring` to ship the game's outcome, one
    root per tier, to the claims chain in one XCM message. The claims chain keeps the first outcome
    it receives for a game and fixes the window its claims are taken in.
 5. **Claim.** A claimant submits `claim_private` on the claims chain, once per tier they earned,
    inside the game's claim window.
 6. **Clean up.** Offchain workers clean up both chains automatically: on the game chain, the
-   offchain worker drives `clean_up_private_game` to remove the game's claimant records and its
-   key index in bounded steps. It waits for step 4: its last step drops the record the delivery
+   offchain worker drives `clean_up_private_game` to remove the game's claimant records in
+   bounded steps. It waits for step 4: its last step drops the record the delivery
    reads, so cleaning up first would leave a queue front that can never be sent. On the claims
    chain, once the window is closed, its offchain worker drives `close_private_ring` to remove the
    ladder and its spent aliases.

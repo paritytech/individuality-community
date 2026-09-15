@@ -67,29 +67,20 @@ fn open_private_game<T: Config>(game_index: GameIdx, tiers: u32) {
 	);
 }
 
-/// Seed one key bucket for each of `buckets` tiers of `game_index`, as registrants spread over
-/// that many credit counts would.
+/// Register `count` keys at tier `tier` of `game_index`, as that many claimants would.
 ///
-/// An abandonment clears one bucket at a time and each is a storage key of its own, so the count
-/// has to vary the keys and not the total alone.
-#[cfg(feature = "runtime-benchmarks")]
-fn spread_private_ring_keys<T: Config>(game_index: GameIdx, buckets: u32) {
-	for tier in 1..=buckets {
-		fill_private_ring::<T>(game_index, tier as PrivateClaimTier, 1);
-	}
-}
-
-/// Register `count` keys into tier `tier` of `game_index`, as that many claimants would.
+/// The keys go at the front of the list, so a caller that seeds one tier per call has to seed
+/// them from the top down to keep the list in descending tier order.
 #[cfg(feature = "runtime-benchmarks")]
 fn fill_private_ring<T: Config>(game_index: GameIdx, tier: PrivateClaimTier, count: u32) {
-	// Seeded from the tier as well as the index, so buckets never share a key.
+	// Seeded from the tier as well as the index, so two tiers never share a key.
 	let base = u32::from(tier).saturating_mul(T::MaxPrivateRingKeys::get());
-	let keys = (0..count).map(|index| private_ring_key::<T>(base + index)).collect::<Vec<_>>();
-	PrivateRingKeys::<T>::insert(
-		game_index,
-		tier,
-		BoundedVec::try_from(keys).expect("count is bounded by MaxPrivateRingKeys"),
-	);
+	let keys = (0..count).map(|index| (tier, private_ring_key::<T>(base + index)));
+	PrivateRingKeys::<T>::mutate(game_index, |held| {
+		for (position, key) in keys.enumerate() {
+			held.try_insert(position, key).expect("count is bounded by MaxPrivateRingKeys");
+		}
+	});
 	PrivateGames::<T>::mutate(game_index, |game| {
 		if let Some(game) = game {
 			game.key_count = game.key_count.saturating_add(count);
@@ -146,17 +137,14 @@ fn seed_closed_tiers<T: Config>(game_index: GameIdx, count: u32) {
 #[cfg(feature = "runtime-benchmarks")]
 fn seed_private_clean_up<T: Config>(game_index: GameIdx, entries: u32) {
 	open_private_game::<T>(game_index, 1);
-	fill_private_ring::<T>(game_index, 1, T::MinPrivateRingKeys::get());
-	// The step that closed each tier removed its bucket, so a game in its cleanup holds none.
-	let _ = PrivateRingKeys::<T>::clear_prefix(game_index, T::MaxPrivateRingTiers::get(), None);
+	// The step that closed tier 1 removed the keys, so a game in its cleanup holds none.
 	for index in 0..entries {
 		let claimant = AccountOrPerson::Person(sp_io::hashing::blake2_256(&index.encode()));
 		PrivateClaimants::<T>::insert(
 			game_index,
 			&claimant,
-			PrivateClaimantState::Registered { credits: 1 },
+			PrivateClaimantState::Registered { tier: 1 },
 		);
-		PrivateRingKeyIndex::<T>::insert(game_index, private_ring_key::<T>(index), ());
 	}
 	PrivateGames::<T>::mutate(game_index, |game| {
 		if let Some(game) = game {
@@ -366,25 +354,29 @@ mod benches {
 	// Registering one key for one claimant. The key list is read and rewritten at its
 	// `MaxEncodedLen` whatever it holds, so a full list costs what an empty one does and the
 	// benchmark needs no component.
+	//
+	// The list is filled with the lowest tier and the caller registers at the highest, so the key
+	// goes in at the front and the insert moves every element, which is its worst case.
 	#[benchmark]
 	fn register_private_claim_key() -> Result<(), BenchmarkError> {
 		let game_index = 1;
+		let top = T::MaxPrivateRingTiers::get() as PrivateClaimTier;
 		let caller: T::AccountId = whitelisted_caller();
 		let claimant = AccountOrPerson::Account(caller.clone());
-		open_private_game::<T>(game_index, 1);
+		open_private_game::<T>(game_index, T::MaxPrivateRingTiers::get());
 		PrivateClaimants::<T>::insert(
 			game_index,
 			&claimant,
-			PrivateClaimantState::Eligible { credits: 1 },
+			PrivateClaimantState::Eligible { tier: top },
 		);
 		fill_private_ring::<T>(game_index, 1, T::MaxPrivateRingKeys::get() - 1);
 
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller), game_index, private_ring_key::<T>(u32::MAX));
 
-		assert!(
-			PrivateRingKeys::<T>::get(game_index, 1).len() as u32 == T::MaxPrivateRingKeys::get()
-		);
+		let keys = PrivateRingKeys::<T>::get(game_index);
+		assert_eq!(keys.len() as u32, T::MaxPrivateRingKeys::get());
+		assert_eq!(keys[0].0, top, "the new key heads the list");
 
 		Ok(())
 	}
@@ -441,10 +433,6 @@ mod benches {
 		build_private_ring(RawOrigin::Authorized, game_index, 0, BlockNumberFor::<T>::zero());
 
 		assert!(PrivateOutcomes::<T>::get(game_index).is_some(), "the tier's root is final");
-		assert!(
-			PrivateRingKeys::<T>::decode_len(game_index, 1).is_none(),
-			"the tier's keys go with it"
-		);
 
 		Ok(())
 	}
@@ -473,19 +461,17 @@ mod benches {
 	}
 
 	// The step that gives the game up, which is the same call against a game whose retries are
-	// spent. `n` is the key buckets it clears, one storage key each, which is the step's cost
-	// beyond recording the abandonment.
+	// spent. It drops the key list and records the abandonment, both at a fixed cost: the list is
+	// removed at its `MaxEncodedLen` whatever it holds.
 	//
 	// It runs on the retries and not the anonymity floor. A game abandoned on the floor holds few
-	// keys, while one abandoned on the retries can hold a full registration spread over every
-	// tier, which is the dearer of the two.
+	// keys, while one abandoned on the retries can hold a full registration, which is the dearer
+	// of the two.
 	#[benchmark]
-	fn abandon_private_ring(
-		n: Linear<0, { T::MaxPrivateRingTiers::get() }>,
-	) -> Result<(), BenchmarkError> {
+	fn abandon_private_ring() -> Result<(), BenchmarkError> {
 		let game_index = 1;
 		open_private_game::<T>(game_index, T::MaxPrivateRingTiers::get());
-		spread_private_ring_keys::<T>(game_index, n);
+		fill_private_ring::<T>(game_index, 1, T::MaxPrivateRingKeys::get());
 		close_private_key_registration::<T>(game_index);
 		// The retries spent, so the zero-key step abandons the game whatever its rings hold.
 		PrivateGames::<T>::mutate(game_index, |game| {
@@ -508,11 +494,7 @@ mod benches {
 			),
 			"the game gave up its ladder"
 		);
-		assert_eq!(
-			PrivateRingKeys::<T>::iter_key_prefix(game_index).count(),
-			0,
-			"every bucket goes with it"
-		);
+		assert!(PrivateRingKeys::<T>::decode_len(game_index).is_none(), "the keys go with it");
 
 		Ok(())
 	}
@@ -602,10 +584,8 @@ mod benches {
 		Ok(())
 	}
 
-	// One cleanup step, over `n` of the claimant entries a private game leaves behind. Each one
-	// carries a key-index entry of its own, which is the worst case: a step removes no more key
-	// entries than claimants, so `n` prices both. The key buckets went with the build steps that
-	// closed the tiers, so no step here touches them.
+	// One cleanup step, over `n` of the claimant entries a private game leaves behind. The
+	// registered keys went with the build step that closed tier 1, so no step here touches them.
 	#[benchmark]
 	fn clean_up_private_game(
 		n: Linear<0, { crate::PRIVATE_CLEAN_UP_ITEMS }>,
@@ -617,7 +597,6 @@ mod benches {
 		_(RawOrigin::Authorized, game_index, BlockNumberFor::<T>::zero());
 
 		assert_eq!(PrivateClaimants::<T>::iter_prefix(game_index).count(), 0);
-		assert_eq!(PrivateRingKeyIndex::<T>::iter_prefix(game_index).count(), 0);
 
 		Ok(())
 	}

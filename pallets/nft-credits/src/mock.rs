@@ -162,10 +162,10 @@ impl CreditsWeightInfo for MockWeightInfo {
 	fn open_private_ring_ladder() -> Weight {
 		Weight::from_parts(300, 30)
 	}
-	/// Distinct from both of the other closing branches and scaling with the key buckets it drops,
-	/// so a test sees the refund an abandonment reports.
-	fn abandon_private_ring(n: u32) -> Weight {
-		Weight::from_parts(700 + 10 * n as u64, 70 + n as u64)
+	/// Distinct from both of the other closing branches, so a test sees the refund an abandonment
+	/// reports.
+	fn abandon_private_ring() -> Weight {
+		Weight::from_parts(700, 70)
 	}
 	fn authorize_build_private_ring() -> Weight {
 		Weight::from_parts(50, 0)

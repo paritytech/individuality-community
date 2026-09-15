@@ -3186,7 +3186,7 @@ mod private_claims {
 			for player in &players {
 				assert_eq!(
 					PrivateClaimants::<Test>::get(GAME, player),
-					Some(PrivateClaimantState::Eligible { credits: 6 })
+					Some(PrivateClaimantState::Eligible { tier: 6 })
 				);
 			}
 			// Six tiers, one per credit a full attendance of this game earns, and every player
@@ -3227,8 +3227,8 @@ mod private_claims {
 			let alice = players[0].clone();
 			open_registration();
 
-			// Alice earned six credits, so her key goes into the sixth bucket, which every tier
-			// from one to six holds.
+			// Alice earned six credits, so her key sits at tier 6, which every tier from one to
+			// six holds.
 			assert_ok!(NftCredits::register_private_claim_key(
 				RuntimeOrigin::signed(ALICE),
 				GAME,
@@ -3237,10 +3237,9 @@ mod private_claims {
 			// The claimant's entry marks the key they took, which is what refuses a second one.
 			assert_eq!(
 				PrivateClaimants::<Test>::get(GAME, &alice),
-				Some(PrivateClaimantState::Registered { credits: 6 })
+				Some(PrivateClaimantState::Registered { tier: 6 })
 			);
-			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 6).len(), 1);
-			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 1).len(), 0);
+			assert_eq!(PrivateRingKeys::<Test>::get(GAME).to_vec(), vec![(6, ring_key(1))]);
 			let info = private_game();
 			assert_eq!(info.key_count, 1);
 			assert_eq!(info.ring_size(6), 1);
@@ -3249,7 +3248,7 @@ mod private_claims {
 				Event::<Test>::PrivateClaimKeyRegistered {
 					game_index: GAME,
 					claimant: alice,
-					credits: 6,
+					tier: 6,
 				}
 				.into(),
 			);
@@ -3288,14 +3287,14 @@ mod private_claims {
 			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
 			assert_eq!(
 				PrivateClaimants::<Test>::get(GAME, &eve),
-				Some(PrivateClaimantState::Eligible { credits: 1 })
+				Some(PrivateClaimantState::Eligible { tier: 1 })
 			);
 			assert_ok!(NftCredits::register_private_claim_key(
 				RuntimeOrigin::signed(EVE),
 				GAME,
 				ring_key(2)
 			));
-			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 1).len(), 1);
+			assert_eq!(PrivateRingKeys::<Test>::get(GAME).to_vec(), vec![(1, ring_key(2))]);
 		});
 	}
 
@@ -3384,9 +3383,12 @@ mod private_claims {
 			// proved against it would strand their proof.
 			assert!(NftCredits::private_ring_build_step(GAME).is_none());
 
-			// Every player earned six credits, so every key is in the sixth bucket and every
-			// tier from one to six holds all four of them.
-			let keys = PrivateRingKeys::<Test>::get(GAME, 6).to_vec();
+			// Every player earned six credits, so every key sits at tier 6 and every tier from
+			// one to six holds all four of them.
+			let keys = PrivateRingKeys::<Test>::get(GAME)
+				.iter()
+				.map(|(_, key)| *key)
+				.collect::<Vec<_>>();
 			close_registration_and_build();
 
 			let info = PrivateGames::<Test>::get(GAME).unwrap();
@@ -3400,9 +3402,9 @@ mod private_claims {
 			for root in &roots {
 				assert_eq!(*root, keys.clone().try_into().expect("the mock ring holds the keys"));
 			}
-			// A root commits to its bucket, so each goes with the step that closed its tier and
+			// The roots commit to the keys, so the list goes with the step that closed tier 1 and
 			// the cleanup that follows never reads it.
-			assert!(PrivateRingKeys::<Test>::iter_prefix(GAME).next().is_none());
+			assert!(PrivateRingKeys::<Test>::decode_len(GAME).is_none());
 			// The intermediate is dropped once the last tier is closed.
 			assert!(PrivateRingIntermediates::<Test>::get(GAME).is_none());
 			System::assert_has_event(
@@ -3438,7 +3440,7 @@ mod private_claims {
 			// No ring was built, so nothing was pushed either. The keys commit to nothing, so
 			// they go with the abandonment rather than waiting for the cleanup.
 			assert!(PrivateRingIntermediates::<Test>::get(GAME).is_none());
-			assert!(PrivateRingKeys::<Test>::iter_prefix(GAME).next().is_none());
+			assert!(PrivateRingKeys::<Test>::decode_len(GAME).is_none());
 			assert!(matches!(
 				PrivateGames::<Test>::get(GAME).unwrap().phase,
 				PrivateGamePhase::Delivering
@@ -3461,7 +3463,7 @@ mod private_claims {
 			assert_eq!(private_game().eligible_at(2), 4);
 			assert_eq!(
 				PrivateClaimants::<Test>::get(GAME, &eve),
-				Some(PrivateClaimantState::Eligible { credits: 1 })
+				Some(PrivateClaimantState::Eligible { tier: 1 })
 			);
 
 			NftCredits::note_private_credit(GAME, &eve, 2, private_game());
@@ -3470,7 +3472,7 @@ mod private_claims {
 			assert_eq!(private_game().eligible_at(3), 4);
 			assert_eq!(
 				PrivateClaimants::<Test>::get(GAME, &eve),
-				Some(PrivateClaimantState::Eligible { credits: 2 })
+				Some(PrivateClaimantState::Eligible { tier: 2 })
 			);
 		});
 	}
@@ -3498,8 +3500,8 @@ mod private_claims {
 
 	#[test]
 	fn a_tier_is_the_ring_of_the_registrants_that_reached_it() {
-		// Each tier's snapshot is the ring the tier's own keys and every bucket above it make,
-		// which a claimant of that tier proves against.
+		// Each tier's snapshot is the ring the tier's own keys and every tier above it make, which
+		// a claimant of that tier proves against.
 		new_test_ext().execute_with(|| {
 			play_private_game();
 			// ALICE keeps her six credits. EVE earned two, so she registers into tier 2 and no
@@ -3517,7 +3519,7 @@ mod private_claims {
 			let roots = ring_roots();
 			assert_eq!(roots.len(), 6, "six tiers, one per credit the game awards");
 			// Tiers 3 to 6 hold the two claimants that earned six credits, and tiers 1 and 2 hold
-			// EVE as well. The build pushes the top bucket first, which is the order the mock ring
+			// EVE as well. The list is in descending tier order, which is the order the mock ring
 			// keeps its members in.
 			let top = vec![ring_key(1), ring_key(2)];
 			let with_eve = top.iter().cloned().chain([ring_key(3)]).collect::<Vec<_>>();
@@ -3530,6 +3532,38 @@ mod private_claims {
 					"tier {tier}'s ring",
 				);
 			}
+		});
+	}
+
+	#[test]
+	fn a_later_registration_takes_its_place_by_tier_and_not_by_arrival() {
+		// The list is in descending tier order, so the build can walk it once. A registration
+		// goes in at its tier whenever it arrives, which is what holds that order.
+		new_test_ext().execute_with(|| {
+			play_private_game();
+			let eve = AccountOrPerson::Account(EVE);
+			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
+
+			open_registration();
+			// The lower tier registers first, so arrival order and tier order disagree.
+			register(&EVE, 2);
+			register(&ALICE, 1);
+
+			assert_eq!(
+				PrivateRingKeys::<Test>::get(GAME).to_vec(),
+				vec![(6, ring_key(1)), (1, ring_key(2))],
+				"ALICE heads the list although EVE registered first",
+			);
+
+			// Tier 1 holds both keys and is the only tier the mock's floor of two clears. Its
+			// root is the list, which is the order the build pushed it in.
+			close_registration_and_build();
+			assert_eq!(
+				ring_roots(),
+				vec![vec![ring_key(1), ring_key(2)]
+					.try_into()
+					.expect("the mock ring holds the keys")],
+			);
 		});
 	}
 
@@ -3562,13 +3596,12 @@ mod private_claims {
 	}
 
 	#[test]
-	fn the_registration_cap_is_the_games_and_not_one_buckets() {
-		// Tier 1 holds every registrant in one ring, so the cap is on the game. A game that took a
-		// full bucket per tier builds no ring at all and puts every claimant back on the public
-		// path.
+	fn the_registration_cap_is_the_games_and_not_one_tiers() {
+		// Tier 1 holds every registrant in one ring, so the cap is on the game and not on a
+		// tier.
 		new_test_ext().execute_with(|| {
 			play_private_game();
-			// EVE earned one credit, so her key belongs in a bucket the others left empty.
+			// EVE earned one credit, so her key belongs at a tier the others left empty.
 			let eve = AccountOrPerson::Account(EVE);
 			NftCredits::note_private_credit(GAME, &eve, 1, private_game());
 			MaxPrivateRingKeys::set(&2);
@@ -3577,7 +3610,7 @@ mod private_claims {
 			register(&ALICE, 1);
 			register(&BOB, 2);
 
-			// Her own bucket is empty, but the game's registration is full.
+			// Tier 1 holds no key yet, but the game's registration is full.
 			assert_noop!(
 				NftCredits::register_private_claim_key(
 					RuntimeOrigin::signed(EVE),
@@ -3587,7 +3620,7 @@ mod private_claims {
 				Error::<Test>::PrivateRingFull
 			);
 			assert_eq!(private_game().key_count, 2);
-			assert_eq!(PrivateRingKeys::<Test>::decode_len(GAME, 1).unwrap_or(0), 0);
+			assert_eq!(PrivateRingKeys::<Test>::decode_len(GAME).unwrap_or(0), 2);
 		});
 	}
 
@@ -3627,7 +3660,7 @@ mod private_claims {
 	}
 
 	#[test]
-	fn an_abandoned_game_refunds_down_to_the_buckets_it_dropped() {
+	fn an_abandoned_game_refunds_down_to_its_own_branch() {
 		new_test_ext().execute_with(|| {
 			play_private_game();
 			MinPrivateRingKeys::set(&2);
@@ -3652,17 +3685,16 @@ mod private_claims {
 			)
 			.expect("the game is abandoned");
 
-			// One bucket held a key, so the step cleared one bucket and is charged for one.
-			assert_eq!(post.actual_weight, Some(MockWeightInfo::abandon_private_ring(1)));
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::abandon_private_ring()));
 			assert!(
-				MockWeightInfo::abandon_private_ring(1).all_lt(charged),
-				"one bucket is below what a closing step is charged for",
+				MockWeightInfo::abandon_private_ring().all_lt(charged),
+				"abandoning is below what a closing step is charged for",
 			);
 			assert!(matches!(
 				PrivateOutcomes::<Test>::get(GAME).unwrap(),
 				PrivateGameOutcome::Abandoned { key_count: 1 }
 			));
-			assert_eq!(PrivateRingKeys::<Test>::iter_key_prefix(GAME).count(), 0);
+			assert!(PrivateRingKeys::<Test>::decode_len(GAME).is_none());
 		});
 	}
 
@@ -3965,12 +3997,12 @@ mod private_claims {
 				),
 				Error::<Test>::DuplicateRingKey
 			);
-			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 6).len(), 1);
+			assert_eq!(PrivateRingKeys::<Test>::decode_len(GAME).unwrap_or(0), 1);
 			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().key_count, 1);
 
 			// A key of their own is taken.
 			register(&BOB, 2);
-			assert_eq!(PrivateRingKeys::<Test>::get(GAME, 6).len(), 2);
+			assert_eq!(PrivateRingKeys::<Test>::decode_len(GAME).unwrap_or(0), 2);
 		});
 	}
 

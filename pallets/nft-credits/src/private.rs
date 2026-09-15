@@ -32,10 +32,10 @@
 //! earnings either: `AwardedNftClaimCredits` is keyed by `(game, claimant)`, so who earned what is
 //! public whatever the rings do.
 //!
-//! The rings are prefixes of one push sequence, so the ladder costs one pass over the keys. A
-//! registration goes into the bucket of its owner's credit count. The build pushes the buckets in
-//! descending order and clones the intermediate at each bucket boundary, which is the ladder's
-//! whole extra cost against a single ring.
+//! The rings are prefixes of one push sequence, so the ladder costs one pass over the keys. The
+//! registration list is held in descending tier order, so ring `t` is its prefix of length
+//! `ring_size(t)`. The build pushes the list front to back and clones the intermediate at each of
+//! those lengths, which is the ladder's whole extra cost against a single ring.
 //!
 //! Registration costs one credit, the ladder's base, so every claimant that earned anything is in
 //! ring 1 and mints at least once. A key that pads ring `t` has to carry `t` credits, so the
@@ -90,9 +90,8 @@ use crate::{
 
 /// How many registration entries one [`Pallet::clean_up_private_game`] call removes.
 ///
-/// A game holds one claimant entry per credited player and one key-index entry per registrant, so
-/// the cleanup runs in bounded steps. It is a pallet constant because only the weight of one call
-/// depends on it.
+/// A game holds one claimant entry per credited player, so the cleanup runs in bounded steps. It
+/// is a pallet constant because only the weight of one call depends on it.
 pub const PRIVATE_CLEAN_UP_ITEMS: u32 = 32;
 
 /// How many failed build steps a private game takes before it is abandoned.
@@ -173,14 +172,14 @@ impl<T: Config> Pallet<T> {
 	) {
 		// A claimant that earned more credits than the runtime carries tiers for stays in the top
 		// one, so neither record changes.
-		if !info.note_tier_credit(credits) {
+		let Some(tier) = info.note_tier_credit(credits) else {
 			return;
-		}
+		};
 		PrivateGames::<T>::insert(game_index, info);
 		PrivateClaimants::<T>::insert(
 			game_index,
 			claimant,
-			PrivateClaimantState::Eligible { credits },
+			PrivateClaimantState::Eligible { tier },
 		);
 	}
 
@@ -246,63 +245,42 @@ impl<T: Config> Pallet<T> {
 		);
 		ensure!(T::RingVrf::is_member_valid(&key), Error::<T>::InvalidRingKey);
 
-		let credits = match PrivateClaimants::<T>::get(game_index, &claimant) {
-			Some(PrivateClaimantState::Eligible { credits }) => credits,
+		let tier = match PrivateClaimants::<T>::get(game_index, &claimant) {
+			Some(PrivateClaimantState::Eligible { tier }) => tier,
 			Some(PrivateClaimantState::Registered { .. }) =>
 				return Err(Error::<T>::AlreadyRegistered.into()),
 			None => return Err(Error::<T>::InsufficientCredits.into()),
 		};
 
-		// Registrations are public, so a claimant can read another's key and enrol it. A ring
-		// would then count a member it does not have and the floor would pass on a set smaller
-		// than it names. The check is a lookup because scanning the buckets reads all of them.
-		ensure!(
-			!PrivateRingKeyIndex::<T>::contains_key(game_index, &key),
-			Error::<T>::DuplicateRingKey
-		);
-
-		// Tier 1 is every registrant, so the game's whole registration has to fit one ring. The
-		// bound is on the total and not on a bucket: a game that took a full bucket per tier
-		// builds no ring at all and puts every claimant back on the public path.
+		// Tier 1 is every registrant, so the game's whole registration has to fit one ring.
 		ensure!(info.key_count < T::MaxPrivateRingKeys::get(), Error::<T>::PrivateRingFull);
 
-		// The key goes into the bucket of its owner's credit count, which is the tallest tier they
-		// can prove against. Every tier at or below it holds that bucket, so one push enrols the
-		// key in each of them.
-		let tier = Self::private_key_tier(&info, credits);
-		PrivateRingKeys::<T>::try_mutate(game_index, tier, |keys| {
-			keys.try_push(key.clone()).map_err(|_| Error::<T>::PrivateRingFull)
+		// The key goes in after every key of its own tier and before the tier below, which holds
+		// the list in descending tier order. `ring_size` is that position: the registrants that
+		// reached this tier or a higher one.
+		let position = info.ring_size(tier) as usize;
+		PrivateRingKeys::<T>::try_mutate(game_index, |keys| -> Result<(), Error<T>> {
+			// Registrations are public, so a claimant can read another's key and enrol it. A ring
+			// would then count a member it does not have and the floor would pass on a set
+			// smaller than it names. The list is decoded here anyway, so the check is a scan.
+			ensure!(!keys.iter().any(|(_, held)| held == &key), Error::<T>::DuplicateRingKey);
+
+			keys.try_insert(position, (tier, key)).map_err(|_| Error::<T>::PrivateRingFull)
 		})?;
-		PrivateRingKeyIndex::<T>::insert(game_index, &key, ());
 
 		PrivateClaimants::<T>::insert(
 			game_index,
 			&claimant,
-			PrivateClaimantState::Registered { credits },
+			PrivateClaimantState::Registered { tier },
 		);
 
 		info.key_count = info.key_count.saturating_add(1);
-		info.note_tier_registration(credits);
+		info.note_tier_registration(tier);
 		PrivateGames::<T>::insert(game_index, info);
 
-		Self::deposit_event(Event::<T>::PrivateClaimKeyRegistered {
-			game_index,
-			claimant,
-			credits,
-		});
+		Self::deposit_event(Event::<T>::PrivateClaimKeyRegistered { game_index, claimant, tier });
 
 		Ok(())
-	}
-
-	/// The tier a registrant that earned `credits` goes into, which is the tallest ring they can
-	/// prove against.
-	///
-	/// A registrant that earned more credits than the runtime carries tiers for joins the top tier
-	/// rather than a bucket the build never reaches.
-	fn private_key_tier(info: &PrivateGameInfoOf<T>, credits: u32) -> PrivateClaimTier {
-		let top = info.tiers.len() as PrivateClaimTier;
-
-		PrivateClaimTier::try_from(credits).unwrap_or(top).clamp(1, top)
 	}
 
 	/// How many keys the build step due for `game_index` pushes, or [`None`] when the game owes
@@ -329,10 +307,7 @@ impl<T: Config> Pallet<T> {
 				if failures >= PRIVATE_RING_BUILD_RETRIES {
 					return Some(0);
 				}
-				let outstanding = info
-					.tiers
-					.get(usize::from(tier).saturating_sub(1))
-					.map_or(0, |counts| counts.registered.saturating_sub(included));
+				let outstanding = info.ring_size(tier).saturating_sub(included);
 
 				Some(outstanding.min(T::PrivateKeysPerBuild::get()))
 			},
@@ -428,12 +403,13 @@ impl<T: Config> Pallet<T> {
 		let mut intermediate = PrivateRingIntermediates::<T>::get(game_index)
 			.unwrap_or_else(|| T::RingVrf::start_members(capacity));
 
-		// Only the tier's own bucket is read. Every key below it is already in the intermediate,
-		// pushed while a higher tier was open.
-		let pushed = PrivateRingKeys::<T>::get(game_index, tier)
+		// The list is in descending tier order, so every key of a ring above `tier` comes first
+		// and `included` is one cursor over the whole ladder.
+		let pushed = PrivateRingKeys::<T>::get(game_index)
 			.into_iter()
 			.skip(included as usize)
 			.take(to_include as usize)
+			.map(|(_, key)| key)
 			.collect::<Vec<_>>();
 		let pushed_count = pushed.len() as u32;
 
@@ -486,19 +462,15 @@ impl<T: Config> Pallet<T> {
 	/// Snapshot tier `tier` of `game_index`'s ladder and drop to the tier below it.
 	///
 	/// At this point the intermediate holds every key of tier `tier` and nothing else, so
-	/// finishing a clone of it yields that tier's root while the original carries on into the next
-	/// bucket. Closing tier 1 finishes the ladder.
+	/// finishing a clone of it yields that tier's root while the original carries on into the tier
+	/// below. Closing tier 1 finishes the ladder.
 	fn close_private_tier(
 		game_index: GameIdx,
 		mut info: PrivateGameInfoOf<T>,
 		tier: PrivateClaimTier,
 		included: u32,
 	) -> Result<Weight, DispatchError> {
-		let owed = info
-			.tiers
-			.get(usize::from(tier).saturating_sub(1))
-			.map_or(0, |counts| counts.registered);
-		ensure!(included >= owed, Error::<T>::NoPrivateRingToBuild);
+		ensure!(included >= info.ring_size(tier), Error::<T>::NoPrivateRingToBuild);
 
 		let intermediate = PrivateRingIntermediates::<T>::get(game_index)
 			.ok_or(Error::<T>::NoPrivateRingToBuild)?;
@@ -524,22 +496,20 @@ impl<T: Config> Pallet<T> {
 			Ok::<u32, Error<T>>(roots.len() as u32)
 		})?;
 
-		// The root commits to the bucket and registration is closed, so nothing reads the bucket
-		// again. It goes here rather than in the cleanup, which would carry a whole bucket into
-		// the proof of one of its steps.
-		PrivateRingKeys::<T>::remove(game_index, tier);
 		Self::deposit_event(Event::<T>::PrivateRingBuilt { game_index, tier });
 
+		// The cursor carries on into the tier below, whose keys follow this tier's in the list.
 		if tier > 1 {
-			info.phase = PrivateGamePhase::Building {
-				tier: tier.saturating_sub(1),
-				included: 0,
-				failures: 0,
-			};
+			info.phase =
+				PrivateGamePhase::Building { tier: tier.saturating_sub(1), included, failures: 0 };
 			PrivateGames::<T>::insert(game_index, info);
 			return Ok(<T as Config>::WeightInfo::finish_private_ring(closed));
 		}
 
+		// The roots commit to the keys and registration is closed, so nothing reads them again.
+		// They go here rather than in the cleanup, which would carry the list into the proof of
+		// one of its steps.
+		PrivateRingKeys::<T>::remove(game_index);
 		PrivateRingIntermediates::<T>::remove(game_index);
 		info.phase = PrivateGamePhase::Delivering;
 		PrivateGames::<T>::insert(game_index, info);
@@ -587,8 +557,7 @@ impl<T: Config> Pallet<T> {
 	/// Give up on `game_index`'s ladder and record the abandonment for the claims chain, which
 	/// reopens the public claim path for the game's credit trees.
 	///
-	/// `info` is the game's record with its phase not yet advanced. The weight returned covers the
-	/// key buckets the step dropped.
+	/// `info` is the game's record with its phase not yet advanced.
 	fn abandon_private_game(game_index: GameIdx, mut info: PrivateGameInfoOf<T>) -> Weight {
 		let key_count = info.key_count;
 		let required = Self::private_ring_floor(&info, 1);
@@ -597,34 +566,13 @@ impl<T: Config> Pallet<T> {
 		// delivered together or not at all. The keys go with it, so the game mints through its
 		// credit trees from here on.
 		PrivateRingIntermediates::<T>::remove(game_index);
-		let buckets = Self::drop_private_ring_keys(game_index, &info);
+		PrivateRingKeys::<T>::remove(game_index);
 		PrivateOutcomes::<T>::insert(game_index, PrivateGameOutcome::Abandoned { key_count });
 		info.phase = PrivateGamePhase::Delivering;
 		PrivateGames::<T>::insert(game_index, info);
 		Self::deposit_event(Event::<T>::PrivateRingAbandoned { game_index, key_count, required });
 
-		<T as Config>::WeightInfo::abandon_private_ring(buckets)
-	}
-
-	/// Drop every key bucket of `game_index` and report how many it cleared for.
-	///
-	/// A bucket exists only for a tier a registrant landed in, which the game's record counts, so
-	/// the prefix is cleared at that bound and the cursor it returns is always spent. A tier
-	/// already closed gave its bucket up, so the bound is an upper one.
-	fn drop_private_ring_keys(game_index: GameIdx, info: &PrivateGameInfoOf<T>) -> u32 {
-		let buckets =
-			info.tiers.iter().filter(|counts| !counts.registered.is_zero()).count() as u32;
-		if PrivateRingKeys::<T>::clear_prefix(game_index, buckets, None)
-			.maybe_cursor
-			.is_some()
-		{
-			log::error!(
-				target: LOG_TARGET,
-				"Game {game_index} holds more key buckets than its {buckets} registered tiers",
-			);
-		}
-
-		buckets
+		<T as Config>::WeightInfo::abandon_private_ring()
 	}
 
 	/// Validate a [`Pallet::clean_up_private_game`] submission.
@@ -664,13 +612,12 @@ impl<T: Config> Pallet<T> {
 
 	/// The body of [`Pallet::clean_up_private_game`], returning the claimants it removed.
 	///
-	/// One call removes at most [`PRIVATE_CLEAN_UP_ITEMS`] claimants and as many key-index
-	/// entries, so a game is dropped over as many calls as it takes. The count returned is the
-	/// claimants, which the weight is measured in. The game's record goes last, because it is what
-	/// says the cleanup is still owed.
+	/// One call removes at most [`PRIVATE_CLEAN_UP_ITEMS`] claimants, so a game is dropped over as
+	/// many calls as it takes. The game's record goes last, because it is what says the cleanup is
+	/// still owed.
 	///
-	/// This drops the private path's own bookkeeping and nothing a claim reads: the key buckets
-	/// went with the build steps that closed the tiers, and the credit trees an abandoned game
+	/// This drops the private path's own bookkeeping and nothing a claim reads: the registered
+	/// keys went with the build step that closed tier 1, and the credit trees an abandoned game
 	/// mints through are untouched.
 	pub(crate) fn do_clean_up_private_game(game_index: GameIdx) -> Result<u32, DispatchError> {
 		ensure!(Self::private_clean_up_due(game_index), Error::<T>::NoPrivateGameToCleanUp);
@@ -680,26 +627,17 @@ impl<T: Config> Pallet<T> {
 		let claimants = PrivateClaimants::<T>::iter_key_prefix(game_index)
 			.take(PRIVATE_CLEAN_UP_ITEMS as usize)
 			.collect::<Vec<_>>();
-		let claimants_removed = claimants.len() as u32;
+		let removed = claimants.len() as u32;
 		for claimant in &claimants {
 			PrivateClaimants::<T>::remove(game_index, claimant);
 		}
 
-		// The key index holds one entry per registrant, which is a subset of the claimants. It is
-		// cleared by prefix because nothing reads the keys back. Both maps give up the same number
-		// of entries per call, so this step removes no more keys than claimants.
-		let keys = PrivateRingKeyIndex::<T>::clear_prefix(game_index, PRIVATE_CLEAN_UP_ITEMS, None);
-
-		if claimants_removed < PRIVATE_CLEAN_UP_ITEMS && keys.maybe_cursor.is_none() {
+		if removed < PRIVATE_CLEAN_UP_ITEMS {
 			PrivateGames::<T>::remove(game_index);
 			Self::deposit_event(Event::<T>::PrivateGameCleanedUp { game_index });
 		}
 
-		// The claimants alone, because the benchmark prices one claimant together with the key
-		// entry that can accompany it. Adding `keys.unique` would measure the refund in entries
-		// where the weight is measured in claimants, and it counts only what the backend held, so
-		// a key written in the same block would cost nothing.
-		Ok(claimants_removed)
+		Ok(removed)
 	}
 
 	/// Validate a [`Pallet::send_private_ring`] submission.
@@ -933,10 +871,13 @@ impl<T: Config> Pallet<T> {
 			"`PrivateKeyRegistrationSeconds` must be at least one",
 		);
 
-		// A ladder of no tiers pays nobody.
+		// A ladder of no tiers pays nobody, and a tier a claim cannot name is a tier nobody mints.
 		assert!(
-			!T::MaxPrivateRingTiers::get().is_zero(),
-			"`MaxPrivateRingTiers` must be at least one",
+			!T::MaxPrivateRingTiers::get().is_zero() &&
+				T::MaxPrivateRingTiers::get() <= u32::from(PrivateClaimTier::MAX),
+			"`MaxPrivateRingTiers` ({tiers}) must be between one and {max}",
+			tiers = T::MaxPrivateRingTiers::get(),
+			max = PrivateClaimTier::MAX,
 		);
 
 		budget.assert_fits(
@@ -950,7 +891,7 @@ impl<T: Config> Pallet<T> {
 			"build_private_ring (close)",
 			<T as Config>::WeightInfo::finish_private_ring(T::MaxPrivateRingTiers::get())
 				.max(<T as Config>::WeightInfo::open_private_ring_ladder())
-				.max(<T as Config>::WeightInfo::abandon_private_ring(T::MaxPrivateRingTiers::get()))
+				.max(<T as Config>::WeightInfo::abandon_private_ring())
 				.saturating_add(<T as Config>::WeightInfo::authorize_build_private_ring()),
 		);
 		budget.assert_fits(
