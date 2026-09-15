@@ -2366,7 +2366,7 @@ pub mod pallet {
 			let Some((closes_at, game_index)) = PrivateRingCloses::<T>::iter_keys().next() else {
 				return;
 			};
-			if closes_at.0 > block_number.saturated_into::<u64>() {
+			if u64::from(closes_at) > block_number.saturated_into::<u64>() {
 				return;
 			}
 

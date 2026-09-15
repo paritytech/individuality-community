@@ -120,8 +120,7 @@
 //! would name them.
 //!
 //! The ring holds the keys the claimants supply, not the keys the game knows them by. A person
-//! plays under an alias, and the chain cannot read the personhood key behind it. See
-//! `docs/private-nft-claims.md` for what the path hides and what it does not.
+//! plays under an alias, and the chain cannot read the personhood key behind it.
 //!
 //! A claimant does not have to rebuild the tree themselves. The runtime API in [`runtime_api`]
 //! serves the proof material:
@@ -307,31 +306,26 @@ pub mod pallet {
 
 		/// The most keys one game's private claim registration can hold.
 		///
-		/// Registration is first-come, first-served, and a claimant past this bound is refused
-		/// and mints nothing, so size it against the players a game credits. Every read of the
-		/// key list is charged at the bound, and what [`Config::PrivateRingExponent`] holds is the
-		/// ceiling the `integrity_test` checks.
+		/// Registration is first-come, first-served, so a claimant past this bound is refused and
+		/// mints nothing. Every read of the key list is charged at the bound, and the
+		/// `integrity_test` holds it to what [`Config::PrivateRingExponent`] fits.
 		#[pallet::constant]
 		type MaxPrivateRingKeys: Get<u32>;
 
 		/// The fewest keys a private claim ring may be built over.
 		///
-		/// A claim proves membership in this set and nothing narrower. A game that too few
-		/// claimants registered for is abandoned and mints over the public path instead, so set
-		/// it against the players a game is expected to credit. It is a floor on its own, and
-		/// [`Config::MinPrivateRingParticipation`] raises it for a game that credited more
-		/// claimants than this.
+		/// A claim proves membership in this set and nothing narrower. A game too few claimants
+		/// registered for is abandoned and mints over the public path instead.
+		/// [`Config::MinPrivateRingParticipation`] raises this floor for a larger game.
 		#[pallet::constant]
 		type MinPrivateRingKeys: Get<u32>;
 
 		/// The share of a game's registration-eligible claimants that has to register before its
 		/// ring is built.
 		///
-		/// It raises [`Config::MinPrivateRingKeys`] with the game's size, so a group that
-		/// registers to fill the anonymity set of one target has to grow with the game rather
-		/// than stop at a fixed count. Set it to zero to hold every game to the absolute floor
-		/// alone. The share is capped at [`Config::MaxPrivateRingKeys`], which is all the room a
-		/// registration has.
+		/// It raises [`Config::MinPrivateRingKeys`] with the game's size, so a group that fills
+		/// one target's anonymity set has to grow with the game. Zero holds every game to the
+		/// absolute floor alone. The share is capped at [`Config::MaxPrivateRingKeys`].
 		#[pallet::constant]
 		type MinPrivateRingParticipation: Get<Percent>;
 
@@ -344,17 +338,16 @@ pub mod pallet {
 
 		/// How long registration stays open after a game's player process ends, in seconds.
 		///
-		/// This is the whole window a claimant has to register. A claimant who misses it mints
-		/// nothing, unless the game is abandoned and its credits go back to the public path.
+		/// A claimant who misses the window mints nothing, unless the game is abandoned and its
+		/// credits go back to the public path.
 		#[pallet::constant]
 		type PrivateRegistrationSeconds: Get<u32>;
 
 		/// Per-ring weight that `receive_private_rings` costs on [`Config::NftClaimsParaId`].
 		///
-		/// Delivery is offchain-worker driven and the message asks for unpaid execution, so no
-		/// caller is charged this. The `integrity_test` reserves it in the offchain-worker block
-		/// budget, which keeps a ring this chain can send but the claims chain cannot execute out
-		/// of the configuration.
+		/// Delivery is offchain-worker driven and asks for unpaid execution, so no caller is
+		/// charged it. The `integrity_test` reserves it in the offchain-worker block budget,
+		/// which keeps out a ring this chain can send but the claims chain cannot execute.
 		#[pallet::constant]
 		type PrivateRingRemoteWeight: Get<Weight>;
 
