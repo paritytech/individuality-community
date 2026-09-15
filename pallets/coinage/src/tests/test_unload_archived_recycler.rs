@@ -1226,11 +1226,11 @@ fn declared_weight_follows_the_fee_currency() {
 		};
 
 		let native =
-			<() as crate::WeightInfo>::unload_archived_recycler_into_external_asset_fee_native();
-		let external = <() as crate::WeightInfo>::
+			<Test as Config>::WeightInfo::unload_archived_recycler_into_external_asset_fee_native();
+		let external = <Test as Config>::WeightInfo::
 			unload_archived_recycler_into_external_asset_fee_external_asset();
 		assert!(native.all_lt(external));
-		assert_eq!(call_with(FeeCurrency::Native).get_dispatch_info().call_weight, native,);
-		assert_eq!(call_with(FeeCurrency::ExternalAsset).get_dispatch_info().call_weight, external,);
+		assert_eq!(call_with(FeeCurrency::Native).get_dispatch_info().call_weight, native);
+		assert_eq!(call_with(FeeCurrency::ExternalAsset).get_dispatch_info().call_weight, external);
 	});
 }
