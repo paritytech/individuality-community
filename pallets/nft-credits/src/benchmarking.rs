@@ -57,7 +57,7 @@ fn open_private_game<T: Config>(game_index: GameIdx, slots: u8) {
 			registration_starts: 0,
 			registration_ends: u32::MAX,
 			key_count: 0,
-			eligible_players: 0,
+			eligible_claimants: 0,
 			phase: PrivateGamePhase::Building { included: 0, failures: 0 },
 		},
 	);

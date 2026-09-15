@@ -205,9 +205,9 @@ pub struct PrivateGameInfo {
 	pub key_count: u32,
 	/// How many claimants earned the credits one registration costs. It is the population the
 	/// game's registration is measured against, and it is final once the player process ends.
-	/// A claimant below the price cannot register, so counting every credited player instead
-	/// would put the floor out of reach.
-	pub eligible_players: u32,
+	/// A claimant below the price cannot register, so counting every claimant that holds any
+	/// credit instead would put the floor out of reach.
+	pub eligible_claimants: u32,
 	/// What the game still owes: its ring to build, or its registration state to drop.
 	pub phase: PrivateGamePhase,
 }

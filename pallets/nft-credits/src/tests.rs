@@ -3404,19 +3404,19 @@ mod private_claims {
 		new_test_ext().execute_with(|| {
 			// Four players, six credits each, against an entry price of two.
 			play_private_game(2);
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_players, 4);
+			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 4);
 
 			// A claimant one credit short of the price cannot register, so they do not raise the
 			// floor either. The credit that reaches the price is what counts them.
 			let eve = AccountOrPerson::Account(EVE);
 			NftCredits::note_private_credit(GAME, &eve);
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_players, 4);
+			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 4);
 			NftCredits::note_private_credit(GAME, &eve);
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_players, 5);
+			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 5);
 
 			// Counted once, however many more credits they earn.
 			NftCredits::note_private_credit(GAME, &eve);
-			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_players, 5);
+			assert_eq!(PrivateGames::<Test>::get(GAME).unwrap().eligible_claimants, 5);
 		});
 	}
 

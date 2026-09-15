@@ -110,7 +110,7 @@ impl<T: Config> Pallet<T> {
 				registration_ends: player_process_end
 					.saturating_add(T::PrivateRegistrationSeconds::get()),
 				key_count: 0,
-				eligible_players: 0,
+				eligible_claimants: 0,
 				phase: PrivateGamePhase::Building { included: 0, failures: 0 },
 			},
 		);
@@ -138,7 +138,7 @@ impl<T: Config> Pallet<T> {
 			return;
 		}
 		PrivateGames::<T>::mutate(game_index, |info| match info {
-			Some(info) => info.eligible_players = info.eligible_players.saturating_add(1),
+			Some(info) => info.eligible_claimants = info.eligible_claimants.saturating_add(1),
 			None => log::error!(
 				target: LOG_TARGET,
 				"Private credit noted for game {game_index}, which has no private path",
@@ -154,7 +154,7 @@ impl<T: Config> Pallet<T> {
 	/// game far larger than the absolute one: a group registering to fill one target's set has
 	/// to grow with the game.
 	fn private_ring_floor(info: &PrivateGameInfo) -> u32 {
-		let share = T::MinPrivateRingParticipation::get().mul_ceil(info.eligible_players);
+		let share = T::MinPrivateRingParticipation::get().mul_ceil(info.eligible_claimants);
 
 		T::MinPrivateRingKeys::get().max(share).min(T::MaxPrivateRingKeys::get())
 	}
