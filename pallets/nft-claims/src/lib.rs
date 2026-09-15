@@ -153,7 +153,7 @@
 //! A private game's tree is unclaimable once its ring arrives: the game reaches no second
 //! outcome, and [`Pallet::claim`] refuses a tree that names slots unless the game was abandoned. A
 //! delivery from then on is refused, the one refusal this chain makes before a tree's deadline,
-//! and [`Event::CreditTreePrivateRingOutcome`] reports it. Only a tree that arrived before the
+//! and [`Event::CreditTreeSupersededByRing`] reports it. Only a tree that arrived before the
 //! ring is stored, and the sweep removes it.
 //!
 //! [`Pallet::sweep_expired_trees`] performs the expiry, and this pallet's offchain worker submits
@@ -743,11 +743,10 @@ pub mod pallet {
 		/// having closed. No claim of the game is taken from now on, and none was taken since
 		/// the window closed.
 		PrivateRingClosed { game_index: GameIdx },
-		/// A tree arrived for `block` whose private game had reached the ring outcome, so this
-		/// chain did not store it. Those credits mint through the ring or not at all, and the
-		/// tree would take no claim on either path. It is filed for no expiry, so no
-		/// [`Event::CreditTreesExpired`] ever counts it.
-		CreditTreePrivateRingOutcome { block: CreditTreeBlock },
+		/// The tree for `block` was dropped, its private game holding a ring. Those credits mint
+		/// through the ring or not at all, and the tree would take no claim on either path. It is
+		/// filed for no expiry, so no [`Event::CreditTreesExpired`] ever counts it.
+		CreditTreeSupersededByRing { block: CreditTreeBlock },
 		/// `game_index` built no ring, so its credits mint over the public path from now on.
 		/// `key_count` is how many claimants had registered for the ring it did not build.
 		PrivateGameAbandoned { game_index: GameIdx, key_count: u32 },
@@ -917,9 +916,7 @@ pub mod pallet {
 						PrivateGameEnds::<T>::get(update.tree.game_index) ==
 							Some(PrivateGameEnd::Closed))
 				{
-					Self::deposit_event(Event::CreditTreePrivateRingOutcome {
-						block: update.block,
-					});
+					Self::deposit_event(Event::CreditTreeSupersededByRing { block: update.block });
 					continue;
 				}
 

@@ -3178,7 +3178,7 @@ mod private_claims {
 			assert_eq!(
 				nft_claims_events(),
 				vec![
-					Event::CreditTreePrivateRingOutcome { block: BLOCK + 1 },
+					Event::CreditTreeSupersededByRing { block: BLOCK + 1 },
 					Event::CreditTreesReceived { count: 1, stored: 0 },
 				]
 			);
@@ -3225,9 +3225,7 @@ mod private_claims {
 				batch(vec![private_update(BLOCK + 1)])
 			));
 			assert!(!CreditTrees::<Test>::contains_key(BLOCK + 1));
-			System::assert_has_event(
-				Event::CreditTreePrivateRingOutcome { block: BLOCK + 1 }.into(),
-			);
+			System::assert_has_event(Event::CreditTreeSupersededByRing { block: BLOCK + 1 }.into());
 
 			// The stored tree goes at its own deadline, counted as unclaimed credits.
 			set_now(due_at(1_000 + BLOCK));
