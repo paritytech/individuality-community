@@ -232,7 +232,6 @@ pub type Barrier = TrailingSetTopicAsId<
 					// Parent and its pluralities get free execution.
 					AllowExplicitUnpaidExecutionFrom<(
 						ParentOrParentsPlurality,
-						Equals<AssetHubLocation>,
 						AssetHubPlurality,
 						Equals<NextAhLocation>,
 					)>,
