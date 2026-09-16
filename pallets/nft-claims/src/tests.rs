@@ -2415,7 +2415,7 @@ mod private_claims {
 	use super::*;
 	use crate::{
 		AuthorizeInvalidity, ClosingBlock, CollectionMinter, CollectionMinters, Error,
-		ItemSelection, PrivateClaimCount, PrivateClaimTally, PrivateGameEnd, PrivateGameEnds,
+		ItemSelection, PrivateGameEnd, PrivateGameEnds,
 		PrivateRingCloses, PrivateRingRoots, PrivateRings, SpentPrivateClaims, PRIVATE_CLOSE_ITEMS,
 	};
 	use codec::{Decode, Encode};
@@ -2994,44 +2994,6 @@ mod private_claims {
 			assert_eq!(
 				authorize(1, alias, proof, COLLECTION, PURSE),
 				Err(AuthorizeInvalidity::UnknownPrivateRing.into())
-			);
-		});
-	}
-
-	#[test]
-	fn the_block_cap_bounds_the_verifications() {
-		new_test_ext().execute_with(|| {
-			let members = [member(1), member(2), member(3)];
-			let keys = members.iter().map(|(_, key)| *key).collect::<Vec<_>>();
-			store_ring(1, &keys);
-
-			// Two per block in the mock, so the third is held back rather than verified.
-			for (index, (secret, _)) in members.iter().take(2).enumerate() {
-				let purse = PURSE + index as u64;
-				let (proof, alias) = proof(secret, &keys, 1, purse);
-				assert_ok!(claim(1, alias, proof, COLLECTION, purse));
-			}
-
-			// `Future` and not a custom invalidity. The claim is valid and only waits for a block
-			// with room, so the pool keeps it.
-			let (proof, alias) = proof(&members[2].0, &keys, 1, PURSE + 2);
-			assert_eq!(
-				authorize(1, alias, proof.clone(), COLLECTION, PURSE + 2),
-				Err(InvalidTransaction::Future.into())
-			);
-
-			// The allowance reopens with the next block. The count stays filed under the block
-			// that ran it, which is what makes it spent.
-			let now = System::block_number();
-			assert_eq!(
-				PrivateClaimTally::<Test>::get(),
-				PrivateClaimCount { block: now, claims: 2 }
-			);
-			System::set_block_number(now + 1);
-			assert_ok!(claim(1, alias, proof, COLLECTION, PURSE + 2));
-			assert_eq!(
-				PrivateClaimTally::<Test>::get(),
-				PrivateClaimCount { block: now + 1, claims: 1 }
 			);
 		});
 	}

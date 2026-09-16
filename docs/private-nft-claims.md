@@ -112,9 +112,8 @@ sequenceDiagram
 
 A claim carries no signed origin on purpose: the fee payer would be the strongest link a claim
 leaks, since two claims from one account are two claims by one member. What bounds the call instead
-is the proof, which nobody outside the ring can make, plus the alias as the pool's `provides` tag
-and `MaxPrivateClaimsPerBlock` as a per-block cap. A claim past the cap is
-`InvalidTransaction::Future` and stays in the pool.
+is the proof, which nobody outside the ring can make, plus the alias as the pool's `provides` tag.
+The weight of a claim is what holds a burst of them to the block.
 
 ## Tiers and nullifiers
 
@@ -206,7 +205,6 @@ ladder for one already abandoned (`PrivateOutcomeConflict`).
 | `PrivateRingExponent` | both | `R2e10`: ring capacity, 767 keys |
 | `PrivateKeysPerBuild` | `pallet-nft-credits` | 8: keys pushed per offchain-worker call |
 | `MaxPrivateRingTiers` | both | 15: tiers one ladder carries, what a full attendance of the reference game earns. Both chains bound it: the game chain builds no more, the claims chain decodes no more |
-| `MaxPrivateClaimsPerBlock` | `pallet-nft-claims` | 8: ring verifications per block |
 | `PrivateClaimDelay` | `pallet-nft-claims` | 5 minutes: from a ladder arriving to its claims opening |
 | `PrivateClaimWindow` | `pallet-nft-claims` | 30 days: how long a game's claims are taken |
 
@@ -231,11 +229,6 @@ claimant spends up the ladder and stops where the set gets too small for them.
 
 A game's tier counters live in its record, one per credit it can award, and each award moves a
 claimant up one tier. The counts need no integrity test, being derived from the game's own shape.
-The runtime's own bounds are asserted instead. The claims chain holds
-`MaxPrivateRingKeys * MaxPrivateRingTiers` to what one claim window serves at
-`MaxPrivateClaimsPerBlock` a block, because a claim past a closed window is dropped from the pool.
-The bound is loose: a game reaches it only if every registrant earned the most the
-ladder pays.
 
 Whether a delivery fits the claims channel is checked before every delivery rather than asserted,
 because only chain state knows the channel's `max_message_size`, and a message that does not fit is

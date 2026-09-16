@@ -94,40 +94,6 @@ pub struct CollectionMinter<AccountId> {
 /// closing block to the latest.
 pub type ClosingBlock = BigEndianU64;
 
-/// How many private claims `block` ran, up to `MaxPrivateClaimsPerBlock`.
-///
-/// A count filed under an earlier block stands for zero, so every block opens a fresh allowance
-/// without a reset writing to it.
-#[derive(
-	Encode,
-	Decode,
-	DecodeWithMemTracking,
-	MaxEncodedLen,
-	TypeInfo,
-	Debug,
-	Clone,
-	PartialEq,
-	Eq,
-	Default,
-)]
-pub struct PrivateClaimCount<BlockNumber> {
-	/// The block the claims ran in.
-	pub block: BlockNumber,
-	/// How many private claims that block ran.
-	pub claims: u32,
-}
-
-impl<BlockNumber: Eq> PrivateClaimCount<BlockNumber> {
-	/// How many private claims `block` has run so far.
-	pub fn claims_in(&self, block: &BlockNumber) -> u32 {
-		if self.block == *block {
-			self.claims
-		} else {
-			0
-		}
-	}
-}
-
 /// One game's private claim ladder, as the game chain delivered it, with the window its claims
 /// are made in.
 ///

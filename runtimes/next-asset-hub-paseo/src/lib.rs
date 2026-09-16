@@ -2215,10 +2215,6 @@ impl indiv_pallet_nft_claims::Config for Runtime {
 	// The game chain sends one ring per message, a ring root being far larger than a Merkle root.
 	// The slack lets it batch them later without this chain being upgraded first.
 	type MaxPrivateRingsPerMessage = ConstU32<4>;
-	// A ring VRF verification costs about 250 ms of the block's compute, so a block gives at most
-	// eight of them to private claims. A claim past the cap is rejected, and its sender retries
-	// in a later block.
-	type MaxPrivateClaimsPerBlock = ConstU32<8>;
 	// Five minutes, so every member's claims open in the same block and a wallet has time to see
 	// the ring and pick a moment inside the window. Claiming first says nothing about who claimed.
 	type PrivateClaimDelay = PrivateClaimDelay;

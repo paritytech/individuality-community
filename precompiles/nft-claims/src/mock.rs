@@ -278,7 +278,6 @@ impl indiv_pallet_nft_claims::Config for Test {
 	type PrivateRingExponent = PrivateRingExponent;
 	type PrivateClaimNetworkSuffix = PrivateClaimNetworkSuffix;
 	type MaxPrivateRingsPerMessage = ConstU32<4>;
-	type MaxPrivateClaimsPerBlock = ConstU32<8>;
 	type PrivateClaimDelay = ConstU64<1>;
 	type PrivateClaimWindow = ConstU64<100>;
 	// Small, so a game's claims fit the mock's narrow claim window.

@@ -81,10 +81,6 @@
 //! carries no signer and pays no fee, a fee payer being an account that ties together the claims
 //! it funded. `authorize` verifies, and the dispatch spends the alias it matched.
 //!
-//! A ring proof costs far more to verify than a Merkle path, so
-//! [`Config::MaxPrivateClaimsPerBlock`] bounds how many one block runs. A claim past the cap stays
-//! in the pool for a block with room.
-//!
 //! ## The claim window
 //!
 //! A ladder's claims run in one window: they open [`Config::PrivateClaimDelay`] after the ladder
@@ -504,14 +500,6 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxPrivateRingsPerMessage: Get<u32>;
 
-		/// The most private claims one block executes.
-		///
-		/// A ring VRF verification is far heavier than a Merkle path, so this keeps a burst of
-		/// them inside the block budget. A claim past the cap is rejected, not queued, and its
-		/// sender retries in a later block.
-		#[pallet::constant]
-		type MaxPrivateClaimsPerBlock: Get<u32>;
-
 		/// Blocks between a private game's ring arriving and its claims opening.
 		///
 		/// Every member's claims open in the same block, so claiming early says nothing about who
@@ -542,9 +530,7 @@ pub mod pallet {
 		/// bounds.
 		///
 		/// This duplicates a constant of the game chain's runtime, as
-		/// [`Config::PrivateRingExponent`] does. Only the `integrity_test` reads it: a game's
-		/// claims are its keys times its tiers and they all have to fit
-		/// [`Config::PrivateClaimWindow`] at [`Config::MaxPrivateClaimsPerBlock`] a block. Keep it
+		/// [`Config::PrivateRingExponent`] does. Keep it
 		/// in step with the game chain's `MaxPrivateRingKeys`.
 		#[pallet::constant]
 		type MaxPrivateRingKeys: Get<u32>;
@@ -676,12 +662,6 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type PrivateRingCloses<T: Config> =
 		StorageDoubleMap<_, Identity, ClosingBlock, Twox64Concat, GameIdx, (), OptionQuery>;
-
-	/// How many private claims the last block to run one ran, against
-	/// [`Config::MaxPrivateClaimsPerBlock`].
-	#[pallet::storage]
-	pub type PrivateClaimTally<T: Config> =
-		StorageValue<_, PrivateClaimCount<BlockNumberFor<T>>, ValueQuery>;
 
 	/// The collections whose owners accept claims, each bound to the registering owner and the
 	/// [`ItemSelection`] deciding the item. A collection with no entry cannot be claimed into.
@@ -856,9 +836,9 @@ pub mod pallet {
 	/// Why a `claim_private` submission, or one of this pallet's offchain worker submissions, is
 	/// not valid.
 	///
-	/// Reported as [`InvalidTransaction::Custom`], so a caller can tell the causes apart. The
-	/// block's allowance is the exception and reports [`InvalidTransaction::Future`]: the claim is
-	/// valid and only waits for a block with room, so the pool keeps it.
+	/// Reported as [`InvalidTransaction::Custom`], so a caller can tell the causes apart. A claim
+	/// made before its window opens is the exception and reports [`InvalidTransaction::Future`]:
+	/// the claim is valid and only waits for the opening block, so the pool keeps it.
 	#[repr(u8)]
 	pub enum AuthorizeInvalidity {
 		/// No ladder is held for the game the claim names, or none that holds the tier it names.
@@ -1225,21 +1205,14 @@ pub mod pallet {
 			ensure_authorized(origin).map_err(|e| e.with_weight(base))?;
 
 			// `authorize` ran on this state in the same block: it verified the proof against the
-			// game's ring, matched `alias` to it, held the claim to the block's allowance and
-			// found the alias unspent. Spending the alias is all that is left.
+			// game's ring, matched `alias` to it and found the alias unspent. Spending the alias
+			// is all that is left.
 			let _ = proof;
 
-			// Both writes land before the contract calls below, so a claim that reenters with
-			// the same proof meets them in `authorize` and is refused. A failure below unwinds
-			// them with the rest of the dispatch.
+			// The write lands before the contract calls below, so a claim that reenters with the
+			// same proof meets it in `authorize` and is refused. A failure below unwinds it with
+			// the rest of the dispatch.
 			SpentPrivateClaims::<T>::insert(game_index, alias, ());
-			let now = frame_system::Pallet::<T>::block_number();
-			PrivateClaimTally::<T>::mutate(|count| {
-				*count = PrivateClaimCount {
-					claims: count.claims_in(&now).saturating_add(1),
-					block: now,
-				};
-			});
 
 			// The credit was spent on the game chain at registration, so the alias stands in for
 			// it as the entropy the item is picked with.
@@ -1449,21 +1422,6 @@ pub mod pallet {
 				),
 			);
 
-			// A registrant claims one tier per credit they earned and a claim past the window's
-			// close is dropped from the pool without a word. A runtime that raises the ring size
-			// or the tier cap past what the window serves forfeits the claims that do not fit.
-			// The product is loose: a game reaches it only if every registrant earned the most
-			// the ladder pays.
-			let window_claims = T::PrivateClaimWindow::get()
-				.saturated_into::<u64>()
-				.saturating_mul(u64::from(T::MaxPrivateClaimsPerBlock::get()));
-			let game_claims = u64::from(T::MaxPrivateRingKeys::get())
-				.saturating_mul(u64::from(T::MaxPrivateRingTiers::get()));
-			assert!(
-				game_claims <= window_claims,
-				"a game's private claims ({game_claims}) do not fit its window ({window_claims})",
-			);
-
 			// A claim reserves the selector's ceiling on top of its own worst case, whether or not
 			// the collection uses a contract. A worst case above the limit therefore blocks
 			// every claim, not only the contract-selected ones.
@@ -1521,12 +1479,6 @@ pub mod pallet {
 					.saturating_add(T::WeightInfo::authorize_claim_private())
 					.saturating_add(T::CollectionSelector::max_weight())
 					.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS)),
-			);
-
-			// A cap of zero takes no private claim at all.
-			assert!(
-				!T::MaxPrivateClaimsPerBlock::get().is_zero(),
-				"MaxPrivateClaimsPerBlock must be at least one",
 			);
 
 			// A window of no blocks closes before the block its claims open in, so every claim
@@ -1985,10 +1937,9 @@ pub mod pallet {
 		/// be able to arrive over the network.
 		///
 		/// A claim whose dispatch fails, on a minter contract that reverts or a collection with
-		/// no items, spends neither its alias nor the block's allowance and can be submitted
-		/// again for nothing. The alias is the `provides` tag and a member holds one alias per
-		/// tier, so the claims retried this way number no more than the claims those members
-		/// would make anyway.
+		/// no items, does not spend its alias and can be submitted again for nothing. The alias is
+		/// the `provides` tag and a member holds one alias per tier, so the claims retried this
+		/// way number no more than the claims those members would make anyway.
 		pub(crate) fn authorize_claim_private(
 			_source: TransactionSource,
 			game_index: &GameIdx,
@@ -1998,16 +1949,7 @@ pub mod pallet {
 			collection: &CollectionId,
 			mint_to: &T::AccountId,
 		) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
-			// The allowance is read before the proof, because checking it costs a verification
-			// itself. A count filed under an earlier block belongs to that block and leaves this
-			// one its full allowance. `Future` keeps the claim in the pool, a later block being
-			// what makes it valid.
 			let now = frame_system::Pallet::<T>::block_number();
-			let executed = PrivateClaimTally::<T>::get().claims_in(&now);
-			if executed >= T::MaxPrivateClaimsPerBlock::get() {
-				return Err(InvalidTransaction::Future.into());
-			}
-
 			let ring = PrivateRings::<T>::get(game_index)
 				.ok_or(AuthorizeInvalidity::UnknownPrivateRing)?;
 

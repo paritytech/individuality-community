@@ -165,14 +165,12 @@ parameter_types! {
 	/// Wider than a byte, so the tests cover a bitmap of more than one byte.
 	pub storage MaxCreditsPerTree: u32 = 12;
 	pub const MaxPrivateRingsPerMessage: u32 = 4;
-	/// Two, so a test fills the block's allowance with one claim to spare.
-	pub storage MaxPrivateClaimsPerBlock: u32 = 2;
 	/// Short, so a test steps over the delay and through the window in a few blocks.
 	pub storage PrivateClaimDelay: u64 = 2;
 	pub storage PrivateClaimWindow: u64 = 10;
-	/// Two, so a game's claims fit the mock's narrow window at its claim allowance.
+	/// Two, so a test builds a ladder over a handful of keys.
 	pub storage MaxPrivateRingKeys: u32 = 2;
-	/// Two, so a game's claims fit the mock's narrow window at its claim allowance.
+	/// Two, so a test walks a whole ladder in two claims.
 	pub storage MaxPrivateRingTiers: u32 = 2;
 	pub const PrivateRingExponent: indiv_support::traits::RingExponent =
 		indiv_support::traits::RingExponent::R2e9;
@@ -498,7 +496,6 @@ impl pallet_nft_claims::Config for Test {
 	type PrivateRingExponent = PrivateRingExponent;
 	type PrivateClaimNetworkSuffix = PrivateClaimNetworkSuffix;
 	type MaxPrivateRingsPerMessage = MaxPrivateRingsPerMessage;
-	type MaxPrivateClaimsPerBlock = MaxPrivateClaimsPerBlock;
 	type PrivateClaimDelay = PrivateClaimDelay;
 	type PrivateClaimWindow = PrivateClaimWindow;
 	type MaxPrivateRingKeys = MaxPrivateRingKeys;
