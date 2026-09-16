@@ -19,6 +19,12 @@
 //! Allows assets to be represented as fungible coins that can be transferred between peers,
 //! split, and consolidated using recyclers. Each instance wraps one asset at one coin unit; the
 //! same asset can be wrapped by several instances, one per unit.
+//!
+//! Dual-mode unload calls pay with a prepaid unload token or from the unloaded assets.
+//! The `UnloadToken` origin selects the fee mode at dispatch. These calls declare the
+//! component-wise maximum of both fee-mode weights in `#[pallet::weight]` and refund down to
+//! the mode actually run through `PostDispatchInfo`. Applicable deposit surcharges are added
+//! separately.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -2172,6 +2178,7 @@ pub mod pallet {
 			)
 		}
 
+		/// Weight of the `Prepaid` fee path of [`Call::unload_recycler_into_external_asset`].
 		pub(crate) fn unload_recycler_into_external_asset_prepaid_weight(
 			alias_count: usize,
 		) -> Weight {
@@ -2190,6 +2197,8 @@ pub mod pallet {
 			)
 		}
 
+		/// Weight of the `Prepaid` fee path of
+		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
 			alias_count: usize,
 			loaded_coin_count: usize,
@@ -2225,9 +2234,6 @@ pub mod pallet {
 		}
 
 		/// Weight of the `FromOutput` fee path of [`Call::unload_recycler_into_external_asset`].
-		///
-		/// Dual-mode unload calls charge the component-wise maximum of their fee-mode paths in
-		/// `#[pallet::weight]` and refund down to the mode actually run via `PostDispatchInfo`.
 		pub(crate) fn unload_recycler_into_external_asset_from_output_weight(
 			alias_count: usize,
 		) -> Weight {
@@ -2248,9 +2254,6 @@ pub mod pallet {
 
 		/// Weight of the `FromOutput` fee path of
 		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
-		///
-		/// Dual-mode unload calls charge the component-wise maximum of their fee-mode paths in
-		/// `#[pallet::weight]` and refund down to the mode actually run via `PostDispatchInfo`.
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
 			alias_count: usize,
 			loaded_coin_count: usize,
@@ -2271,19 +2274,14 @@ pub mod pallet {
 			)
 		}
 
-		/// Worst-case weight charged up front by the `#[pallet::weight]` annotation: the
-		/// component-wise maximum of the two fee-mode paths. The fee mode is only known at
-		/// dispatch (it lives in the `UnloadToken` origin), so the call refunds down to the
-		/// mode actually run via `PostDispatchInfo`, and a call is billed exactly the mode it
-		/// runs, never more.
+		/// Worst-case weight of [`Call::unload_recycler_into_external_asset`] over its fee modes.
 		pub(crate) fn unload_recycler_into_external_asset_max_weight(alias_count: usize) -> Weight {
 			Self::unload_recycler_into_external_asset_prepaid_weight(alias_count)
 				.max(Self::unload_recycler_into_external_asset_from_output_weight(alias_count))
 		}
 
-		/// Mode-independent base weight for
-		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
-		/// See [`Self::unload_recycler_into_external_asset_max_weight`].
+		/// Worst-case weight of [`Call::unload_recycler_into_external_asset_and_loaded_coins`] over
+		/// its fee modes.
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_max_weight(
 			alias_count: usize,
 			loaded_coin_count: usize,
@@ -2298,6 +2296,7 @@ pub mod pallet {
 			))
 		}
 
+		/// Weight of [`Call::unload_recycler_into_external_asset_non_anonymous`].
 		pub(crate) fn unload_recycler_into_external_asset_non_anonymous_weight(
 			alias_count: usize,
 		) -> Weight {
@@ -2340,6 +2339,7 @@ pub mod pallet {
 			)
 		}
 
+		/// Weight of the `FromOutput` fee path of [`Call::unload_recycler_into_coins`].
 		pub(crate) fn unload_recycler_into_coins_from_output_weight(
 			alias_count: usize,
 			destination_count: u32,
@@ -2361,9 +2361,6 @@ pub mod pallet {
 		}
 
 		/// Weight of the `Prepaid` fee path of [`Call::unload_recycler_into_coins`].
-		///
-		/// Dual-mode unload calls charge the component-wise maximum of their fee-mode paths in
-		/// `#[pallet::weight]` and refund down to the mode actually run via `PostDispatchInfo`.
 		pub(crate) fn unload_recycler_into_coins_prepaid_weight(
 			alias_count: usize,
 			destination_count: u32,
@@ -2384,8 +2381,7 @@ pub mod pallet {
 			)
 		}
 
-		/// Worst-case weight for [`Call::unload_recycler_into_coins`]. See
-		/// [`Self::unload_recycler_into_external_asset_max_weight`].
+		/// Worst-case weight of [`Call::unload_recycler_into_coins`] over its fee modes.
 		pub(crate) fn unload_recycler_into_coins_max_weight(
 			alias_count: usize,
 			destination_count: u32,
