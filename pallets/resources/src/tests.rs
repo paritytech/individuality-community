@@ -413,11 +413,10 @@ fn allowance_not_increased_on_duplicate_lite_register() {
 #[test]
 fn allowance_not_increased_on_failed_person_register_invalid_proof() {
 	new_test_ext().execute_with(|| {
-		let lite_account = id_to_account(1);
 		let person_origin = person_origin_for(10, 0, 0);
 		let lite_allowance = <Test as Config>::LitePersonStatementLimit::get();
 
-		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
+		let lite_account = register_lite(1);
 		assert_eq!(get_allowance(&lite_account), lite_allowance);
 
 		let invalid_proof = mock_lite_proof(id_to_account(2));
@@ -461,15 +460,10 @@ fn allowance_not_increased_on_failed_person_register_already_linked() {
 #[test]
 fn allowance_not_decreased_when_demote_not_expired() {
 	new_test_ext().execute_with(|| {
-		let lite_account = id_to_account(1);
-		let person_origin = person_origin_for(10, 0, 0);
 		let person_allowance = <Test as Config>::PersonStatementLimit::get();
 
-		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
-
-		let proof = mock_lite_proof(lite_account.clone());
 		set_time_sec(100);
-		assert_ok!(Resources::register_person(person_origin, lite_account.clone(), proof));
+		let lite_account = register_full_person(1, 10);
 		assert_eq!(get_allowance(&lite_account), person_allowance);
 
 		assert_noop!(
@@ -483,10 +477,9 @@ fn allowance_not_decreased_when_demote_not_expired() {
 #[test]
 fn allowance_not_decreased_when_demote_not_full_person() {
 	new_test_ext().execute_with(|| {
-		let lite_account = id_to_account(1);
 		let lite_allowance = <Test as Config>::LitePersonStatementLimit::get();
 
-		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
+		let lite_account = register_lite(1);
 		assert_eq!(get_allowance(&lite_account), lite_allowance);
 
 		assert_noop!(
@@ -569,7 +562,6 @@ fn statement_allowance_lifecycle() {
 #[test]
 fn touch_restores_allowance_for_demoted_person() {
 	new_test_ext().execute_with(|| {
-		let lite_account = id_to_account(1);
 		let person_id = 10;
 		let person_alias = id_to_alias(person_id);
 		let person_origin = person_origin_for(person_id, 0, 0);
@@ -579,9 +571,7 @@ fn touch_restores_allowance_for_demoted_person() {
 
 		// Register as lite person, then promote to full person.
 		set_time_sec(100);
-		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
-		let proof = mock_lite_proof(lite_account.clone());
-		assert_ok!(Resources::register_person(person_origin.clone(), lite_account.clone(), proof));
+		let lite_account = register_full_person(1, person_id);
 		assert_eq!(get_allowance(&lite_account), person_allowance);
 
 		// Let person auth expire and demote.
@@ -614,7 +604,6 @@ fn touch_restores_allowance_for_demoted_person() {
 #[test]
 fn touch_keeps_existing_allowance_for_non_demoted_person() {
 	new_test_ext().execute_with(|| {
-		let lite_account = id_to_account(1);
 		let person_id = 10;
 		let person_alias = id_to_alias(person_id);
 		let person_origin = person_origin_for(person_id, 0, 0);
@@ -623,9 +612,7 @@ fn touch_keeps_existing_allowance_for_non_demoted_person() {
 
 		// Register as lite person, then promote to full person.
 		set_time_sec(100);
-		assert_ok!(Resources::register_lite_person(lite_person_origin(1), comm_id(b"key1")));
-		let proof = mock_lite_proof(lite_account.clone());
-		assert_ok!(Resources::register_person(person_origin.clone(), lite_account.clone(), proof));
+		let lite_account = register_full_person(1, person_id);
 		assert_eq!(get_allowance(&lite_account), person_allowance);
 
 		// Touch without demotion — allowance should remain unchanged.
@@ -713,14 +700,31 @@ mod migration {
 		assert_eq!(Resources::on_chain_storage_version(), StorageVersion::new(1));
 	}
 
+	/// Runs one migration step with `limit` and commits it, as a block does.
+	fn step(
+		ext: &mut sp_io::TestExternalities,
+		cursor: Option<Cursor<AccountId32>>,
+		limit: Weight,
+	) -> Option<Cursor<AccountId32>> {
+		let cursor = ext.execute_with(|| {
+			MigrateV0ToV1::<Test>::step(cursor, &mut WeightMeter::with_limit(limit))
+				.expect("step succeeds")
+		});
+		ext.commit_all().expect("step commits");
+		cursor
+	}
+
 	/// Drives the migration from `cursor` to completion with `limit` per step and returns the
 	/// step count.
-	fn run(mut cursor: Option<Cursor<AccountId32>>, limit: Weight) -> u32 {
+	fn run(
+		ext: &mut sp_io::TestExternalities,
+		mut cursor: Option<Cursor<AccountId32>>,
+		limit: Weight,
+	) -> u32 {
 		let mut steps = 0;
 		loop {
 			steps += 1;
-			cursor = MigrateV0ToV1::<Test>::step(cursor, &mut WeightMeter::with_limit(limit))
-				.expect("step succeeds");
+			cursor = step(ext, cursor, limit);
 			if cursor.is_none() {
 				return steps;
 			}
@@ -733,16 +737,16 @@ mod migration {
 		let person = id_to_account(2);
 		let alias = id_to_alias(10);
 		let person_credibility = Credibility::Person { alias, last_update: 100, demoted: false };
-		seeded(|| {
+		let mut ext = seeded(|| {
 			seed_old_consumer(&lite, Credibility::Lite);
 			seed_old_consumer(&person, person_credibility.clone());
 			seed_username_storage(&[lite.clone(), person.clone(), id_to_account(3)]);
-		})
-		.execute_with(|| {
-			// Three items per step, so the migration resumes from its cursor several times.
-			let steps = run(None, translate_weight().saturating_mul(3));
+		});
+		// Three translations per step, so the migration resumes from its cursor several times.
+		let steps = run(&mut ext, None, translate_weight().saturating_mul(3));
+		assert!(steps > 1, "migration should span several steps, took {steps}");
 
-			assert!(steps > 1, "migration should span several steps, took {steps}");
+		ext.execute_with(|| {
 			assert_eq!(
 				Consumers::<Test>::get(&lite),
 				Some(ConsumerInfo {
@@ -764,25 +768,20 @@ mod migration {
 	#[test]
 	fn v1_resumes_clearing_a_map_across_steps() {
 		let owners = [id_to_account(1), id_to_account(2), id_to_account(3)];
-		seeded(|| seed_username_storage(&owners)).execute_with(|| {
-			// No consumers, so the first step moves on to `UsernameOwnerOf` and clears two of its
-			// three entries before the meter runs out.
-			let limit = translate_weight().saturating_add(clear_weight().saturating_mul(2));
+		let mut ext = seeded(|| seed_username_storage(&owners));
+		// No consumers, so the first step moves on to `UsernameOwnerOf` and clears two of its
+		// three entries before the meter runs out.
+		let limit = translate_weight().saturating_add(clear_weight().saturating_mul(2));
 
-			let cursor = MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::with_limit(limit))
-				.expect("step succeeds");
+		let cursor = step(&mut ext, None, limit);
 
-			assert!(
-				matches!(cursor, Some(Cursor::UsernameOwnerOf(Some(_)))),
-				"expected a position inside UsernameOwnerOf, got {cursor:?}"
-			);
-			assert_eq!(v0::UsernameOwnerOf::<Test>::iter_keys().count(), 1);
+		assert_eq!(cursor, Some(Cursor::UsernameOwnerOf));
+		ext.execute_with(|| assert_eq!(v0::UsernameOwnerOf::<Test>::iter_keys().count(), 1));
 
-			let steps = run(cursor, limit);
+		let steps = run(&mut ext, cursor, limit);
 
-			assert!(steps > 1, "clearing should span several steps, took {steps}");
-			assert_username_storage_empty();
-		});
+		assert!(steps > 1, "clearing should span several steps, took {steps}");
+		ext.execute_with(assert_username_storage_empty);
 	}
 
 	#[test]
@@ -852,7 +851,7 @@ mod migration {
 		new_test_ext().execute_with(|| {
 			StorageVersion::new(1).put::<Resources>();
 			let lite = register_lite(1);
-			seed_username_storage(&[lite.clone()]);
+			seed_username_storage(std::slice::from_ref(&lite));
 
 			let cursor =
 				MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::new()).expect("step succeeds");
@@ -3272,8 +3271,9 @@ mod dynamic_parameters {
 	fn identifier(collection: MembershipCollection) -> &'static Identifier {
 		match collection {
 			MembershipCollection::People => indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER,
-			MembershipCollection::LitePeople =>
-				indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER,
+			MembershipCollection::LitePeople => {
+				indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER
+			},
 		}
 	}
 
@@ -3729,9 +3729,9 @@ mod dynamic_parameters {
 			let period_key = BigEndianU32::from(period);
 			SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(1), ());
 			set_time_sec(
-				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
-					LongTermStorageGraceWindow::get() as u64 +
-					1,
+				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64
+					+ LongTermStorageGraceWindow::get() as u64
+					+ 1,
 			);
 			let limit = LongTermStorageCleanupLimit::get();
 			let clear = |limit: u32| {
@@ -3764,9 +3764,9 @@ mod dynamic_parameters {
 				SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(i as u64), ());
 			}
 			set_time_sec(
-				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
-					LongTermStorageGraceWindow::get() as u64 +
-					1,
+				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64
+					+ LongTermStorageGraceWindow::get() as u64
+					+ 1,
 			);
 
 			// A lowered limit removes fewer entries per offchain-worker run.

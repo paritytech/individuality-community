@@ -926,7 +926,7 @@ mod benches {
 
 	#[benchmark]
 	fn migrate_v1_clear_username_entry() -> Result<(), BenchmarkError> {
-		use crate::migration::{v0, MigrateV0ToV1};
+		use crate::migration::v0;
 
 		let account: T::AccountId = whitelisted_caller();
 		let username: v0::Username = BoundedVec::truncate_from([b'a'; 32].to_vec());
@@ -934,7 +934,7 @@ mod benches {
 
 		#[block]
 		{
-			MigrateV0ToV1::<T>::clear_next::<_, v0::UsernameOwnerOf<T>>(None);
+			v0::UsernameOwnerOf::<T>::clear(1, None);
 		}
 
 		assert!(!v0::UsernameOwnerOf::<T>::contains_key(&username));

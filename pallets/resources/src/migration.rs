@@ -29,14 +29,10 @@ use frame_support::{
 	weights::WeightMeter,
 };
 use indiv_support::traits::CommunicationIdentifier;
-use sp_runtime::Saturating;
+use sp_io::KillStorageResult;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-resources::migration";
 const PALLET_MIGRATIONS_ID: &[u8; 22] = b"indiv-pallet-resources";
-
-/// The raw storage key of the last removed entry, the position to resume from. Keys of the cleared
-/// maps are at most 81 bytes: two `twox128` prefixes, a `blake2_128` hash and the encoded key.
-pub type RawCursor = BoundedVec<u8, ConstU32<128>>;
 
 /// Storage as it was while the pallet managed usernames.
 pub mod v0 {
@@ -96,25 +92,21 @@ pub mod v0 {
 pub enum Cursor<AccountId> {
 	/// Translating `Consumers`; holds the last translated account.
 	Consumers(Option<AccountId>),
-	/// Clearing `UsernameOwnerOf`; holds the last removed key.
-	UsernameOwnerOf(Option<RawCursor>),
-	/// Clearing `UsernameReservationQueue`; holds the last removed key.
-	UsernameReservationQueue(Option<RawCursor>),
-	/// Clearing `ReservationOf`; holds the last removed key.
-	ReservationOf(Option<RawCursor>),
+	/// Clearing `UsernameOwnerOf`.
+	UsernameOwnerOf,
+	/// Clearing `UsernameReservationQueue`.
+	UsernameReservationQueue,
+	/// Clearing `ReservationOf`.
+	ReservationOf,
 }
 
 /// Removes usernames from the pallet storage over as many blocks as needed.
 ///
 /// Translates every [`Consumers`] record to the shape without username fields, then clears the
 /// four username storage items that no longer exist in the pallet and bumps the storage version
-/// to 1. Each step does as much work as the weight meter allows, one item at a time. Every
-/// `ReservationOf` item also charges the two writes of the final step, which kills the reservation
-/// duration and bumps the storage version.
-///
-/// Map entries are removed one key at a time with `next_key` and `clear`. `clear_prefix` with a
-/// limit is not usable here: it ignores the cursor and does not see removals made earlier in the
-/// same block, so repeated calls remove the same entry again.
+/// to 1. Each step does as much work as the weight meter allows. Consumers are translated one at
+/// a time. Every `ReservationOf` item also charges the two writes of the final step, which kills
+/// the reservation duration and bumps the storage version.
 ///
 /// Single use: remove from the runtime once the upgrade carrying it is live.
 pub struct MigrateV0ToV1<T>(PhantomData<T>);
@@ -135,36 +127,52 @@ impl<T: Config> MigrateV0ToV1<T> {
 		Some(account)
 	}
 
-	/// Removes the first entry of `M` after `last`. Returns its key, or `None` when no entry
-	/// remains.
-	pub(crate) fn clear_next<V: FullCodec, M: StoragePrefixedMap<V>>(
-		last: Option<&RawCursor>,
-	) -> Option<RawCursor> {
-		let prefix = M::final_prefix();
-		let key = sp_io::storage::next_key(last.map_or(&prefix[..], |c| c.as_slice()))?;
-		if !key.starts_with(&prefix) {
-			return None;
-		}
-		sp_io::storage::clear(&key);
-		match RawCursor::try_from(key) {
-			Ok(key) => Some(key),
-			Err(_) => {
-				log::error!(
-					target: LOG_TARGET,
-					"removed key exceeds {} bytes, leaving the rest of the map in place",
-					<ConstU32<128> as Get<u32>>::get()
-				);
-				None
+	/// Translates the old-shape consumer record after `last` if `meter` allows. Returns whether no
+	/// old-shape record remains, or `Err(unit)` when the meter has no room for one.
+	fn translate_stage(
+		last: &mut Option<T::AccountId>,
+		meter: &mut WeightMeter,
+		unit: Weight,
+	) -> Result<bool, Weight> {
+		meter.try_consume(unit).map_err(|()| unit)?;
+		match Self::translate_next(last.as_ref()) {
+			Some(account) => {
+				*last = Some(account);
+				Ok(false)
 			},
+			None => Ok(true),
 		}
+	}
+
+	/// Clears as many entries of `M` as `meter` allows at `unit` weight each, in one `clear_prefix`
+	/// call. Returns whether the map is empty afterwards, or `Err(unit)` when the meter has no room
+	/// for one entry. A partial clear leaves no room for another entry, so the next call is in the
+	/// next step.
+	fn clear_stage<V: FullCodec, M: StoragePrefixedMap<V>>(
+		meter: &mut WeightMeter,
+		unit: Weight,
+	) -> Result<bool, Weight> {
+		let limit = meter.remaining().checked_div_per_component(&unit).unwrap_or(0);
+		let limit = u32::try_from(limit).unwrap_or(u32::MAX);
+		if limit == 0 {
+			return Err(unit);
+		}
+		let (removed, done) = match sp_io::storage::clear_prefix(&M::final_prefix(), Some(limit)) {
+			KillStorageResult::AllRemoved(removed) => (removed, true),
+			KillStorageResult::SomeRemaining(removed) => (removed, false),
+		};
+		// An empty map still costs the call.
+		meter.consume(unit.saturating_mul(u64::from(removed.max(1))));
+		Ok(done)
 	}
 
 	fn required_weight(cursor: &Cursor<T::AccountId>) -> Weight {
 		match cursor {
 			Cursor::Consumers(_) => T::WeightInfo::migrate_v1_translate_consumer(),
-			Cursor::UsernameOwnerOf(_) | Cursor::UsernameReservationQueue(_) =>
-				T::WeightInfo::migrate_v1_clear_username_entry(),
-			Cursor::ReservationOf(_) => T::WeightInfo::migrate_v1_clear_username_entry()
+			Cursor::UsernameOwnerOf | Cursor::UsernameReservationQueue => {
+				T::WeightInfo::migrate_v1_clear_username_entry()
+			},
+			Cursor::ReservationOf => T::WeightInfo::migrate_v1_clear_username_entry()
 				.saturating_add(<T as frame_system::Config>::DbWeight::get().writes(2)),
 		}
 	}
@@ -191,39 +199,32 @@ impl<T: Config> SteppedMigration for MigrateV0ToV1<T> {
 			None => Cursor::Consumers(None),
 		};
 
-		let mut items = 0u32;
+		let mut progressed = false;
 		loop {
-			let required = Self::required_weight(&cursor);
-			if meter.try_consume(required).is_err() {
+			let unit = Self::required_weight(&cursor);
+			let stage_done = match &mut cursor {
+				Cursor::Consumers(last) => Self::translate_stage(last, meter, unit),
+				Cursor::UsernameOwnerOf => {
+					Self::clear_stage::<_, v0::UsernameOwnerOf<T>>(meter, unit)
+				},
+				Cursor::UsernameReservationQueue => {
+					Self::clear_stage::<_, v0::UsernameReservationQueue<T>>(meter, unit)
+				},
+				Cursor::ReservationOf => Self::clear_stage::<_, v0::ReservationOf<T>>(meter, unit),
+			};
+			match stage_done {
 				// A step that did nothing cannot progress with this meter.
-				return if items == 0 {
-					Err(SteppedMigrationError::InsufficientWeight { required })
-				} else {
-					Ok(Some(cursor))
-				};
-			}
-			items.saturating_inc();
-			cursor = match cursor {
-				Cursor::Consumers(last) => match Self::translate_next(last.as_ref()) {
-					Some(account) => Cursor::Consumers(Some(account)),
-					None => Cursor::UsernameOwnerOf(None),
+				Err(required) if !progressed => {
+					return Err(SteppedMigrationError::InsufficientWeight { required })
 				},
-				Cursor::UsernameOwnerOf(at) => {
-					match Self::clear_next::<_, v0::UsernameOwnerOf<T>>(at.as_ref()) {
-						Some(at) => Cursor::UsernameOwnerOf(Some(at)),
-						None => Cursor::UsernameReservationQueue(None),
-					}
-				},
-				Cursor::UsernameReservationQueue(at) => {
-					match Self::clear_next::<_, v0::UsernameReservationQueue<T>>(at.as_ref()) {
-						Some(at) => Cursor::UsernameReservationQueue(Some(at)),
-						None => Cursor::ReservationOf(None),
-					}
-				},
-				Cursor::ReservationOf(at) => {
-					match Self::clear_next::<_, v0::ReservationOf<T>>(at.as_ref()) {
-						Some(at) => Cursor::ReservationOf(Some(at)),
-						None => {
+				Err(_) => return Ok(Some(cursor)),
+				Ok(false) => {},
+				Ok(true) => {
+					cursor = match cursor {
+						Cursor::Consumers(_) => Cursor::UsernameOwnerOf,
+						Cursor::UsernameOwnerOf => Cursor::UsernameReservationQueue,
+						Cursor::UsernameReservationQueue => Cursor::ReservationOf,
+						Cursor::ReservationOf => {
 							v0::UsernameReservationDuration::<T>::kill();
 							StorageVersion::new(1).put::<Pallet<T>>();
 							log::info!(target: LOG_TARGET, "username storage removed");
@@ -231,7 +232,8 @@ impl<T: Config> SteppedMigration for MigrateV0ToV1<T> {
 						},
 					}
 				},
-			};
+			}
+			progressed = true;
 		}
 	}
 
