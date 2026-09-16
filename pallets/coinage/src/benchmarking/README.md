@@ -3,9 +3,17 @@
 `proof_cache.rs` stores cached alias proofs used by coinage benchmarks.
 
 A ring-VRF proof takes over a second to create in WASM, and the unload
-benchmarks need up to `MaxConsolidation` of them per run. Without a warm
-cache a `frame-omni-bencher` run of the coinage pallet takes hours instead of
-minutes.
+benchmarks need up to `MaxConsolidation` of them per run. A warm cache avoids
+repeating that proof generation during benchmark setup.
+
+With a warm cache, the production-WASM smoke test at `--steps 2 --repeat 1
+--min-duration 0` took about three minutes on a local macOS host. This is not
+the duration of a full weight-generation run. The [successful CI command job
+on September 14, 2026](https://github.com/paritytech/individuality-community/actions/runs/34807856617)
+took about 7 hours 49 minutes, including setup and building, for
+`next-people-paseo` / `indiv_pallet_coinage` at `--steps 50 --repeat 20`.
+These are observed durations, not limits; the machine, build cache and proof
+cache coverage affect subsequent runs.
 
 A miss is logged at warn level as `alias proof cache miss`, so a run under
 `RUNTIME_LOG=warn` shows directly whether the cache still matches. A run that
