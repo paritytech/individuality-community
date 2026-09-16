@@ -107,7 +107,7 @@ jobs:
       environment: previewnet,paseo-next-v2
       runtime_asset_hub: artifact:e2e-runtime-wasm
       runtime_people: artifact:e2e-runtime-wasm
-      runs_on: parity-large-new
+      runs_on: parity-large
       # Only the two chains named above are upgraded. Every other chain stays at
       # whatever the fork took from the live network, which is what this build
       # would meet in a real deployment. To move more, set any of these:
@@ -146,7 +146,7 @@ jobs:
       - name: Run runtime upgrade Chopsticks suite
         uses: ./.github/actions/test-runtime-upgrade
   benchmark-runtime:
-    runs-on: ${{ matrix.runtime.runner }}
+    runs-on: parity-large
     timeout-minutes: 60
     if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
     strategy:
@@ -154,10 +154,8 @@ jobs:
         runtime:
           - name: next-people-paseo-runtime
             package: next-people-paseo-runtime
-            runner: parity-large-new
           - name: next-asset-hub-paseo-runtime
             package: next-asset-hub-paseo-runtime
-            runner: parity-large
 
     steps:
       - name: Install updates and protobuf-compiler
