@@ -1902,9 +1902,10 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recycler_into_coin_16() -> Result<(), BenchmarkError> {
-		let (call, dest) = prepare_unload_recycler_into_coin::<T>(
-			16.min(Pallet::<T>::max_aliases_per_coin_unload()),
-		);
+		if 16 > Pallet::<T>::max_aliases_per_coin_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, dest) = prepare_unload_recycler_into_coin::<T>(16);
 		#[block]
 		{
 			call()?;
@@ -1915,9 +1916,10 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recycler_into_coin_32() -> Result<(), BenchmarkError> {
-		let (call, dest) = prepare_unload_recycler_into_coin::<T>(
-			32.min(Pallet::<T>::max_aliases_per_coin_unload()),
-		);
+		if 32 > Pallet::<T>::max_aliases_per_coin_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, dest) = prepare_unload_recycler_into_coin::<T>(32);
 		#[block]
 		{
 			call()?;
@@ -2023,9 +2025,10 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recycler_into_external_asset_prepaid_16() -> Result<(), BenchmarkError> {
-		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(
-			16.min(Pallet::<T>::max_aliases_per_unload()),
-		);
+		if 16 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(16);
 		#[block]
 		{
 			call()?;
@@ -2036,9 +2039,10 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recycler_into_external_asset_prepaid_32() -> Result<(), BenchmarkError> {
-		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(
-			32.min(Pallet::<T>::max_aliases_per_unload()),
-		);
+		if 32 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_prepaid::<T>(32);
 		#[block]
 		{
 			call()?;
@@ -2186,9 +2190,10 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recycler_into_external_asset_from_output_16() -> Result<(), BenchmarkError> {
-		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(
-			16.min(Pallet::<T>::max_aliases_per_unload()),
-		);
+		if 16 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(16);
 		#[block]
 		{
 			call()?;
@@ -2199,9 +2204,10 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recycler_into_external_asset_from_output_32() -> Result<(), BenchmarkError> {
-		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(
-			32.min(Pallet::<T>::max_aliases_per_unload()),
-		);
+		if 32 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, balances) = prepare_unload_recycler_into_external_asset_from_output::<T>(32);
 		#[block]
 		{
 			call()?;
@@ -2402,8 +2408,11 @@ mod benches {
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
+		if 16 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			16.min(Pallet::<T>::max_aliases_per_unload()),
+			16,
 			d,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
@@ -2419,8 +2428,11 @@ mod benches {
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
+		if 32 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			32.min(Pallet::<T>::max_aliases_per_unload()),
+			32,
 			d,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
@@ -2531,8 +2543,11 @@ mod benches {
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_16(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
+		if 16 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			16.min(Pallet::<T>::max_aliases_per_unload()),
+			16,
 			d,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
@@ -2548,8 +2563,11 @@ mod benches {
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_32(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
+		if 32 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
-			32.min(Pallet::<T>::max_aliases_per_unload()),
+			32,
 			d,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
@@ -2663,9 +2681,11 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recycler_into_external_asset_non_anonymous_16() -> Result<(), BenchmarkError> {
-		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_non_anonymous::<T>(
-			16.min(Pallet::<T>::max_aliases_per_unload()),
-		);
+		if 16 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, dest, expected) =
+			prepare_unload_recycler_into_external_asset_non_anonymous::<T>(16);
 		#[block]
 		{
 			call()?;
@@ -2676,9 +2696,11 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recycler_into_external_asset_non_anonymous_32() -> Result<(), BenchmarkError> {
-		let (call, dest, expected) = prepare_unload_recycler_into_external_asset_non_anonymous::<T>(
-			32.min(Pallet::<T>::max_aliases_per_unload()),
-		);
+		if 32 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, dest, expected) =
+			prepare_unload_recycler_into_external_asset_non_anonymous::<T>(32);
 		#[block]
 		{
 			call()?;
@@ -2788,9 +2810,11 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recyclers_into_external_asset_non_anonymous_16() -> Result<(), BenchmarkError> {
-		let (call, dest, expected) = prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(
-			16.min(T::MaxConsolidation::get()),
-		);
+		if 16 > T::MaxConsolidation::get() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, dest, expected) =
+			prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(16);
 		#[block]
 		{
 			call()?;
@@ -2801,9 +2825,11 @@ mod benches {
 
 	#[benchmark]
 	fn unload_recyclers_into_external_asset_non_anonymous_32() -> Result<(), BenchmarkError> {
-		let (call, dest, expected) = prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(
-			32.min(T::MaxConsolidation::get()),
-		);
+		if 32 > T::MaxConsolidation::get() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, dest, expected) =
+			prepare_unload_recyclers_into_external_asset_non_anonymous::<T>(32);
 		#[block]
 		{
 			call()?;
@@ -3185,11 +3211,11 @@ mod benches {
 	fn unload_recycler_into_coins_from_output_16(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
-			16.min(Pallet::<T>::max_aliases_per_unload()),
-			d,
-			UnloadFeeBenchMode::FromOutput,
-		)?;
+		if 16 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(16, d, UnloadFeeBenchMode::FromOutput)?;
 		#[block]
 		{
 			call()?;
@@ -3202,11 +3228,11 @@ mod benches {
 	fn unload_recycler_into_coins_from_output_32(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
-			32.min(Pallet::<T>::max_aliases_per_unload()),
-			d,
-			UnloadFeeBenchMode::FromOutput,
-		)?;
+		if 32 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(32, d, UnloadFeeBenchMode::FromOutput)?;
 		#[block]
 		{
 			call()?;
@@ -3302,11 +3328,11 @@ mod benches {
 	fn unload_recycler_into_coins_prepaid_16(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
-			16.min(Pallet::<T>::max_aliases_per_unload()),
-			d,
-			UnloadFeeBenchMode::Prepaid,
-		)?;
+		if 16 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(16, d, UnloadFeeBenchMode::Prepaid)?;
 		#[block]
 		{
 			call()?;
@@ -3319,11 +3345,11 @@ mod benches {
 	fn unload_recycler_into_coins_prepaid_32(
 		d: Linear<1, { T::MaxSplitOutputs::get() }>,
 	) -> Result<(), BenchmarkError> {
-		let (call, expectation) = prepare_unload_recycler_into_coins::<T>(
-			32.min(Pallet::<T>::max_aliases_per_unload()),
-			d,
-			UnloadFeeBenchMode::Prepaid,
-		)?;
+		if 32 > Pallet::<T>::max_aliases_per_unload() {
+			return Err(BenchmarkError::Skip);
+		}
+		let (call, expectation) =
+			prepare_unload_recycler_into_coins::<T>(32, d, UnloadFeeBenchMode::Prepaid)?;
 		#[block]
 		{
 			call()?;
@@ -4572,6 +4598,83 @@ mod benches {
 		assert!(PaidTokenCollectionsCreated::<T>::contains_key(BigEndianPeriod::from(period)));
 
 		Ok(())
+	}
+
+	#[cfg(test)]
+	mod fixed_sample_tests {
+		use super::*;
+		use crate::mock::{new_test_ext_bench, Test};
+		use frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
+		use frame_support::assert_ok;
+
+		#[test]
+		fn fixed_samples_run_at_the_limit_and_skip_above_it() {
+			assert_eq!(Pallet::<Test>::max_aliases_per_unload(), 16);
+			let samples: [(_, _, &[(BenchmarkParameter, u32)]); 9] = [
+				(
+					SelectedBenchmark::unload_recycler_into_coin_16,
+					SelectedBenchmark::unload_recycler_into_coin_32,
+					&[],
+				),
+				(
+					SelectedBenchmark::unload_recycler_into_external_asset_prepaid_16,
+					SelectedBenchmark::unload_recycler_into_external_asset_prepaid_32,
+					&[],
+				),
+				(
+					SelectedBenchmark::unload_recycler_into_external_asset_from_output_16,
+					SelectedBenchmark::unload_recycler_into_external_asset_from_output_32,
+					&[],
+				),
+				(
+					SelectedBenchmark::unload_recycler_into_external_asset_non_anonymous_16,
+					SelectedBenchmark::unload_recycler_into_external_asset_non_anonymous_32,
+					&[],
+				),
+				(
+					SelectedBenchmark::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16,
+					SelectedBenchmark::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32,
+					&[(BenchmarkParameter::d, 1)],
+				),
+				(
+					SelectedBenchmark::unload_recycler_into_external_asset_and_loaded_coins_from_output_16,
+					SelectedBenchmark::unload_recycler_into_external_asset_and_loaded_coins_from_output_32,
+					&[(BenchmarkParameter::d, 1)],
+				),
+				(
+					SelectedBenchmark::unload_recycler_into_coins_prepaid_16,
+					SelectedBenchmark::unload_recycler_into_coins_prepaid_32,
+					&[(BenchmarkParameter::d, 1)],
+				),
+				(
+					SelectedBenchmark::unload_recycler_into_coins_from_output_16,
+					SelectedBenchmark::unload_recycler_into_coins_from_output_32,
+					&[(BenchmarkParameter::d, 1)],
+				),
+				(
+					SelectedBenchmark::unload_recyclers_into_external_asset_non_anonymous_16,
+					SelectedBenchmark::unload_recyclers_into_external_asset_non_anonymous_32,
+					&[],
+				),
+			];
+
+			for (at_limit, above_limit, components) in samples {
+				new_test_ext_bench().execute_with(|| {
+					assert_ok!(<SelectedBenchmark as BenchmarkingSetup<Test>>::unit_test_instance(
+						&at_limit, components
+					));
+				});
+				new_test_ext_bench().execute_with(|| {
+					assert!(matches!(
+						<SelectedBenchmark as BenchmarkingSetup<Test>>::unit_test_instance(
+							&above_limit,
+							components
+						),
+						Err(BenchmarkError::Skip)
+					));
+				});
+			}
+		}
 	}
 
 	#[cfg(test)]
