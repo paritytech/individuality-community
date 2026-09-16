@@ -41,7 +41,7 @@ use parachains_common::{
 	},
 	TREASURY_PALLET_ID,
 };
-use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, COLLECTIVES_ID, NEXT_ASSET_HUB_ID};
+use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, COLLECTIVES_ID};
 use polkadot_parachain_primitives::primitives::Sibling;
 use sp_runtime::traits::{AccountIdConversion, TryConvertInto};
 use xcm::latest::prelude::*;
@@ -82,7 +82,6 @@ parameter_types! {
 	pub UniversalLocationNetworkId: NetworkId = UniversalLocation::get().global_consensus().unwrap();
 	pub CheckingAccount: AccountId = PolkadotXcm::check_account();
 	pub AssetHubLocation: Location = Location::new(1, [Parachain(ASSET_HUB_ID)]);
-	pub NextAhLocation: Location = Location::new(1, [Parachain(NEXT_ASSET_HUB_ID)]);
 }
 
 pub type PriceForParentDelivery = polkadot_runtime_common::xcm_sender::ExponentialPrice<
@@ -185,9 +184,9 @@ pub type XcmOriginToTransactDispatchOrigin = (
 	// Native converter for sibling Parachains; will convert to a `SiblingPara` origin when
 	// recognized.
 	SiblingParachainAsNative<cumulus_pallet_xcm::Origin, RuntimeOrigin>,
-	// Superuser converter for the AH-next location. This will allow it to issue a transaction from
+	// Superuser converter for Asset Hub. This will allow it to issue a transaction from
 	// the Root origin.
-	LocationAsSuperuser<Equals<NextAhLocation>, RuntimeOrigin>,
+	LocationAsSuperuser<Equals<AssetHubLocation>, RuntimeOrigin>,
 	// Native signed account converter; this just converts an `AccountId32` origin into a normal
 	// `RuntimeOrigin::Signed` origin of the same 32-byte value.
 	SignedAccountId32AsNative<RelayNetwork, RuntimeOrigin>,
@@ -233,7 +232,7 @@ pub type Barrier = TrailingSetTopicAsId<
 					AllowExplicitUnpaidExecutionFrom<(
 						ParentOrParentsPlurality,
 						AssetHubPlurality,
-						Equals<NextAhLocation>,
+						Equals<AssetHubLocation>,
 					)>,
 					// Subscriptions for version tracking are OK.
 					AllowSubscriptionsFrom<ParentRelayOrSiblingParachains>,
