@@ -1508,6 +1508,30 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 3667).saturating_mul(n.into()))
 	}
+	/// Storage: `System::Account` (r:3 w:3)
+	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `Coinage::Instances` (r:1 w:0)
+	/// Proof: `Coinage::Instances` (`max_values`: None, `max_size`: Some(1926), added: 4401, mode: `MaxEncodedLen`)
+	/// Storage: `Coinage::RecyclersArchives` (r:1 w:1)
+	/// Proof: `Coinage::RecyclersArchives` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
+	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
+	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(901), added: 3376, mode: `MaxEncodedLen`)
+	/// Storage: `AssetsHolder::BalancesOnHold` (r:1 w:1)
+	/// Proof: `AssetsHolder::BalancesOnHold` (`max_values`: None, `max_size`: Some(682), added: 3157, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Asset` (r:1 w:1)
+	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(808), added: 3283, mode: `MaxEncodedLen`)
+	/// Storage: `Assets::Account` (r:1 w:1)
+	/// Proof: `Assets::Account` (`max_values`: None, `max_size`: Some(732), added: 3207, mode: `MaxEncodedLen`)
+	fn unload_archived_recycler_into_external_asset_fee_native() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1360`
+		//  Estimated: `8799`
+		// Minimum execution time: 18_038_480_000 picoseconds.
+		Weight::from_parts(18_458_247_000, 0)
+			.saturating_add(Weight::from_parts(0, 8799))
+			.saturating_add(T::DbWeight::get().reads(9))
+			.saturating_add(T::DbWeight::get().writes(8))
+	}
 	/// Storage: `Coinage::Instances` (r:1 w:0)
 	/// Proof: `Coinage::Instances` (`max_values`: None, `max_size`: Some(1926), added: 4401, mode: `MaxEncodedLen`)
 	/// Storage: `Assets::Asset` (r:1 w:1)
@@ -1522,7 +1546,7 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Proof: `Coinage::RecyclersArchives` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(901), added: 3376, mode: `MaxEncodedLen`)
-	fn unload_archived_recycler_into_external_asset() -> Weight {
+	fn unload_archived_recycler_into_external_asset_fee_external_asset() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1506`
 		//  Estimated: `10611`
