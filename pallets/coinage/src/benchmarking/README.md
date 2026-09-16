@@ -3,9 +3,17 @@
 `proof_cache.rs` stores cached alias proofs used by coinage benchmarks.
 
 A ring-VRF proof takes over a second to create in WASM, and the unload
-benchmarks need up to `MaxConsolidation` of them per run. Without a warm
-cache a `frame-omni-bencher` run of the coinage pallet takes hours instead of
-minutes.
+benchmarks need up to `MaxConsolidation` of them per run. A warm cache avoids
+repeating that proof generation during benchmark setup.
+
+With a warm cache, the production-WASM smoke test at `--steps 2 --repeat 1
+--min-duration 0` took about three minutes on a local macOS host. This is not
+the duration of a full weight-generation run. The [successful CI command job
+on September 14, 2026](https://github.com/paritytech/individuality-community/actions/runs/34807856617)
+took about 7 hours 49 minutes, including setup and building, for
+`next-people-paseo` / `indiv_pallet_coinage` at `--steps 50 --repeat 20`.
+These are observed durations, not limits; the machine, build cache and proof
+cache coverage affect subsequent runs.
 
 A miss is logged at warn level as `alias proof cache miss`, so a run under
 `RUNTIME_LOG=warn` shows directly whether the cache still matches. A run that
@@ -72,7 +80,8 @@ lookup path is active again.
 
 ## CI cache coverage gate
 
-The `benchmark-runtime` CI job enables strict mode for `next-people-paseo-runtime` and fails on
+The `benchmark-runtime` CI job enables `coinage-benchmark-proof-cache-check` for
+`next-people-paseo-runtime` and fails on
 an `alias proof cache miss`. The failure reports the ring exponent, member count and cache key.
 It tells you to run `python3 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py`,
 commit the regenerated `proof_cache.rs` and see this README. A benchmark change that preserves
@@ -103,9 +112,11 @@ Flags:
 - `--no-write` — run the full harvest and print the entry count without
   modifying `proof_cache.rs`. Useful for dry runs.
 - `--profile <profile>` — cargo profile for the runtime build, `release` by
-  default. The cached proofs are the same either way. `dev` uses the debug WASM
-  artefact and gives the shortest build, while `release` uses the compact
-  compressed WASM artefact and gives the fastest harvest.
+  default, matching CI. Cached proofs do not depend on the profile. `release`
+  avoids `production`'s fat LTO and single codegen unit. Unless overridden,
+  `dev` also builds release-mode WASM but skips normal compaction and
+  compression, so it can build faster. No timing comparison establishes
+  which profile gives the shortest build-and-harvest run.
 
 After the script finishes, still run the step 5 verification below.
 

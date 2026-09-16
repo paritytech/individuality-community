@@ -292,16 +292,16 @@ fn setup_built_unload_recycler<T: Config>(
 
 #[cfg(any(
 	feature = "benchmark-proof-cache-regenerate",
-	feature = "benchmark-proof-cache-strict"
+	feature = "benchmark-proof-cache-check"
 ))]
 use alloc::string::String;
 #[cfg(any(
 	feature = "benchmark-proof-cache-regenerate",
-	feature = "benchmark-proof-cache-strict"
+	feature = "benchmark-proof-cache-check"
 ))]
 use core::fmt::Write;
 
-#[cfg(any(feature = "benchmark-proof-cache-regenerate", feature = "benchmark-proof-cache-strict"))]
+#[cfg(any(feature = "benchmark-proof-cache-regenerate", feature = "benchmark-proof-cache-check"))]
 fn to_hex(bytes: &[u8]) -> String {
 	let mut out = String::with_capacity(bytes.len() * 2);
 	for byte in bytes {
@@ -327,8 +327,8 @@ fn emit_cache_entry(cache_key: &[u8; 32], proof: &[u8], alias: &Alias) {
 }
 
 /// Generates an alias proof for a recycler unload from the cache when available.
-/// Normal mode warns before generating a missed proof; strict mode panics on a miss.
-/// Regeneration mode emits cached and generated proofs and takes precedence over strict mode.
+/// Normal mode warns before generating a missed proof; check mode panics on a miss.
+/// Regeneration mode emits cached and generated proofs and takes precedence over check mode.
 fn generate_alias_proof<T: Config>(
 	secret: &SecretOf<T>,
 	all_members: &[MemberOf<T>],
@@ -351,7 +351,7 @@ fn generate_alias_proof<T: Config>(
 		return (proof, alias);
 	}
 	#[cfg(all(
-		feature = "benchmark-proof-cache-strict",
+		feature = "benchmark-proof-cache-check",
 		not(feature = "benchmark-proof-cache-regenerate")
 	))]
 	{
@@ -368,7 +368,7 @@ fn generate_alias_proof<T: Config>(
 	}
 	#[cfg(not(any(
 		feature = "benchmark-proof-cache-regenerate",
-		feature = "benchmark-proof-cache-strict"
+		feature = "benchmark-proof-cache-check"
 	)))]
 	log::warn!(
 		target: LOG_TARGET,
@@ -378,7 +378,7 @@ fn generate_alias_proof<T: Config>(
 
 	#[cfg(any(
 		feature = "benchmark-proof-cache-regenerate",
-		not(feature = "benchmark-proof-cache-strict")
+		not(feature = "benchmark-proof-cache-check")
 	))]
 	{
 		// Cache miss: compute the proof
@@ -4635,15 +4635,15 @@ mod benches {
 #[cfg(all(
 	test,
 	feature = "runtime-benchmarks",
-	feature = "benchmark-proof-cache-strict",
+	feature = "benchmark-proof-cache-check",
 	not(feature = "benchmark-proof-cache-regenerate")
 ))]
-mod strict_tests {
+mod cache_check_tests {
 	use super::*;
 
 	#[test]
 	#[should_panic(expected = "alias proof cache miss")]
-	fn strict_proof_cache_miss_panics() {
+	fn check_proof_cache_miss_panics() {
 		let (secret, member) = new_member_from::<crate::mock::Test>(u32::MAX, u32::MAX);
 		let members = [member];
 		let msg = [u8::MAX; 32];

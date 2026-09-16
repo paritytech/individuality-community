@@ -154,7 +154,7 @@ jobs:
         runtime:
           - name: next-people-paseo-runtime
             package: next-people-paseo-runtime
-            features: runtime-benchmarks,coinage-benchmark-proof-cache-strict
+            features: runtime-benchmarks,coinage-benchmark-proof-cache-check
           - name: next-asset-hub-paseo-runtime
             package: next-asset-hub-paseo-runtime
             features: runtime-benchmarks

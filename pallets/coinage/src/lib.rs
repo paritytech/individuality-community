@@ -19,6 +19,12 @@
 //! Allows assets to be represented as fungible coins that can be transferred between peers,
 //! split, and consolidated using recyclers. Each instance wraps one asset at one coin unit; the
 //! same asset can be wrapped by several instances, one per unit.
+//!
+//! Dual-mode unload calls pay with a prepaid unload token or from the unloaded assets.
+//! The `UnloadToken` origin selects the fee mode at dispatch. These calls declare the
+//! component-wise maximum of both fee-mode weights in `#[pallet::weight]` and refund down to
+//! the mode actually run through `PostDispatchInfo`. Applicable deposit surcharges are added
+//! separately.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -379,6 +385,14 @@ pub mod pallet {
 		fn from(e: CustomInvalidity) -> Self {
 			InvalidTransaction::Custom(e as u8).into()
 		}
+	}
+
+	/// Selects the single-recycler unload paths included in a weight maximum.
+	pub(crate) enum UnloadWeightScope {
+		/// All single-recycler unload paths, including both fee modes.
+		AnyFeeMode,
+		/// Only paths that pay the fee from their output.
+		FromOutputOnly,
 	}
 
 	pub(crate) enum MixedOutputValidationError {
@@ -1916,17 +1930,11 @@ pub mod pallet {
 			// Maximum of the possible unload call weights in `FromOutput` mode: the worst-case
 			// `FromOutput` benchmarked path, matching what a `FromOutput` transaction pays after
 			// its `PostDispatchInfo` refund.
-			let call_weight = Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-				T::MaxConsolidation::get() as usize,
-				T::MaxSplitOutputs::get() as usize,
-			)
-			.max(Pallet::<T>::unload_recycler_into_external_asset_from_output_weight(
-				T::MaxConsolidation::get() as usize,
-			))
-			.max(Pallet::<T>::unload_recycler_into_coins_from_output_weight(
+			let call_weight = Self::max_unload_call_weight(
+				UnloadWeightScope::FromOutputOnly,
 				T::MaxConsolidation::get() as usize,
 				T::MaxSplitOutputs::get(),
-			))
+			)
 			// On a sponsored instance the unload additionally settles the load deposits, and
 			// the voucher variant charges deposits for its fresh keys.
 			.saturating_add(T::WeightInfo::settle_load_deposits())
@@ -2170,6 +2178,7 @@ pub mod pallet {
 			)
 		}
 
+		/// Weight of the `Prepaid` fee path of [`Call::unload_recycler_into_external_asset`].
 		pub(crate) fn unload_recycler_into_external_asset_prepaid_weight(
 			alias_count: usize,
 		) -> Weight {
@@ -2188,6 +2197,8 @@ pub mod pallet {
 			)
 		}
 
+		/// Weight of the `Prepaid` fee path of
+		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
 			alias_count: usize,
 			loaded_coin_count: usize,
@@ -2223,9 +2234,6 @@ pub mod pallet {
 		}
 
 		/// Weight of the `FromOutput` fee path of [`Call::unload_recycler_into_external_asset`].
-		///
-		/// Dual-mode unload calls charge the component-wise maximum of their fee-mode paths in
-		/// `#[pallet::weight]` and refund down to the mode actually run via `PostDispatchInfo`.
 		pub(crate) fn unload_recycler_into_external_asset_from_output_weight(
 			alias_count: usize,
 		) -> Weight {
@@ -2246,9 +2254,6 @@ pub mod pallet {
 
 		/// Weight of the `FromOutput` fee path of
 		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
-		///
-		/// Dual-mode unload calls charge the component-wise maximum of their fee-mode paths in
-		/// `#[pallet::weight]` and refund down to the mode actually run via `PostDispatchInfo`.
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
 			alias_count: usize,
 			loaded_coin_count: usize,
@@ -2269,19 +2274,14 @@ pub mod pallet {
 			)
 		}
 
-		/// Worst-case weight charged up front by the `#[pallet::weight]` annotation: the
-		/// component-wise maximum of the two fee-mode paths. The fee mode is only known at
-		/// dispatch (it lives in the `UnloadToken` origin), so the call refunds down to the
-		/// mode actually run via `PostDispatchInfo`, and a call is billed exactly the mode it
-		/// runs, never more.
+		/// Worst-case weight of [`Call::unload_recycler_into_external_asset`] over its fee modes.
 		pub(crate) fn unload_recycler_into_external_asset_max_weight(alias_count: usize) -> Weight {
 			Self::unload_recycler_into_external_asset_prepaid_weight(alias_count)
 				.max(Self::unload_recycler_into_external_asset_from_output_weight(alias_count))
 		}
 
-		/// Mode-independent base weight for
-		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
-		/// See [`Self::unload_recycler_into_external_asset_max_weight`].
+		/// Worst-case weight of [`Call::unload_recycler_into_external_asset_and_loaded_coins`] over
+		/// its fee modes.
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_max_weight(
 			alias_count: usize,
 			loaded_coin_count: usize,
@@ -2296,6 +2296,7 @@ pub mod pallet {
 			))
 		}
 
+		/// Weight of [`Call::unload_recycler_into_external_asset_non_anonymous`].
 		pub(crate) fn unload_recycler_into_external_asset_non_anonymous_weight(
 			alias_count: usize,
 		) -> Weight {
@@ -2338,6 +2339,7 @@ pub mod pallet {
 			)
 		}
 
+		/// Weight of the `FromOutput` fee path of [`Call::unload_recycler_into_coins`].
 		pub(crate) fn unload_recycler_into_coins_from_output_weight(
 			alias_count: usize,
 			destination_count: u32,
@@ -2359,9 +2361,6 @@ pub mod pallet {
 		}
 
 		/// Weight of the `Prepaid` fee path of [`Call::unload_recycler_into_coins`].
-		///
-		/// Dual-mode unload calls charge the component-wise maximum of their fee-mode paths in
-		/// `#[pallet::weight]` and refund down to the mode actually run via `PostDispatchInfo`.
 		pub(crate) fn unload_recycler_into_coins_prepaid_weight(
 			alias_count: usize,
 			destination_count: u32,
@@ -2382,8 +2381,7 @@ pub mod pallet {
 			)
 		}
 
-		/// Worst-case weight for [`Call::unload_recycler_into_coins`]. See
-		/// [`Self::unload_recycler_into_external_asset_max_weight`].
+		/// Worst-case weight of [`Call::unload_recycler_into_coins`] over its fee modes.
 		pub(crate) fn unload_recycler_into_coins_max_weight(
 			alias_count: usize,
 			destination_count: u32,
@@ -2391,6 +2389,37 @@ pub mod pallet {
 			Self::unload_recycler_into_coins_prepaid_weight(alias_count, destination_count).max(
 				Self::unload_recycler_into_coins_from_output_weight(alias_count, destination_count),
 			)
+		}
+
+		/// Component-wise maximum of the selected single-recycler unload paths.
+		/// Deposit charges and settlement are excluded; callers add the applicable surcharges.
+		pub(crate) fn max_unload_call_weight(
+			scope: UnloadWeightScope,
+			alias_count: usize,
+			output_count: u32,
+		) -> Weight {
+			let from_output = Self::unload_recycler_into_external_asset_from_output_weight(
+				alias_count,
+			)
+			.max(Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
+				alias_count,
+				output_count as usize,
+			))
+			.max(Self::unload_recycler_into_coins_from_output_weight(alias_count, output_count));
+			match scope {
+				UnloadWeightScope::FromOutputOnly => from_output,
+				UnloadWeightScope::AnyFeeMode => from_output
+					.max(Self::unload_recycler_into_coin_weight(alias_count))
+					.max(Self::unload_recycler_into_external_asset_prepaid_weight(alias_count))
+					.max(Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
+						alias_count,
+						output_count as usize,
+					))
+					.max(Self::unload_recycler_into_coins_prepaid_weight(alias_count, output_count))
+					.max(Self::unload_recycler_into_external_asset_non_anonymous_weight(
+						alias_count,
+					)),
+			}
 		}
 
 		/// Shared dispatch body for [`Call::load_recycler_with_external_asset_unpaid`] and
@@ -5704,34 +5733,11 @@ pub mod pallet {
 
 			// === Phase 3: Unloading ===
 			// Unload recycler with average number of items.
-			let unload_avg = Self::unload_recycler_into_coin_weight(
+			let unload_avg = Self::max_unload_call_weight(
+				UnloadWeightScope::AnyFeeMode,
 				avg_aliases_single_ring as usize,
+				avg_split_outputs,
 			)
-			.max(Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
-				avg_aliases_single_ring as usize,
-				avg_split_outputs as usize,
-			))
-			.max(Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-				avg_aliases_single_ring as usize,
-				avg_split_outputs as usize,
-			))
-			.max(Self::unload_recycler_into_external_asset_prepaid_weight(
-				avg_aliases_single_ring as usize,
-			))
-			.max(Self::unload_recycler_into_external_asset_from_output_weight(
-				avg_aliases_single_ring as usize,
-			))
-			.max(Self::unload_recycler_into_external_asset_non_anonymous_weight(
-				avg_aliases_single_ring as usize,
-			))
-			.max(Self::unload_recycler_into_coins_from_output_weight(
-				avg_aliases_single_ring as usize,
-				avg_split_outputs,
-			))
-			.max(Self::unload_recycler_into_coins_prepaid_weight(
-				avg_aliases_single_ring as usize,
-				avg_split_outputs,
-			))
 			// On a sponsored instance the unload also settles the load deposits.
 			.saturating_add(T::WeightInfo::settle_load_deposits());
 

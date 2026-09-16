@@ -23,6 +23,8 @@
 
 use frame_support::weights::Weight;
 
+const SAMPLE_COUNT: usize = 7;
+
 /// The weight of an unload call for `alias_count` aliases, from its seven fixed benchmarks.
 ///
 /// `max` is the count of the final benchmark and must be at least 8, which the pallet's
@@ -32,7 +34,7 @@ use frame_support::weights::Weight;
 pub(crate) fn interpolate_unload_weight(
 	alias_count: u32,
 	max: u32,
-	weights: [Weight; 7],
+	weights: [Weight; SAMPLE_COUNT],
 ) -> Weight {
 	let coordinates = [1, 2, 4, 8, 16.min(max), 32.min(max), max];
 	interpolate_weight(alias_count, coordinates, weights)
@@ -44,9 +46,13 @@ pub(crate) fn interpolate_unload_weight(
 /// is extended, component-wise never below the combined final weight. Equal coordinates are
 /// combined first so every sample at a clamped count contributes to the charge. Each `Weight`
 /// component is interpolated on its own and rounded up.
-fn interpolate_weight(x: u32, coordinates: [u32; 7], weights: [Weight; 7]) -> Weight {
-	let mut distinct_coordinates = [0; 7];
-	let mut distinct_weights = [Weight::zero(); 7];
+fn interpolate_weight(
+	x: u32,
+	coordinates: [u32; SAMPLE_COUNT],
+	weights: [Weight; SAMPLE_COUNT],
+) -> Weight {
+	let mut distinct_coordinates = [0; SAMPLE_COUNT];
+	let mut distinct_weights = [Weight::zero(); SAMPLE_COUNT];
 	let mut distinct_len = 0;
 
 	for index in 0..coordinates.len() {
@@ -123,7 +129,7 @@ mod tests {
 		Weight::from_parts(ref_time, proof_size)
 	}
 
-	fn samples() -> [Weight; 7] {
+	fn samples() -> [Weight; SAMPLE_COUNT] {
 		[
 			weight(100, 1_000),
 			weight(150, 1_200),

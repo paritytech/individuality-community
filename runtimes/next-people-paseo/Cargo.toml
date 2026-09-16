@@ -289,8 +289,8 @@ runtime-benchmarks = [
 coinage-benchmark-proof-cache-regenerate = [
 	"indiv-pallet-coinage/benchmark-proof-cache-regenerate",
 ]
-coinage-benchmark-proof-cache-strict = [
-	"indiv-pallet-coinage/benchmark-proof-cache-strict",
+coinage-benchmark-proof-cache-check = [
+	"indiv-pallet-coinage/benchmark-proof-cache-check",
 ]
 
 # Build the ring VRF suite with the RFC-163 EC host functions instead of the default

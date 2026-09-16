@@ -85,7 +85,7 @@ runtime-benchmarks = [
 ]
 benchmark-proof-cache-regenerate = []
 # Regeneration takes precedence when both proof-cache features are enabled.
-benchmark-proof-cache-strict = []
+benchmark-proof-cache-check = []
 try-runtime = [
 	"frame-executive/try-runtime",
 	"frame-support/try-runtime",

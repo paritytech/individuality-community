@@ -70,10 +70,10 @@ jobs:
           cargo clippy --all-targets --locked --quiet
           cargo clippy --all-targets --all-features --locked --quiet
 
-      - name: Test strict coinage proof cache mode
+      - name: Test coinage proof cache check mode
         env:
           SKIP_WASM_BUILD: 1
-        run: cargo test -p indiv-pallet-coinage --features runtime-benchmarks,benchmark-proof-cache-strict strict_proof_cache_miss_panics --locked --quiet
+        run: cargo test -p indiv-pallet-coinage --features runtime-benchmarks,benchmark-proof-cache-check check_proof_cache_miss_panics --locked --quiet
 
       - name: Rustdoc
         env:
