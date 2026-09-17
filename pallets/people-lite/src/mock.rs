@@ -418,6 +418,11 @@ impl AppendOnlyMembers for MockMemberService {
 	) -> frame_support::dispatch::DispatchResult {
 		Ok(())
 	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn seal_current_ring(_identifier: &Identifier) -> frame_support::dispatch::DispatchResult {
+		Ok(())
+	}
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
