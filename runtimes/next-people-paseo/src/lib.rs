@@ -1558,7 +1558,8 @@ impl_runtime_apis! {
 			message: VersionedXcm<()>,
 			asset_id: VersionedAssetId,
 		) -> Result<VersionedAssets, XcmPaymentApiError> {
-			PolkadotXcm::query_delivery_fees::<()>(destination, message, asset_id)
+			type AssetExchanger = <xcm_config::XcmConfig as xcm_executor::Config>::AssetExchanger;
+			PolkadotXcm::query_delivery_fees::<AssetExchanger>(destination, message, asset_id)
 		}
 	}
 
