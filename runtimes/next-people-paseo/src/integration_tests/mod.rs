@@ -88,6 +88,7 @@ mod score_game_person_flow;
 mod statement_allowance;
 mod transaction_era;
 mod tx_payment_external_asset;
+mod xcm_asset_rate_trader;
 mod xcm_fee_api;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
