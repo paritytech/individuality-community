@@ -343,16 +343,18 @@ pub mod pallet {
 				);
 				let subscription = match Pallet::<T>::resolve_whitelist_entry(entry) {
 					Ok(subscription) => subscription,
-					Err(WhitelistEntryError::Collections(CollectionOrderViolation::Unsorted)) =>
+					Err(WhitelistEntryError::Collections(CollectionOrderViolation::Unsorted)) => {
 						panic!(
 							"genesis subscription whitelist collections for {para_id:?} must be \
 							 sorted by identifier"
-						),
-					Err(WhitelistEntryError::Collections(CollectionOrderViolation::Duplicate)) =>
+						)
+					},
+					Err(WhitelistEntryError::Collections(CollectionOrderViolation::Duplicate)) => {
 						panic!(
 							"genesis subscription whitelist collections for {para_id:?} must be \
 							 without duplicates"
-						),
+						)
+					},
 					Err(WhitelistEntryError::UnsupportedRingExponent(exponent)) => panic!(
 						"invalid ring exponent {exponent:?} in genesis subscription whitelist \
 						 for {para_id:?}"

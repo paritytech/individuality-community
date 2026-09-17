@@ -1552,10 +1552,12 @@ pub mod pallet {
 
 		fn log_offchain_worker_tx_submit_result(res: Result<(), ()>, operation: &str) {
 			match res {
-				Ok(_) =>
-					log::info!(target: LOG_TARGET, "offchain_worker - {operation} transaction submitted"),
-				Err(e) =>
-					log::error!(target: LOG_TARGET, "offchain_worker - failed to submit {operation} transaction: {e:?}"),
+				Ok(_) => {
+					log::info!(target: LOG_TARGET, "offchain_worker - {operation} transaction submitted")
+				},
+				Err(e) => {
+					log::error!(target: LOG_TARGET, "offchain_worker - failed to submit {operation} transaction: {e:?}")
+				},
 			}
 		}
 

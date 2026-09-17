@@ -432,12 +432,13 @@ pub mod pallet {
 						}
 						Call::capture_entropy_authorized { event_id, discriminator }
 					},
-					Status::DrawWinners { winners_added, effective_winners, .. } =>
+					Status::DrawWinners { winners_added, effective_winners, .. } => {
 						if winners_added == effective_winners {
 							Call::close_drawing_authorized { event_id, discriminator }
 						} else {
 							Call::draw_winners_authorized { event_id, discriminator }
-						},
+						}
+					},
 					Status::Claiming { .. } =>
 						Call::close_claiming_authorized { event_id, discriminator },
 					Status::ClearingRegistrations { .. } =>

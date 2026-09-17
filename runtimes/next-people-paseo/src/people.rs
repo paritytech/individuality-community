@@ -1309,17 +1309,14 @@ impl indiv_pallet_people_lite::Config for Runtime {
 }
 
 parameter_types! {
-	pub const MinUsernameLength: u32 = 6;
 	pub const PersonAuthDuration: u32 = 2 * 24 * 60 * 60; // 2 days
 	pub const MinPersonAuthUpdateInterval: u32 = 24 * 60 * 60; // 1 day
-	pub const MaxReservationQueueLength: u32 = 10;
 }
 
 impl indiv_pallet_resources::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_resources::WeightInfo<Runtime>;
 	type Suffix = NetworkSuffix;
 	type MemberService = Members;
-	type MinUsernameLength = MinUsernameLength;
 	type PersonAuthDuration = PersonAuthDuration;
 	type AccountsApiAllowance = AccountsApiAllowance;
 	type StmtStoreSlotsPerPeriod = StmtStoreSlotsPerPeriod;
@@ -1339,7 +1336,6 @@ impl indiv_pallet_resources::Config for Runtime {
 	type OffchainSignature = Signature;
 	type LitePersonStatementLimit = LitePersonStatementLimit;
 	type PersonStatementLimit = PersonStatementLimit;
-	type MaxReservationQueueLength = MaxReservationQueueLength;
 	type ManagerOrigin = EnsureRoot<AccountId>;
 	type LongTermStoragePeriodDuration = LongTermStoragePeriodDuration;
 	type LongTermStorageGraceWindow = LongTermStorageGraceWindow;

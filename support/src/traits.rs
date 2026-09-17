@@ -24,6 +24,6 @@ pub use reality::{
 	PeopleTrait, PersonalId, PersonhoodLookup, PersonhoodProofRequest, RevisedAlias,
 	RevisedContextualAlias, RevisionIndex, RingExponent, RingIndex, RingMembersState,
 	RingMembershipProof, RingMode, RingMutationMode, RingPosition, RingSize, RingStatus, Social,
-	Statement, StatementOracle, Truth, Username, ValidateProof, CONTEXT_SIZE, PEOPLE_IDENTIFIER,
+	Statement, StatementOracle, Truth, ValidateProof, CONTEXT_SIZE, PEOPLE_IDENTIFIER,
 	PEOPLE_LITE_IDENTIFIER, RI_ZERO,
 };

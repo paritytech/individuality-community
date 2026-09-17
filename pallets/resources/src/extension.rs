@@ -51,8 +51,6 @@ pub enum CustomValidity {
 	InvalidNotificationPeriod = 220,
 	/// The notification sequence is above the collection-specific slot limit.
 	InvalidNotificationSequence = 221,
-	/// The requested expired username reservation is not removable.
-	InvalidExpiredUsernameReservationRemoval = 222,
 	/// The requested demotion is not currently valid.
 	InvalidPersonDemotion = 223,
 	/// The requested notification cleanup is not currently valid.

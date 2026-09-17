@@ -28,6 +28,36 @@ Later workflow runs read a release's spec version from its attached `*_srtool_ou
 falling back to the plain `Spec version: <n>` line in the release notes. Do not edit or remove
 either.
 
+## Pre-release checks
+
+The release that removes usernames from the `Resources` pallet on People Chain (carrying
+`indiv_pallet_resources::migration::MigrateV0ToV1`) deletes the People Chain copy of every username.
+The `DotnsGateway` pallet on Asset Hub is the remaining source. Before cutting the release, confirm
+with the app and attester teams that:
+
+1. The app reads usernames from Asset Hub only. Until then the People Chain copy is still shown to
+   users.
+2. The attester switches the `consumer_registration` signing payload at enactment, keyed on the new
+   `spec_version`. The current payload carries the username and is rejected by the new runtime; the
+   new payload is rejected by the current one.
+
+To size the impact of the read switch, compare the two chains:
+
+```bash
+RPC_PEOPLE=wss://<people-rpc> RPC_ASSET_HUB=wss://<asset-hub-rpc> scripts/check-username-sync.sh
+```
+
+The script prints one row per username that People Chain holds and Asset Hub does not, and exits 1
+when there is any. Those users see their name disappear when the app switches to Asset Hub. If the
+count is not acceptable, consider a reconciliation: root-only `DotnsGateway` calls that reserve a
+lite name or register a full name for a given account without the candidate's signature or ring
+proof, enacted by governance as a batch built from the script's rows. Those calls do not exist in
+`DotnsGateway` at the moment and would ship in an Asset Hub release before this one. Reserved base
+names live only in the dotNS contract and cannot be compared from storage; the script lists them for
+manual follow-up.
+
+This section and the script are removed once the release carrying `MigrateV0ToV1` is live.
+
 ## Cutting a release
 
 ```bash

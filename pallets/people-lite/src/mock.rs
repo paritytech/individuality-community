@@ -177,8 +177,6 @@ impl indiv_support::traits::ConsumerRegistrar<u64> for MockConsumerRegistrar {
 	fn register_lite_consumer(
 		account: u64,
 		_identifier_key: indiv_support::traits::CommunicationIdentifier,
-		_username: indiv_support::traits::Username,
-		_reserved_username: Option<indiv_support::traits::Username>,
 	) -> Result<(), Self::Error> {
 		if MOCK_FAIL_NEXT_CONSUMER_REGISTRATION.with(|flag| flag.replace(false)) {
 			return Err(DispatchError::Other("mock consumer registration failed"));
