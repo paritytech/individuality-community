@@ -22,6 +22,8 @@ include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
 extern crate alloc;
 
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
 mod genesis_config_presets;
 pub mod parameters;
 pub mod people;
@@ -1584,6 +1586,22 @@ impl_runtime_apis! {
 		}
 	}
 
+	impl xcm_runtime_apis::authorized_aliases::AuthorizedAliasersApi<Block> for Runtime {
+		fn authorized_aliasers(target: VersionedLocation) -> Result<
+			Vec<xcm_runtime_apis::authorized_aliases::OriginAliaser>,
+			xcm_runtime_apis::authorized_aliases::Error
+		> {
+			PolkadotXcm::authorized_aliasers(target)
+		}
+
+		fn is_authorized_alias(origin: VersionedLocation, target: VersionedLocation) -> Result<
+			bool,
+			xcm_runtime_apis::authorized_aliases::Error
+		> {
+			PolkadotXcm::is_authorized_alias(origin, target)
+		}
+	}
+
 	impl indiv_pallet_mob_rule::runtime_api::MobRuleApi<Block, AccountId, Balance> for Runtime {
 		fn voted_on(voter: &Alias, done_only: bool) -> Vec<indiv_pallet_mob_rule::CaseIndex> {
 			MobRule::voted_on(voter, done_only)
@@ -1885,7 +1903,7 @@ impl_runtime_apis! {
 				}
 
 				fn alias_origin() -> Result<(Location, Location), BenchmarkError> {
-					Err(BenchmarkError::Skip)
+					Ok(crate::benchmarking::set_up_worst_case_authorized_alias())
 				}
 			}
 
