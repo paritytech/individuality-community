@@ -144,6 +144,21 @@
 //! A lite person invites one account, ever: the first account they invite is the only one they can
 //! play with.
 //!
+//! # Sign-up preconditions
+//!
+//! Three read-only helpers hold the preconditions of a sign-up: `require_open_game`,
+//! `check_sign_up_eligibility` and `check_airdrop_shape`. Dispatch and the
+//! [`extension::GameAsInvited`] transaction extension call the same helper and map its result to
+//! their own error type: a dispatch reports an [`Error`], an extension reports an
+//! `InvalidTransaction` code.
+//!
+//! The extension validates a sign-up with an invite before it consumes the invite, and it checks
+//! every precondition of that path: the three helpers, the statement-account check, a dry run of
+//! `register_for_airdrop` and the `can_onboard_for_recognition` predictor. An invited player is a
+//! new, non-recognized account, so the remaining work in dispatch (onboarding, player insertion
+//! and airdrop registration) has no failure case, and the invite buys a sign-up.
+//! `GameAsInvited::post_dispatch_details` raises a defensive error if the dispatch fails anyway.
+//!
 //! # Statement store usage
 //!
 //! All players in the game are given some statement store usage allowance. The player's allowance
@@ -1766,10 +1781,7 @@ pub mod pallet {
 
 	/// Reasons a game is not open for player registration.
 	///
-	/// Neutral, error-vocabulary-agnostic result of [`Pallet::require_open_game`], shared
-	/// by [`Pallet::sign_up_inner`] (dispatch) and the
-	/// [`GameAsInvited`](crate::extension::GameAsInvited) transaction extension so the two cannot
-	/// drift; each caller maps it to its own error type.
+	/// [`Pallet::require_open_game`] returns this. The caller maps it to its own error type.
 	pub(crate) enum RegistrationClosedReason {
 		/// No game exists.
 		NoGame,
@@ -1789,12 +1801,9 @@ pub mod pallet {
 		}
 	}
 
-	/// Neutral reasons a sign-up's airdrop VRF entries don't match the scheduled events.
+	/// Reasons a sign-up's airdrop VRF entries do not match the scheduled events.
 	///
-	/// Result of the read-only [`Pallet::check_airdrop_shape`], shared by
-	/// [`Pallet::register_for_airdrop`] (dispatch) and [`Pallet::validate_register_for_airdrop`]
-	/// (the [`GameAsInvited`](crate::extension::GameAsInvited) extension) so the two cannot drift;
-	/// each maps it to its own error vocabulary.
+	/// [`Pallet::check_airdrop_shape`] returns this. The caller maps it to its own error type.
 	pub(crate) enum AirdropShapeError {
 		/// The number of supplied VRFs does not match the number of scheduled airdrop events.
 		CountMismatch,
@@ -1824,12 +1833,10 @@ pub mod pallet {
 		Direct,
 	}
 
-	/// Neutral reasons `who` is not eligible to (re-)sign up for the current game.
+	/// Reasons `who` cannot (re-)sign up for the current game.
 	///
-	/// Result of the read-only [`Pallet::check_sign_up_eligibility`], shared by
-	/// [`Pallet::sign_up_inner`] (dispatch) and the
-	/// [`GameAsInvited`](crate::extension::GameAsInvited) extension so the two cannot drift; each
-	/// maps it to its own error vocabulary.
+	/// [`Pallet::check_sign_up_eligibility`] returns this. The caller maps it to its own error
+	/// type.
 	pub(crate) enum SignUpEligibilityError {
 		/// An invite was used but the player is already playing.
 		AlreadyPlayingWithInvite,
@@ -1848,9 +1855,11 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
-		/// Read-only check of the airdrop VRF entries' count and variant against the player's
-		/// `recognized` state. Callers compute `recognized` themselves (dispatch after onboarding,
-		/// the extension before it) and perform the actual per-event registration afterwards.
+		/// Check the count and the variant of the airdrop VRF entries against the player's
+		/// `recognized` state.
+		///
+		/// The caller computes `recognized` itself: dispatch after onboarding, the extension
+		/// before it. Registration for the events is a separate step.
 		pub(crate) fn check_airdrop_shape(
 			airdrops: &AirdropVrfs<AirdropProofOf<T>>,
 			who: &AccountOrPerson<T::AccountId>,
@@ -1875,11 +1884,10 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Read-only check that `who` may (re-)sign up for the current game, given whether an
-		/// invite is used. Returns the existing player record (if any) so the caller can reuse it.
+		/// Check that `who` may (re-)sign up for the current game with a sign-up of `kind`.
 		///
-		/// Shared by dispatch (`sign_up_inner`) and the
-		/// [`GameAsInvited`](crate::extension::GameAsInvited) extension so the two cannot drift.
+		/// Returns the player record when `who` already plays, so the caller does not read it
+		/// again.
 		pub(crate) fn check_sign_up_eligibility(
 			who: &AccountOrPerson<T::AccountId>,
 			kind: SignUpKind,
@@ -1898,7 +1906,7 @@ pub mod pallet {
 			Ok(maybe_player)
 		}
 
-		/// Read-only check that a game exists and is currently open for registration, returning it.
+		/// Return the current game, if it is open for registration.
 		pub(crate) fn require_open_game() -> Result<GameInfo<T::AccountId>, RegistrationClosedReason>
 		{
 			let game = Game::<T>::get().ok_or(RegistrationClosedReason::NoGame)?;
@@ -2137,22 +2145,11 @@ pub mod pallet {
 		fn sign_up_inner(
 			args: SignUpArgs<T::AccountId, T::AccountSignature, AirdropProofOf<T>>,
 		) -> DispatchResult {
-			// The preconditions below are shared with the `GameAsInvited` transaction extension's
-			// validation through the read-only helpers `require_open_game`,
-			// `check_sign_up_eligibility` and `check_airdrop_shape`, so the two cannot drift.
-			// Together with the extension's airdrop dry-run and the faithful
-			// `can_onboard_for_recognition` predictor, these cover every fallible operation on the
-			// invite path (an invited player is always a fresh, non-recognized account, so the
-			// remaining work: onboarding, player insertion and airdrop registration cannot fail).
-			// Hence a sign-up with an invite is guaranteed to succeed after validation and the
-			// invite is never wasted; `GameAsInvited::post_dispatch_details` defensively enforces
-			// this invariant.
-
-			// Check the game state. Mirrored by the `GameAsInvited` extension via the shared
-			// `require_open_game` helper.
+			// The `GameAsInvited` extension checks the preconditions below before it consumes an
+			// invite. See the module documentation on sign-up preconditions.
 			let mut game = Self::require_open_game().map_err(Error::<T>::from)?;
 			let GameState::Registration { next_player_index } = &mut game.state else {
-				// `require_open_game` already ensured this; kept as a defensive guard.
+				// `require_open_game` checked the state. This guards against a later change.
 				return Err(Error::<T>::NoRegistration.into());
 			};
 
@@ -2220,7 +2217,6 @@ pub mod pallet {
 				},
 			};
 
-			// Shared with the `GameAsInvited` extension so the eligibility checks cannot drift.
 			let kind = if new_invited { SignUpKind::WithInvite } else { SignUpKind::Direct };
 			let maybe_player =
 				Self::check_sign_up_eligibility(&who, kind).map_err(Error::<T>::from)?;
@@ -2294,9 +2290,8 @@ pub mod pallet {
 			Ok(())
 		}
 
-		// The count/variant shape check is shared with `validate_register_for_airdrop` via
-		// `check_airdrop_shape`; only the per-event registration below is mirrored there (as a
-		// dry-run), so keep that part in sync.
+		// `validate_register_for_airdrop` dry-runs the per-event registration below. Keep the two
+		// in sync.
 		//
 		// Registers the player into every scheduled airdrop event, one entry per event in
 		// airdrop-index order, return error on the first failure.
@@ -2313,13 +2308,13 @@ pub mod pallet {
 			let recognized = indiv_pallet_score::Participants::<T>::get(who)
 				.defensive_proof("pallet-game: registering account must be a participant")
 				.is_some_and(|p| p.recognition.is_recognized());
-			// Shared with the `GameAsInvited` extension so the shape checks cannot drift.
 			Self::check_airdrop_shape(&airdrops, who, recognized, airdrops_scheduled)
 				.map_err(Error::<T>::from)?;
 			match airdrops {
 				AirdropVrfs::Account(vrfs) => {
 					let AccountOrPerson::Account(acct) = &who else {
-						// Guaranteed by `check_airdrop_shape`; kept as a defensive guard.
+						// `check_airdrop_shape` checked the variant. This guards against a later
+						// change.
 						return Err(Error::<T>::InvalidAirdropVrfVariantForAccount.into());
 					};
 					for (airdrop_index, sig) in vrfs.into_iter().enumerate() {
@@ -2344,15 +2339,12 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Validation-only counterpart of [`Self::register_for_airdrop`] used by the
-		/// `GameAsInvited` transaction extension: it dry-runs the same per-event registration
-		/// (rolled back) so the extension can reject a sign-up before the invite is consumed.
+		/// Validation-only counterpart of [`Self::register_for_airdrop`] for the `GameAsInvited`
+		/// extension: it dry-runs the per-event registration and rolls the storage back.
 		///
-		/// Its only caller is the invite path, where the player is always a fresh, non-recognized
-		/// account. `recognized` is therefore `false` here (participant not yet onboarded) and also
-		/// `false` in `register_for_airdrop` (a freshly onboarded account is `NotRecognized`), so
-		/// running this before onboarding rather than after does not change the outcome. Shape
-		/// checks are shared via [`Self::check_airdrop_shape`].
+		/// The invite path is the only caller, where the player is a new account. `recognized` is
+		/// `false` both here, where the participant is not onboarded yet, and in
+		/// [`Self::register_for_airdrop`], where a freshly onboarded account is `NotRecognized`.
 		pub(crate) fn validate_register_for_airdrop(
 			airdrops: &Option<AirdropVrfs<AirdropProofOf<T>>>,
 			who: &AccountOrPerson<T::AccountId>,
@@ -2370,7 +2362,6 @@ pub mod pallet {
 				// When None, it will be onboarded as NotRecognized.
 				.is_some_and(|p| p.recognition.is_recognized());
 
-			// Shared with dispatch (`register_for_airdrop`) so the shape checks cannot drift.
 			Self::check_airdrop_shape(airdrops, who, recognized, airdrops_scheduled).map_err(
 				|e| match e {
 					AirdropShapeError::CountMismatch => InvalidAirdropVrfCount,

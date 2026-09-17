@@ -176,16 +176,14 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for GameAsI
 
 				let who_account_or_person = AccountOrPerson::Account(who.clone());
 
-				// Player must be new. Shared with dispatch via `check_sign_up_eligibility` (an
-				// invite always signs up a new player) so the two checks cannot drift.
+				// An invite signs up a new player only.
 				Pallet::<T>::check_sign_up_eligibility(
 					&who_account_or_person,
 					SignUpKind::WithInvite,
 				)
 				.map_err(|_| InvalidTransaction::Custom(NotNewPlayer as u8))?;
 
-				// Game must be open for registration. Shared with dispatch via
-				// `require_open_game` so the two checks cannot drift.
+				// Game must be open for registration.
 				let game = Pallet::<T>::require_open_game().map_err(|reason| {
 					let code = match reason {
 						RegistrationClosedReason::NoGame => NoGame,
@@ -195,8 +193,7 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for GameAsI
 					InvalidTransaction::Custom(code as u8)
 				})?;
 
-				// We prevent any overlap between statement accounts and player. Mirrors the same
-				// check in dispatch.
+				// We prevent any overlap between statement accounts and player.
 				ensure!(
 					!StmtAccountToAlias::<T>::contains_key(who),
 					InvalidTransaction::Custom(AccountAlreadyUsedForStmtAccount as u8)
@@ -272,9 +269,8 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for GameAsI
 				// Prepare the nonce.
 				CheckNonce::<T>::prepare_nonce_for_account(&account, nonce)?;
 
-				// Consume the invite. `validate` mirrors every fallible precondition of the
-				// dispatch, so a validated sign-up is guaranteed to succeed and the invite is
-				// never wasted; `post_dispatch_details` defensively enforces that invariant.
+				// Consume the invite. `validate` checked every precondition of the invite path, so
+				// the dispatch that follows has no failure case.
 				PendingInvites::<T>::remove(inviter, ticket);
 
 				Ok(GameAsInvitedValPre::UsingInvite(account))
@@ -292,13 +288,9 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for GameAsI
 	) -> Result<Weight, TransactionValidityError> {
 		match pre {
 			GameAsInvitedValPre::UsingInvite(account) => {
-				// `validate` mirrors every fallible precondition of `sign_up_inner`'s invite path
-				// (via the shared `require_open_game` and `check_sign_up_eligibility` helpers, the
-				// statement-account check, the `validate_register_for_airdrop` dry-run, and the
-				// faithful `can_onboard_for_recognition` predictor), and nothing interleaves
-				// between validation and dispatch, so a consumed invite must always yield a
-				// successful sign-up. If that invariant ever regresses the invite is silently
-				// wasted, so surface it.
+				// `validate` checked every precondition of the invite path and nothing runs
+				// between validation and dispatch, so the sign-up cannot fail here. A failure
+				// consumes the invite for nothing, so report it.
 				if result.is_err() {
 					defensive!("sign_up_with_invite failed after validation, invite was consumed");
 				}
