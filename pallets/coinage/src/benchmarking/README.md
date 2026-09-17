@@ -52,6 +52,12 @@ same at any `--steps` and `--repeat`, and one harvest is warm for every run.
 The remaining `Linear` components (split outputs, ring cleaning, ...) do not
 feed a proof.
 
+The `_16` and `_32` benchmarks measure exactly 16 and 32 aliases. They return
+`BenchmarkError::Skip` before setup if the count exceeds the call's configured
+maximum. The mock maximum is 16, so its `_32` cases skip; Paseo supports both
+counts and measures all seven samples. A skipped benchmark produces no weight
+measurement and must not be treated as coverage for that sample.
+
 The output-sweep benchmarks build a fixed member list large enough for
 `max_aliases_per_unload()`, rather than filling every slot in the ring. They
 seal the ring to retain the expiration check and next-ring state. Proof
