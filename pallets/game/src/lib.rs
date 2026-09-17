@@ -144,6 +144,21 @@
 //! A lite person invites one account, ever: the first account they invite is the only one they can
 //! play with.
 //!
+//! # Sign-up preconditions
+//!
+//! Three read-only helpers hold the preconditions of a sign-up: `require_open_game`,
+//! `check_sign_up_eligibility` and `check_airdrop_shape`. Dispatch and the
+//! [`extension::GameAsInvited`] transaction extension call the same helper and map its result to
+//! their own error type: a dispatch reports an [`Error`], an extension reports an
+//! `InvalidTransaction` code.
+//!
+//! The extension validates a sign-up with an invite before it consumes the invite, and it checks
+//! every precondition of that path: the three helpers, the statement-account check, a dry run of
+//! `register_for_airdrop` and the `can_onboard_for_recognition` predictor. An invited player is a
+//! new, non-recognized account, so the remaining work in dispatch (onboarding, player insertion
+//! and airdrop registration) has no failure case, and the invite buys a sign-up.
+//! `GameAsInvited::post_dispatch_details` raises a defensive error if the dispatch fails anyway.
+//!
 //! # Statement store usage
 //!
 //! All players in the game are given some statement store usage allowance. The player's allowance
@@ -1764,7 +1779,148 @@ pub mod pallet {
 		}
 	}
 
+	/// Reasons a game is not open for player registration.
+	///
+	/// [`Pallet::require_open_game`] returns this. The caller maps it to its own error type.
+	pub(crate) enum RegistrationClosedReason {
+		/// No game exists.
+		NoGame,
+		/// The game's registration window has ended.
+		RegistrationEnded,
+		/// The game is not in its registration phase.
+		NotInRegistration,
+	}
+
+	impl<T: Config> From<RegistrationClosedReason> for Error<T> {
+		fn from(reason: RegistrationClosedReason) -> Self {
+			match reason {
+				RegistrationClosedReason::NoGame => Self::NoGame,
+				RegistrationClosedReason::RegistrationEnded |
+				RegistrationClosedReason::NotInRegistration => Self::NoRegistration,
+			}
+		}
+	}
+
+	/// Reasons a sign-up's airdrop VRF entries do not match the scheduled events.
+	///
+	/// [`Pallet::check_airdrop_shape`] returns this. The caller maps it to its own error type.
+	pub(crate) enum AirdropShapeError {
+		/// The number of supplied VRFs does not match the number of scheduled airdrop events.
+		CountMismatch,
+		/// The VRF variant (alias vs account) does not match the player's recognition state.
+		RecognitionMismatch,
+		/// The account VRF variant was used by a person-identified player.
+		AccountVariantForPerson,
+	}
+
+	impl<T: Config> From<AirdropShapeError> for Error<T> {
+		fn from(error: AirdropShapeError) -> Self {
+			match error {
+				AirdropShapeError::CountMismatch => Self::InvalidAirdropVrfCount,
+				AirdropShapeError::RecognitionMismatch =>
+					Self::InvalidAirdropVrfVariantForRecognition,
+				AirdropShapeError::AccountVariantForPerson =>
+					Self::InvalidAirdropVrfVariantForAccount,
+			}
+		}
+	}
+
+	/// How a player is signing up, used to gate invite-specific eligibility.
+	pub(crate) enum SignUpKind {
+		/// Signing up with an invite; the player must be brand new.
+		WithInvite,
+		/// A direct sign-up (with an account or alias).
+		Direct,
+	}
+
+	/// Reasons `who` cannot (re-)sign up for the current game.
+	///
+	/// [`Pallet::check_sign_up_eligibility`] returns this. The caller maps it to its own error
+	/// type.
+	pub(crate) enum SignUpEligibilityError {
+		/// An invite was used but the player is already playing.
+		AlreadyPlayingWithInvite,
+		/// The player is already registered for the current game.
+		AlreadyRegistered,
+	}
+
+	impl<T: Config> From<SignUpEligibilityError> for Error<T> {
+		fn from(error: SignUpEligibilityError) -> Self {
+			match error {
+				SignUpEligibilityError::AlreadyPlayingWithInvite =>
+					Self::UseInviteButAlreadyPlaying,
+				SignUpEligibilityError::AlreadyRegistered => Self::AlreadyRegistered,
+			}
+		}
+	}
+
 	impl<T: Config> Pallet<T> {
+		/// Check the count and the variant of the airdrop VRF entries against the player's
+		/// `recognized` state.
+		///
+		/// The caller computes `recognized` itself: dispatch after onboarding, the extension
+		/// before it. Registration for the events is a separate step.
+		pub(crate) fn check_airdrop_shape(
+			airdrops: &AirdropVrfs<AirdropProofOf<T>>,
+			who: &AccountOrPerson<T::AccountId>,
+			recognized: bool,
+			airdrops_scheduled: u8,
+		) -> Result<(), AirdropShapeError> {
+			ensure!(
+				airdrops.count() == usize::from(airdrops_scheduled),
+				AirdropShapeError::CountMismatch
+			);
+			match airdrops {
+				AirdropVrfs::Alias { .. } =>
+					ensure!(recognized, AirdropShapeError::RecognitionMismatch),
+				AirdropVrfs::Account(_) => {
+					ensure!(!recognized, AirdropShapeError::RecognitionMismatch);
+					ensure!(
+						matches!(who, AccountOrPerson::Account(_)),
+						AirdropShapeError::AccountVariantForPerson
+					);
+				},
+			}
+			Ok(())
+		}
+
+		/// Check that `who` may (re-)sign up for the current game with a sign-up of `kind`.
+		///
+		/// Returns the player record when `who` already plays, so the caller does not read it
+		/// again.
+		pub(crate) fn check_sign_up_eligibility(
+			who: &AccountOrPerson<T::AccountId>,
+			kind: SignUpKind,
+		) -> Result<Option<Player<T::PlayDeposit>>, SignUpEligibilityError> {
+			let maybe_player = Players::<T>::get(who);
+			// A player using an invite must not already be playing.
+			ensure!(
+				!matches!(kind, SignUpKind::WithInvite) || maybe_player.is_none(),
+				SignUpEligibilityError::AlreadyPlayingWithInvite
+			);
+			// The player must not be registered for the current game yet.
+			ensure!(
+				maybe_player.as_ref().is_none_or(|player| !player.registered),
+				SignUpEligibilityError::AlreadyRegistered
+			);
+			Ok(maybe_player)
+		}
+
+		/// Return the current game, if it is open for registration.
+		pub(crate) fn require_open_game() -> Result<GameInfo<T::AccountId>, RegistrationClosedReason>
+		{
+			let game = Game::<T>::get().ok_or(RegistrationClosedReason::NoGame)?;
+			ensure!(
+				T::UnixTime::now() < Duration::from_secs(game.registration_ends as u64),
+				RegistrationClosedReason::RegistrationEnded
+			);
+			ensure!(
+				matches!(game.state, GameState::Registration { .. }),
+				RegistrationClosedReason::NotInRegistration
+			);
+			Ok(game)
+		}
+
 		fn do_on_idle(n: BlockNumberFor<T>, weight_meter: &mut WeightMeter) {
 			if weight_meter.try_consume(<T as Config>::WeightInfo::get_game()).is_err() {
 				return;
@@ -1989,23 +2145,11 @@ pub mod pallet {
 		fn sign_up_inner(
 			args: SignUpArgs<T::AccountId, T::AccountSignature, AirdropProofOf<T>>,
 		) -> DispatchResult {
-			// Some pre-condition here are duplicated in validation checks in `GameAsInvited`
-			// transaction extension. This is to prevent consuming the invite when it would fail.
-			// If further checks are needed, they might also need to be duplicated in the
-			// transaction exstension `GameAsInvited`.
-			// Signing up with an invite must never fail after the transaction extension validation,
-			// except, potentially, extreme conditions.
-			//
-			// TODO(paritytech/individuality#230): refactor to avoid duplicated checks and enforce
-			// the success of `sign_up_with_invite`.
-
-			// Check the game state.
-			let mut game = Game::<T>::get().ok_or(Error::<T>::NoGame)?;
-			ensure!(
-				T::UnixTime::now() < Duration::from_secs(game.registration_ends as u64),
-				Error::<T>::NoRegistration
-			);
+			// The `GameAsInvited` extension checks the preconditions below before it consumes an
+			// invite. See the module documentation on sign-up preconditions.
+			let mut game = Self::require_open_game().map_err(Error::<T>::from)?;
 			let GameState::Registration { next_player_index } = &mut game.state else {
+				// `require_open_game` checked the state. This guards against a later change.
 				return Err(Error::<T>::NoRegistration.into());
 			};
 
@@ -2073,17 +2217,10 @@ pub mod pallet {
 				},
 			};
 
-			let maybe_player = Players::<T>::get(&who);
+			let kind = if new_invited { SignUpKind::WithInvite } else { SignUpKind::Direct };
+			let maybe_player =
+				Self::check_sign_up_eligibility(&who, kind).map_err(Error::<T>::from)?;
 			let already_playing = maybe_player.is_some();
-
-			// Ensure the player is not playing if using an invite.
-			ensure!(!new_invited || !already_playing, Error::<T>::UseInviteButAlreadyPlaying);
-
-			// Ensure the player isn't registered yet for the game
-			ensure!(
-				maybe_player.as_ref().is_none_or(|player| !player.registered),
-				Error::<T>::AlreadyRegistered
-			);
 
 			let maybe_archived = ArchivedPlayers::<T>::take(&who);
 
@@ -2153,7 +2290,8 @@ pub mod pallet {
 			Ok(())
 		}
 
-		// This function is mirrored `validate_register_for_airdrop`, changes must be kept in sync.
+		// `validate_register_for_airdrop` dry-runs the per-event registration below. Keep the two
+		// in sync.
 		//
 		// Registers the player into every scheduled airdrop event, one entry per event in
 		// airdrop-index order, return error on the first failure.
@@ -2166,18 +2304,17 @@ pub mod pallet {
 			let Some(airdrops) = airdrops else {
 				return Ok(());
 			};
-			ensure!(
-				airdrops.count() == usize::from(airdrops_scheduled),
-				Error::<T>::InvalidAirdropVrfCount
-			);
 
 			let recognized = indiv_pallet_score::Participants::<T>::get(who)
 				.defensive_proof("pallet-game: registering account must be a participant")
 				.is_some_and(|p| p.recognition.is_recognized());
+			Self::check_airdrop_shape(&airdrops, who, recognized, airdrops_scheduled)
+				.map_err(Error::<T>::from)?;
 			match airdrops {
 				AirdropVrfs::Account(vrfs) => {
-					ensure!(!recognized, Error::<T>::InvalidAirdropVrfVariantForRecognition);
 					let AccountOrPerson::Account(acct) = &who else {
+						// `check_airdrop_shape` checked the variant. This guards against a later
+						// change.
 						return Err(Error::<T>::InvalidAirdropVrfVariantForAccount.into());
 					};
 					for (airdrop_index, sig) in vrfs.into_iter().enumerate() {
@@ -2186,7 +2323,6 @@ pub mod pallet {
 					}
 				},
 				AirdropVrfs::Alias { proofs, ring_index, revision } => {
-					ensure!(recognized, Error::<T>::InvalidAirdropVrfVariantForRecognition);
 					let participant_origin = into_registration_entry(who.clone());
 					for (airdrop_index, proof) in proofs.into_iter().enumerate() {
 						let event_id = Self::airdrop_event_id(game_index, airdrop_index as u8);
@@ -2203,13 +2339,12 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Validation-only counterpart of [`Self::register_for_airdrop`] used by the
-		/// `GameAsInvited` transaction extension.
-		// TODO(paritytech/individuality#230): ideally change the onboarding flow to first onboard
-		// and then register for the game so the check for onboarding only consists of checking
-		// the invitation. Or otherwise we may not want to check the validity of the VRF and maybe
-		// not even check the validity of the complete call, just let the invitation do 5 calls
-		// until being consumed, the invited being responsible for doing valid calls.
+		/// Validation-only counterpart of [`Self::register_for_airdrop`] for the `GameAsInvited`
+		/// extension: it dry-runs the per-event registration and rolls the storage back.
+		///
+		/// The invite path is the only caller, where the player is a new account. `recognized` is
+		/// `false` both here, where the participant is not onboarded yet, and in
+		/// [`Self::register_for_airdrop`], where a freshly onboarded account is `NotRecognized`.
 		pub(crate) fn validate_register_for_airdrop(
 			airdrops: &Option<AirdropVrfs<AirdropProofOf<T>>>,
 			who: &AccountOrPerson<T::AccountId>,
@@ -2222,21 +2357,18 @@ pub mod pallet {
 			let Some(airdrops) = airdrops.as_ref() else {
 				return Ok(());
 			};
-			if airdrops.count() != usize::from(airdrops_scheduled) {
-				return Err(InvalidAirdropVrfCount);
-			}
 
 			let recognized = indiv_pallet_score::Participants::<T>::get(who)
 				// When None, it will be onboarded as NotRecognized.
 				.is_some_and(|p| p.recognition.is_recognized());
 
-			let variant_ok = match airdrops {
-				AirdropVrfs::Alias { .. } => recognized,
-				AirdropVrfs::Account(_) => !recognized,
-			};
-			if !variant_ok {
-				return Err(InvalidAirdropVrfVariant);
-			}
+			Self::check_airdrop_shape(airdrops, who, recognized, airdrops_scheduled).map_err(
+				|e| match e {
+					AirdropShapeError::CountMismatch => InvalidAirdropVrfCount,
+					AirdropShapeError::RecognitionMismatch |
+					AirdropShapeError::AccountVariantForPerson => InvalidAirdropVrfVariant,
+				},
+			)?;
 
 			let res = match airdrops {
 				AirdropVrfs::Account(vrfs) => {
