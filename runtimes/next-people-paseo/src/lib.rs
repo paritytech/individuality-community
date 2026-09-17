@@ -1536,7 +1536,6 @@ impl_runtime_apis! {
 		}
 
 		fn query_weight_to_asset_fee(weight: Weight, asset: VersionedAssetId) -> Result<u128, XcmPaymentApiError> {
-			use crate::xcm_config::XcmConfig;
 			type Trader = <XcmConfig as xcm_executor::Config>::Trader;
 			PolkadotXcm::query_weight_to_asset_fee::<Trader>(weight, asset)
 		}
