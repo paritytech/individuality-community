@@ -1295,7 +1295,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4344 + d * (55 ±0)`
 		//  Estimated: `18926 + d * (2568 ±0)`
@@ -1343,7 +1344,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4383 + d * (53 ±0)`
 		//  Estimated: `18926 + d * (2568 ±13)`
@@ -1391,7 +1393,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4435 + d * (51 ±0)`
 		//  Estimated: `18926 + d * (2568 ±0)`
@@ -1439,7 +1442,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4660 + d * (42 ±0)`
 		//  Estimated: `24021 + d * (2568 ±14)`
@@ -1487,7 +1491,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4487 + d * (72 ±0)`
 		//  Estimated: `44493 + d * (2568 ±0)`
@@ -1535,7 +1540,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4001 + d * (111 ±0)`
 		//  Estimated: `85437 + d * (2568 ±0)`
@@ -1583,7 +1589,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4355 + d * (58 ±0)`
 		//  Estimated: `167325 + d * (2568 ±0)`
@@ -1625,7 +1632,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(883), added: 3358, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_1(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_1(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `3425 + d * (55 ±0)`
 		//  Estimated: `20795 + d * (2568 ±0)`
@@ -1673,7 +1681,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(883), added: 3358, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_2(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_2(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4732 + d * (54 ±0)`
 		//  Estimated: `20795 + d * (2568 ±25)`
@@ -1721,7 +1730,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(883), added: 3358, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_4(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_4(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4775 + d * (52 ±0)`
 		//  Estimated: `20795 + d * (2568 ±19)`
@@ -1769,7 +1779,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(883), added: 3358, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_8(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_8(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4973 + d * (44 ±0)`
 		//  Estimated: `21462 + d * (2568 ±19)`
@@ -1817,7 +1828,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(883), added: 3358, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_16(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_16(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4924 + d * (64 ±0)`
 		//  Estimated: `41934 + d * (2568 ±20)`
@@ -1865,7 +1877,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(883), added: 3358, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_32(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_32(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4356 + d * (113 ±0)`
 		//  Estimated: `82878 + d * (2568 ±0)`
@@ -1913,7 +1926,8 @@ impl<T: frame_system::Config> indiv_pallet_coinage::WeightInfo for WeightInfo<T>
 	/// Storage: `AssetsHolder::Holds` (r:1 w:1)
 	/// Proof: `AssetsHolder::Holds` (`max_values`: None, `max_size`: Some(883), added: 3358, mode: `MaxEncodedLen`)
 	/// The range of component `d` is `[1, 32]`.
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_max(d: u32, ) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_max(g: u32, e: u32) -> Weight {
+		let d = g.saturating_add(e);
 		// Proof Size summary in bytes:
 		//  Measured:  `4724 + d * (58 ±0)`
 		//  Estimated: `164766 + d * (2568 ±0)`
