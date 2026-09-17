@@ -846,22 +846,30 @@ impl<T: frame_system::Config> pallet_staking_async::WeightInfo for WeightInfo<T>
 	/// Proof: `Staking::ActiveEra` (`max_values`: Some(1), `max_size`: Some(13), added: 508, mode: `MaxEncodedLen`)
 	/// Storage: `Staking::ErasRewardPoints` (r:1 w:1)
 	/// Proof: `Staking::ErasRewardPoints` (`max_values`: None, `max_size`: Some(36018), added: 38493, mode: `MaxEncodedLen`)
-	/// Storage: `Staking::CurrentEra` (r:1 w:0)
+	/// Storage: `Staking::ErasValidatorIncentiveWeight` (r:999 w:0)
+	/// Proof: `Staking::ErasValidatorIncentiveWeight` (`max_values`: None, `max_size`: Some(68), added: 2543, mode: `MaxEncodedLen`)
+	/// Storage: `Staking::ErasSumWeightedPoints` (r:1 w:1)
+	/// Proof: `Staking::ErasSumWeightedPoints` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
+	/// Storage: `Staking::CurrentEra` (r:1 w:1)
 	/// Proof: `Staking::CurrentEra` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
-	/// Storage: `Parameters::Parameters` (r:4 w:0)
-	/// Proof: `Parameters::Parameters` (`max_values`: None, `max_size`: Some(37), added: 2512, mode: `MaxEncodedLen`)
-	/// Storage: `Staking::ErasTotalStake` (r:1 w:0)
-	/// Proof: `Staking::ErasTotalStake` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
-	/// Storage: `Staking::MaxStakedRewards` (r:1 w:0)
-	/// Proof: `Staking::MaxStakedRewards` (`max_values`: Some(1), `max_size`: Some(1), added: 496, mode: `MaxEncodedLen`)
-	/// Storage: `AhMigrator::AhMigrationStage` (r:1 w:0)
-	/// Proof: `AhMigrator::AhMigrationStage` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
-	/// Storage: `System::Account` (r:1 w:0)
+	/// Storage: `System::Account` (r:4 w:2)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	/// Storage: `Revive::OriginalAccount` (r:2 w:2)
+	/// Proof: `Revive::OriginalAccount` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `Staking::DisableMintingGuard` (r:1 w:1)
+	/// Proof: `Staking::DisableMintingGuard` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
 	/// Storage: `Staking::BondedEras` (r:1 w:1)
 	/// Proof: `Staking::BondedEras` (`max_values`: Some(1), `max_size`: Some(233), added: 728, mode: `MaxEncodedLen`)
+	/// Storage: `Staking::AreNominatorsSlashable` (r:1 w:0)
+	/// Proof: `Staking::AreNominatorsSlashable` (`max_values`: Some(1), `max_size`: Some(1), added: 496, mode: `MaxEncodedLen`)
 	/// Storage: `Staking::ForceEra` (r:1 w:0)
 	/// Proof: `Staking::ForceEra` (`max_values`: Some(1), `max_size`: Some(1), added: 496, mode: `MaxEncodedLen`)
+	/// Storage: `MultiBlockElection::CurrentPhase` (r:1 w:1)
+	/// Proof: `MultiBlockElection::CurrentPhase` (`max_values`: Some(1), `max_size`: Some(5), added: 500, mode: `MaxEncodedLen`)
+	/// Storage: `Staking::ErasNominatorsSlashable` (r:0 w:1)
+	/// Proof: `Staking::ErasNominatorsSlashable` (`max_values`: None, `max_size`: Some(13), added: 2488, mode: `MaxEncodedLen`)
+	/// Storage: `Staking::ErasValidatorIncentiveBudget` (r:0 w:1)
+	/// Proof: `Staking::ErasValidatorIncentiveBudget` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
 	/// Storage: `Staking::VoterSnapshotStatus` (r:0 w:1)
 	/// Proof: `Staking::VoterSnapshotStatus` (`max_values`: Some(1), `max_size`: Some(33), added: 528, mode: `MaxEncodedLen`)
 	/// Storage: `Staking::ErasValidatorReward` (r:0 w:1)
@@ -870,15 +878,20 @@ impl<T: frame_system::Config> pallet_staking_async::WeightInfo for WeightInfo<T>
 	/// Proof: `Staking::NextElectionPage` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
 	/// Storage: `Staking::ElectableStashes` (r:0 w:1)
 	/// Proof: `Staking::ElectableStashes` (`max_values`: Some(1), `max_size`: Some(32002), added: 32497, mode: `MaxEncodedLen`)
-	fn rc_on_session_report() -> Weight {
+	/// The range of component `v` is `[1, 1000]`.
+	fn rc_on_session_report(v: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `2272`
-		//  Estimated: `39483`
-		// Minimum execution time: 604_272_000 picoseconds.
-		Weight::from_parts(786_924_000, 0)
+		//  Measured:  `8505 + v * (61 ±0)`
+		//  Estimated: `39483 + v * (2543 ±0)`
+		// Minimum execution time: 165_656_000 picoseconds.
+		Weight::from_parts(153_620_565, 0)
 			.saturating_add(Weight::from_parts(0, 39483))
-			.saturating_add(T::DbWeight::get().reads(13))
-			.saturating_add(T::DbWeight::get().writes(7))
+			// Standard Error: 4_116
+			.saturating_add(Weight::from_parts(4_113_950, 0).saturating_mul(v.into()))
+			.saturating_add(T::DbWeight::get().reads(15))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(v.into())))
+			.saturating_add(T::DbWeight::get().writes(17))
+			.saturating_add(Weight::from_parts(0, 2543).saturating_mul(v.into()))
 	}
 	/// Storage: `Staking::ActiveEra` (r:1 w:0)
 	/// Proof: `Staking::ActiveEra` (`max_values`: Some(1), `max_size`: Some(13), added: 508, mode: `Measured`)
