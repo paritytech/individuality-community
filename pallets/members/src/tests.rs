@@ -6268,3 +6268,79 @@ mod integrity_tests {
 		});
 	}
 }
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmark_tail_setup_tests {
+	use super::*;
+	use frame_support::storage::{with_transaction, TransactionOutcome};
+	use sp_runtime::{DispatchError, StateVersion};
+
+	#[test]
+	fn direct_tail_fill_matches_real_member_insertion_with_existing_keys() {
+		TestExt::new().execute_with(|| {
+			create_test_collection(TEST_IDENTIFIER, 5);
+			generate_members(TEST_IDENTIFIER, 1, 3);
+			let pending = (0..3)
+				.map(|_| MockCrypto::member_from_secret(&create_unique_secret()))
+				.collect::<Vec<_>>();
+			let expected = with_transaction(|| {
+				assert_ok!(MembersPallet::add_members(&TEST_IDENTIFIER, pending.clone()));
+				TransactionOutcome::Rollback(Ok::<_, DispatchError>(sp_io::storage::root(
+					StateVersion::V1,
+				)))
+			})
+			.unwrap();
+			let actual = with_transaction(|| {
+				assert_ok!(MembersPallet::fill_onboarding_queue_tail(
+					&TEST_IDENTIFIER,
+					pending.clone()
+				));
+				TransactionOutcome::Rollback(Ok::<_, DispatchError>(sp_io::storage::root(
+					StateVersion::V1,
+				)))
+			})
+			.unwrap();
+			assert_eq!(actual, expected);
+			assert_ok!(MembersPallet::fill_onboarding_queue_tail(
+				&TEST_IDENTIFIER,
+				pending.clone()
+			));
+			assert_eq!(OnboardingQueue::<Test>::get(TEST_IDENTIFIER, 0).len(), 6);
+			assert_eq!(QueuePageIndices::<Test>::get(TEST_IDENTIFIER), (0, 0));
+			for member in pending {
+				assert!(matches!(
+					Members::<Test>::get(TEST_IDENTIFIER, member),
+					Some(RingPosition::Onboarding { queue_page: 0, .. })
+				));
+			}
+		});
+	}
+
+	#[test]
+	fn direct_tail_fill_rejects_invalid_batches_without_mutation() {
+		TestExt::new().execute_with(|| {
+			create_test_collection(TEST_IDENTIFIER, 5);
+			let existing = generate_members(TEST_IDENTIFIER, 1, 1)[0].0;
+			let fresh = MockCrypto::member_from_secret(&create_unique_secret());
+			assert_noop!(
+				MembersPallet::fill_onboarding_queue_tail(&NONEXISTENT_IDENTIFIER, vec![fresh]),
+				Error::<Test>::CollectionNotFound
+			);
+			assert_noop!(
+				MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, vec![fresh, fresh]),
+				Error::<Test>::KeyAlreadyInUse
+			);
+			assert_noop!(
+				MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, vec![fresh, existing]),
+				Error::<Test>::KeyAlreadyInUse
+			);
+			let overflow = (0..255)
+				.map(|_| MockCrypto::member_from_secret(&create_unique_secret()))
+				.collect::<Vec<_>>();
+			assert_noop!(
+				MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, overflow),
+				Error::<Test>::TooManyMembers
+			);
+		});
+	}
+}
