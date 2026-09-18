@@ -119,16 +119,16 @@ pub trait InspectCollection<AccountId> {
 	/// collection does not exist.
 	fn collection_owner(collection: CollectionId) -> Option<AccountId>;
 
-	/// The next item index the collection would allocate, or `None` if the collection does not
-	/// exist. Every allocated item index is below it, though deleted ones no longer resolve.
-	fn next_item_index(collection: CollectionId) -> Option<ItemIndex>;
+	/// The next item index the collection would allocate and its current number of item
+	/// definitions, from one backend read, or `None` if the collection does not exist.
+	/// Every allocated item index is below the next index, though deleted ones no longer
+	/// resolve; deletions decrement the count but never the next index.
+	fn item_draw_bounds(collection: CollectionId) -> Option<(ItemIndex, u32)>;
 
 	/// Whether an item definition currently exists in the collection.
-	/// The default assumes allocated indexes remain present, so backends with deletions must
-	/// override it.
-	fn item_exists(collection: CollectionId, item: ItemIndex) -> bool {
-		Self::next_item_index(collection).is_some_and(|next_item| item < next_item)
-	}
+	/// Deleted indexes stay below the next item index forever, so backends must answer
+	/// from their live item set, not from the allocation counter.
+	fn item_exists(collection: CollectionId, item: ItemIndex) -> bool;
 }
 
 /// Notified when a collection is deleted, so runtime pallets can drop cross-pallet state keyed
@@ -237,6 +237,8 @@ pub mod extension;
 pub mod migration;
 pub mod runtime_api;
 pub mod weights;
+
+const LOG_TARGET: &str = "runtime::pallet-scarcity";
 
 pub use weights::WeightInfo;
 
@@ -609,6 +611,10 @@ pub mod pallet {
 		StateNonceOverflow,
 		/// The item definition binds its instances to the purse key they were minted into.
 		Soulbound,
+		/// The configured per-collection metadata entry limit was reached.
+		TooManyCollectionMetadata,
+		/// The configured per-item metadata entry limit was reached.
+		TooManyItemMetadata,
 	}
 
 	/// Hold reason available to runtimes which back [`Config::Consideration`] with fungible holds.
@@ -726,6 +732,18 @@ pub mod pallet {
 		/// Maximum byte length of one metadata value.
 		#[pallet::constant]
 		type MaxValueLen: Get<u32>;
+
+		/// Maximum number of metadata entries stored on one collection.
+		///
+		/// This bounds what one collection query in the metadata runtime API can read.
+		#[pallet::constant]
+		type MaxCollectionMetadata: Get<u32>;
+
+		/// Maximum number of metadata entries stored on one item definition.
+		///
+		/// This bounds what one item query in the metadata runtime API can read.
+		#[pallet::constant]
+		type MaxItemMetadata: Get<u32>;
 
 		/// Maximum number of metadata overrides stored on one live instance.
 		///
@@ -1266,6 +1284,12 @@ pub mod pallet {
 					let Some(nft) =
 						NftsByOwner::<T>::get(owner).filter(|nft| nft.instance == instance)
 					else {
+						// `Instances` and `NftsByOwner` are kept in bijection by every mutation
+						// path, so this arm is inconsistent state, not a missing target.
+						log::error!(
+							target: crate::LOG_TARGET,
+							"Instances entry {instance:?} has no matching NftsByOwner entry"
+						);
 						return MetadataLayers::default();
 					};
 					MetadataLayers {
@@ -1305,16 +1329,11 @@ pub mod pallet {
 		}
 
 		/// Returns stored metadata layers for a positionally aligned query batch.
-		/// Oversized batches fail explicitly so callers can split them without losing queries.
+		/// The bounded argument enforces the batch ceiling at decode, before any allocation.
 		pub fn metadata_batch(
-			queries: Vec<crate::runtime_api::MetadataQuery>,
-		) -> Result<Vec<crate::runtime_api::MetadataLayers>, crate::runtime_api::BatchError> {
-			if queries.len() > crate::runtime_api::MAX_METADATA_QUERIES as usize {
-				return Err(crate::runtime_api::BatchError::TooLarge {
-					max: crate::runtime_api::MAX_METADATA_QUERIES,
-				});
-			}
-			Ok(queries.into_iter().map(Self::metadata_layers).collect::<Vec<_>>())
+			queries: crate::runtime_api::MetadataQueries,
+		) -> Vec<crate::runtime_api::MetadataLayers> {
+			queries.into_iter().map(Self::metadata_layers).collect::<Vec<_>>()
 		}
 
 		fn metadata_footprint(key: &MetadataKeyOf<T>, value: &MetadataValueOf<T>) -> Footprint {
@@ -1354,6 +1373,10 @@ pub mod pallet {
 					Self::deposit_event(Event::CollectionMetadataSet { collection, key });
 				},
 				(None, Some(value)) => {
+					ensure!(
+						info.metadata_count < T::MaxCollectionMetadata::get(),
+						Error::<T>::TooManyCollectionMetadata
+					);
 					info.metadata_count =
 						info.metadata_count.checked_add(1).ok_or(ArithmeticError::Overflow)?;
 					let deposit =
@@ -1407,6 +1430,10 @@ pub mod pallet {
 					Self::deposit_event(Event::ItemMetadataSet { collection, item, key });
 				},
 				(None, Some(value)) => {
+					ensure!(
+						definition.metadata_count < T::MaxItemMetadata::get(),
+						Error::<T>::TooManyItemMetadata
+					);
 					definition.metadata_count = definition
 						.metadata_count
 						.checked_add(1)
@@ -1777,8 +1804,8 @@ pub mod pallet {
 			Collections::<T>::get(collection).map(|info| info.owner)
 		}
 
-		fn next_item_index(collection: CollectionId) -> Option<ItemIndex> {
-			Collections::<T>::get(collection).map(|info| info.next_item_index)
+		fn item_draw_bounds(collection: CollectionId) -> Option<(ItemIndex, u32)> {
+			Collections::<T>::get(collection).map(|info| (info.next_item_index, info.item_count))
 		}
 
 		fn item_exists(collection: CollectionId, item: ItemIndex) -> bool {
@@ -2001,6 +2028,11 @@ pub mod pallet {
 						"collection metadata count does not match stored entries",
 					));
 				}
+				if info.metadata_count > T::MaxCollectionMetadata::get() {
+					return Err(TryRuntimeError::Other(
+						"collection metadata count exceeds configured maximum",
+					));
+				}
 			}
 
 			let mut actual_item_metadata_counts = BTreeMap::<(CollectionId, ItemIndex), u32>::new();
@@ -2034,6 +2066,11 @@ pub mod pallet {
 				if definition.metadata_count != actual {
 					return Err(TryRuntimeError::Other(
 						"item metadata count does not match stored entries",
+					));
+				}
+				if definition.metadata_count > T::MaxItemMetadata::get() {
+					return Err(TryRuntimeError::Other(
+						"item metadata count exceeds configured maximum",
 					));
 				}
 			}

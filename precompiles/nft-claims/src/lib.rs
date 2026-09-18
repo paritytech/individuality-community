@@ -93,9 +93,10 @@ pub const ERR_NOT_COLLECTION_OWNER: &str = "caller is not the collection owner";
 /// `CollectionSelector::validate` reports, which is forwarded as the revert reason. Anything
 /// else propagates as a plain error, which traps the frame rather than reverting.
 fn revert_nft_claims<T: indiv_pallet_nft_claims::Config>(e: DispatchError) -> Error {
-	let cases: [(NftClaimsError<T>, &str); 2] = [
+	let cases: [(NftClaimsError<T>, &str); 3] = [
 		(NftClaimsError::UnknownCollection, ERR_UNKNOWN_COLLECTION),
 		(NftClaimsError::NotCollectionOwner, ERR_NOT_COLLECTION_OWNER),
+		(NftClaimsError::MinterNotAContract, "no contract code at the minter address"),
 	];
 	for (error, reason) in cases {
 		if e == DispatchError::from(error) {

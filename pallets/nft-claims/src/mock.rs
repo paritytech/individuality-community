@@ -324,6 +324,16 @@ impl MintWithoutDeposit<u64> for MockNfts {
 /// claim's charge and refund assertions cannot pass tautologically.
 pub const MINT_HOOK_WEIGHT: Weight = Weight::from_parts(9_000, 300);
 
+impl MockNfts {
+	/// The next item index the mock backend holds for `collection`, if it exists.
+	fn next_item_index(collection: CollectionId) -> Option<ItemIndex> {
+		MockCollections::get()
+			.iter()
+			.find(|(existing, _, _)| *existing == collection)
+			.map(|(_, _, next_item_index)| *next_item_index)
+	}
+}
+
 impl InspectCollection<u64> for MockNfts {
 	fn collection_owner(collection: CollectionId) -> Option<u64> {
 		MockCollections::get()
@@ -332,11 +342,13 @@ impl InspectCollection<u64> for MockNfts {
 			.map(|(_, owner, _)| *owner)
 	}
 
-	fn next_item_index(collection: CollectionId) -> Option<ItemIndex> {
-		MockCollections::get()
+	fn item_draw_bounds(collection: CollectionId) -> Option<(ItemIndex, u32)> {
+		let next_item = Self::next_item_index(collection)?;
+		let missing = MissingItems::get()
 			.iter()
-			.find(|(existing, _, _)| *existing == collection)
-			.map(|(_, _, next_item_index)| *next_item_index)
+			.filter(|(existing, item)| *existing == collection && *item < next_item)
+			.count() as u32;
+		Some((next_item, next_item.saturating_sub(missing)))
 	}
 
 	fn item_exists(collection: CollectionId, item: ItemIndex) -> bool {

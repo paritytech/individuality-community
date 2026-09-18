@@ -102,6 +102,8 @@ impl crate::Config for Test {
 	type MetadataDeposit = TestStoragePrice;
 	type MaxKeyLen = ConstU32<32>;
 	type MaxValueLen = ConstU32<256>;
+	type MaxCollectionMetadata = ConstU32<6>;
+	type MaxItemMetadata = ConstU32<6>;
 	type MaxInstanceMetadata = MaxInstanceMetadata;
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;

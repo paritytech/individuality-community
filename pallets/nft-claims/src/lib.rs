@@ -228,7 +228,9 @@ pub trait CollectionSelector<AccountId> {
 
 	/// Ask `contract` as `owner` which of `collection`'s items the claim of `entropy` mints.
 	///
-	/// A failure reports the weight the call consumed before failing, so the claim charges it.
+	/// Claims and previews both run this. A failure reports the weight the call consumed
+	/// before failing: a claim charges it, while a preview rolls the call back and charges
+	/// nothing.
 	fn select(
 		owner: AccountId,
 		contract: H160,
@@ -545,8 +547,20 @@ pub mod pallet {
 		/// The collection has changed owners since registration, so its current owner must
 		/// register it again.
 		CollectionOwnerChanged,
-		/// The collection has no item definitions for [`ItemSelection::Random`] to draw from.
+		/// The collection has no live item definitions for [`ItemSelection::Random`] to draw
+		/// from, either because none were defined or because all were deleted.
 		NoItems,
+		/// The registered minter contract reverted instead of selecting an item.
+		MinterContractReverted,
+		/// The registered minter contract returned data that is not one canonical `uint32`
+		/// item index.
+		MinterContractInvalidReturn,
+		/// The address given for a minter registration holds no contract code.
+		MinterNotAContract,
+		/// The selected item has no definition in the collection, so the mint would reject it.
+		/// An [`ItemSelection::Random`] draw reaches this by landing on a deleted index, which
+		/// stays inside the draw range, and a contract selection by naming such an index.
+		UnknownItem,
 	}
 
 	/// Why an offchain worker's submission was rejected, reported to the caller as
@@ -1076,6 +1090,12 @@ pub mod pallet {
 		UnknownCollection,
 		CollectionOwnerChanged,
 		NoItems,
+		/// The selection named an index with no item definition. Carries the weight the
+		/// selection consumed, which a contract selection charges even though its item is gone.
+		UnknownItem {
+			item: ItemIndex,
+			weight_consumed: Weight,
+		},
 		Contract(SelectionError),
 	}
 
@@ -1086,6 +1106,8 @@ pub mod pallet {
 				Self::UnknownCollection => Error::<T>::UnknownCollection.into(),
 				Self::CollectionOwnerChanged => Error::<T>::CollectionOwnerChanged.into(),
 				Self::NoItems => Error::<T>::NoItems.into(),
+				Self::UnknownItem { weight_consumed, .. } =>
+					return SelectionError { error: Error::<T>::UnknownItem.into(), weight_consumed },
 				Self::Contract(error) => return error,
 			};
 			SelectionError { error, weight_consumed: Weight::zero() }
@@ -1099,6 +1121,7 @@ pub mod pallet {
 				Self::UnknownCollection => PreviewFailure::UnknownCollection,
 				Self::CollectionOwnerChanged => PreviewFailure::CollectionOwnerChanged,
 				Self::NoItems => PreviewFailure::NoItems,
+				Self::UnknownItem { item, .. } => PreviewFailure::UnknownItem { item },
 				Self::Contract(error) =>
 					PreviewFailure::ContractSelectionFailed { error: error.error },
 			}
@@ -1107,45 +1130,46 @@ pub mod pallet {
 
 	impl<T: Config> Pallet<T> {
 		/// Previews the item the real claim selection path chooses for one credit and collection.
-		/// Contract execution can change the current storage overlay, so runtime API callers must
-		/// discard that overlay after the request.
+		/// The selection runs in its own storage layer that is always rolled back, so a contract
+		/// selector's writes never outlive the query, whoever the caller is.
 		pub fn preview_mint(
 			credit: NftClaimCredit,
 			collection: CollectionId,
 		) -> crate::runtime_api::PreviewOutcome {
 			use crate::runtime_api::{PreviewFailure, PreviewOutcome};
+			use frame_support::storage::{with_transaction, TransactionOutcome};
 
-			match Self::select_item(collection, credit) {
-				Ok(selection) => {
-					if !T::Nfts::item_exists(collection, selection.item) {
-						return PreviewOutcome::Fails {
-							reason: PreviewFailure::UnknownItem { item: selection.item },
-						};
-					}
-					PreviewOutcome::Mints { item: selection.item, via: selection.kind }
-				},
-				Err(error) => PreviewOutcome::Fails { reason: error.into_preview_failure() },
-			}
+			with_transaction(|| {
+				let outcome = match Self::select_item(collection, credit) {
+					Ok(selection) =>
+						PreviewOutcome::Mints { item: selection.item, via: selection.kind },
+					Err(error) => PreviewOutcome::Fails { reason: error.into_preview_failure() },
+				};
+				TransactionOutcome::Rollback(Ok::<_, DispatchError>(outcome))
+			})
+			// Unreachable short of a caller already at the transactional layer limit, where no
+			// selection ran at all.
+			.unwrap_or_else(|error| PreviewOutcome::Fails {
+				reason: PreviewFailure::ContractSelectionFailed { error },
+			})
 		}
 
 		/// Previews a positionally aligned batch through the real claim selection path.
-		/// Oversized batches fail explicitly before any selector runs.
+		/// The bounded argument enforces the batch ceiling at decode, before any allocation.
 		pub fn preview_mints(
-			queries: Vec<crate::runtime_api::PreviewQuery>,
-		) -> Result<Vec<crate::runtime_api::PreviewOutcome>, crate::runtime_api::BatchError> {
-			if queries.len() > crate::runtime_api::MAX_PREVIEW_QUERIES as usize {
-				return Err(crate::runtime_api::BatchError::TooLarge {
-					max: crate::runtime_api::MAX_PREVIEW_QUERIES,
-				});
-			}
-			Ok(queries
+			queries: crate::runtime_api::PreviewQueries,
+		) -> Vec<crate::runtime_api::PreviewOutcome> {
+			queries
 				.into_iter()
 				.map(|query| Self::preview_mint(query.credit, query.collection))
-				.collect::<Vec<_>>())
+				.collect::<Vec<_>>()
 		}
 
 		/// The item of `collection` that claiming `credit` mints, per the collection's
 		/// registered [`ItemSelection`], with the weight the selection consumed.
+		///
+		/// The returned item has a live definition. Both selections can name an allocated index
+		/// whose definition was deleted, which is reported as [`Error::UnknownItem`].
 		///
 		/// A contract selection's failure is returned as its error: the contract is how the
 		/// collection's owner gates minting, so no fallback overrides it. A failure carries the
@@ -1159,11 +1183,13 @@ pub mod pallet {
 			let owner = T::Nfts::collection_owner(collection)
 				.ok_or(ItemSelectionError::UnknownCollection)?;
 			ensure!(owner == registration.owner, ItemSelectionError::CollectionOwnerChanged);
-			match registration.selection {
+			let selected = match registration.selection {
 				ItemSelection::Random => {
-					let next_item = T::Nfts::next_item_index(collection)
+					let (next_item, items) = T::Nfts::item_draw_bounds(collection)
 						.ok_or(ItemSelectionError::UnknownCollection)?;
-					ensure!(next_item > 0, ItemSelectionError::NoItems);
+					// The live count decides emptiness: a collection whose items were all
+					// deleted keeps its allocation counter, but has nothing to draw from.
+					ensure!(items > 0 && next_item > 0, ItemSelectionError::NoItems);
 					let draw = u32::from_le_bytes(
 						credit[..4].try_into().expect("a credit holds at least four bytes"),
 					);
@@ -1181,7 +1207,15 @@ pub mod pallet {
 							weight_consumed: selection.weight_consumed,
 						})
 						.map_err(ItemSelectionError::Contract),
-			}
+			}?;
+			ensure!(
+				T::Nfts::item_exists(collection, selected.item),
+				ItemSelectionError::UnknownItem {
+					item: selected.item,
+					weight_consumed: selected.weight_consumed
+				}
+			);
+			Ok(selected)
 		}
 
 		/// Advances the expected sequence over the sequenced trees of `batch` and reports the

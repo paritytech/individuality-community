@@ -228,11 +228,12 @@ mod claim {
 	use super::*;
 	use crate::{
 		runtime_api::{
-			BatchError, PreviewFailure, PreviewOutcome, PreviewQuery, SelectionKind,
+			PreviewFailure, PreviewOutcome, PreviewQueries, PreviewQuery, SelectionKind,
 			MAX_PREVIEW_QUERIES,
 		},
 		ClaimedLeaves, CollectionMinter, CollectionMinters, Error, ItemSelection,
 	};
+	use codec::{Decode, Encode};
 	use indiv_pallet_scarcity::CollectionId;
 	use indiv_support::{credit_trees::credit_leaf, identity::AccountOrPerson};
 	use sp_core::H160;
@@ -1081,17 +1082,15 @@ mod claim {
 			StatefulSelectorContract::set(&Some(STATEFUL_CONTRACT));
 			StatefulSelectorItem::set(&2);
 
-			let preview = frame_support::storage::with_transaction(|| {
-				frame_support::storage::TransactionOutcome::Rollback(
-					Result::<_, DispatchError>::Ok(NftClaims::preview_mints(vec![
-						PreviewQuery { credit: [1u8; 32], collection: COLLECTION },
-						PreviewQuery { credit: [2u8; 32], collection: PURE_COLLECTION },
-						PreviewQuery { credit: [3u8; 32], collection: STATEFUL_COLLECTION },
-					])),
-				)
-			})
-			.expect("the preview transaction starts")
-			.expect("three queries fit the preview cap");
+			let preview = NftClaims::preview_mints(
+				vec![
+					PreviewQuery { credit: [1u8; 32], collection: COLLECTION },
+					PreviewQuery { credit: [2u8; 32], collection: PURE_COLLECTION },
+					PreviewQuery { credit: [3u8; 32], collection: STATEFUL_COLLECTION },
+				]
+				.try_into()
+				.expect("three queries fit the preview cap"),
+			);
 			assert_eq!(
 				preview,
 				vec![
@@ -1150,7 +1149,7 @@ mod claim {
 	}
 
 	#[test]
-	fn preview_batch_compounds_repeated_stateful_selections() {
+	fn preview_queries_are_independent_and_roll_back_selector_state() {
 		new_test_ext().execute_with(|| {
 			const STATEFUL_COLLECTION: CollectionId = 5;
 			const STATEFUL_CONTRACT: H160 = H160::repeat_byte(0xbb);
@@ -1163,19 +1162,17 @@ mod claim {
 			StatefulSelectorContract::set(&Some(STATEFUL_CONTRACT));
 			StatefulSelectorItem::set(&2);
 
-			let preview = frame_support::storage::with_transaction(|| {
-				frame_support::storage::TransactionOutcome::Rollback(
-					Result::<_, DispatchError>::Ok(NftClaims::preview_mints(vec![
-						PreviewQuery { credit: [1u8; 32], collection: STATEFUL_COLLECTION },
-						PreviewQuery { credit: [2u8; 32], collection: STATEFUL_COLLECTION },
-					])),
-				)
-			})
-			.expect("the preview transaction starts")
-			.expect("two queries fit the preview cap");
+			let preview = NftClaims::preview_mints(
+				vec![
+					PreviewQuery { credit: [1u8; 32], collection: STATEFUL_COLLECTION },
+					PreviewQuery { credit: [2u8; 32], collection: STATEFUL_COLLECTION },
+				]
+				.try_into()
+				.expect("two queries fit the preview cap"),
+			);
 
-			// The second query sees the first query's contract state, exactly as claiming in
-			// that order would; the shared overlay is then discarded whole.
+			// Each query rolls its selector's writes back, so the second query sees the same
+			// state as the first rather than a claim order no submission can guarantee.
 			assert_eq!(
 				preview,
 				vec![
@@ -1184,9 +1181,45 @@ mod claim {
 						via: SelectionKind::Contract(STATEFUL_CONTRACT),
 					},
 					PreviewOutcome::Mints {
-						item: 3,
+						item: 2,
 						via: SelectionKind::Contract(STATEFUL_CONTRACT),
 					},
+				]
+			);
+			assert_eq!(StatefulSelectorItem::get(), 2);
+		});
+	}
+
+	#[test]
+	fn preview_failure_rolls_back_the_selectors_writes() {
+		new_test_ext().execute_with(|| {
+			const STATEFUL_COLLECTION: CollectionId = 5;
+			const STATEFUL_CONTRACT: H160 = H160::repeat_byte(0xbb);
+
+			register_named_collection(
+				STATEFUL_COLLECTION,
+				8,
+				ItemSelection::Contract(STATEFUL_CONTRACT),
+			);
+			StatefulSelectorContract::set(&Some(STATEFUL_CONTRACT));
+			StatefulSelectorItem::set(&2);
+			MissingItems::set(&vec![(STATEFUL_COLLECTION, 2)]);
+
+			// The first query selects the deleted item 2 and fails. Its selector advance rolls
+			// back, so the second query reports the same failure a fresh claim would hit,
+			// instead of a compounded item no claim sequence reaches.
+			assert_eq!(
+				NftClaims::preview_mints(
+					vec![
+						PreviewQuery { credit: [1u8; 32], collection: STATEFUL_COLLECTION },
+						PreviewQuery { credit: [2u8; 32], collection: STATEFUL_COLLECTION },
+					]
+					.try_into()
+					.expect("two queries fit the preview cap"),
+				),
+				vec![
+					PreviewOutcome::Fails { reason: PreviewFailure::UnknownItem { item: 2 } },
+					PreviewOutcome::Fails { reason: PreviewFailure::UnknownItem { item: 2 } },
 				]
 			);
 			assert_eq!(StatefulSelectorItem::get(), 2);
@@ -1217,15 +1250,19 @@ mod claim {
 			SelectorFails::set(&true);
 
 			assert_eq!(
-				NftClaims::preview_mints(vec![
-					PreviewQuery { credit: [1u8; 32], collection: UNREGISTERED },
-					PreviewQuery { credit: [1u8; 32], collection: OWNER_CHANGED },
-					PreviewQuery { credit: [1u8; 32], collection: DELETED_ITEM },
-					PreviewQuery { credit: [1u8; 32], collection: CONTRACT_FAILURE },
-					PreviewQuery { credit: [1u8; 32], collection: NO_ITEMS },
-					PreviewQuery { credit: [1u8; 32], collection: DELETED_COLLECTION },
-				]),
-				Ok(vec![
+				NftClaims::preview_mints(
+					vec![
+						PreviewQuery { credit: [1u8; 32], collection: UNREGISTERED },
+						PreviewQuery { credit: [1u8; 32], collection: OWNER_CHANGED },
+						PreviewQuery { credit: [1u8; 32], collection: DELETED_ITEM },
+						PreviewQuery { credit: [1u8; 32], collection: CONTRACT_FAILURE },
+						PreviewQuery { credit: [1u8; 32], collection: NO_ITEMS },
+						PreviewQuery { credit: [1u8; 32], collection: DELETED_COLLECTION },
+					]
+					.try_into()
+					.expect("six queries fit the preview cap"),
+				),
+				vec![
 					PreviewOutcome::Fails { reason: PreviewFailure::CollectionNotRegistered },
 					PreviewOutcome::Fails { reason: PreviewFailure::CollectionOwnerChanged },
 					PreviewOutcome::Fails { reason: PreviewFailure::UnknownItem { item: 1 } },
@@ -1236,26 +1273,21 @@ mod claim {
 					},
 					PreviewOutcome::Fails { reason: PreviewFailure::NoItems },
 					PreviewOutcome::Fails { reason: PreviewFailure::UnknownCollection },
-				])
+				]
 			);
 		});
 	}
 
 	#[test]
-	fn preview_rejects_an_oversized_batch_before_selection() {
-		new_test_ext().execute_with(|| {
-			assert_eq!(
-				NftClaims::preview_mints(vec![
-					PreviewQuery {
-						credit: [0u8; 32],
-						collection: COLLECTION
-					};
-					MAX_PREVIEW_QUERIES as usize + 1
-				]),
-				Err(BatchError::TooLarge { max: MAX_PREVIEW_QUERIES })
-			);
-			assert!(SelectorCalls::get().is_empty());
-		});
+	fn preview_query_bound_rejects_an_oversized_batch_at_decode() {
+		let query = PreviewQuery { credit: [0u8; 32], collection: COLLECTION };
+		let full = vec![query.clone(); MAX_PREVIEW_QUERIES as usize].encode();
+		let oversized = vec![query; MAX_PREVIEW_QUERIES as usize + 1].encode();
+
+		// The bound rejects an oversized batch at decode, before any query is materialized,
+		// so no selector can run for a request over the ceiling.
+		assert!(PreviewQueries::decode(&mut &full[..]).is_ok());
+		assert!(PreviewQueries::decode(&mut &oversized[..]).is_err());
 	}
 
 	#[test]
@@ -1278,6 +1310,96 @@ mod claim {
 				),
 				Error::<Test>::NoItems
 			);
+		});
+	}
+
+	#[test]
+	fn a_random_selection_over_an_emptied_collection_reports_no_items() {
+		new_test_ext().execute_with(|| {
+			let awards = awards();
+			store_tree(&awards);
+			// Two items were allocated and both were deleted: the allocation counter stays at
+			// two, so an emptiness check on it would pass and the claim would only fail later
+			// at the mint, with the wrong error.
+			add_collection(COLLECTION, COLLECTION_OWNER, 2);
+			MissingItems::set(&vec![(COLLECTION, 0), (COLLECTION, 1)]);
+
+			assert_claim_noop!(
+				NftClaims::claim(
+					RuntimeOrigin::signed(ALICE),
+					ClaimantKind::Account,
+					BLOCK,
+					[1u8; 32],
+					0,
+					proof_of(&awards, 0),
+					COLLECTION,
+					PURSE
+				),
+				Error::<Test>::NoItems
+			);
+
+			assert_eq!(
+				NftClaims::preview_mints(
+					vec![PreviewQuery { credit: [1u8; 32], collection: COLLECTION }]
+						.try_into()
+						.expect("one query fits the preview cap"),
+				),
+				vec![PreviewOutcome::Fails { reason: PreviewFailure::NoItems }]
+			);
+		});
+	}
+
+	#[test]
+	fn a_random_selection_landing_on_a_deleted_item_reports_unknown_item() {
+		new_test_ext().execute_with(|| {
+			let awards = awards();
+			store_tree(&awards);
+			// Item 1 is deleted while item 0 lives, so the collection still draws but the
+			// credit's own index is a hole. The claim names that as its error instead of
+			// passing a gone item to the mint.
+			MissingItems::set(&vec![(COLLECTION, 1)]);
+
+			assert_claim_noop!(
+				NftClaims::claim(
+					RuntimeOrigin::signed(ALICE),
+					ClaimantKind::Account,
+					BLOCK,
+					[1u8; 32],
+					0,
+					proof_of(&awards, 0),
+					COLLECTION,
+					PURSE
+				),
+				Error::<Test>::UnknownItem
+			);
+			assert!(!ClaimedLeaves::<Test>::contains_key(BLOCK));
+			assert!(MintedInstances::get().is_empty());
+
+			// The preview names the same item the claim refused, so a claimant can tell a hole
+			// from a collection that accepts no claims at all.
+			assert_eq!(
+				NftClaims::preview_mints(
+					vec![PreviewQuery { credit: [1u8; 32], collection: COLLECTION }]
+						.try_into()
+						.expect("one query fits the preview cap"),
+				),
+				vec![PreviewOutcome::Fails { reason: PreviewFailure::UnknownItem { item: 1 } }]
+			);
+
+			// The hole is the collection's to fill: the credit claims once item 1 is defined
+			// again, at the index the draw keeps mapping it to.
+			MissingItems::set(&vec![]);
+			assert_ok!(NftClaims::claim(
+				RuntimeOrigin::signed(ALICE),
+				ClaimantKind::Account,
+				BLOCK,
+				[1u8; 32],
+				0,
+				proof_of(&awards, 0),
+				COLLECTION,
+				PURSE
+			));
+			assert_eq!(MintedInstances::get(), vec![(COLLECTION, 1, PURSE)]);
 		});
 	}
 
@@ -1654,6 +1776,27 @@ mod claim {
 			let actual = err.post_info.actual_weight.expect("a failure refunds to a weight");
 			assert_eq!(actual, person_base.saturating_add(SELECTOR_FAILED_WEIGHT));
 			assert!(person_base.all_lt(actual));
+			assert!(actual.all_lt(charged));
+
+			// A contract that returns a deleted item ran to completion, so the claim charges
+			// what it consumed, not the cheaper failed-call weight.
+			SelectorFails::set(&false);
+			SelectorItem::set(&1);
+			MissingItems::set(&vec![(COLLECTION, 1)]);
+			let err = NftClaims::claim(
+				RuntimeOrigin::signed(ALICE),
+				ClaimantKind::Account,
+				BLOCK,
+				[1u8; 32],
+				0,
+				proof.clone(),
+				COLLECTION,
+				PURSE,
+			)
+			.expect_err("the selected item has no definition");
+			assert_eq!(err.error, Error::<Test>::UnknownItem.into());
+			let actual = err.post_info.actual_weight.expect("a failure refunds to a weight");
+			assert_eq!(actual, account_base.saturating_add(SELECTOR_CONSUMED_WEIGHT));
 			assert!(actual.all_lt(charged));
 		});
 	}
