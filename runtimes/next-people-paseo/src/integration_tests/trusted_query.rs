@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use next_people_paseo_runtime::{
+use crate::{
 	people::ExternalAssetLocation,
 	xcm_config::{AssetHubLocation, RelayLocation},
 	Runtime,
