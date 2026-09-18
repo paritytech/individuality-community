@@ -69,11 +69,9 @@
 //! nonce invalidates an authorization whenever that instance moves, including collection-owner
 //! force-transfers away from and back to the same purse. Following Coinage's purse model,
 //! [`AsScarcity`](extension::AsScarcity) replaces the signed origin before ordinary account checks,
-//! so an NFT-only purse does not need a System account. Failed dispatch restores the NFT and
-//! temporarily locks the purse key; after the lock expires, the same signed transaction may be
-//! submitted again if its NFT state is still current. Callers must sign mortal transactions with
-//! an era shorter than [`Config::LockPeriod`] so that retrying is always a fresh signing
-//! decision; see the [replay and mortality rules](extension#replay-and-mortality).
+//! so an NFT-only purse does not need a System account. Failed dispatch restores the NFT at the
+//! next state nonce and locks the purse key, which retires the transaction that failed; see the
+//! [replay rules](extension#replay).
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -385,10 +383,11 @@ pub mod pallet {
 		pub minted_at: u64,
 		/// Unix seconds; equal to `minted_at` until the first transfer.
 		pub last_moved: u64,
-		/// Monotonic ownership-state revision, incremented by every successful transfer.
+		/// Monotonic ownership-state revision, incremented by every dispatch made under it.
 		///
-		/// Purse-key authorizations bind to this value so moving an instance away and back cannot
-		/// revive an authorization created for its earlier ownership state.
+		/// An authorization names the nonce it was signed for, so each nonce authorizes one
+		/// dispatch. An instance moved away and back returns at a later nonce, so no old
+		/// authorization revives.
 		pub state_nonce: u64,
 	}
 
@@ -627,12 +626,13 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		/// Check that every call whose worst case a runtime sizes still fits a share of a block.
+		/// Check the configuration values a runtime picks.
 		///
 		/// [`Config::MaxInstanceMetadata`] sets the entries a mint carries and a burn removes, and
 		/// the weights of [`Config::MetadataPolicy`], [`Config::OnPurseOccupied`] and
 		/// [`Config::OnCollectionDeleted`] ride on the calls that run them. A runtime that
 		/// overshoots on any of them produces a call that no block can hold.
+		/// [`Config::LockPeriod`] must pace the retries of a failing purse key.
 		fn integrity_test() {
 			let budget = OcwWeightBudget::from_normal_max::<T>();
 			let pairs = T::MaxInstanceMetadata::get();
@@ -650,6 +650,10 @@ pub mod pallet {
 				T::WeightInfo::delete_collection()
 					.saturating_add(T::OnCollectionDeleted::on_delete_weight()),
 			);
+
+			// A zero lock period expires the lock in the block that creates it, so a purse key
+			// that fails dispatch retries in the next block at no cost.
+			assert!(T::LockPeriod::get() > 0, "`LockPeriod` must be greater than zero");
 		}
 
 		#[cfg(feature = "try-runtime")]
