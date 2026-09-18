@@ -74,6 +74,10 @@
 //! submitted again if its NFT state is still current. Callers must sign mortal transactions with
 //! an era shorter than [`Config::LockPeriod`] so that retrying is always a fresh signing
 //! decision; see the [replay and mortality rules](extension#replay-and-mortality).
+//!
+//! Each instance carries [`Config::MaximumMoves`] feeless moves, spends one per transfer, and any
+//! paid move refills them. The budget bounds the block space one mint buys, as Coinage's
+//! `MaximumAge` does for coins.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -390,6 +394,12 @@ pub mod pallet {
 		/// Purse-key authorizations bind to this value so moving an instance away and back cannot
 		/// revive an authorization created for its earlier ownership state.
 		pub state_nonce: u64,
+		/// Feeless moves spent out of [`Config::MaximumMoves`].
+		///
+		/// [`Pallet::transfer`] adds one and a paid move resets it to zero. The
+		/// [`AsScarcity`](crate::extension::AsScarcity) extension authorizes no transfer once the
+		/// two are equal.
+		pub moves: u16,
 	}
 
 	/// Post-failure backoff lock for an NFT purse key.
@@ -618,8 +628,8 @@ pub mod pallet {
 		StorageDeposit,
 	}
 
-	/// Version 1 added `transferability` to `ItemDefinition`.
-	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft`.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
 
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
@@ -741,6 +751,13 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxTransferPriority: Get<TransactionPriority>;
 
+		/// Feeless moves one instance gets between paid moves.
+		///
+		/// This bounds the block space one mint buys, since nothing else charges for a feeless
+		/// move.
+		#[pallet::constant]
+		type MaximumMoves: Get<u16>;
+
 		/// Cross-pallet cleanup run when a collection is deleted. Defaults to `()` for runtimes
 		/// with nothing keyed by a collection.
 		type OnCollectionDeleted: crate::OnCollectionDeleted;
@@ -827,7 +844,11 @@ pub mod pallet {
 			let from = owner;
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
+			// The extension checked the budget against this state. Only another move of this
+			// instance could spend it since, and that changes the state nonce the authorization
+			// names.
+			let moves = nft.moves.saturating_add(1);
+			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves, ..nft };
 			NftsByOwner::<T>::insert(&to, nft.clone());
 			Instances::<T>::insert(nft.instance, &to);
 			T::OnPurseOccupied::on_purse_occupied(&to);
@@ -1552,7 +1573,8 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
+			let nft =
+				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
 			NftsByOwner::<T>::remove(&from);
 			Locked::<T>::remove(&from);
@@ -1605,7 +1627,8 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
+			let nft =
+				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
 			NftsByOwner::<T>::remove(holder);
 			Locked::<T>::remove(holder);
@@ -1705,8 +1728,15 @@ pub mod pallet {
 			let next_live_supply =
 				definition.live_supply.checked_add(1).ok_or(Error::<T>::SupplyOverflow)?;
 			let now = T::UnixTime::now().as_secs();
-			let nft =
-				Nft { instance, collection, item, minted_at: now, last_moved: now, state_nonce: 0 };
+			let nft = Nft {
+				instance,
+				collection,
+				item,
+				minted_at: now,
+				last_moved: now,
+				state_nonce: 0,
+				moves: 0,
+			};
 			let instance_deposit = if with_deposit {
 				// Four storage entries back one instance: `NftsByOwner`, the `Instances`
 				// reverse index, `InstanceDeposits`, and `InstanceMetadataCount`. This measures
