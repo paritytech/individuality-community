@@ -134,8 +134,8 @@ parameter_types! {
 	pub storage LastOwnerChangedCollection: Option<crate::CollectionId> = None;
 }
 
-/// Records the collection passed to the owner-change hook and charges a distinct weight, so the
-/// wiring and the weight added to `claim_collection_ownership` are both observable in tests.
+/// Records the collection passed to the owner-change hook and charges a distinct weight, so
+/// tests can observe both the wiring and the weight added to `claim_collection_ownership`.
 pub struct RecordCollectionOwnerChange;
 impl crate::OnCollectionOwnerChanged for RecordCollectionOwnerChange {
 	fn on_collection_owner_changed(collection: crate::CollectionId) {

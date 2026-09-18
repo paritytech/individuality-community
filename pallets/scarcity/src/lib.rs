@@ -158,12 +158,11 @@ impl OnCollectionDeleted for () {
 	}
 }
 
-/// Notified when a collection changes owner, so runtime pallets can drop cross-pallet state the
-/// previous owner authorized without this pallet depending on theirs.
+/// Notified when a collection changes owner, so other pallets can drop state the previous owner
+/// authorized without this pallet depending on theirs.
 ///
-/// The handler runs inside `claim_collection_ownership` and must not fail; its weight is added
-/// to that call through [`Self::on_owner_change_weight`], so an under-report undercharges the
-/// handover.
+/// The handler runs inside `claim_collection_ownership` and must not fail. That call charges
+/// [`Self::on_owner_change_weight`], so an under-report undercharges the handover.
 pub trait OnCollectionOwnerChanged {
 	/// Runs after the collection record holds the new owner.
 	fn on_collection_owner_changed(collection: CollectionId);
@@ -171,10 +170,9 @@ pub trait OnCollectionOwnerChanged {
 	/// Worst-case weight of one [`Self::on_collection_owner_changed`], added to
 	/// `claim_collection_ownership`.
 	///
-	/// Benchmarks run against a runtime that wires a real handler measure the handler inside
-	/// `WeightInfo::claim_collection_ownership`, which the annotation then adds again.
-	/// Regenerating weights therefore double-counts this unless the benchmark runs with
-	/// `OnCollectionOwnerChanged = ()`.
+	/// A benchmark that runs a real handler measures it inside
+	/// `WeightInfo::claim_collection_ownership`, which the annotation adds again. Regenerate
+	/// weights with `OnCollectionOwnerChanged = ()` to avoid the double count.
 	fn on_owner_change_weight() -> frame_support::weights::Weight;
 }
 

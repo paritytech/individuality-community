@@ -397,17 +397,17 @@ fn an_address_without_code_is_rejected_at_registration() {
 /// `ClearCollectionMinter` into `OnCollectionOwnerChanged`.
 ///
 /// Pinned at the runtime level because the pallet cannot check its own wiring: `do_try_state`
-/// accepts a registration whose owner no longer holds the collection, since a runtime leaving
-/// the hook unwired has claims reject it instead. Without this test a runtime that drops the
-/// wiring stays green, and an A to B to A round trip would revive the old registration.
+/// accepts a registration whose owner no longer holds the collection. Without this test a
+/// runtime that drops the wiring stays green, and an A to B to A round trip revives the old
+/// registration.
 #[test]
 fn a_collection_handover_clears_its_claim_registration() {
 	new_test_ext().execute_with(|| {
 		let owner = account(1);
 		let new_owner = account(4);
 		create_collection(&owner);
-		// The claimant establishes its own consideration for the collection deposit, so it
-		// needs funds of its own before the handover.
+		// The claimant establishes its own consideration for the collection deposit, so it needs
+		// funds before the handover.
 		let _ = Balances::deposit_creating(&new_owner, 1u128 << 60);
 
 		assert_ok!(NftClaims::set_collection_minter(

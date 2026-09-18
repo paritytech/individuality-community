@@ -43,8 +43,8 @@ fn credit(i: u32) -> NftClaimCredit {
 
 /// A batch of `n` trees of the live stream, one per block, as the game pallet sends it.
 ///
-/// The sequence numbers are odd and start at one, so a receiver still expecting zero sees every
-/// delivery as ahead of the stream and each one opens a gap of its own.
+/// The sequence numbers are odd and start at one, so a receiver still expecting zero sees each
+/// delivery as ahead of the stream and opening a gap of its own.
 fn batch<T: Config>(n: u32) -> CreditTreeBatch<T> {
 	let mut trees = BoundedVec::new();
 	for i in 0..n {
@@ -71,10 +71,9 @@ mod benches {
 	use super::*;
 
 	/// Worst case: every tree in the batch is new, so each one is read and written, and no two
-	/// sequences are adjacent, so every delivery also reports a gap.
+	/// sequences are adjacent, so every delivery reports a gap as well.
 	///
-	/// A rejected delivery is cheaper than this: it emits one event and skips the read and the
-	/// write a stored tree pays for.
+	/// A rejected delivery is cheaper: it emits one event and skips the read and the write.
 	#[benchmark]
 	fn receive_credit_trees(
 		n: Linear<1, { T::MaxTreesPerMessage::get() }>,

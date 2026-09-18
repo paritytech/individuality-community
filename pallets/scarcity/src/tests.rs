@@ -355,8 +355,8 @@ fn claim_moves_exact_collection_deposit_and_authority() {
 		));
 		assert_ok!(Scarcity::claim_collection_ownership(RuntimeOrigin::signed(OTHER), 0));
 
-		// The owner-change hook ran for this collection, so cross-pallet state the previous
-		// owner authorized is cleared.
+		// The owner-change hook ran for this collection, so state the previous owner authorized
+		// is cleared.
 		assert_eq!(LastOwnerChangedCollection::get(), Some(0));
 
 		let claimed = Collections::<Test>::get(0).expect("claimed collection exists");

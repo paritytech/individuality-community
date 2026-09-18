@@ -173,8 +173,8 @@ parameter_types! {
 	pub storage SelectorCalls: Vec<(u64, H160, CollectionId, NftClaimCredit)> = Vec::new();
 	/// Whether the mock selector fails, standing in for a trapped or reverting contract.
 	pub storage SelectorFails: bool = false;
-	/// Whether the mock selector reports [`SELECTOR_OVERREPORTED_WEIGHT`], above its ceiling,
-	/// standing in for an adapter breaking the trait's consumption bound.
+	/// Whether the mock selector reports [`SELECTOR_OVERREPORTED_WEIGHT`], standing in for an
+	/// adapter that reports above its ceiling.
 	pub storage SelectorOverreports: bool = false;
 	/// A claim the selector submits from inside the selection, standing in for a minter
 	/// contract calling back into the runtime. Taken before dispatching so it runs once.

@@ -71,7 +71,7 @@ pub enum ItemSelection {
 	/// lands on fails.
 	Random,
 	/// The collection's minter contract picks the item, called with the claimed credit. The
-	/// credit is public before any claim and chosen by the submitter, so the contract must not
+	/// credit is public and the submitter picks which one to spend, so the contract must not
 	/// treat it as unpredictable.
 	Contract(H160),
 }
