@@ -21,17 +21,21 @@ use crate::{
 	extension::{AsScarcity, AsScarcityInfo, CustomInvalidity, Pre, Val},
 	mock::*,
 	runtime_api::{
-		BatchError, MetadataLayers, MetadataQuery, MetadataTarget, MAX_METADATA_QUERIES,
+		MetadataLayers, MetadataQueries, MetadataQuery, MetadataTarget, MAX_METADATA_QUERIES,
 	},
-	CollectionMetadata, Collections, Error, Event, InstanceDeposits, InstanceMetadata,
-	InstanceMetadataCount, Instances, ItemDefs, ItemMetadata, LockInfo, Locked, MetadataKeyOf,
-	MetadataValueOf, MintWithoutDeposit, NextCollectionId, NextInstanceId, Nft, NftsByOwner,
-	OnCollectionDeleted, Origin, Transferability,
+	CollectionMetadata, Collections, Error, Event, InspectCollection, InstanceDeposits,
+	InstanceMetadata, InstanceMetadataCount, Instances, ItemDefs, ItemMetadata, LockInfo, Locked,
+	MetadataEntry, MetadataKeyOf, MetadataValueOf, MintWithoutDeposit, NextCollectionId,
+	NextInstanceId, Nft, NftsByOwner, OnCollectionDeleted, Origin, Transferability,
 };
-use codec::Encode;
+use codec::{Decode, Encode};
 #[cfg(feature = "try-runtime")]
 use frame_support::traits::Hooks;
-use frame_support::{assert_noop, assert_ok, dispatch::Pays, traits::OriginTrait};
+use frame_support::{
+	assert_noop, assert_ok,
+	dispatch::Pays,
+	traits::{Get, OriginTrait},
+};
 use sp_runtime::{
 	traits::{TransactionExtension, TxBaseImplication},
 	transaction_validity::{
@@ -620,15 +624,19 @@ fn metadata_batch_returns_positionally_aligned_stored_layers() {
 
 		let empty = MetadataLayers::default();
 		assert_eq!(
-			Scarcity::metadata_batch(vec![
-				MetadataQuery::Instance(0),
-				MetadataQuery::Item { collection: 0, item: 0 },
-				MetadataQuery::Collection(0),
-				MetadataQuery::Instance(99),
-				MetadataQuery::Item { collection: 0, item: 99 },
-				MetadataQuery::Collection(99),
-			]),
-			Ok(vec![
+			Scarcity::metadata_batch(
+				vec![
+					MetadataQuery::Instance(0),
+					MetadataQuery::Item { collection: 0, item: 0 },
+					MetadataQuery::Collection(0),
+					MetadataQuery::Instance(99),
+					MetadataQuery::Item { collection: 0, item: 99 },
+					MetadataQuery::Collection(99),
+				]
+				.try_into()
+				.expect("six queries fit the cap"),
+			),
+			vec![
 				MetadataLayers {
 					resolved: Some(MetadataTarget::Instance {
 						instance: 0,
@@ -654,7 +662,7 @@ fn metadata_batch_returns_positionally_aligned_stored_layers() {
 				empty.clone(),
 				empty.clone(),
 				empty,
-			])
+			]
 		);
 	});
 }
@@ -680,8 +688,9 @@ fn metadata_batch_orders_entries_by_raw_key_bytes() {
 		}
 
 		// Storage iteration order is hash order; the API promises raw key byte order.
-		let layers = Scarcity::metadata_batch(vec![MetadataQuery::Collection(0)])
-			.expect("one query fits the cap");
+		let layers = Scarcity::metadata_batch(
+			vec![MetadataQuery::Collection(0)].try_into().expect("one query fits the cap"),
+		);
 		assert_eq!(
 			layers[0].collection,
 			vec![
@@ -697,16 +706,14 @@ fn metadata_batch_orders_entries_by_raw_key_bytes() {
 }
 
 #[test]
-fn metadata_batch_rejects_an_oversized_request() {
-	new_test_ext().execute_with(|| {
-		assert_eq!(
-			Scarcity::metadata_batch(vec![
-				MetadataQuery::Collection(0);
-				MAX_METADATA_QUERIES as usize + 1
-			]),
-			Err(BatchError::TooLarge { max: MAX_METADATA_QUERIES })
-		);
-	});
+fn metadata_query_bound_rejects_an_oversized_request_at_decode() {
+	let full = vec![MetadataQuery::Collection(0); MAX_METADATA_QUERIES as usize].encode();
+	let oversized = vec![MetadataQuery::Collection(0); MAX_METADATA_QUERIES as usize + 1].encode();
+
+	// The bound rejects an oversized batch at decode, before any query is materialized, so no
+	// storage scan can run for a request over the ceiling.
+	assert!(MetadataQueries::decode(&mut &full[..]).is_ok());
+	assert!(MetadataQueries::decode(&mut &oversized[..]).is_err());
 }
 
 #[test]
@@ -1196,15 +1203,15 @@ fn removing_absent_metadata_is_a_no_op() {
 }
 
 #[test]
-fn define_item_accepts_more_than_old_cap_and_charges_each_metadata_entry() {
+fn define_item_charges_each_metadata_entry_up_to_the_cap() {
 	new_test_ext().execute_with(|| {
+		let cap = <Test as crate::Config>::MaxItemMetadata::get();
 		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
 		let held_before = held(OWNER);
-		let metadata = (0..41)
-			.map(|index| {
-				(key(format!("key-{index}").as_bytes()), value(format!("value-{index}").as_bytes()))
-			})
-			.collect::<Vec<_>>();
+		let entry = |index: u32| {
+			(key(format!("key-{index}").as_bytes()), value(format!("value-{index}").as_bytes()))
+		};
+		let metadata = (0..cap).map(entry).collect::<Vec<_>>();
 		assert_ok!(Scarcity::define_item(
 			RuntimeOrigin::signed(OWNER),
 			0,
@@ -1213,13 +1220,84 @@ fn define_item_accepts_more_than_old_cap_and_charges_each_metadata_entry() {
 		));
 
 		let definition = ItemDefs::<Test>::get(0, 0).expect("item definition exists");
-		assert_eq!(ItemMetadata::<Test>::iter_prefix((0, 0)).count(), 41);
-		assert_eq!(Scarcity::item_metadata_of(0, 0, &key(b"key-40")), Some(value(b"value-40")),);
+		assert_eq!(ItemMetadata::<Test>::iter_prefix((0, 0)).count(), cap as usize);
 		let metadata_deposit = ItemMetadata::<Test>::iter_prefix((0, 0))
 			.map(|(_, entry)| entry.deposit)
 			.sum::<u64>();
 		assert_eq!(held(OWNER), held_before + definition.deposit + metadata_deposit);
 		assert_eq!(Collections::<Test>::get(0).unwrap().owner_deposit, held(OWNER));
+
+		// The cap counts live entries, so one more insert fails until an entry is removed.
+		assert_noop!(
+			Scarcity::set_item_metadata(
+				RuntimeOrigin::signed(OWNER),
+				0,
+				0,
+				key(b"over-cap"),
+				Some(value(b"over-cap"))
+			),
+			Error::<Test>::TooManyItemMetadata
+		);
+		assert_ok!(Scarcity::set_item_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			0,
+			key(b"key-0"),
+			None
+		));
+		assert_ok!(Scarcity::set_item_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			0,
+			key(b"over-cap"),
+			Some(value(b"over-cap"))
+		));
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+#[test]
+fn collection_metadata_insertion_stops_at_the_cap() {
+	new_test_ext().execute_with(|| {
+		let cap = <Test as crate::Config>::MaxCollectionMetadata::get();
+		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+		for index in 0..cap {
+			assert_ok!(Scarcity::set_collection_metadata(
+				RuntimeOrigin::signed(OWNER),
+				0,
+				key(format!("key-{index}").as_bytes()),
+				Some(value(b"v"))
+			));
+		}
+
+		// Replacing an existing entry stays within the cap; a new key does not.
+		assert_ok!(Scarcity::set_collection_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			key(b"key-0"),
+			Some(value(b"replaced"))
+		));
+		assert_noop!(
+			Scarcity::set_collection_metadata(
+				RuntimeOrigin::signed(OWNER),
+				0,
+				key(b"over-cap"),
+				Some(value(b"v"))
+			),
+			Error::<Test>::TooManyCollectionMetadata
+		);
+		assert_ok!(Scarcity::set_collection_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			key(b"key-0"),
+			None
+		));
+		assert_ok!(Scarcity::set_collection_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			key(b"over-cap"),
+			Some(value(b"v"))
+		));
 		assert_ok!(Scarcity::do_try_state());
 	});
 }
@@ -2295,6 +2373,10 @@ fn delete_item_requires_dependencies_to_be_removed_and_never_reuses_its_id() {
 		let info = Collections::<Test>::get(0).expect("collection remains");
 		assert_eq!(info.item_count, 0);
 		assert_eq!(info.next_item_index, 1);
+		// The inspection view answers from the live item set, not the allocation counter, so
+		// a deleted index below `next_item_index` reads as absent and the count as empty.
+		assert_eq!(<Scarcity as InspectCollection<u64>>::item_draw_bounds(0), Some((1, 0)));
+		assert!(!<Scarcity as InspectCollection<u64>>::item_exists(0, 0));
 		assert_eq!(held(OWNER), held_before - definition_deposit);
 		System::assert_has_event(Event::<Test>::ItemDeleted { collection: 0, item: 0 }.into());
 
@@ -2545,6 +2627,45 @@ fn try_state_rejects_item_metadata_counter_mismatch() {
 		});
 
 		assert_try_state_error("item metadata count does not match stored entries");
+	});
+}
+
+#[test]
+fn try_state_rejects_collection_metadata_count_above_maximum() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+		let cap = <Test as crate::Config>::MaxCollectionMetadata::get();
+		for index in 0..=cap {
+			CollectionMetadata::<Test>::insert(
+				0,
+				key(&[index as u8]),
+				MetadataEntry { value: value(b"v"), deposit: 0 },
+			);
+		}
+		Collections::<Test>::mutate(0, |maybe_info| {
+			maybe_info.as_mut().expect("collection exists").metadata_count = cap + 1;
+		});
+
+		assert_try_state_error("collection metadata count exceeds configured maximum");
+	});
+}
+
+#[test]
+fn try_state_rejects_item_metadata_count_above_maximum() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		let cap = <Test as crate::Config>::MaxItemMetadata::get();
+		for index in 0..=cap {
+			ItemMetadata::<Test>::insert(
+				(0, 0, key(&[index as u8])),
+				MetadataEntry { value: value(b"v"), deposit: 0 },
+			);
+		}
+		ItemDefs::<Test>::mutate(0, 0, |maybe_definition| {
+			maybe_definition.as_mut().expect("item definition exists").metadata_count = cap + 1;
+		});
+
+		assert_try_state_error("item metadata count exceeds configured maximum");
 	});
 }
 
