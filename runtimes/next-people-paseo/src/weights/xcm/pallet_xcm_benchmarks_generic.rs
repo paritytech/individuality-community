@@ -468,4 +468,14 @@ impl<T: frame_system::Config> WeightInfo<T> {
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
+	// Storage: `PolkadotXcm::AuthorizedAliases` (r:1 w:0)
+	// Proof: `PolkadotXcm::AuthorizedAliases` (`max_values`: None, `max_size`: None, mode: `Measured`)
+	pub(crate) fn alias_origin() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `6181`
+		//  Estimated: `9646`
+		// Minimum execution time: 19_000_000 picoseconds.
+		Weight::from_parts(21_000_000, 9646)
+			.saturating_add(T::DbWeight::get().reads(1))
+	}
 }

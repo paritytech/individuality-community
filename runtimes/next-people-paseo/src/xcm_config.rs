@@ -250,12 +250,19 @@ pub type Barrier = TrailingSetTopicAsId<
 					// Parent and its pluralities (i.e. governance bodies) get free execution.
 					AllowExplicitUnpaidExecutionFrom<
 						ParentOrParentsPlurality,
+						// The barrier runs before fees: keep this computation-only.
+						// Do not use `TrustedAliasers` here.
 						CheapTrustedAliasers,
 					>,
 					// The chain the credit trees are delivered to. It sends back the roots it is
 					// finished with. Unlike `AllowAssetHubExecution` above, this accepts only a
 					// message that asks for free execution.
-					AllowExplicitUnpaidExecutionFrom<Equals<NextAhLocation>, CheapTrustedAliasers>,
+					AllowExplicitUnpaidExecutionFrom<
+						Equals<NextAhLocation>,
+						// The barrier runs before fees: keep this computation-only.
+						// Do not use `TrustedAliasers` here.
+						CheapTrustedAliasers,
+					>,
 					// Subscriptions for version tracking are OK.
 					AllowSubscriptionsFrom<ParentRelayOrSiblingParachains>,
 					// HRMP notifications from the relay chain are OK.
@@ -414,6 +421,7 @@ parameter_types! {
 }
 
 impl pallet_xcm::Config for Runtime {
+	// xcm_executor::Config::Aliasers includes pallet_xcm::AuthorizedAliasers.
 	type AuthorizedAliasConsideration = HoldConsideration<
 		AccountId,
 		Balances,
