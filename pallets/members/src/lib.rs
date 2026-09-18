@@ -3080,6 +3080,44 @@ pub mod pallet {
 		}
 
 		#[cfg(feature = "runtime-benchmarks")]
+		fn onboarding_queue_tail_free_slots(identifier: &Identifier) -> u32 {
+			let (_, tail) = QueuePageIndices::<T>::get(identifier);
+			let used = OnboardingQueue::<T>::decode_len(identifier, tail).unwrap_or(0) as u32;
+			T::OnboardingQueuePageSize::get().saturating_sub(used)
+		}
+
+		#[cfg(feature = "runtime-benchmarks")]
+		fn fill_onboarding_queue_tail(
+			identifier: &Identifier,
+			members: Vec<MemberOf<T>>,
+		) -> DispatchResult {
+			ensure!(Collections::<T>::contains_key(identifier), Error::<T>::CollectionNotFound);
+			let (head, tail) = QueuePageIndices::<T>::get(identifier);
+			let mut keys = OnboardingQueue::<T>::get(identifier, tail);
+			let mut seen = alloc::collections::BTreeSet::new();
+			for member in &members {
+				ensure!(
+					seen.insert(member.encode()) && !Members::<T>::contains_key(identifier, member),
+					Error::<T>::KeyAlreadyInUse
+				);
+			}
+			keys.try_extend(members.iter().cloned())
+				.map_err(|_| Error::<T>::TooManyMembers)?;
+			let queued_at = T::Clock::now().as_secs();
+			for member in members {
+				Members::<T>::insert(
+					identifier,
+					&member,
+					RingPosition::Onboarding { queue_page: tail, queued_at },
+				);
+				Self::deposit_event(Event::<T>::MemberAdded { key: member });
+			}
+			QueuePageIndices::<T>::insert(identifier, (head, tail));
+			OnboardingQueue::<T>::insert(identifier, tail, keys);
+			Ok(())
+		}
+
+		#[cfg(feature = "runtime-benchmarks")]
 		fn onboard_all_and_build_ring(
 			identifier: &Identifier,
 			ring_index: RingIndex,

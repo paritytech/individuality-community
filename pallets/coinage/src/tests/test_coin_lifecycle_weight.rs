@@ -30,6 +30,10 @@ fn worst_case_lifecycle_weight<T: Config>() -> Weight {
 	let max_aliases_single_ring = max_aliases.min(max_ring_capacity);
 
 	let max_split_outputs = T::MaxSplitOutputs::get();
+	let groups = max_split_outputs.min(
+		(i16::from(T::MaximumExponent::get()) - i16::from(T::MinimumExponent::get()) + 1) as u32,
+	);
+	let extras = max_split_outputs - groups;
 	let max_age = u32::from(T::MaximumAge::get());
 
 	// Per-key background cost from MemberService
@@ -59,11 +63,23 @@ fn worst_case_lifecycle_weight<T: Config>() -> Weight {
 	)
 	.max(Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
 		max_aliases_single_ring as usize,
-		max_split_outputs as usize,
+		groups,
+		extras,
+	))
+	.max(Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
+		max_aliases_single_ring as usize,
+		1,
+		max_split_outputs - 1,
 	))
 	.max(Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
 		max_aliases_single_ring as usize,
-		max_split_outputs as usize,
+		groups,
+		extras,
+	))
+	.max(Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
+		max_aliases_single_ring as usize,
+		1,
+		max_split_outputs - 1,
 	))
 	.max(Pallet::<T>::unload_recycler_into_external_asset_prepaid_weight(
 		max_aliases_single_ring as usize,
@@ -126,12 +142,21 @@ fn average_lifecycle_includes_each_phase_and_deposit_surcharge_once() {
 		// Eight aliases is an exact sample, independent of the interpolation implementation.
 		assert_eq!(MAX_CONSOLIDATION / 2, 8);
 		let outputs = MAX_SPLIT_OUTPUTS / 2;
+		// The mock exposes ten denominations (-2 through 7).
+		let (groups, extras) = (10, outputs - 10);
 		let unload = W::unload_recycler_into_coin_8()
 			.max(W::unload_recycler_into_external_asset_prepaid_8())
 			.max(W::unload_recycler_into_external_asset_from_output_8())
 			.max(W::unload_recycler_into_external_asset_non_anonymous_8())
-			.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(outputs))
-			.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(outputs))
+			.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(groups, extras))
+			.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(1, outputs - 1))
+			.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
+				groups, extras,
+			))
+			.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
+				1,
+				outputs - 1,
+			))
 			.max(W::unload_recycler_into_coins_prepaid_8(outputs))
 			.max(W::unload_recycler_into_coins_from_output_8(outputs));
 		let pay = W::pay_for_recycler_unload_fee_token_with_coin()

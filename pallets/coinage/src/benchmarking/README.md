@@ -66,6 +66,59 @@ still fill the ring because their measured work depends on its members.
 The output-fee extension signs a fixed maximum denomination and fee limit, so
 regenerating weights does not change its cached proof's message.
 
+## Mixed-output dispatch components
+
+Only `unload_recycler_into_external_asset_and_loaded_coins` groups loaded outputs by
+denomination. Its fourteen dispatch benchmarks use `g` distinct denominations and `e`
+additional coins at an existing denomination, so the output count is `g + e`.
+`validate_unload_calls(r, d)` retains its output-count component and uses one group.
+Coin-output calls retain their existing setup and weights.
+
+The mixed-output setup constructs one coin at each exponent from `MinimumExponent`
+through `MinimumExponent + g - 1`, followed by `e` coins at `MinimumExponent`.
+The input denomination is `MaximumExponent`; the remaining value becomes the external
+asset output. This costs `2^g - 1 + e` base units. A base unit is the asset amount of
+`MinimumExponent`, so the same arithmetic applies to negative minimum exponents.
+`FromOutput` reserves `ceil(quoted_asset_fee / base_unit) + 1` units; `Prepaid` reserves
+zero. The fee quote uses the benchmark asset and conversion pool.
+
+For each alias bucket `a`, the helper chooses the greatest `G` satisfying
+`2^G - 1 + (MaxSplitOutputs - G) + reserve <= a * 2^(MaximumExponent - MinimumExponent)`.
+The independent component ranges are `g = 1..G` and `e = 0..MaxSplitOutputs-G`.
+Metadata obtains the fee quote inside a rolled-back storage transaction, without
+initializing proof chunks. Every point inside this rectangle must construct a valid
+scenario; infeasible setup is an error, never a skipped measurement.
+
+At Paseo's exponent range `0..14` and 32 outputs, `G` is 13, 14 and 15 for one, two
+and at least four aliases when the reserve is at most 8,174 units. The production
+benchmark pool holds raw native and external assets in a 10,000:1 ratio; denomination
+zero is 10,000 raw external units. Recheck the quote after regenerating lifecycle
+weights because those weights determine the fee.
+
+The rectangle does not cover the entire valid call domain. Calls with one or two
+aliases can have one extra denomination with at most one repeat. `FromOutput` also
+requires the remaining value to cover its actual fee, which can be less than the
+benchmark reserve. Calls with
+fewer groups can have up to 31 repeats. The linear formula extrapolates into both
+regions. The setup tests verify their value and output construction.
+
+Every target collection starts with a full onboarding tail. The first output in each
+group reads that full page and writes a new page. A group of at most `MaxSplitOutputs`
+keys touches at most two pages, and this state reaches both pages for every group
+independent of repeats. `OnboardingQueue` and `QueuePageIndices` accesses therefore
+scale with `g`.
+
+The source ring is sealed before filler members are inserted. Source members still
+use seed 60,000 and the proven message is still `[0; 32]`, so filling target tails
+does not change the proof cache key. Filler members decode the hash of their index
+and group into the member encoding. They are not validated or onboarded. The measured
+call decodes and stores these bytes and validates its actual output keys normally.
+
+Regenerate both weight files through `/cmd bench` for `next-people-paseo` and
+`indiv_pallet_coinage`. Check that all fourteen mixed-output benchmarks run, queue
+accesses scale with `g` and per-coin accesses scale with `g + e`. Replace the temporary
+output-count formulas with the generated `(g, e)` formulas before merging.
+
 ## Regeneration feature flags
 
 Two feature flags toggle the regeneration mode. The harvest commands below
