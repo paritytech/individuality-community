@@ -41,6 +41,19 @@ const CHARLIE: AccountId32 = AccountId32::new(*b"30_____________________________
 const DAVE: AccountId32 = AccountId32::new(*b"40______________________________");
 const EVE: AccountId32 = AccountId32::new(*b"50______________________________");
 
+/// The earliest `game_play_time` `schedule_games` accepts for the game following `previous`.
+///
+/// The gap holds the previous game's player-process phase, the next game's registration, shuffle
+/// and post-shuffle margin, and one `OcwStepLatency` for `start_game` to be included.
+fn minimal_next_game_play_time(previous: &GameSchedule<u32, u128>) -> u32 {
+	let durations = <Test as Config>::DefaultPhaseDurations::get();
+	GameTimes::<Test>::player_process_end(previous)
+		+ <<Test as Config>::OcwStepLatency as Get<u32>>::get()
+		+ durations.registration
+		+ durations.shuffle
+		+ durations.post_shuffle_margin
+}
+
 // Test one game with votes, groups and reports including
 // - a player that doesn't send a report
 // - a player that is not a person
@@ -164,8 +177,6 @@ fn outdated_game_schedule_multi_game() {
 		let players = [AccountOrPerson::Account(ALICE), AccountOrPerson::Account(BOB)];
 
 		// 1. Two games are scheduled with minimum valid spacing (no overlap at scheduling time).
-		let durations = <Test as Config>::DefaultPhaseDurations::get();
-
 		let game_1 = GameSchedule::<u32, u128> {
 			game_play_time: 100,
 			rounds: 1,
@@ -173,14 +184,8 @@ fn outdated_game_schedule_multi_game() {
 			..Default::default()
 		};
 
-		let game_1_player_process_end = GameTimes::<Test>::player_process_end(&game_1);
-		let minimal_next_game_play_time = game_1_player_process_end
-			+ durations.registration
-			+ durations.shuffle
-			+ durations.post_shuffle_margin;
-
 		let game_2 = GameSchedule::<u32, u128> {
-			game_play_time: minimal_next_game_play_time,
+			game_play_time: minimal_next_game_play_time(&game_1),
 			rounds: 1,
 			max_group_size: 2,
 			..Default::default()
@@ -718,9 +723,10 @@ mod games_scheduling {
 
 			// Attempt to schedule more than the limit fails
 			let max_games: usize = <Test as Config>::MaxGameSchedules::get();
+			// Play times start at 100: a schedule at 0 leaves no room before its registration.
 			let too_many_games = (0..max_games + 1)
 				.map(|i| GameSchedule::<u32, u128> {
-					game_play_time: i as u32 * 100,
+					game_play_time: (i as u32 + 1) * 100,
 					rounds: 2,
 					max_group_size: 2,
 					..Default::default()
@@ -735,7 +741,7 @@ mod games_scheduling {
 			// Attempt to schedule less than the limit succeeds
 			let games_within_limit = (0..max_games - 1)
 				.map(|i| GameSchedule::<u32, u128> {
-					game_play_time: i as u32 * 100,
+					game_play_time: (i as u32 + 1) * 100,
 					rounds: 2,
 					max_group_size: 2,
 					..Default::default()
@@ -880,12 +886,8 @@ mod games_scheduling {
 				..Default::default()
 			};
 
-			let durations = <Test as Config>::DefaultPhaseDurations::get();
 			let game1_player_process_end = GameTimes::<Test>::player_process_end(&game1);
-			let minimal_next_game_play_time = game1_player_process_end
-				+ durations.registration
-				+ durations.shuffle
-				+ durations.post_shuffle_margin;
+			let minimal_next_game_play_time = minimal_next_game_play_time(&game1);
 			let game2 = GameSchedule::<u32, u128> {
 				// game2 reporting would start at game1 estimated end, leaving no time for
 				// registration and shuffle
@@ -5275,12 +5277,8 @@ mod cancel_game {
 				None,
 			));
 
-			let durations = <Test as Config>::DefaultPhaseDurations::get();
 			let next = GameSchedule::<u32, u128> {
-				game_play_time: GameTimes::<Test>::player_process_end(&current)
-					+ durations.registration
-					+ durations.shuffle
-					+ durations.post_shuffle_margin,
+				game_play_time: minimal_next_game_play_time(&current),
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
@@ -5532,15 +5530,38 @@ mod set_game_phases {
 	}
 
 	#[test]
+	fn shuffle_shorter_than_the_offchain_worker_needs_is_rejected() {
+		new_test_ext().execute_with(|| {
+			let minimum = Game::min_shuffle_duration();
+			assert!(minimum > 0, "the mock must enforce a minimum for this test to mean anything");
+
+			// One second below the minimum: the offchain worker could not complete the shuffle
+			// before its deadline, so every game would be cancelled.
+			let too_short = PhaseDurationValues { shuffle: minimum - 1, ..distinct_phases() };
+			assert_noop!(
+				Game::set_game_phases(RuntimeOrigin::root(), too_short),
+				Error::<Test>::ShuffleTooShort,
+			);
+			assert!(StoredPhaseDurations::<Test>::get().is_none());
+
+			// Exactly the minimum is accepted.
+			let shortest = PhaseDurationValues { shuffle: minimum, ..distinct_phases() };
+			assert_ok!(Game::set_game_phases(RuntimeOrigin::root(), shortest.clone()));
+			assert_eq!(StoredPhaseDurations::<Test>::get(), Some(shortest));
+		});
+	}
+
+	#[test]
 	fn override_propagates_to_game_scheduling() {
 		new_test_ext().execute_with(|| {
 			// Pick durations that are clearly distinguishable from the
 			// chain-default `GamePhaseDurations` so the assertion below
-			// would fail if `configured_phases()` ignored the override.
+			// would fail if `configured_phases()` ignored the override. Both derived times
+			// differ from the ones the default produces (997 and 1_002).
 			let phases = PhaseDurationValues {
 				registration: 1,
-				shuffle: 1,
-				post_shuffle_margin: 1,
+				shuffle: 3,
+				post_shuffle_margin: 2,
 				reporting: 1,
 				player_process: 1,
 			};
@@ -5556,9 +5577,9 @@ mod set_game_phases {
 
 			let game = GameStorage::<Test>::get().expect("game exists");
 			// With our overrides:
-			//   registration_ends = game_play_time - shuffle - post_shuffle_margin = 998
+			//   registration_ends = game_play_time - shuffle - post_shuffle_margin = 995
 			//   report_ends       = game_play_time + reporting                     = 1001
-			assert_eq!(game.registration_ends, 998);
+			assert_eq!(game.registration_ends, 995);
 			assert_eq!(game.report_ends, 1_001);
 		});
 	}
@@ -7636,6 +7657,17 @@ fn shuffle_step_retrieve_resumes_and_drains_both_phases() {
 #[test]
 fn integrity_test_passes() {
 	new_test_ext().execute_with(|| {
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+/// A runtime shipping a shuffle the offchain worker cannot complete fails at construction, rather
+/// than cancelling every game it ever runs.
+#[test]
+#[should_panic(expected = "`DefaultPhaseDurations.shuffle` must be at least `2 * OcwStepLatency`")]
+fn integrity_test_rejects_a_shuffle_shorter_than_the_offchain_worker_needs() {
+	new_test_ext().execute_with(|| {
+		MockShuffleDuration::set(&(Game::min_shuffle_duration() - 1));
 		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }

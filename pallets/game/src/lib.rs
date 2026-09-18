@@ -397,6 +397,16 @@ pub mod pallet {
 		#[pallet::constant]
 		type DefaultPhaseDurations: Get<PhaseDurationValues>;
 
+		/// The seconds needed for one offchain worker step to be submitted and included.
+		///
+		/// A step is a transaction the offchain worker submits at the end of a block, so it
+		/// applies in a later one. Phase durations and game schedules must leave room for that
+		/// delay, otherwise a phase deadline passes before its step lands. Set this from the
+		/// chain's observed step delay, not from its nominal block time: the deadlines are
+		/// compared against the block timestamp, which advances one slot at a time.
+		#[pallet::constant]
+		type OcwStepLatency: Get<u32>;
+
 		/// The Maximum number of game schedules the pallet can store.
 		#[pallet::constant]
 		type MaxGameSchedules: Get<u32>;
@@ -790,6 +800,10 @@ pub mod pallet {
 		/// `report`: fewer NFT claim credits can be recorded right now than the report may award.
 		/// Submit it again once later blocks have committed the buffered credits.
 		CreditCapacityExhausted,
+		/// `set_game_phases`: the shuffle is shorter than the offchain worker needs to complete
+		/// it, so every game would pass its shuffle deadline and be cancelled. The minimum is
+		/// [`Pallet::min_shuffle_duration`].
+		ShuffleTooShort,
 	}
 
 	/// A reason for this pallet placing a hold on funds.
@@ -832,6 +846,13 @@ pub mod pallet {
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		fn integrity_test() {
 			Self::integrity_test_steps();
+
+			assert!(
+				Self::validate_phase_durations(&T::DefaultPhaseDurations::get()).is_ok(),
+				"game: `DefaultPhaseDurations.shuffle` must be at least `2 * OcwStepLatency`, \
+				otherwise every game passes its shuffle deadline before the offchain worker \
+				completes the shuffle, and is cancelled",
+			);
 
 			let max_votes = Self::max_received_votes();
 			assert!(
@@ -1555,12 +1576,14 @@ pub mod pallet {
 				},
 			);
 
+			let step_latency = Duration::from_secs(T::OcwStepLatency::get().into());
+
 			for schedule in &games_schedules {
 				// Checks that games do not overlap in time and that schedules were provided in
 				// chronological order.
 
 				ensure!(
-					last_game_end_time
+					last_game_end_time.saturating_add(step_latency)
 						<= Duration::from_secs(GameTimes::<T>::registration_start(schedule) as u64),
 					Error::<T>::InvalidGameSetup
 				);
@@ -1753,6 +1776,9 @@ pub mod pallet {
 		/// Registration phase; otherwise fails with [`Error::InvalidGameState`]. This
 		/// prevents changing phase durations once players have committed to a game
 		/// whose timing is already locked in.
+		///
+		/// `phases.shuffle` must be at least [`Pallet::min_shuffle_duration`], otherwise the call
+		/// fails with [`Error::ShuffleTooShort`].
 		#[pallet::call_index(14)]
 		#[pallet::weight(<T as Config>::WeightInfo::set_game_phases())]
 		pub fn set_game_phases(
@@ -1760,6 +1786,7 @@ pub mod pallet {
 			phases: PhaseDurationValues,
 		) -> DispatchResult {
 			<T as Config>::ManagerOrigin::ensure_origin_or_root(origin)?;
+			Self::validate_phase_durations(&phases)?;
 			// No game or Registration only: in both, no player is committed to the
 			// timings we're about to change. The no-game case is intentional.
 			if let Some(game) = Game::<T>::get() {
@@ -1932,6 +1959,27 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
+		/// The shortest shuffle the offchain worker can complete, in seconds.
+		///
+		/// A shuffle holds two steps: `end_registration`, which moves the game into the shuffle,
+		/// and at least one `advance_shuffle`. Each costs one [`Config::OcwStepLatency`]. This is
+		/// a floor against a configuration that can never work, not a guarantee: a shuffle over
+		/// many players needs more than one `advance_shuffle`.
+		pub fn min_shuffle_duration() -> u32 {
+			T::OcwStepLatency::get().saturating_mul(2)
+		}
+
+		/// Checks the phase durations against the pace the offchain worker can keep.
+		///
+		/// [`Pallet::set_game_phases`] and the integrity test share this, so the value a runtime
+		/// ships and the value a manager sets are held to one rule.
+		pub(crate) fn validate_phase_durations(
+			phases: &PhaseDurationValues,
+		) -> Result<(), Error<T>> {
+			ensure!(phases.shuffle >= Self::min_shuffle_duration(), Error::<T>::ShuffleTooShort);
+			Ok(())
+		}
+
 		/// The offchain worker budget. A metered step declares it as its weight.
 		/// The block builder reserves it at inclusion. The refund releases the unused part.
 		pub fn step_budget() -> Weight {

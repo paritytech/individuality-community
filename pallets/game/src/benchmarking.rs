@@ -1819,9 +1819,9 @@ mod benches {
 
 		// The time to kickout a player is respected
 		frame_system::Pallet::<T>::set_block_number(
-			frame_system::Pallet::<T>::block_number()
-				+ T::NonPlayingKickoutTime::get()
-				+ One::one(),
+			frame_system::Pallet::<T>::block_number() +
+				T::NonPlayingKickoutTime::get() +
+				One::one(),
 		);
 
 		#[extrinsic_call]
@@ -2186,9 +2186,11 @@ mod benches {
 			GameState::Registration { .. },
 		));
 
+		// The shuffle must clear `min_shuffle_duration`, which the call validates. Deriving it
+		// keeps the input valid whatever `OcwStepLatency` a runtime configures.
 		let phases = PhaseDurationValues {
 			registration: 1,
-			shuffle: 1,
+			shuffle: pallet::Pallet::<T>::min_shuffle_duration().max(1),
 			post_shuffle_margin: 1,
 			reporting: 1,
 			player_process: 1,
@@ -2228,12 +2230,12 @@ mod benches {
 			let event_id = pallet::Pallet::<T>::airdrop_event_id(game.index, airdrop_index as u8);
 			let still_present = indiv_pallet_airdrop::Events::<T>::get(event_id);
 			assert!(
-				still_present.is_none()
-					|| matches!(
+				still_present.is_none() ||
+					matches!(
 						still_present.expect("checked").status,
-						Status::ClearingRegistrations { .. }
-							| Status::ClearingWinners { .. }
-							| Status::Finalizing { .. },
+						Status::ClearingRegistrations { .. } |
+							Status::ClearingWinners { .. } |
+							Status::Finalizing { .. },
 					),
 			);
 		}

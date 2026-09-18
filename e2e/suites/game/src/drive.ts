@@ -77,8 +77,27 @@ export const MIN_SPACING =
  */
 export const SPACING_SLACK = 90;
 
+/**
+ * Reads `OcwStepLatency`, the seconds the pallet reserves for one offchain-worker step.
+ *
+ * `schedule_games` adds it to the gap it demands between games, and `set_game_phases` rejects a
+ * shuffle shorter than twice it. Reading it keeps this suite in step with the runtime instead of
+ * restating its numbers. A runtime without the constant predates it, so the clock tick stands in.
+ */
+export async function readStepLatency(api: PeopleApi): Promise<number> {
+  try {
+    return Number(await api.constants.Game.OcwStepLatency());
+  } catch {
+    console.warn(`  runtime has no Game.OcwStepLatency constant, assuming ${CLOCK_TICK}s`);
+    return CLOCK_TICK;
+  }
+}
+
+/** The shortest shuffle the chain accepts, mirroring `Pallet::min_shuffle_duration`. */
+export const minShuffleDuration = (stepLatency: number) => 2 * stepLatency;
+
 /** The distance between consecutive play times used by this suite. */
-export const SPACING = MIN_SPACING + SPACING_SLACK;
+export const spacing = (stepLatency: number) => MIN_SPACING + stepLatency + SPACING_SLACK;
 
 /**
  * Headroom between reading the clock and `start_game` running, for the first game of a batch.
@@ -91,15 +110,25 @@ export const SPACING = MIN_SPACING + SPACING_SLACK;
 export const FIRST_GAME_MARGIN = 120;
 
 /** How far ahead of `now` the first game of a batch is placed. */
-export const FIRST_OFFSET = LEAD_TIME + FIRST_GAME_MARGIN;
+export const firstOffset = (stepLatency: number) => LEAD_TIME + stepLatency + FIRST_GAME_MARGIN;
 
 /** Any 65 bytes. The game only stores this identifier for the players to find each other. */
 const IDENTIFIER_KEY = Binary.toHex(new Uint8Array(65).fill(0x42));
 
 /**
  * Sets the phase durations.
+ *
+ * The shuffle is checked here first so a suite misconfiguration names itself, rather than arriving
+ * as a `ShuffleTooShort` module error from the chain.
  */
-export async function setPhases(api: PeopleApi, sudo: Sudo): Promise<void> {
+export async function setPhases(api: PeopleApi, sudo: Sudo, stepLatency: number): Promise<void> {
+  const minimum = minShuffleDuration(stepLatency);
+  if (PHASES.shuffle < minimum) {
+    throw new Error(
+      `GAME_PHASE_SHUFFLE is ${PHASES.shuffle}s, below the ${minimum}s the chain requires ` +
+        `(2 * OcwStepLatency, which is ${stepLatency}s)`,
+    );
+  }
   await sudo(api.tx.Game.set_game_phases({ phases: PHASES }).decodedCall, "Game.set_game_phases");
 }
 
@@ -108,9 +137,10 @@ export async function setPlayDeposit(api: PeopleApi, sudo: Sudo): Promise<void> 
   await sudo(api.tx.Game.set_play_deposit({ amount: PLAY_DEPOSIT }).decodedCall, "Game.set_play_deposit");
 }
 
-/** Play times for `count` games. The first sits `FIRST_OFFSET` ahead of `from`, the rest `SPACING` apart. */
-export function playTimes(from: number, count: number): number[] {
-  return Array.from({ length: count }, (_value, index) => from + FIRST_OFFSET + index * SPACING);
+/** Play times for `count` games, the first ahead of `from` and the rest evenly spaced. */
+export function playTimes(from: number, count: number, stepLatency: number): number[] {
+  const first = from + firstOffset(stepLatency);
+  return Array.from({ length: count }, (_value, index) => first + index * spacing(stepLatency));
 }
 
 /** Queues one game per play time. One player per group is enough on a `TESTNET` runtime. */

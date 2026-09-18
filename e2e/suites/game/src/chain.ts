@@ -47,6 +47,7 @@ export interface PeopleApi {
   query: Untyped;
   tx: Untyped;
   event: Untyped;
+  constants: Untyped;
 }
 
 /** Submits a call wrapped in `Sudo.sudo`. Reports the inner call's result. */

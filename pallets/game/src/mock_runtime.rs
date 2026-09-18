@@ -924,12 +924,20 @@ impl
 	}
 }
 
+parameter_types! {
+	/// The shuffle duration the mock ships, in seconds.
+	///
+	/// It is the smallest value clearing `2 * OcwStepLatency`, the minimum the pallet enforces.
+	/// Overridable so a test can drive `integrity_test` below that minimum.
+	pub storage MockShuffleDuration: u32 = 2;
+}
+
 pub struct GamePhaseDurations;
 impl Get<PhaseDurationValues> for GamePhaseDurations {
 	fn get() -> PhaseDurationValues {
 		PhaseDurationValues {
 			registration: 2,
-			shuffle: 1,
+			shuffle: MockShuffleDuration::get(),
 			post_shuffle_margin: 1,
 			reporting: 2,
 			player_process: 2,
@@ -1618,6 +1626,7 @@ impl indiv_pallet_game::Config for Test {
 	type PlayDeposit = deposit::MockConsideration;
 	type DefaultPlayDeposit = PlayDepositDefault;
 	type DefaultPhaseDurations = GamePhaseDurations;
+	type OcwStepLatency = ConstUint<1>;
 	type MaxGameSchedules = ConstUint<5>;
 	type MaxAttendanceHistoryDepth = ConstUint<2>;
 	type TicketSignature = TestSignature;

@@ -18,29 +18,37 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { chainNow, connect, devSigner, type Submit, type Sudo, submitters } from "./chain.ts";
 import {
-  FIRST_OFFSET,
+  CLOCK_TICK,
+  firstOffset,
+  minShuffleDuration,
   PHASES,
   playTimes,
-  SPACING,
+  readStepLatency,
   scheduleGames,
   setPhases,
   setPlayDeposit,
   signUp,
+  spacing,
 } from "./drive.ts";
 import { RUN_ZOMBIENET_TESTS } from "./env.ts";
 import { type BlockRecord, type Monitor, startMonitor } from "./monitor.ts";
 
 const SECOND = 1_000;
 
+/**
+ * The step latency the timeouts below are sized for.
+ */
+const TIMEOUT_STEP_LATENCY = 2 * CLOCK_TICK;
+
 /** A game runs from its registration start until the reporting deadline, plus the tail steps. */
-const GAME_MS = (FIRST_OFFSET + PHASES.reporting + PHASES.player_process) * SECOND;
+const GAME_MS = (firstOffset(TIMEOUT_STEP_LATENCY) + PHASES.reporting + PHASES.player_process) * SECOND;
 /** Every wait is given the phase it covers plus a generous tail for inclusion latency. */
 const PHASE_SLACK_MS = 90 * SECOND;
 /** Finalized blocks each idle window must observe without any game activity. */
 const IDLE_BLOCKS = 10;
 
 const ONE_GAME_TIMEOUT = GAME_MS + PHASE_SLACK_MS;
-const THREE_GAMES_TIMEOUT = GAME_MS + 2 * SPACING * SECOND + 3 * PHASE_SLACK_MS;
+const THREE_GAMES_TIMEOUT = GAME_MS + 2 * spacing(TIMEOUT_STEP_LATENCY) * SECOND + 3 * PHASE_SLACK_MS;
 
 /** An idle window plus room for the monitor to catch up before it starts. */
 const IDLE_TIMEOUT = IDLE_BLOCKS * 15 * SECOND + 120 * SECOND;
@@ -106,6 +114,8 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("game offchain worker drives the game stat
   let monitor: Monitor;
   let sudo: Sudo;
   let submit: Submit;
+  /** `Game::OcwStepLatency`, read from the chain so the suite follows the runtime's own rules. */
+  let stepLatency: number;
 
   beforeAll(async () => {
     chain = connect();
@@ -121,10 +131,17 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("game offchain worker drives the game stat
 
     monitor = startMonitor(chain.client, chain.api);
 
+    stepLatency = await readStepLatency(chain.api);
+    console.log(`  OcwStepLatency: ${stepLatency}s (minimum shuffle ${minShuffleDuration(stepLatency)}s)`);
+    expect(
+      stepLatency,
+      `OcwStepLatency exceeds the ${TIMEOUT_STEP_LATENCY}s the test timeouts are sized for`,
+    ).toBeLessThanOrEqual(TIMEOUT_STEP_LATENCY);
+
     const existing = await chain.api.query.Game.Game.getValue();
     expect(existing, "a game is already running; wait for it to finish or cancel it").toBe(undefined);
 
-    await setPhases(chain.api, sudo);
+    await setPhases(chain.api, sudo, stepLatency);
     await setPlayDeposit(chain.api, sudo);
   }, 120 * SECOND);
 
@@ -152,7 +169,7 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("game offchain worker drives the game stat
     async () => {
       const before = Number(await chain.api.query.Game.GameIndex.getValue());
       const now = await chainNow(chain.api);
-      await scheduleGames(chain.api, sudo, playTimes(now, 1));
+      await scheduleGames(chain.api, sudo, playTimes(now, 1, stepLatency));
 
       await expectFullGame(monitor, before + 1, () => signUp(chain.api, submit));
 
@@ -177,7 +194,7 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("game offchain worker drives the game stat
     async () => {
       const before = Number(await chain.api.query.Game.GameIndex.getValue());
       const now = await chainNow(chain.api);
-      await scheduleGames(chain.api, sudo, playTimes(now, 3));
+      await scheduleGames(chain.api, sudo, playTimes(now, 3, stepLatency));
 
       for (let offset = 1; offset <= 3; offset += 1) {
         await expectFullGame(monitor, before + offset, () => signUp(chain.api, submit));
@@ -194,7 +211,7 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("game offchain worker drives the game stat
     async () => {
       const before = Number(await chain.api.query.Game.GameIndex.getValue());
       const now = await chainNow(chain.api);
-      await scheduleGames(chain.api, sudo, playTimes(now, 1));
+      await scheduleGames(chain.api, sudo, playTimes(now, 1, stepLatency));
 
       const registration = await monitor.waitFor(
         entry => inPhase("Registration")(entry) && entry.gameIndex === before + 1,

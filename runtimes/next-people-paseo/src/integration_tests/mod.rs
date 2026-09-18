@@ -1617,7 +1617,10 @@ fn reduce_game_phase_durations() {
 		RuntimeOrigin::root(),
 		indiv_pallet_game::PhaseDurationValues {
 			registration: durations.registration / GAME_PHASE_SPEEDUP,
-			shuffle: durations.shuffle / GAME_PHASE_SPEEDUP,
+			// The shuffle does not shrink below what the offchain worker needs to complete it,
+			// which `set_game_phases` enforces.
+			shuffle: (durations.shuffle / GAME_PHASE_SPEEDUP)
+				.max(indiv_pallet_game::Pallet::<Runtime>::min_shuffle_duration()),
 			post_shuffle_margin: durations.post_shuffle_margin / GAME_PHASE_SPEEDUP,
 			reporting: durations.reporting / GAME_PHASE_SPEEDUP,
 			player_process: durations.player_process / GAME_PHASE_SPEEDUP,

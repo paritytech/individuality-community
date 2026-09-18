@@ -127,10 +127,10 @@ pub type RuntimeClock = BenchmarkClock;
 pub struct AccountContexts;
 impl frame_support::traits::Contains<Context> for AccountContexts {
 	fn contains(l: &Context) -> bool {
-		l == &indiv_pallet_mob_rule::MOB_CONTEXT ||
-			l == &indiv_pallet_score::Pallet::<Runtime>::score_context() ||
-			l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context() ||
-			l == &indiv_pallet_people_airdrops::Pallet::<Runtime>::people_airdrops_context()
+		l == &indiv_pallet_mob_rule::MOB_CONTEXT
+			|| l == &indiv_pallet_score::Pallet::<Runtime>::score_context()
+			|| l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context()
+			|| l == &indiv_pallet_people_airdrops::Pallet::<Runtime>::people_airdrops_context()
 	}
 }
 
@@ -654,6 +654,9 @@ impl indiv_pallet_game::Config for Runtime {
 	type MaxAttendanceHistoryDepth = ConstU32<12>;
 	type NftClaimCredits = NftCredits;
 	type DefaultPhaseDurations = GamePhaseDurations;
+	// One Aura slot (`SLOT_DURATION`), which is the granularity of the block timestamp every game
+	// deadline is compared against.
+	type OcwStepLatency = ConstU32<{ (SLOT_DURATION / 1_000) as u32 }>;
 	type AccountSignature = Signature;
 	type PlayerStatementLimit = PlayerStatementLimit;
 	type PeopleVoteWeight = ConstUint<2>;
@@ -1269,8 +1272,8 @@ parameter_types! {
 pub struct LitePeopleAccountContexts;
 impl frame_support::traits::Contains<Context> for LitePeopleAccountContexts {
 	fn contains(l: &Context) -> bool {
-		l == &indiv_pallet_people_lite::Pallet::<Runtime>::auth_context() ||
-			l == &indiv_pallet_score::Pallet::<Runtime>::score_context()
+		l == &indiv_pallet_people_lite::Pallet::<Runtime>::auth_context()
+			|| l == &indiv_pallet_score::Pallet::<Runtime>::score_context()
 	}
 }
 
