@@ -61,10 +61,11 @@
 //! claim mints:
 //!
 //! - [`ItemSelection::Contract`] asks the named contract, `mint(uint32 collection, bytes32
-//!   entropy)`, with the credit as the only entropy, and mints the item index it returns. The
-//!   current collection owner makes the bounded call and collateralizes its storage writes. Any
-//!   failure fails the claim and leaves the credit unspent because the contract is how an owner
-//!   gates their collection.
+//!   credit)`, with the claimed credit, and mints the item index it returns. The credit is public
+//!   before any claim, constant per credit and chosen by the submitter among their unclaimed
+//!   credits, so no minter may treat it as unpredictable. The current collection owner makes the
+//!   bounded call and collateralizes its storage writes. Any failure fails the claim and leaves the
+//!   credit unspent because the contract is how an owner gates their collection.
 //! - [`ItemSelection::Random`] needs no contract: the item index is the credit modulo the
 //!   collection's next item index. A claimant chooses which collection to claim into, but not the
 //!   item within it: for a fixed collection and item set the credit maps to one item and the credit
@@ -77,11 +78,13 @@
 //!
 //! Tree blocks are not contiguous, since a block that committed no credit has no tree, so a
 //! missing tree cannot be spotted from the block numbers. Each tree of the live stream instead
-//! carries a contiguous sequence number, and a batch whose first sequence is ahead of the one
-//! expected means the trees in between never arrived: [`Event::CreditTreesMissing`] names them.
-//! Recovering them is a `replay_credit_trees` call on the game pallet, naming the tree blocks,
-//! which anyone can submit. A resent tree carries no sequence number and leaves the tracking of
-//! the live stream alone.
+//! carries a contiguous sequence number, and only the trees a batch delivered and the pallet
+//! accepted advance the expected sequence. A sequence that is skipped, whether its tree was lost
+//! on the way or rejected as invalid on arrival, stays unconsumed and the gap check names it:
+//! [`Event::CreditTreesMissing`] reports each skipped run. Recovering them is a
+//! `replay_credit_trees` call on the game pallet, naming the tree blocks, which anyone can
+//! submit. A resent tree carries no sequence number and leaves the tracking of the live stream
+//! alone.
 //!
 //! The sequences a gap names are turned back into those tree blocks on the game chain. Its
 //! `CreditTreesSent` event lists the blocks one message delivered, in the order they go out, and
@@ -195,8 +198,8 @@ const CLAIM_METADATA_PAIRS: u32 = 0;
 pub struct Selection {
 	/// The item, within the collection the contract was asked about, the claim mints.
 	pub item: ItemIndex,
-	/// Weight the selection really consumed, refunded against
-	/// [`CollectionSelector::max_weight`]. Must not exceed it.
+	/// Weight the selection really consumed. The claim charges it, clamped to the
+	/// [`CollectionSelector::max_weight`] reservation.
 	pub weight_consumed: Weight,
 }
 
@@ -204,18 +207,31 @@ pub struct Selection {
 pub struct SelectionError {
 	/// What failed, which fails the claim.
 	pub error: DispatchError,
-	/// Weight the call really consumed before it failed, charged against
-	/// [`CollectionSelector::max_weight`]. Must not exceed it.
+	/// Weight the call really consumed before it failed. The claim charges it, clamped to the
+	/// [`CollectionSelector::max_weight`] reservation.
 	pub weight_consumed: Weight,
 }
 
 /// Runtime adapter calling a collection's minter contract as its current owner.
 ///
-/// The contract exposes `mint(uint32 collection, bytes32 entropy) returns (uint32 item)` and uses
-/// the claimed credit as its only entropy. The runtime limits execution and storage deposits.
+/// The contract exposes `mint(uint32 collection, bytes32 credit) returns (uint32 item)` and is
+/// called with the claimed credit. The credit is public before any claim, constant per credit
+/// and chosen by the submitter among their unclaimed credits, so no minter may treat it as
+/// unpredictable. The runtime limits execution and storage deposits.
 pub trait CollectionSelector<AccountId> {
-	/// Worst-case weight of one selection, reserved before dispatch.
-	fn max_weight() -> Weight;
+	/// Worst-case weight one claim into `collection` reserves for its item selection.
+	///
+	/// Reads the collection's registration: zero when no contract runs for it,
+	/// [`Self::contract_max_weight`] when a minter contract is registered. Called from the
+	/// claim's weight function, so the read itself is not charged.
+	fn max_weight(collection: CollectionId) -> Weight;
+
+	/// Worst-case weight of one minter contract call, which is [`Self::max_weight`] for a
+	/// contract-registered collection.
+	///
+	/// State-free, so the pallet's `integrity_test` can hold the contract worst case to the
+	/// block budget.
+	fn contract_max_weight() -> Weight;
 
 	/// Confirm `contract` can be registered as a minter, which is that code is deployed at the
 	/// address.
@@ -226,14 +242,14 @@ pub trait CollectionSelector<AccountId> {
 	/// validates every call's outcome.
 	fn validate(contract: H160) -> Result<(), DispatchError>;
 
-	/// Ask `contract` as `owner` which of `collection`'s items the claim of `entropy` mints.
+	/// Ask `contract` as `owner` which of `collection`'s items the claim of `credit` mints.
 	///
 	/// A failure reports the weight the call consumed before failing, so the claim charges it.
 	fn select(
 		owner: AccountId,
 		contract: H160,
 		collection: CollectionId,
-		entropy: NftClaimCredit,
+		credit: NftClaimCredit,
 	) -> Result<Selection, SelectionError>;
 }
 
@@ -363,9 +379,10 @@ pub mod pallet {
 		/// Executes a registered [`ItemSelection::Contract`] minter as the current collection
 		/// owner.
 		///
-		/// Every claim reserves `max_weight` and refunds it down to what the selection really
-		/// consumed, whether the claim succeeds or fails. The runtime also limits the storage
-		/// deposit the owner can pay for one call.
+		/// Every claim reserves the collection's `max_weight`, zero unless a contract is
+		/// registered, and refunds it down to what the selection really consumed, whether the
+		/// claim succeeds or fails. The runtime also limits the storage deposit the owner can
+		/// pay for one call.
 		type CollectionSelector: CollectionSelector<Self::AccountId>;
 
 		/// Maximum number of sibling hashes an inclusion proof may carry.
@@ -482,6 +499,10 @@ pub mod pallet {
 		/// A tree was received for a block that already holds a different root. The stored
 		/// root is kept, so the proofs built against it stay valid.
 		CreditTreeConflict { block: CreditTreeBlock },
+		/// A tree with a zero root or no leaves was received for `block` and not stored. Its
+		/// sequence, when it carried one, is not consumed, so the gap check reports it and a
+		/// replay can deliver the genuine tree.
+		CreditTreeRejected { block: CreditTreeBlock },
 		/// A credit `block` committed was claimed, minting `instance` of `collection`'s `item`
 		/// to the purse key `owner`.
 		CreditClaimed {
@@ -543,7 +564,9 @@ pub mod pallet {
 		/// it.
 		CollectionNotRegistered,
 		/// The collection has changed owners since registration, so its current owner must
-		/// register it again.
+		/// register it again. Only a runtime that leaves
+		/// [`indiv_pallet_scarcity::Config::OnCollectionOwnerChanged`] unwired reaches this, since
+		/// [`ClearCollectionMinter`] drops the registration on a handover.
 		CollectionOwnerChanged,
 		/// The collection has no item definitions for [`ItemSelection::Random`] to draw from.
 		NoItems,
@@ -589,6 +612,9 @@ pub mod pallet {
 			let count = batch.trees.len() as u32;
 			let mut stored = 0u32;
 			let now = T::UnixTime::now().as_secs();
+			// The sequences of the deliveries the loop accepts. A rejected delivery's sequence
+			// stays out, so it is not consumed and the gap check reports it.
+			let mut accepted = Vec::new();
 
 			for update in batch.trees.iter() {
 				if update.tree.leaf_count == 0 || update.tree.root.0 == [0u8; 32] {
@@ -602,6 +628,7 @@ pub mod pallet {
 						update.tree.root,
 						update.tree.leaf_count,
 					);
+					Self::deposit_event(Event::CreditTreeRejected { block: update.block });
 					continue;
 				}
 
@@ -633,7 +660,8 @@ pub mod pallet {
 					if existing != update.tree {
 						// A block's credits are committed once and the root never changes
 						// afterwards, so two roots for one block mean the chains disagree about
-						// what that block awarded.
+						// what that block awarded. The delivery is not accepted, so its
+						// sequence is left to the gap check as well.
 						log::error!(
 							target: LOG_TARGET,
 							"Conflicting credit tree for block {}: kept {:?}, ignored {:?}",
@@ -642,15 +670,19 @@ pub mod pallet {
 							update.tree.root,
 						);
 						Self::deposit_event(Event::CreditTreeConflict { block: update.block });
+						continue;
 					}
 				} else {
 					CreditTrees::<T>::insert(update.block, update.tree);
 					Self::note_tree_expiry(update.block, update.tree.timestamp);
 					stored = stored.saturating_add(1);
 				}
+				if let Some(sequence) = update.sequence {
+					accepted.push(sequence);
+				}
 			}
 
-			Self::note_sequences(&batch);
+			Self::note_sequences(accepted);
 
 			Self::deposit_event(Event::CreditTreesReceived { count, stored });
 
@@ -691,13 +723,15 @@ pub mod pallet {
 		/// refunded down to what the selection consumed, including on the error path.
 		#[pallet::call_index(1)]
 		// Resolving a person claimant reads the signer's alias binding, which an account
-		// claimant does not, so the kind the call names picks the weight.
+		// claimant does not, so the kind the call names picks the weight. The selector
+		// reservation follows the collection's registration: only a contract-registered
+		// collection reserves the contract ceiling.
 		#[pallet::weight(
 			match claimant {
 				ClaimantKind::Account => T::WeightInfo::claim_last_account(proof.len() as u32),
 				ClaimantKind::Person => T::WeightInfo::claim_last_person(proof.len() as u32),
 			}
-			.saturating_add(T::CollectionSelector::max_weight())
+			.saturating_add(T::CollectionSelector::max_weight(*collection))
 			.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS))
 		)]
 		pub fn claim(
@@ -759,11 +793,19 @@ pub mod pallet {
 			Self::spend_leaf(block, leaf_index, tree.leaf_count)
 				.map_err(|()| Error::<T>::LeafIndexOutOfBounds.with_weight(base))?;
 
+			// The weight any exit below reports is clamped to the reservation the declared
+			// weight carries, so a selector reporting more than its ceiling cannot charge past
+			// what was reserved. Read before the selection runs, since a reentrant minter could
+			// change the registration underneath it.
+			let reservation = T::CollectionSelector::max_weight(collection);
 			let selection = Self::select_item(collection, credit).map_err(|error| {
 				let error = error.into_claim_error::<T>();
-				error.error.with_weight(base.saturating_add(error.weight_consumed))
+				error
+					.error
+					.with_weight(base.saturating_add(error.weight_consumed.min(reservation)))
 			})?;
-			let SelectedItem { item, weight_consumed: selection_weight, .. } = selection;
+			let SelectedItem { item, weight_consumed, .. } = selection;
+			let selection_weight = weight_consumed.min(reservation);
 			let instance =
 				T::Nfts::mint_without_deposit(collection, item, mint_to.clone(), Vec::new())
 					.map_err(|e| e.with_weight(base.saturating_add(selection_weight)))?;
@@ -812,11 +854,17 @@ pub mod pallet {
 		///
 		/// Registration is the owner's opt-in to deposit-free supply growth: without it no claim
 		/// can mint into the collection. Withdrawing stops further claims and spends nothing
-		/// already claimed. Deleting the collection clears its registration through
-		/// [`indiv_pallet_scarcity::OnCollectionDeleted`], so an unknown collection can be neither
-		/// registered nor withdrawn. A contract selection is validated through
-		/// [`CollectionSelector::validate`], so an address with no code fails here rather than on
-		/// the first claim.
+		/// already claimed. Deleting the collection or handing it to a new owner clears its
+		/// registration through [`indiv_pallet_scarcity::OnCollectionDeleted`] and
+		/// [`indiv_pallet_scarcity::OnCollectionOwnerChanged`], so an unknown collection can be
+		/// neither registered nor withdrawn and a new owner has to register again. A contract
+		/// selection is validated through [`CollectionSelector::validate`], so an address with
+		/// no code fails here rather than on the first claim.
+		///
+		/// Registering a contract selection commits the owner's funds: the owner pays the
+		/// storage deposit of every minter call, up to the runtime's per-call limit. The
+		/// claimant pays for the contract's execution, on failure too, since a failed selection
+		/// still consumed the weight it burned.
 		///
 		/// ## Origin
 		/// The collection's Scarcity owner.
@@ -940,14 +988,14 @@ pub mod pallet {
 				T::WeightInfo::receive_credit_trees(T::MaxTreesPerMessage::get()),
 			);
 
-			// A claim reserves the selector's ceiling on top of its own worst case, whether or not
-			// the collection uses a contract. A worst case above the limit therefore blocks
-			// every claim, not only the contract-selected ones.
+			// A claim into a contract-registered collection reserves the contract ceiling on
+			// top of its own worst case, so an unsubmittable ceiling would make every such
+			// claim unsubmittable.
 			budget.assert_fits(
 				"claim",
 				T::WeightInfo::claim_last_account(T::MaxProofNodes::get())
 					.max(T::WeightInfo::claim_last_person(T::MaxProofNodes::get()))
-					.saturating_add(T::CollectionSelector::max_weight())
+					.saturating_add(T::CollectionSelector::contract_max_weight())
 					.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS)),
 			);
 
@@ -1052,9 +1100,10 @@ pub mod pallet {
 			// Registration requires a live collection and deletion clears it through
 			// `indiv_pallet_scarcity::OnCollectionDeleted`, so an entry naming a collection that no
 			// longer exists means the runtime did not wire that hook to `ClearCollectionMinter`.
-			// The registered owner is deliberately not compared against the current one: an
-			// ownership handover leaves the registration stale on purpose, and claims reject it.
-			for (collection, _) in CollectionMinters::<T>::iter() {
+			// The registered owner is deliberately not compared against the current one: a
+			// runtime without `OnCollectionOwnerChanged` wired leaves a handover's registration
+			// stale, and claims reject it.
+			for collection in CollectionMinters::<T>::iter_keys() {
 				if T::Nfts::collection_owner(collection).is_none() {
 					return Err(TryRuntimeError::Other(
 						"a collection minter registration outlived its collection",
@@ -1158,6 +1207,10 @@ pub mod pallet {
 				.ok_or(ItemSelectionError::CollectionNotRegistered)?;
 			let owner = T::Nfts::collection_owner(collection)
 				.ok_or(ItemSelectionError::UnknownCollection)?;
+			// Load-bearing: a registration binds an account and a contract address, not a code
+			// identity, so this re-check is what invalidates it after a handover the runtime's
+			// owner-change hook missed. A code-hash check could not replace it, since a
+			// delegate-call proxy swaps its implementation without changing its own hash.
 			ensure!(owner == registration.owner, ItemSelectionError::CollectionOwnerChanged);
 			match registration.selection {
 				ItemSelection::Random => {
@@ -1184,34 +1237,34 @@ pub mod pallet {
 			}
 		}
 
-		/// Advances the expected sequence over the sequenced trees of `batch` and reports the
-		/// ones that were skipped.
+		/// Advances the expected sequence over `accepted`, the sequences of the deliveries the
+		/// batch's loop accepted, and reports each skipped run as [`Event::CreditTreesMissing`].
 		///
-		/// Only the highest sequence in the batch matters: trees arrive in ascending order, so
-		/// anything below the expected sequence has already been accounted for, and one gap
-		/// event covers a whole run of lost trees.
-		fn note_sequences(batch: &CreditTreeBatch<T>) {
-			let Some(highest) = batch.trees.iter().filter_map(|update| update.sequence).max()
-			else {
-				// A batch of resent trees only, which says nothing about the live stream.
-				return;
-			};
-
-			let expected = NextExpectedSequence::<T>::get();
-			if highest < expected {
-				return;
+		/// A sequence below the expectation was accounted for by an earlier batch and is
+		/// ignored, so a late delivery cannot rewind the expectation. A sequence the loop
+		/// rejected is not in `accepted`, stays below the advanced expectation and is reported
+		/// here or by a later batch's gap check.
+		fn note_sequences(mut accepted: Vec<TreeSequence>) {
+			// Deliveries arrive in ascending order; sorting keeps the walk correct if one
+			// batch ever carries them otherwise.
+			accepted.sort_unstable();
+			let start = NextExpectedSequence::<T>::get();
+			let mut expected = start;
+			for sequence in accepted {
+				if sequence < expected {
+					continue;
+				}
+				if sequence > expected {
+					Self::deposit_event(Event::CreditTreesMissing {
+						from_sequence: expected,
+						to_sequence: sequence.saturating_sub(1),
+					});
+				}
+				expected = sequence.saturating_add(1);
 			}
-
-			let lowest =
-				batch.trees.iter().filter_map(|update| update.sequence).min().unwrap_or(highest);
-			if lowest > expected {
-				Self::deposit_event(Event::CreditTreesMissing {
-					from_sequence: expected,
-					to_sequence: lowest.saturating_sub(1),
-				});
+			if expected != start {
+				NextExpectedSequence::<T>::put(expected);
 			}
-
-			NextExpectedSequence::<T>::put(highest.saturating_add(1));
 		}
 
 		/// Whether `now` has reached the deadline [`Config::TreeTtl`] puts on a tree committed to
@@ -1526,9 +1579,10 @@ impl<T: Config> Pallet<T> {
 	}
 }
 
-/// Clears a collection's minter registration when Scarcity deletes the collection, so no
-/// registration outlives the collection it names. The runtime wires this into
-/// [`indiv_pallet_scarcity::Config::OnCollectionDeleted`].
+/// Clears a collection's minter registration when Scarcity deletes the collection or hands it
+/// to a new owner, so no registration outlives the collection or the owner who made it. The
+/// runtime wires this into [`indiv_pallet_scarcity::Config::OnCollectionDeleted`] and
+/// [`indiv_pallet_scarcity::Config::OnCollectionOwnerChanged`].
 pub struct ClearCollectionMinter<T>(core::marker::PhantomData<T>);
 
 impl<T: Config> indiv_pallet_scarcity::OnCollectionDeleted for ClearCollectionMinter<T> {
@@ -1537,6 +1591,18 @@ impl<T: Config> indiv_pallet_scarcity::OnCollectionDeleted for ClearCollectionMi
 	}
 
 	fn on_delete_weight() -> Weight {
+		T::DbWeight::get().writes(1)
+	}
+}
+
+impl<T: Config> indiv_pallet_scarcity::OnCollectionOwnerChanged for ClearCollectionMinter<T> {
+	fn on_collection_owner_changed(collection: CollectionId) {
+		// Without this removal an ownership round trip back to the registering owner would
+		// silently reactivate the old registration, contract selection included.
+		CollectionMinters::<T>::remove(collection);
+	}
+
+	fn on_owner_change_weight() -> Weight {
 		T::DbWeight::get().writes(1)
 	}
 }

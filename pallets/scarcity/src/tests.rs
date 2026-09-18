@@ -26,7 +26,7 @@ use crate::{
 	CollectionMetadata, Collections, Error, Event, InstanceDeposits, InstanceMetadata,
 	InstanceMetadataCount, Instances, ItemDefs, ItemMetadata, LockInfo, Locked, MetadataKeyOf,
 	MetadataValueOf, MintWithoutDeposit, NextCollectionId, NextInstanceId, Nft, NftsByOwner,
-	OnCollectionDeleted, Origin, Transferability,
+	OnCollectionDeleted, OnCollectionOwnerChanged, Origin, Transferability,
 };
 use codec::Encode;
 #[cfg(feature = "try-runtime")]
@@ -317,6 +317,8 @@ fn claim_fails_atomically_when_nominee_cannot_back_the_deposit() {
 		assert_eq!(after.owner_deposit, before.owner_deposit);
 		assert_eq!(held(OWNER), owner_hold);
 		assert_eq!(held(99), 0);
+		// The failed claim changed no owner, so the owner-change hook did not run.
+		assert_eq!(LastOwnerChangedCollection::get(), None);
 		assert_ok!(Scarcity::do_try_state());
 	});
 }
@@ -352,6 +354,10 @@ fn claim_moves_exact_collection_deposit_and_authority() {
 			Some(OTHER),
 		));
 		assert_ok!(Scarcity::claim_collection_ownership(RuntimeOrigin::signed(OTHER), 0));
+
+		// The owner-change hook ran for this collection, so cross-pallet state the previous
+		// owner authorized is cleared.
+		assert_eq!(LastOwnerChangedCollection::get(), Some(0));
 
 		let claimed = Collections::<Test>::get(0).expect("claimed collection exists");
 		assert_eq!(claimed.owner, OTHER);
@@ -2369,6 +2375,21 @@ fn delete_collection_weight_includes_the_deletion_hook() {
 				.saturating_add(RecordCollectionDeletion::on_delete_weight())
 		);
 	});
+}
+
+#[test]
+fn claim_collection_ownership_weight_includes_the_owner_change_hook() {
+	use crate::weights::WeightInfo;
+	use frame_support::dispatch::GetDispatchInfo;
+
+	let declared = crate::Call::<Test>::claim_collection_ownership { collection: 0 }
+		.get_dispatch_info()
+		.call_weight;
+	assert_eq!(
+		declared,
+		<() as WeightInfo>::claim_collection_ownership()
+			.saturating_add(RecordCollectionOwnerChange::on_owner_change_weight())
+	);
 }
 
 #[test]

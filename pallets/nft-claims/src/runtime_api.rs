@@ -30,7 +30,7 @@ pub const MAX_PREVIEW_QUERIES: u32 = 32;
 /// One credit and collection whose mint selection is previewed.
 #[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
 pub struct PreviewQuery {
-	/// The credit used as the Random draw or contract entropy.
+	/// The credit whose claim is previewed, which the Random draw or the minter contract reads.
 	pub credit: NftClaimCredit,
 	/// The registered collection the claim would mint into.
 	pub collection: CollectionId,
@@ -52,7 +52,8 @@ pub enum PreviewFailure {
 	CollectionNotRegistered,
 	/// The registered collection no longer exists.
 	UnknownCollection,
-	/// The collection owner differs from the owner who registered claims.
+	/// The collection owner differs from the owner who registered claims. Only a runtime that
+	/// does not clear registrations on a handover reports this.
 	CollectionOwnerChanged,
 	/// Random selection has no allocated item index to draw from.
 	NoItems,
