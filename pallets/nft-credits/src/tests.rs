@@ -926,26 +926,28 @@ fn a_new_game_starts_a_tree_of_its_own() {
 }
 
 #[test]
-fn a_dropped_block_loses_every_chunk_it_held() {
-	// Retention removes a block's awards by clearing its chunks, so a block that filled several
-	// must leave none behind. A chunk that outlived its block would sit in state for good, since
-	// the ring no longer names the block to remove it under.
+fn a_swept_block_loses_every_chunk_it_held() {
+	// The sweep removes a block's awards by clearing its chunks, so a block that filled several
+	// must leave none behind. A chunk that outlived its block would sit in state for good, nothing
+	// naming the block to remove it under any more.
 	new_test_ext().execute_with(|| {
-		MaxRetainedCreditTrees::set(&1);
 		System::set_block_number(1);
 		let block = System::block_number();
 		award_credits(1, AWARDS_PER_CHUNK * 2 + 5);
 		advance_process();
-		assert_eq!(RetainedCreditTreeBlocks::<Test>::get().to_vec(), vec![block]);
+		let credit_root =
+			NftClaimCreditRoots::<Test>::get(block).expect("the block awarded credits");
+		assert!(NftClaimCreditAwards::<Test>::iter_prefix(block).count() > 1);
 
-		// A second tree block pushes the first out of the one-entry window.
-		let second_block = System::block_number();
-		award_credits(2, 1);
-		advance_process();
+		let due = expiry_deadline(credit_root.timestamp, AwardRetentionTtl::get());
+		MOCK_UNIX_TIME.with(|time| *time.borrow_mut() = core::time::Duration::from_secs(due));
+		assert_ok!(NftCredits::sweep_expired_awards(
+			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+			credit_root.timestamp,
+			1
+		));
 
 		assert_eq!(NftClaimCreditAwards::<Test>::iter_prefix(block).count(), 0);
-		assert_eq!(RetainedCreditTreeBlocks::<Test>::get().to_vec(), vec![second_block]);
-		assert!(!awards_of(second_block).is_empty());
 	});
 }
 
@@ -1174,28 +1176,23 @@ fn the_room_left_in_a_buffer_is_capacity_for_its_own_game_only() {
 
 #[test]
 fn pruned_tree_block_keeps_its_root_and_falls_back_to_the_events() {
-	// A block dropping out of the retained window must cost no claimant their mint: the root
+	// A block whose awards the sweep has removed must cost no claimant their mint: the root
 	// stays, and the awards rebuilt from the block's events still yield the same proof.
 	new_test_ext().execute_with(|| {
-		MaxRetainedCreditTrees::set(&1);
 		let (tree_block, awards) = award_credits_in_one_block();
 		let credit_root =
 			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
 		let claimant = awards[0].claimant.clone();
 
-		// A second tree block pushes the first out of the one-entry window.
-		let report = build_report_with_opinion(&AccountOrPerson::Account(DAVE), |_| Report::Person);
-		assert_ok!(Game::report(RuntimeOrigin::signed(DAVE), report));
-		let second_block = System::block_number();
-		advance_process();
+		let due = expiry_deadline(credit_root.timestamp, AwardRetentionTtl::get());
+		MOCK_UNIX_TIME.with(|time| *time.borrow_mut() = core::time::Duration::from_secs(due));
+		assert_ok!(NftCredits::sweep_expired_awards(
+			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+			credit_root.timestamp,
+			1
+		));
 
 		assert!(awards_of(tree_block).is_empty());
-		assert!(!awards_of(second_block).is_empty());
-		assert_eq!(
-			RetainedCreditTreeBlocks::<Test>::get().to_vec(),
-			vec![second_block],
-			"the ring holds only the newest tree block",
-		);
 		// The root outlives the awards, so the credits are still mintable.
 		assert_eq!(NftClaimCreditRoots::<Test>::get(tree_block), Some(credit_root));
 		assert_eq!(
@@ -1312,9 +1309,9 @@ fn credit_proofs_api_serves_every_credit_of_a_claimant_that_holds_several() {
 	// Each proof for the claimant with the most credits must be the one a single-index query
 	// returns.
 	new_test_ext().execute_with(|| {
-		let (award_block, awards) = award_credits_in_one_block();
+		let (tree_block, awards) = award_credits_in_one_block();
 		let credit_root =
-			NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded credits");
+			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
 		let claimant = awards
 			.iter()
 			.max_by_key(|award| {
@@ -1330,14 +1327,14 @@ fn credit_proofs_api_serves_every_credit_of_a_claimant_that_holds_several() {
 			.collect::<Vec<_>>();
 		assert!(expected.len() > 1, "the claimant must hold several credits in the block");
 
-		let proofs = NftCredits::nft_claim_credit_proofs(award_block, &claimant)
+		let proofs = NftCredits::nft_claim_credit_proofs(tree_block, &claimant)
 			.expect("the block's awards are retained");
 		assert_eq!(proofs.len(), expected.len());
 		for (proof, (leaf_index, award)) in proofs.iter().zip(expected) {
 			assert_credit_proof(proof, &credit_root, award, leaf_index as u32);
 			// The same proof the per-index path builds, which rebuilds the tree for the one leaf.
 			let single = NftCredits::nft_claim_credit_proof_from_awards(
-				award_block,
+				tree_block,
 				awards.clone(),
 				leaf_index as u32,
 			)
@@ -1729,14 +1726,23 @@ fn credit_is_committed_once_and_keeps_its_first_tree_block() {
 	});
 }
 
-/// A delivery queue wider than the retained-awards ring is rejected: the tail of such a queue
-/// holds trees whose awards the ring has already pruned.
+/// A zero-length window retains nothing, leaving every claim on the events fallback.
 #[test]
-#[should_panic(expected = "MaxRetainedCreditTrees (8) must be >= MaxQueuedCreditTrees (9)")]
-fn integrity_test_rejects_queue_wider_than_retained_awards() {
+#[should_panic(expected = "`AwardRetentionTtl` must be greater than zero")]
+fn integrity_test_rejects_a_zero_award_window() {
 	new_test_ext().execute_with(|| {
-		MaxRetainedCreditTrees::set(&8);
-		MaxQueuedCreditTrees::set(&9);
+		AwardRetentionTtl::set(&0);
+		<Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+/// Awards outliving their root would prove nothing, the root being what a proof is checked
+/// against.
+#[test]
+#[should_panic(expected = "AwardRetentionTtl")]
+fn integrity_test_rejects_awards_outliving_their_root() {
+	new_test_ext().execute_with(|| {
+		AwardRetentionTtl::set(&(NftCredits::root_ttl() + 1));
 		<Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }
@@ -3022,6 +3028,254 @@ mod root_removal {
 	}
 }
 
+/// Removal of a block's awards once their own TTL has run out, the root outliving them.
+mod award_removal {
+	use super::*;
+	use frame_support::pallet_prelude::{
+		InvalidTransaction, TransactionSource, TransactionValidityError,
+	};
+	use indiv_support::credit_trees::{expiry_deadline, oldest_expiry, ExpiryTimestamp};
+
+	/// The wall-clock time the first tree block commits to. It is well above zero, so a test can
+	/// name a timestamp before it.
+	const TIMESTAMP: u32 = 1_000_000;
+
+	/// The wall-clock time the root of `block` commits to. One timestamp per block, so a sweep
+	/// takes the blocks in block order.
+	fn timestamp_of(block: u64) -> u32 {
+		TIMESTAMP.saturating_add(block as u32)
+	}
+
+	/// The first second at which `block`'s awards are past their TTL.
+	fn due_at(block: u64) -> u64 {
+		expiry_deadline(timestamp_of(block), AwardRetentionTtl::get())
+	}
+
+	fn set_now(secs: u64) {
+		MOCK_UNIX_TIME.with(|now| *now.borrow_mut() = Duration::from_secs(secs));
+	}
+
+	/// The timestamp the next award sweep starts at.
+	fn oldest_filed() -> Option<u32> {
+		oldest_expiry::<NftClaimCreditAwardExpiries<Test>, u64>()
+	}
+
+	fn credit_events() -> Vec<Event<Test>> {
+		recorded_events()
+			.into_iter()
+			.filter_map(|event| match event {
+				RuntimeEvent::NftCredits(event) => Some(event),
+				_ => None,
+			})
+			.collect()
+	}
+
+	/// Records a root and a block's worth of awards under each of `blocks`, as
+	/// `build_credit_tree` does once a block has awarded.
+	///
+	/// This also moves the block number off zero. `frame_system` drops the events of block zero,
+	/// and the sweep reports one.
+	fn record_tree_blocks(blocks: &[u64]) {
+		System::set_block_number(1);
+		for block in blocks {
+			let timestamp = timestamp_of(*block);
+			NftClaimCreditAwards::<Test>::insert(
+				block,
+				0,
+				BoundedVec::truncate_from(vec![NftClaimCreditAward {
+					claimant: AccountOrPerson::Account(ALICE),
+					credit: [*block as u8; 32],
+				}]),
+			);
+			NftClaimCreditRoots::<Test>::insert(
+				block,
+				NftClaimCreditTree {
+					game_index: 7,
+					root: CreditProofNode([*block as u8; 32]),
+					leaf_count: 1,
+					timestamp,
+				},
+			);
+			crate::Pallet::<Test>::note_root_expiry(*block, timestamp);
+			crate::Pallet::<Test>::note_award_expiry(*block, timestamp);
+		}
+	}
+
+	fn sweep(oldest: u32) -> frame_support::dispatch::DispatchResultWithPostInfo {
+		NftCredits::sweep_expired_awards(
+			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+			oldest,
+			1,
+		)
+	}
+
+	#[test]
+	fn a_tree_block_is_filed_under_the_timestamp_of_its_root() {
+		new_test_ext().execute_with(|| {
+			record_tree_blocks(&[10]);
+
+			assert!(NftClaimCreditAwardExpiries::<Test>::contains_key(
+				ExpiryTimestamp::from(timestamp_of(10)),
+				10
+			));
+			assert_eq!(oldest_filed(), Some(timestamp_of(10)));
+		});
+	}
+
+	#[test]
+	fn a_sweep_removes_the_due_awards_and_leaves_the_roots() {
+		new_test_ext().execute_with(|| {
+			record_tree_blocks(&[10]);
+			set_now(due_at(10));
+
+			assert_ok!(sweep(timestamp_of(10)));
+
+			assert_eq!(NftClaimCreditAwards::<Test>::iter().count(), 0);
+			assert_eq!(oldest_filed(), None);
+			// The roots run on the longer TTL, so a claimant holding their own proof still mints.
+			assert_eq!(NftClaimCreditRoots::<Test>::iter().count(), 1);
+			assert!(credit_events().contains(&Event::CreditAwardsExpired { count: 1 }));
+		});
+	}
+
+	#[test]
+	fn a_sweep_stops_at_the_first_tree_block_that_is_not_due() {
+		new_test_ext().execute_with(|| {
+			// Block 11's root is timestamped one second after block 10's, so its awards fall due
+			// one second later as well.
+			record_tree_blocks(&[10, 11]);
+			set_now(due_at(10));
+
+			let post = sweep(timestamp_of(10)).expect("the sweep goes through");
+
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::sweep_expired_awards(1)));
+			assert!(awards_of(10).is_empty());
+			assert!(!awards_of(11).is_empty(), "the tree block that is not due stays");
+			assert_eq!(oldest_filed(), Some(timestamp_of(11)));
+		});
+	}
+
+	#[test]
+	fn more_due_tree_blocks_than_one_sweep_removes_take_several() {
+		new_test_ext().execute_with(|| {
+			// Three tree blocks against a `MaxAwardBlocksPerSweep` of two.
+			record_tree_blocks(&[10, 11, 12]);
+			set_now(due_at(12));
+
+			let post = sweep(timestamp_of(10)).expect("the first sweep goes through");
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::sweep_expired_awards(2)));
+			assert_eq!(NftClaimCreditAwards::<Test>::iter().count(), 1);
+			assert_eq!(
+				oldest_filed(),
+				Some(timestamp_of(12)),
+				"the sweep is up to the third tree block",
+			);
+
+			assert_ok!(sweep(timestamp_of(12)));
+			assert_eq!(NftClaimCreditAwards::<Test>::iter().count(), 0);
+			assert_eq!(oldest_filed(), None);
+		});
+	}
+
+	#[test]
+	fn a_sweep_is_authorized_only_for_the_oldest_filed_timestamp() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::Local,
+					&timestamp_of(10)
+				),
+				Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(
+					AuthorizeInvalidity::NothingToSweepAwards as u8
+				))),
+				"nothing is filed",
+			);
+
+			record_tree_blocks(&[10, 11]);
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::Local,
+					&timestamp_of(10)
+				),
+				Err(InvalidTransaction::Future.into()),
+				"the oldest tree block's TTL has not run out",
+			);
+
+			set_now(due_at(10));
+			assert!(crate::Pallet::<Test>::authorize_sweep_expired_awards(
+				TransactionSource::Local,
+				&timestamp_of(10)
+			)
+			.is_ok());
+
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::External,
+					&timestamp_of(10)
+				),
+				Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(
+					AuthorizeInvalidity::TransactionNotLocal as u8
+				))),
+			);
+
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::Local,
+					&timestamp_of(11)
+				),
+				Err(InvalidTransaction::Future.into()),
+				"a timestamp the sweep has not reached",
+			);
+
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::Local,
+					&(timestamp_of(10) - 1)
+				),
+				Err(InvalidTransaction::Stale.into()),
+				"a timestamp the sweep is past",
+			);
+		});
+	}
+
+	#[test]
+	fn the_offchain_worker_submits_one_sweep_per_block() {
+		new_test_ext().execute_with(|| {
+			record_tree_blocks(&[10, 11, 12]);
+			set_now(due_at(10));
+			clear_pool();
+
+			crate::Pallet::<Test>::submit_award_expiry_sweep(5);
+			crate::Pallet::<Test>::submit_award_expiry_sweep(6);
+
+			// The discriminator is the submitting block, as it is for the root sweep: `oldest`
+			// alone cannot tell two blocks' sweeps apart while none has been included.
+			assert_eq!(
+				submitted_calls(),
+				vec![
+					RuntimeCall::NftCredits(Call::sweep_expired_awards {
+						oldest: timestamp_of(10),
+						discriminator: 5
+					}),
+					RuntimeCall::NftCredits(Call::sweep_expired_awards {
+						oldest: timestamp_of(10),
+						discriminator: 6
+					}),
+				]
+			);
+		});
+	}
+
+	#[test]
+	fn awards_fall_due_before_the_root_they_prove_against() {
+		new_test_ext().execute_with(|| {
+			// The ordering the two TTLs give, stated as the property it holds: a credit inside its
+			// claim deadline always has a root, whether or not its awards are still in state.
+			assert!(due_at(10) < expiry_deadline(timestamp_of(10), NftCredits::root_ttl()));
+		});
+	}
+}
+
 mod migration {
 	use super::*;
 	use crate::migration::MigrateV0ToV1;
@@ -3045,6 +3299,38 @@ mod migration {
 		);
 	}
 
+	/// The awards map as the old code declared it: one entry a block, holding every award of that
+	/// block. The key is the one the chunked map now shares between a block's chunks.
+	mod v0 {
+		use super::*;
+		use frame_support::{storage_alias, Twox64Concat};
+
+		#[storage_alias]
+		pub type NftClaimCreditAwards<T: Config> = StorageMap<
+			Pallet<T>,
+			Twox64Concat,
+			BlockNumberFor<T>,
+			BoundedVec<
+				NftClaimCreditAward<<T as frame_system::Config>::AccountId>,
+				frame_support::traits::ConstU32<1200>,
+			>,
+			ValueQuery,
+		>;
+	}
+
+	/// Records `block`'s awards the way a chain running the old code left them: one entry under the
+	/// old layout, with no expiry entry, and the block named by the ring that bounded them.
+	fn record_awards_without_an_expiry(block: u64) {
+		v0::NftClaimCreditAwards::<Test>::insert(
+			block,
+			BoundedVec::truncate_from(vec![NftClaimCreditAward {
+				claimant: AccountOrPerson::Account(ALICE),
+				credit: [block as u8; 32],
+			}]),
+		);
+		crate::migration::v1::NftClaimCreditAwardBlocks::<Test>::put(vec![block]);
+	}
+
 	#[test]
 	fn the_migration_files_every_root_under_its_timestamp() {
 		new_test_ext().execute_with(|| {
@@ -3061,6 +3347,88 @@ mod migration {
 			// The sweep starts at the oldest root, whichever was filed last.
 			assert_eq!(oldest_expiry::<RootExpiries<Test>, u64>(), Some(early));
 			assert_eq!(NftCredits::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn the_migration_files_the_awards_of_a_root_and_drops_the_ring() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<NftCredits>();
+			record_root_without_an_expiry(10, TIMESTAMP);
+			record_awards_without_an_expiry(10);
+			// A block the ring had already dropped: its root is filed, its awards are not there
+			// to file.
+			record_root_without_an_expiry(11, TIMESTAMP);
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			let timestamp = ExpiryTimestamp::from(TIMESTAMP);
+			assert!(NftClaimCreditAwardExpiries::<Test>::contains_key(timestamp, 10));
+			assert!(
+				!NftClaimCreditAwardExpiries::<Test>::contains_key(timestamp, 11),
+				"a block whose awards are gone is filed for its root alone",
+			);
+			assert!(
+				!crate::migration::v1::NftClaimCreditAwardBlocks::<Test>::exists(),
+				"the ring the awards used to be bounded by is dropped",
+			);
+		});
+	}
+
+	#[test]
+	fn the_migration_files_retained_awards_whose_root_is_gone_under_its_own_time() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<NftCredits>();
+			// A deletion message removed this block's root, so nothing on chain dates its awards.
+			record_awards_without_an_expiry(10);
+			let upgrade_time = 5 * TIMESTAMP;
+			MOCK_UNIX_TIME.with(|now| *now.borrow_mut() = Duration::from_secs(upgrade_time as u64));
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert!(
+				NftClaimCreditAwardExpiries::<Test>::contains_key(
+					ExpiryTimestamp::from(upgrade_time),
+					10
+				),
+				"a retained block with no root is filed, so a sweep still reaches its awards",
+			);
+		});
+	}
+
+	#[test]
+	fn migrated_awards_are_swept_like_recorded_ones() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			StorageVersion::new(0).put::<NftCredits>();
+			record_root_without_an_expiry(10, TIMESTAMP);
+			record_awards_without_an_expiry(10);
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			assert!(
+				v0::NftClaimCreditAwards::<Test>::contains_key(10),
+				"the migration leaves the awards where the old layout put them",
+			);
+
+			MOCK_UNIX_TIME.with(|now| {
+				*now.borrow_mut() =
+					Duration::from_secs(expiry_deadline(TIMESTAMP, AwardRetentionTtl::get()))
+			});
+			assert_ok!(NftCredits::sweep_expired_awards(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				TIMESTAMP,
+				1
+			));
+
+			assert!(
+				!v0::NftClaimCreditAwards::<Test>::contains_key(10),
+				"the old layout wrote the key a block's chunks are cleared by, so the sweep \
+			removes it",
+			);
+			assert_eq!(NftClaimCreditAwardExpiries::<Test>::iter().count(), 0);
+			assert!(
+				NftClaimCreditRoots::<Test>::contains_key(10),
+				"the root outlives the awards it was built from",
+			);
 		});
 	}
 
