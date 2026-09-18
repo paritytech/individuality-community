@@ -29,31 +29,22 @@
 //!
 //! The account checks deliberately see a non-system origin and skip it, so an NFT-only purse needs
 //! neither a System account nor a balance. [`AsScarcity`] consumes the NFT during preparation to
-//! prevent concurrent use. A successful move increments its state nonce. Failed dispatch restores
-//! the same state and applies a temporary backoff lock; once that lock expires, the same signed
-//! transaction can be submitted again. This is the same retry model as Coinage.
+//! prevent concurrent use. Successful and failed dispatches both increment the state nonce. A
+//! failed dispatch also restores the NFT and applies a temporary backoff lock.
 //!
 //! Payment is what the ordering turns on: transaction payment reads the signer from a system
 //! origin, so it charges nothing once this extension has replaced one, and a purse-key call is
 //! free for that reason alone. An integrator placing this extension after payment instead makes a
 //! balance-less purse unable to transact.
 //!
-//! # Replay and mortality
+//! # Replay
 //!
-//! Purse authorization is not account-nonce-based: a signed NFT transaction stays valid for as
-//! long as its purse still holds the named instance at the named state nonce. Two rules bound
-//! stale intent, exactly as in Coinage:
-//!
-//! * Callers must sign **mortal** transactions with an era shorter than [`Config::LockPeriod`]. A
-//!   successful move invalidates every outstanding authorization by incrementing the state nonce,
-//!   but an unexecuted transaction is otherwise replayable by anyone who has seen it until its era
-//!   expires.
-//! * Because the era ends before the shortest failure lock does, a failed transaction can never
-//!   re-enter a block: every retry after a failure is a fresh signing decision rather than a
-//!   third-party replay of the old transaction.
-//!
-//! A holder can also cancel an outstanding authorization at any time by moving the NFT, which
-//! increments its state nonce.
+//! Purse authorization is not account-nonce-based: a transaction stays valid while its purse
+//! holds the named instance at the named state nonce, and anyone who has seen it can submit it.
+//! Every dispatch moves that nonce on, a success by moving the NFT and a failure by restoring it
+//! at the next nonce, which retires every authorization signed for the old state. One that never
+//! executes stays valid until the NFT moves, so callers should sign mortal transactions to bound
+//! stale intent.
 
 use crate::{pallet::*, weights::WeightInfo, Config, Nft, Transferability};
 use codec::{Decode, DecodeWithMemTracking, Encode};
@@ -304,7 +295,10 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 	) -> Result<Weight, TransactionValidityError> {
 		if let Pre::UsingNft { owner, nft } = pre {
 			if result.is_err() {
-				NftsByOwner::<T>::insert(&owner, nft);
+				// The next state nonce retires the failed transaction, so nobody resubmits it when
+				// the lock expires. A nonce at the maximum stays put, where dispatch fails anyway.
+				let state_nonce = nft.state_nonce.saturating_add(1);
+				NftsByOwner::<T>::insert(&owner, Nft { state_nonce, ..nft });
 				Locked::<T>::insert(&owner, Self::failed_dispatch_lock(Locked::<T>::get(&owner)));
 			} else {
 				Locked::<T>::remove(&owner);

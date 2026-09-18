@@ -69,11 +69,9 @@
 //! nonce invalidates an authorization whenever that instance moves, including collection-owner
 //! force-transfers away from and back to the same purse. Following Coinage's purse model,
 //! [`AsScarcity`](extension::AsScarcity) replaces the signed origin before ordinary account checks,
-//! so an NFT-only purse does not need a System account. Failed dispatch restores the NFT and
-//! temporarily locks the purse key; after the lock expires, the same signed transaction may be
-//! submitted again if its NFT state is still current. Callers must sign mortal transactions with
-//! an era shorter than [`Config::LockPeriod`] so that retrying is always a fresh signing
-//! decision; see the [replay and mortality rules](extension#replay-and-mortality).
+//! so an NFT-only purse does not need a System account. Failed dispatch restores the NFT at the
+//! next state nonce and locks the purse key, which retires the transaction that failed; see the
+//! [replay rules](extension#replay).
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -385,10 +383,11 @@ pub mod pallet {
 		pub minted_at: u64,
 		/// Unix seconds; equal to `minted_at` until the first transfer.
 		pub last_moved: u64,
-		/// Monotonic ownership-state revision, incremented by every successful transfer.
+		/// Monotonic ownership-state revision, incremented by every dispatch made under it.
 		///
-		/// Purse-key authorizations bind to this value so moving an instance away and back cannot
-		/// revive an authorization created for its earlier ownership state.
+		/// An authorization names the nonce it was signed for, so each nonce authorizes one
+		/// dispatch. An instance moved away and back returns at a later nonce, so no old
+		/// authorization revives.
 		pub state_nonce: u64,
 	}
 
