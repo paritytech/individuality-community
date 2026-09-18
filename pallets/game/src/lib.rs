@@ -23,7 +23,7 @@
 //!    including their `game_play_time`.
 //!
 //! 2. **New Game**: if the previous game has finished result processing and there is a game
-//!    scheduled then `on_poll`/`on_idle` will start the new game in the registration phase. The new
+//!    scheduled then the `start_game` step starts the new game in the registration phase. The new
 //!    game is stored in [`Game`].
 //!
 //! 3. **Registration**: Players call [`Pallet::sign_up_with_account`],
@@ -31,9 +31,8 @@
 //!    player who fails to register before the deadline is considered absent.
 //!
 //! 4. **Shuffle**:
-//!    - After registration ends, `on_poll`/`on_idle` automatically triggers the transition to
-//!      shuffle phase.
-//!    - Then the `on_poll`/`on_idle` will operate the shuffle until all player have been shuffled.
+//!    - After registration ends, the `end_registration` step moves the game to the shuffle phase.
+//!    - Then `advance_shuffle` steps operate the shuffle until all players have been shuffled.
 //!    - Once the shuffling is complete, the pallet transitions to [`GameState::Reporting`].
 //!
 //! 5. **Reporting**:
@@ -43,13 +42,25 @@
 //!    - A player who fails to report will be considered absent in this game.
 //!
 //! 6. **Result Processing**:
-//!    - After `report_ends`, `on_poll`/`on_idle` automatically triggers the transition to the phase
+//!    - After `report_ends`, the `end_reporting` step moves the game to the phase
 //!      [`GameState::PlayerProcess`].
-//!    - Then `on_poll`/`on_idle` process all the results and update players final attendance status
-//!      based on the aggregate of received reports. If a player is considered a person (i.e.,
-//!      sufficiently many `Person` reports vs. `NotPerson`), they are marked as “attended” in
-//!      [`indiv_pallet_score`]. Otherwise, they are marked absent.
+//!    - Then `process_players` steps process all the results and update players final attendance
+//!      status based on the aggregate of received reports. If a player is considered a person
+//!      (i.e., sufficiently many `Person` reports vs. `NotPerson`), they are marked as “attended”
+//!      in [`indiv_pallet_score`]. Otherwise, they are marked absent.
 //!    - At the end of processing, the game concludes and is removed from storage.
+//!
+//! # Game steps
+//!
+//! The steps above and the cancellation of a game (`advance_cancelling`) are authorized calls.
+//! This pallet's offchain worker submits the next step whenever it can make progress. Anyone else
+//! may submit it too. The `authorize` check accepts a step only when [`Pallet::next_step`] says it
+//! is due for the named game. No step runs early or out of order. A one-shot step cannot run
+//! twice. The calls take no input that shapes the work. Every step carries a `discriminator` and
+//! the block the worker runs on. Retries therefore hash differently. The transaction tag is the
+//! step and the game index. The pool therefore holds one transaction per step at a time. A step
+//! that iterates over players declares the offchain worker budget as its weight. That budget is
+//! half of `Normal.max_extrinsic`. The step runs as many items as fit and refunds the rest.
 //!
 //! # player index, groups, rounds and report.
 //!
@@ -243,8 +254,8 @@ use frame_support::{
 	sp_runtime::Saturating,
 	storage::{with_transaction, TransactionOutcome},
 	traits::{
-		fungible::Inspect, Consideration, Defensive, EnsureOriginWithArg, IsSubType, OriginTrait,
-		UnixTime,
+		fungible::Inspect, Consideration, Defensive, EnsureOriginWithArg, GetCallName, IsSubType,
+		OriginTrait, UnixTime,
 	},
 	weights::WeightMeter,
 };
@@ -256,7 +267,9 @@ use indiv_pallet_airdrop::types::{
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
 	credit_trees::AwardCredits,
+	offchain::{submit_authorized, TX_LONGEVITY},
 	traits::{Alias, CommunicationIdentifier, Context},
+	tx_priority,
 	weight_budget::OcwWeightBudget,
 };
 use sp_runtime::traits::{IdentifyAccount, Verify, Zero};
@@ -297,10 +310,6 @@ pub mod pallet {
 	/// Native chain balance, used for the play deposit held on the `Balances` pallet.
 	pub type NativeBalanceOf<T> =
 		<<T as Config>::NativeFungible as Inspect<<T as frame_system::Config>::AccountId>>::Balance;
-
-	/// Every `GAME_PROCESS_SKIPPED_BLOCK` blocks, the game process in on_poll/on_idle is skipped.
-	/// This is a defense mechanism if the game process is wrongly weighted.
-	pub const GAME_PROCESS_SKIPPED_BLOCK: u32 = 8;
 
 	pub(crate) const LOG_TARGET: &str = "runtime::indiv-pallet-game";
 
@@ -387,6 +396,16 @@ pub mod pallet {
 		/// [`Pallet::set_game_phases`].
 		#[pallet::constant]
 		type DefaultPhaseDurations: Get<PhaseDurationValues>;
+
+		/// The seconds needed for one offchain worker step to be submitted and included.
+		///
+		/// A step is a transaction the offchain worker submits at the end of a block, so it
+		/// applies in a later one. Phase durations and game schedules must leave room for that
+		/// delay, otherwise a phase deadline passes before its step lands. Set this from the
+		/// chain's observed step delay, not from its nominal block time: the deadlines are
+		/// compared against the block timestamp, which advances one slot at a time.
+		#[pallet::constant]
+		type OcwStepLatency: Get<u32>;
 
 		/// The Maximum number of game schedules the pallet can store.
 		#[pallet::constant]
@@ -706,6 +725,8 @@ pub mod pallet {
 		AirdropScheduleFailed { game_index: GameIdx, airdrop_index: u8, error: DispatchError },
 		/// Game `game_index` was cancelled.
 		GameCancelled { game_index: GameIdx },
+		/// A scheduled game failed to start. Its schedule was removed.
+		GameScheduleDropped { game_play_time: u32, error: DispatchError },
 	}
 
 	#[pallet::error]
@@ -779,6 +800,10 @@ pub mod pallet {
 		/// `report`: fewer NFT claim credits can be recorded right now than the report may award.
 		/// Submit it again once later blocks have committed the buffered credits.
 		CreditCapacityExhausted,
+		/// `set_game_phases`: the shuffle is shorter than the offchain worker needs to complete
+		/// it, so every game would pass its shuffle deadline and be cancelled. The minimum is
+		/// [`Pallet::min_shuffle_duration`].
+		ShuffleTooShort,
 	}
 
 	/// A reason for this pallet placing a hold on funds.
@@ -788,9 +813,47 @@ pub mod pallet {
 		PlayDeposit,
 	}
 
+	/// Why an authorized game step is invalid.
+	///
+	/// Both variants drop the transaction from the pool. A step that is not yet due becomes due
+	/// later. The offchain worker resubmits it every block, so the pool keeps nothing.
+	#[repr(u8)]
+	pub enum AuthorizeInvalidity {
+		/// The game is not in the phase the call advances, or its deadline has not passed.
+		NotDue = 200,
+		/// The call names a game other than the current one.
+		WrongGame = 201,
+	}
+
+	impl From<AuthorizeInvalidity> for TransactionValidityError {
+		fn from(e: AuthorizeInvalidity) -> Self {
+			InvalidTransaction::Custom(e as u8).into()
+		}
+	}
+
+	/// The game step that is due.
+	#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+	pub enum NextStep {
+		StartGame,
+		EndRegistration,
+		AdvanceShuffle,
+		EndReporting,
+		ProcessPlayers,
+		AdvanceCancelling,
+	}
+
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		fn integrity_test() {
+			Self::integrity_test_steps();
+
+			assert!(
+				Self::validate_phase_durations(&T::DefaultPhaseDurations::get()).is_ok(),
+				"game: `DefaultPhaseDurations.shuffle` must be at least `2 * OcwStepLatency`, \
+				otherwise every game passes its shuffle deadline before the offchain worker \
+				completes the shuffle, and is cancelled",
+			);
+
 			let max_votes = Self::max_received_votes();
 			assert!(
 				max_votes as u64 * T::PeopleVoteWeight::get() as u64 <= u8::MAX as u64,
@@ -833,29 +896,15 @@ pub mod pallet {
 			OcwWeightBudget::from_normal_max::<T>().assert_fits("sign_up", sign_up_worst_case);
 		}
 
-		fn on_idle(n: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
-			// Use at most 50% of available weight to be cautious about weight
-			// underestimates.
-			let budget = remaining_weight / 2;
-			let mut meter = WeightMeter::with_limit(budget);
-			Self::do_on_idle(n, &mut meter);
-			meter.consumed()
-		}
-
-		fn on_poll(n: BlockNumberFor<T>, weight_meter: &mut WeightMeter) {
-			let budget = weight_meter.remaining() / 2;
-			let mut meter = WeightMeter::with_limit(budget);
-			Self::do_on_poll(n, &mut meter);
-			weight_meter.consume(meter.consumed());
-		}
-
-		fn offchain_worker(_block_number: BlockNumberFor<T>) {
+		fn offchain_worker(block_number: BlockNumberFor<T>) {
 			// Remove the statements for a specific account id when the event is emitted.
 			for event in frame_system::Pallet::<T>::read_events_no_consensus() {
 				if let Ok(Event::<T>::StmtUsageRemoved { who }) = event.event.try_into() {
 					statement_store::remove_by(who);
 				}
 			}
+
+			Self::submit_next_step(block_number);
 		}
 	}
 
@@ -1525,12 +1574,14 @@ pub mod pallet {
 				},
 			);
 
+			let step_latency = Duration::from_secs(T::OcwStepLatency::get().into());
+
 			for schedule in &games_schedules {
 				// Checks that games do not overlap in time and that schedules were provided in
 				// chronological order.
 
 				ensure!(
-					last_game_end_time <=
+					last_game_end_time.saturating_add(step_latency) <=
 						Duration::from_secs(GameTimes::<T>::registration_start(schedule) as u64),
 					Error::<T>::InvalidGameSetup
 				);
@@ -1722,6 +1773,9 @@ pub mod pallet {
 		/// Registration phase; otherwise fails with [`Error::InvalidGameState`]. This
 		/// prevents changing phase durations once players have committed to a game
 		/// whose timing is already locked in.
+		///
+		/// `phases.shuffle` must be at least [`Pallet::min_shuffle_duration`], otherwise the call
+		/// fails with [`Error::ShuffleTooShort`].
 		#[pallet::call_index(14)]
 		#[pallet::weight(<T as Config>::WeightInfo::set_game_phases())]
 		pub fn set_game_phases(
@@ -1729,6 +1783,7 @@ pub mod pallet {
 			phases: PhaseDurationValues,
 		) -> DispatchResult {
 			<T as Config>::ManagerOrigin::ensure_origin_or_root(origin)?;
+			Self::validate_phase_durations(&phases)?;
 			// No game or Registration only: in both, no player is committed to the
 			// timings we're about to change. The no-game case is intentional.
 			if let Some(game) = Game::<T>::get() {
@@ -1762,62 +1817,407 @@ pub mod pallet {
 
 			Ok(())
 		}
+
+		/// Starts the first scheduled game once no game is ongoing.
+		///
+		/// Authorized game step, see the module documentation.
+		#[pallet::call_index(22)]
+		#[pallet::authorize(|_source, _discriminator| {
+			Self::authorize_step(NextStep::StartGame, None)
+		})]
+		#[pallet::weight(<T as Config>::WeightInfo::start_game())]
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
+		pub fn start_game(
+			origin: OriginFor<T>,
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+			Self::start_next_game();
+			Ok(Pays::No.into())
+		}
+
+		/// Ends the registration phase of game `game_index` once its deadline has passed.
+		/// The game moves to the shuffle phase, or is cancelled when too few players signed up.
+		///
+		/// Authorized game step, see the module documentation.
+		#[pallet::call_index(23)]
+		#[pallet::authorize(|_source, game_index, _discriminator| {
+			Self::authorize_step(NextStep::EndRegistration, Some(*game_index))
+		})]
+		#[pallet::weight(Pallet::<T>::end_registration_max_weight())]
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
+		pub fn end_registration(
+			origin: OriginFor<T>,
+			game_index: GameIdx,
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+			let game = Self::current_game(game_index)?;
+			let actual_weight = Self::end_registration_inner(game);
+			Ok(PostDispatchInfo { actual_weight: Some(actual_weight), pays_fee: Pays::No })
+		}
+
+		/// Runs the shuffle phase of game `game_index` for as long as the step budget allows.
+		/// The unused part of the budget is refunded.
+		///
+		/// Authorized game step, see the module documentation.
+		#[pallet::call_index(24)]
+		#[pallet::authorize(|_source, game_index, _discriminator| {
+			Self::authorize_step(NextStep::AdvanceShuffle, Some(*game_index))
+		})]
+		#[pallet::weight(Pallet::<T>::step_budget())]
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
+		pub fn advance_shuffle(
+			origin: OriginFor<T>,
+			game_index: GameIdx,
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+			let game = Self::current_game(game_index)?;
+			let mut meter = Self::step_meter();
+			Self::shuffles(&mut meter, game);
+			Ok(Self::step_post_info(&meter))
+		}
+
+		/// Ends the reporting phase of game `game_index` once its deadline has passed or every
+		/// attendance is settled.
+		///
+		/// Authorized game step, see the module documentation.
+		#[pallet::call_index(25)]
+		#[pallet::authorize(|_source, game_index, _discriminator| {
+			Self::authorize_step(NextStep::EndReporting, Some(*game_index))
+		})]
+		#[pallet::weight(<T as Config>::WeightInfo::end_reporting())]
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
+		pub fn end_reporting(
+			origin: OriginFor<T>,
+			game_index: GameIdx,
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+			let game = Self::current_game(game_index)?;
+			Self::end_reporting_inner(game);
+			Ok(Pays::No.into())
+		}
+
+		/// Runs the player processing phase of game `game_index` for as long as the step budget
+		/// allows.
+		/// The unused part of the budget is refunded. While the credit buffers are full, the call
+		/// makes no progress. Only its base cost is charged then.
+		///
+		/// Authorized game step, see the module documentation.
+		#[pallet::call_index(26)]
+		#[pallet::authorize(|_source, game_index, _discriminator| {
+			Self::authorize_step(NextStep::ProcessPlayers, Some(*game_index))
+		})]
+		#[pallet::weight(Pallet::<T>::step_budget())]
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
+		pub fn process_players(
+			origin: OriginFor<T>,
+			game_index: GameIdx,
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+			let game = Self::current_game(game_index)?;
+			let mut meter = Self::step_meter();
+			match game.state {
+				GameState::PlayerProcess {
+					step: PlayerProcessStep::Step1ProcessPlayers { .. },
+				} => Self::player_process_step1(&mut meter),
+				GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices } =>
+					Self::player_process_step2(&mut meter),
+				_ => return Err(Error::<T>::InvalidGameState.into()),
+			}
+			Ok(Self::step_post_info(&meter))
+		}
+
+		/// Runs the cancellation of game `game_index` for as long as the step budget allows.
+		/// The unused part of the budget is refunded.
+		///
+		/// Authorized game step, see the module documentation.
+		#[pallet::call_index(27)]
+		#[pallet::authorize(|_source, game_index, _discriminator| {
+			Self::authorize_step(NextStep::AdvanceCancelling, Some(*game_index))
+		})]
+		#[pallet::weight(Pallet::<T>::step_budget())]
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
+		pub fn advance_cancelling(
+			origin: OriginFor<T>,
+			game_index: GameIdx,
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+			Self::current_game(game_index)?;
+			let mut meter = Self::step_meter();
+			Self::process_cancelling(&mut meter);
+			Ok(Self::step_post_info(&meter))
+		}
 	}
 
 	impl<T: Config> Pallet<T> {
-		fn do_on_idle(n: BlockNumberFor<T>, weight_meter: &mut WeightMeter) {
-			if weight_meter.try_consume(<T as Config>::WeightInfo::get_game()).is_err() {
-				return;
-			}
-			if let Some(game) = Game::<T>::get() {
-				Self::process_game(weight_meter, n, game);
+		/// The shortest shuffle the offchain worker can complete, in seconds.
+		///
+		/// A shuffle holds two steps: `end_registration`, which moves the game into the shuffle,
+		/// and at least one `advance_shuffle`. Each costs one [`Config::OcwStepLatency`]. This is
+		/// a floor against a configuration that can never work, not a guarantee: a shuffle over
+		/// many players needs more than one `advance_shuffle`.
+		pub fn min_shuffle_duration() -> u32 {
+			T::OcwStepLatency::get().saturating_mul(2)
+		}
+
+		/// Checks the phase durations against the pace the offchain worker can keep.
+		///
+		/// [`Pallet::set_game_phases`] and the integrity test share this, so the value a runtime
+		/// ships and the value a manager sets are held to one rule.
+		pub(crate) fn validate_phase_durations(
+			phases: &PhaseDurationValues,
+		) -> Result<(), Error<T>> {
+			ensure!(phases.shuffle >= Self::min_shuffle_duration(), Error::<T>::ShuffleTooShort);
+			Ok(())
+		}
+
+		/// The offchain worker budget. A metered step declares it as its weight.
+		/// The block builder reserves it at inclusion. The refund releases the unused part.
+		pub fn step_budget() -> Weight {
+			OcwWeightBudget::from_normal_max::<T>().weight()
+		}
+
+		/// The declared weight of `end_registration`: the heavier of its two branches.
+		pub fn end_registration_max_weight() -> Weight {
+			<T as Config>::WeightInfo::end_registration_shuffle()
+				.max(<T as Config>::WeightInfo::end_registration_cancel(MAX_GAME_AIRDROPS.into()))
+		}
+
+		/// A meter over the step budget with the call's own overhead already consumed. The refund
+		/// therefore accounts for that overhead.
+		fn step_meter() -> WeightMeter {
+			let mut meter = WeightMeter::with_limit(Self::step_budget());
+			meter.consume(<T as Config>::WeightInfo::game_step_base());
+			meter
+		}
+
+		/// The post-dispatch info of a metered step: the consumed weight, no fee.
+		fn step_post_info(meter: &WeightMeter) -> PostDispatchInfo {
+			PostDispatchInfo { actual_weight: Some(meter.consumed()), pays_fee: Pays::No }
+		}
+
+		/// The step that is due on the current state, if any.
+		pub fn next_step() -> Option<NextStep> {
+			let Some(game) = Game::<T>::get() else {
+				let scheduled = GameSchedules::<T>::decode_len().unwrap_or(0) > 0;
+				return scheduled.then_some(NextStep::StartGame);
+			};
+			let now = T::UnixTime::now();
+			match game.state {
+				GameState::Registration { .. } => (now >=
+					Duration::from_secs(game.registration_ends.into()))
+				.then_some(NextStep::EndRegistration),
+				GameState::Shuffle { .. } => Some(NextStep::AdvanceShuffle),
+				GameState::Reporting { .. } => (now >=
+					Duration::from_secs(game.report_ends.into()) ||
+					game.pending_attendance == 0)
+					.then_some(NextStep::EndReporting),
+				GameState::PlayerProcess { .. } => Some(NextStep::ProcessPlayers),
+				GameState::Cancelling { .. } => Some(NextStep::AdvanceCancelling),
 			}
 		}
-		fn do_on_poll(n: BlockNumberFor<T>, weight_meter: &mut WeightMeter) {
-			if weight_meter.try_consume(<T as Config>::WeightInfo::get_game()).is_err() {
+
+		/// The call that runs `step`, for the offchain worker running on block `discriminator`.
+		pub fn next_step_call(step: NextStep, discriminator: BlockNumberFor<T>) -> Call<T> {
+			let game_index = GameIndex::<T>::get();
+			match step {
+				NextStep::StartGame => Call::start_game { discriminator },
+				NextStep::EndRegistration => Call::end_registration { game_index, discriminator },
+				NextStep::AdvanceShuffle => Call::advance_shuffle { game_index, discriminator },
+				NextStep::EndReporting => Call::end_reporting { game_index, discriminator },
+				NextStep::ProcessPlayers => Call::process_players { game_index, discriminator },
+				NextStep::AdvanceCancelling =>
+					Call::advance_cancelling { game_index, discriminator },
+			}
+		}
+
+		/// Submits the next step call from the offchain worker.
+		///
+		/// While the game waits on something outside this pallet, the step is not submitted,
+		/// otherwise a no-op transaction lands every block. Two states wait: the shuffle awaiting
+		/// the score session while it can neither start the session nor be cancelled, and the
+		/// player process while the credit buffers lack room for one player. The on-chain check
+		/// stays in `authorize`. This is only spam avoidance.
+		pub(crate) fn submit_next_step(block_number: BlockNumberFor<T>) {
+			let Some(step) = Self::next_step() else { return };
+			if Self::game_awaits() {
 				return;
 			}
-			let game = Game::<T>::get();
-			match game {
-				// If there's no ongoing game at a time, take the first scheduled game and make it
-				// the next one.
-				None => {
-					if weight_meter
-						.try_consume(<T as Config>::WeightInfo::get_game_schedules(
-							T::MaxGameSchedules::get(),
-						))
-						.is_err()
-					{
-						return;
-					}
-					let mut schedules = <GameSchedules<T>>::get();
-					if !schedules.is_empty() {
-						let schedule_airdrops =
-							schedules.first().map_or(0, |schedule| schedule.airdrops.len() as u32);
-						let weight = <T as Config>::WeightInfo::new_game(schedule_airdrops)
-							.saturating_add(<T as Config>::WeightInfo::put_game_schedules());
+			let call = Self::next_step_call(step, block_number);
+			let name = call.get_call_name();
+			submit_authorized::<T, _>(call, name, LOG_TARGET);
+		}
 
-						if weight_meter.try_consume(weight).is_err() {
-							return;
-						}
-
-						let schedule = schedules.remove(0);
-						let _ = Self::new_game(&schedule).inspect_err(|e| {
-							log::error!(
-								target: LOG_TARGET,
-								"Failed to start new game from schedule {e:?}",
-							);
-						});
-						// Regardless the outcome of new_game call, the next scheduled game is
-						// removed. If new_game call fails, regardless of the reason, that
-						// game must be removed from scheduled ones as the call will never
-						// succeed. The reason for failure may be that the previous game took
-						// longer to finish than expected.
-						GameSchedules::<T>::put(schedules);
-					}
-				},
-				Some(game) => Self::process_game(weight_meter, n, game),
+		/// Whether the game waits on a condition outside this pallet, so that its next step would
+		/// make no progress.
+		///
+		/// A shuffle in [`ShuffleStep::Step4AwaitSession`] waits while the score session is
+		/// unavailable and the shuffle deadline has not passed.
+		/// A player process in [`PlayerProcessStep::Step1ProcessPlayers`] waits while the credit
+		/// buffer has less space than one player can need.
+		fn game_awaits() -> bool {
+			let Some(game) = Game::<T>::get() else { return false };
+			match &game.state {
+				GameState::Shuffle { step: ShuffleStep::Step4AwaitSession { .. } } =>
+					!indiv_pallet_score::Pallet::<T>::can_start_attendance_report_session() &&
+						T::UnixTime::now() <= Duration::from_secs(game.shuffle_deadline.into()),
+				GameState::PlayerProcess {
+					step: PlayerProcessStep::Step1ProcessPlayers { .. },
+				} =>
+					T::NftClaimCredits::remaining_capacity(game.index) <
+						Self::max_attestations(game.rounds.into(), game.max_group_size),
+				_ => false,
 			}
+		}
+
+		/// Validates a step call.
+		///
+		/// `game_index`, when given, must be the current game. `expected` must be the due step.
+		/// The tag is the step and the game index. The pool therefore holds one transaction per
+		/// step per game at a time, whoever submits it. A `start_game` call is tagged with the
+		/// index the new game takes.
+		pub(crate) fn authorize_step(
+			expected: NextStep,
+			game_index: Option<GameIdx>,
+		) -> TransactionValidityWithRefund {
+			let current = GameIndex::<T>::get();
+			let tag_index = match game_index {
+				Some(index) => {
+					ensure!(index == current, AuthorizeInvalidity::WrongGame);
+					index
+				},
+				None => current.saturating_add(1),
+			};
+			ensure!(Self::next_step() == Some(expected), AuthorizeInvalidity::NotDue);
+
+			// One step is due per game at a time. The tag holds one transaction per step. At most
+			// one game step therefore lands per block.
+			let validity = ValidTransaction::with_tag_prefix("indiv-pallet-game")
+				.and_provides((expected as u8, tag_index))
+				.priority(tx_priority::PROTOCOL_LIVENESS)
+				.longevity(TX_LONGEVITY)
+				.propagate(true)
+				.build()
+				.expect("tag prefix is not empty; qed");
+			Ok((validity, Weight::zero()))
+		}
+
+		/// The current game, which must be `game_index`.
+		pub(crate) fn current_game(
+			game_index: GameIdx,
+		) -> Result<GameInfo<T::AccountId>, DispatchError> {
+			ensure!(game_index == GameIndex::<T>::get(), Error::<T>::InvalidGameState);
+			Game::<T>::get().ok_or(Error::<T>::NoGame.into())
+		}
+
+		/// Takes the first scheduled game and starts it.
+		///
+		/// The schedule is removed regardless if the game starts or not.
+		/// A schedule that fails once, never succeeds later.
+		pub(crate) fn start_next_game() {
+			let mut schedules = GameSchedules::<T>::get();
+			if schedules.is_empty() {
+				return;
+			}
+			let schedule = schedules.remove(0);
+			let _ = Self::new_game(&schedule).inspect_err(|e| {
+				log::error!(
+					target: LOG_TARGET,
+					"Failed to start new game from schedule {e:?}",
+				);
+				Self::deposit_event(Event::<T>::GameScheduleDropped {
+					game_play_time: schedule.game_play_time,
+					error: *e,
+				});
+			});
+			GameSchedules::<T>::put(schedules);
+		}
+
+		/// Moves a game out of registration. The game goes to the shuffle phase when the player
+		/// count is acceptable, otherwise to cancellation. Returns the weight of the branch taken.
+		pub(crate) fn end_registration_inner(mut game: GameInfo<T::AccountId>) -> Weight {
+			let GameState::Registration { next_player_index } = game.state else {
+				defensive!("indiv-pallet-game: game state is not registration");
+				return Self::end_registration_max_weight();
+			};
+			let player_count = next_player_index;
+			let group_setting = GroupsSetting { max_per_group: game.max_group_size, player_count };
+
+			let weight = if group_setting.acceptable_player_count::<T>() {
+				game.state =
+					GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } };
+				log::trace!(
+					target: LOG_TARGET,
+					"Game shuffle started, player count: {player_count:?}",
+				);
+				<T as Config>::WeightInfo::end_registration_shuffle()
+			} else {
+				Self::on_game_cancelled(&game);
+				game.state = GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
+				log::trace!(
+					target: LOG_TARGET,
+					"Game cancelled due to unacceptable player count. player count: \
+					{player_count:?}, max group size: {:?}",
+					game.max_group_size,
+				);
+				<T as Config>::WeightInfo::end_registration_cancel(game.airdrops_scheduled.into())
+			};
+			Game::<T>::put(game);
+			weight
+		}
+
+		/// Asserts every step call fits the offchain worker budget.
+		fn integrity_test_steps() {
+			type W<T> = <T as Config>::WeightInfo;
+			let budget = OcwWeightBudget::from_normal_max::<T>();
+			let authorize = W::<T>::authorize_game_step();
+			budget.assert_fits("start_game", W::<T>::start_game().saturating_add(authorize));
+			budget.assert_fits(
+				"end_registration",
+				Self::end_registration_max_weight().saturating_add(authorize),
+			);
+			budget.assert_fits("end_reporting", W::<T>::end_reporting().saturating_add(authorize));
+
+			let max_rounds = T::MaxRounds::get();
+			let max_airdrops = u32::from(MAX_GAME_AIRDROPS);
+			let metered_overhead = W::<T>::game_step_base().saturating_add(authorize);
+			let shuffle_item = W::<T>::shuffle_step_insert(max_rounds)
+				.max(W::<T>::shuffle_step_retrieve(max_rounds))
+				.max(W::<T>::shuffle_step_compute_weights(
+					max_rounds.saturating_mul(T::MaxGroupSize::get()),
+				))
+				.max(W::<T>::shuffle_step_start_session());
+			budget.assert_fits(
+				"advance_shuffle",
+				W::<T>::shuffles_base()
+					.saturating_add(W::<T>::on_game_cancelled(max_airdrops))
+					.saturating_add(shuffle_item)
+					.saturating_add(metered_overhead),
+			);
+			budget.assert_fits(
+				"process_players",
+				W::<T>::player_process_step1()
+					.saturating_add(W::<T>::player_process_step1_inner_loop(max_rounds))
+					.max(
+						W::<T>::player_process_step2()
+							.saturating_add(W::<T>::player_process_step2_inner_loop()),
+					)
+					.saturating_add(metered_overhead),
+			);
+			budget.assert_fits(
+				"advance_cancelling",
+				W::<T>::process_cancelling()
+					.saturating_add(
+						W::<T>::process_cancelling_step_shuffle()
+							.max(W::<T>::process_cancelling_step_player(max_rounds)),
+					)
+					.saturating_add(metered_overhead),
+			);
 		}
 
 		/// Create a new game.
@@ -2684,22 +3084,10 @@ pub mod pallet {
 			Game::<T>::put(game);
 		}
 
-		/// Process the reporting phase: end the reporting when the conditions are met.
-		pub(crate) fn process_reporting(weight_meter: &mut WeightMeter) {
-			if weight_meter
-				.try_consume(<T as Config>::WeightInfo::process_reporting())
-				.is_err()
-			{
-				return;
-			}
-
-			let Some(mut game) = Game::<T>::get() else {
-				defensive!("game should exist while processing reporting");
-				return;
-			};
-
+		/// Ends the reporting phase once the deadline has passed or every attendance is settled.
+		pub(crate) fn end_reporting_inner(mut game: GameInfo<T::AccountId>) {
 			let GameState::Reporting { player_count } = game.state else {
-				defensive!("game state is not reporting phase");
+				defensive!("indiv-pallet-game: game state is not reporting phase");
 				return;
 			};
 
@@ -3316,85 +3704,6 @@ pub mod pallet {
 					ShuffleNotRecognized::<T>::clear(CANCELLING_SHUFFLE_CHUNK, cursor2.as_deref());
 				*cursor2 = r.maybe_cursor;
 				*done2 = cursor2.is_none();
-			}
-		}
-
-		/// Process the game.
-		pub(crate) fn process_game(
-			weight_meter: &mut WeightMeter,
-			n: BlockNumberFor<T>,
-			mut game: GameInfo<T::AccountId>,
-		) {
-			// We skip some block as a defense mechanism if the game process is wrongly weighted.
-			//
-			// NOTE: This only defends against faulty weight if the block number can increase when
-			// block is overweight, which is the case if we use the relay chain block number.
-			// Using the parachain block number here makes this skipping useless: if the STF is
-			// stuck then the block number doesn't increase.
-			if n % GAME_PROCESS_SKIPPED_BLOCK.into() == 0u32.into() {
-				return;
-			}
-
-			match game.state {
-				GameState::Registration { next_player_index } => {
-					if weight_meter.try_consume(<T as Config>::WeightInfo::unix_time()).is_err() {
-						return;
-					}
-					let now = T::UnixTime::now();
-					if now >= Duration::from_secs(game.registration_ends.into()) {
-						let weight = <T as Config>::WeightInfo::put_game().saturating_add(
-							<T as Config>::WeightInfo::on_game_cancelled(
-								game.airdrops_scheduled.into(),
-							),
-						);
-						if weight_meter.try_consume(weight).is_err() {
-							return;
-						}
-
-						let player_count = next_player_index;
-
-						let group_setting =
-							GroupsSetting { max_per_group: game.max_group_size, player_count };
-
-						if group_setting.acceptable_player_count::<T>() {
-							game.state = GameState::Shuffle {
-								step: ShuffleStep::Step1Insert { last_iteration: None },
-							};
-							log::trace!(
-								target: LOG_TARGET,
-								"Game shuffle started, player count: {player_count:?}",
-							);
-						} else {
-							Self::on_game_cancelled(&game);
-							game.state =
-								GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
-							log::trace!(
-								target: LOG_TARGET,
-								"Game cancelled due to unacceptable player count. player count: \
-								{player_count:?}, max group size: {:?}",
-								game.max_group_size,
-							);
-						}
-						Game::<T>::put(game);
-					}
-				},
-				GameState::Shuffle { .. } => {
-					Self::shuffles(weight_meter, game);
-				},
-				GameState::Reporting { .. } => {
-					Self::process_reporting(weight_meter);
-				},
-				GameState::PlayerProcess { step } => match step {
-					PlayerProcessStep::Step1ProcessPlayers { .. } => {
-						Self::player_process_step1(weight_meter);
-					},
-					PlayerProcessStep::Step2ClearIndices => {
-						Self::player_process_step2(weight_meter);
-					},
-				},
-				GameState::Cancelling { .. } => {
-					Self::process_cancelling(weight_meter);
-				},
 			}
 		}
 
