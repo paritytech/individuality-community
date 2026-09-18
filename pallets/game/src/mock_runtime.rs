@@ -20,7 +20,7 @@
 //! to be compiled into the same crate, so `indiv-pallet-game` declares this module and
 //! `indiv-pallet-nft-credits` includes the same file by path. What differs between the two is left
 //! to the including module: the `construct_runtime!` pallet list, an `indiv_pallet_game` alias for
-//! the crate the game pallet is in each case, and a `MockNftClaimCredits` alias naming who owns the
+//! the crate the game pallet is in each case, and a `MockNftClaimCredits` type naming who owns the
 //! credits. The credits mock adds its own pallet's [`Config`](indiv_pallet_game::Config) on top.
 //!
 //! Items unused by one of the two are kept rather than pruned, so the runtime stays one runtime.
@@ -36,17 +36,16 @@ use super::{
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use frame_support::{
 	assert_ok, derive_impl,
-	dispatch::{DispatchErrorWithPostInfo, GetDispatchInfo},
+	dispatch::{DispatchClass, DispatchErrorWithPostInfo, GetDispatchInfo},
 	pallet_prelude::{Get, ValidTransaction},
 	parameter_types,
 	storage::with_transaction,
-	traits::{AsEnsureOriginWithArg, Everything, OnIdle, OnPoll, OriginTrait},
-	weights::WeightMeter,
+	traits::{AsEnsureOriginWithArg, Everything, OriginTrait},
 	PalletId,
 };
 use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateBare, CreateTransaction, CreateTransactionBase},
-	EnsureRoot, RunToBlockHooks,
+	EnsureRoot,
 };
 use indiv_pallet_game::*;
 use indiv_pallet_people::Origin::PersonalAlias;
@@ -248,8 +247,9 @@ impl TransactionExtensionTrait<RuntimeCall> for DenyNotFundedAccount {
 		_: TransactionSource,
 	) -> ValidateResult<(), RuntimeCall> {
 		match origin.caller() {
-			OriginCaller::system(frame_system::RawOrigin::Signed(NOT_FUNDED_ACCOUNT)) =>
-				Err(InvalidTransaction::Payment.into()),
+			OriginCaller::system(frame_system::RawOrigin::Signed(NOT_FUNDED_ACCOUNT)) => {
+				Err(InvalidTransaction::Payment.into())
+			},
 			_ => Ok((ValidTransaction::default(), (), origin)),
 		}
 	}
@@ -266,8 +266,12 @@ impl TransactionExtensionTrait<RuntimeCall> for DenyNotFundedAccount {
 	}
 }
 
-pub type TransactionExtension =
-	(GameAsInvited<Test>, indiv_pallet_score::ScoreAsParticipant<Test>, DenyNotFundedAccount);
+pub type TransactionExtension = (
+	frame_system::AuthorizeCall<Test>,
+	GameAsInvited<Test>,
+	indiv_pallet_score::ScoreAsParticipant<Test>,
+	DenyNotFundedAccount,
+);
 
 pub type Header = sp_runtime::generic::Header<u64, sp_runtime::traits::BlakeTwo256>;
 pub type Block = sp_runtime::generic::Block<Header, Extrinsic>;
@@ -314,6 +318,7 @@ where
 {
 	fn create_extension() -> Self::Extension {
 		(
+			frame_system::AuthorizeCall::<Test>::new(),
 			GameAsInvited::new(None),
 			indiv_pallet_score::ScoreAsParticipant::new(None),
 			DenyNotFundedAccount,
@@ -324,7 +329,7 @@ where
 #[derive_impl(frame_system::config_preludes::TestDefaultConfig)]
 impl frame_system::Config for Test {
 	type BaseCallFilter = frame_support::traits::Everything;
-	type BlockWeights = ();
+	type BlockWeights = MockBlockWeights;
 	type BlockLength = ();
 	type DbWeight = ();
 	type RuntimeOrigin = RuntimeOrigin;
@@ -428,24 +433,6 @@ parameter_types! {
 
 pub struct MockWeightInfo;
 impl WeightInfo for MockWeightInfo {
-	fn new_game(_n: u32) -> Weight {
-		Weight::zero()
-	}
-	fn get_game() -> Weight {
-		Weight::zero()
-	}
-	fn get_game_schedules(_n: u32) -> Weight {
-		Weight::zero()
-	}
-	fn unix_time() -> Weight {
-		Weight::zero()
-	}
-	fn put_game() -> Weight {
-		Weight::zero()
-	}
-	fn put_game_schedules() -> Weight {
-		Weight::zero()
-	}
 	fn shuffles_base() -> Weight {
 		Weight::from_parts(15, 15)
 	}
@@ -468,13 +455,13 @@ impl WeightInfo for MockWeightInfo {
 		Weight::from_parts(10, 10)
 	}
 	fn process_cancelling() -> Weight {
-		Weight::zero()
+		Weight::from_parts(15, 15)
 	}
-	fn process_cancelling_step_player(_n: u32) -> Weight {
-		Weight::zero()
+	fn process_cancelling_step_player(n: u32) -> Weight {
+		Weight::from_parts(10, 10).saturating_add(Weight::from_parts(1, 1).saturating_mul(n as u64))
 	}
 	fn process_cancelling_step_shuffle() -> Weight {
-		Weight::zero()
+		Weight::from_parts(10, 10)
 	}
 
 	fn sign_up_with_invite(n: u32) -> Weight {
@@ -559,8 +546,23 @@ impl WeightInfo for MockWeightInfo {
 			.saturating_add(Weight::from_parts(10, 10).saturating_mul(n as u64))
 	}
 
-	fn process_reporting() -> Weight {
+	fn start_game() -> Weight {
 		Weight::zero()
+	}
+	fn end_registration_shuffle() -> Weight {
+		Weight::from_parts(5, 5)
+	}
+	fn end_registration_cancel(n: u32) -> Weight {
+		Weight::from_parts(7, 7).saturating_add(Weight::from_parts(3, 3).saturating_mul(n as u64))
+	}
+	fn end_reporting() -> Weight {
+		Weight::zero()
+	}
+	fn authorize_game_step() -> Weight {
+		Weight::zero()
+	}
+	fn game_step_base() -> Weight {
+		Weight::from_parts(3, 3)
 	}
 
 	fn insert_attendance_history() -> Weight {
@@ -1297,6 +1299,7 @@ pub fn exec_invited_tx(
 		account.clone(),
 		AccountAuthority(account),
 		(
+			frame_system::AuthorizeCall::<Test>::new(),
 			GameAsInvited::<Test>::new(Some(tx_ext)),
 			indiv_pallet_score::ScoreAsParticipant::<Test>::new(None),
 			DenyNotFundedAccount,
@@ -1316,6 +1319,7 @@ pub fn exec_signed_tx(
 		account.clone(),
 		AccountAuthority(account),
 		(
+			frame_system::AuthorizeCall::<Test>::new(),
 			GameAsInvited::<Test>::new(None),
 			indiv_pallet_score::ScoreAsParticipant::<Test>::new(None),
 			DenyNotFundedAccount,
@@ -1336,6 +1340,7 @@ pub fn exec_participant_tx(
 		account.clone(),
 		AccountAuthority(account),
 		(
+			frame_system::AuthorizeCall::<Test>::new(),
 			GameAsInvited::<Test>::new(None),
 			indiv_pallet_score::ScoreAsParticipant::<Test>::new(Some(
 				indiv_pallet_score::ScoreAsParticipantData { nonce },
@@ -1410,9 +1415,9 @@ pub fn run_game_scenario_with_phase<FS, FR>(
 	FS: FnOnce(),
 	FR: FnOnce(),
 {
-	// Reach the game the way a live chain does: schedule it, then let `on_poll` open its
-	// registration. The clock stays where it is, so the setup happens before the registration
-	// phase ends.
+	// Reaching the game the way a live chain does: the game is scheduled, then the `start_game`
+	// step opens its registration. The clock stays where it is. The setup therefore happens before
+	// the registration phase ends.
 	assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]));
 	advance_process();
 	assert!(indiv_pallet_game::Game::<Test>::exists(), "the scheduled game opened");
@@ -1439,41 +1444,53 @@ pub fn run_game_scenario_with_phase<FS, FR>(
 	advance_process(); // step3 to done
 }
 
-pub fn block_skipped() -> bool {
-	System::block_number().is_multiple_of(GAME_PROCESS_SKIPPED_BLOCK as u64)
+parameter_types! {
+	/// A block weight limit a test sets to bound the game step budget. See
+	/// [`advance_process_with_weights`].
+	pub storage MockBlockWeight: Option<Weight> = None;
 }
 
-pub fn advance_process_with_weights(on_poll: Weight, on_idle: Weight) {
-	record_events();
-	let bn = System::block_number() + 1;
-	System::run_to_block_with::<AllPalletsWithSystem>(
-		bn,
-		RunToBlockHooks::default().after_initialize(|bn| {
-			AllPalletsWithSystem::on_poll(bn, &mut WeightMeter::with_limit(on_poll));
-			AllPalletsWithSystem::on_idle(bn, on_idle);
-		}),
-	);
-	if block_skipped() {
-		advance_process_with_weights(on_poll, on_idle);
+/// The block weights: the frame defaults, or the limit a test set as the whole block.
+pub struct MockBlockWeights;
+impl Get<frame_system::limits::BlockWeights> for MockBlockWeights {
+	fn get() -> frame_system::limits::BlockWeights {
+		let Some(weight) = MockBlockWeight::get() else { return Default::default() };
+		// The whole block goes to non-mandatory extrinsics with no base costs. `max_extrinsic` is
+		// therefore `weight` itself.
+		frame_system::limits::BlockWeights::builder()
+			.base_block(Weight::zero())
+			.for_class(DispatchClass::all(), |weights| weights.base_extrinsic = Weight::zero())
+			.for_class(DispatchClass::non_mandatory(), |weights| weights.max_total = Some(weight))
+			.avg_block_initialization(sp_runtime::Perbill::zero())
+			.build_or_panic()
 	}
 }
 
-pub fn advance_process_with_on_poll_only() {
-	record_events();
-	let bn = System::block_number() + 1;
-	System::run_to_block_with::<AllPalletsWithSystem>(
-		bn,
-		RunToBlockHooks::default().after_initialize(|bn| {
-			AllPalletsWithSystem::on_poll(bn, &mut WeightMeter::with_limit(Weight::MAX));
-		}),
+/// Dispatches the due game step, if any, as the authorized transaction the offchain worker
+/// submits.
+pub fn dispatch_next_step() {
+	let Some(step) = Game::next_step() else { return };
+	let call = Game::next_step_call(step, System::block_number());
+	let tx = <Test as CreateAuthorizedTransaction<RuntimeCall>>::create_authorized_transaction(
+		call.into(),
 	);
-	if block_skipped() {
-		advance_process_with_on_poll_only();
-	}
+	exec_tx(tx).expect("the due game step is valid");
 }
 
+/// Advances one block and runs the due game step, if any, at the step budget `block_weight`
+/// gives. That budget is half of `block_weight`, as `OcwWeightBudget` takes half of the block's
+/// `max_extrinsic`.
+pub fn advance_process_with_weights(block_weight: Weight) {
+	MockBlockWeight::set(&Some(block_weight));
+	advance_process();
+	MockBlockWeight::set(&None);
+}
+
+/// Advances one block and runs the due game step, if any, with an unbounded step budget.
 pub fn advance_process() {
-	advance_process_with_weights(Weight::MAX, Weight::zero());
+	record_events();
+	System::run_to_block::<AllPalletsWithSystem>(System::block_number() + 1);
+	dispatch_next_step();
 }
 
 pub fn run_game_scenario_with_hooks<F>(

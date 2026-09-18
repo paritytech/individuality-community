@@ -1418,8 +1418,6 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 		// Run on_poll for pallets that drive state forward
 		let mut wm_people = WeightMeter::with_limit(Weight::MAX);
 		indiv_pallet_people::Pallet::<Runtime>::on_poll(next, &mut wm_people);
-		let mut wm_game = WeightMeter::with_limit(Weight::MAX);
-		indiv_pallet_game::Pallet::<Runtime>::on_poll(next, &mut wm_game);
 		let mut wm_score = WeightMeter::with_limit(Weight::MAX);
 		indiv_pallet_score::Pallet::<Runtime>::on_poll(next, &mut wm_score);
 
@@ -1759,9 +1757,9 @@ fn build_alias_airdrop_vrfs(
 }
 
 /// Advance blocks until the airdrop event reaches `Status::Registering`. Tolerates the
-/// event not yet existing — `do_schedule_airdrop` runs inside `Game::on_poll` once a slot
-/// in `GameSchedules` becomes the active game, which takes at least one block after
-/// `Game::schedule_games`.
+/// event not yet existing. `do_schedule_airdrop` runs inside the `start_game` step once a slot
+/// in `GameSchedules` becomes the active game. That takes at least two blocks after
+/// `Game::schedule_games`: the offchain worker submits the step, the next block applies it.
 fn drive_airdrop_to_registering(event_id: [u8; 32]) {
 	const MAX_BLOCKS: u32 = 20_000;
 	let mut seen = false;
@@ -1772,12 +1770,13 @@ fn drive_airdrop_to_registering(event_id: [u8; 32]) {
 				seen = true;
 				advance_block();
 			},
-			None =>
+			None => {
 				if seen {
 					panic!("airdrop event {event_id:?} is gone before reaching Registering");
 				} else {
 					advance_block();
-				},
+				}
+			},
 		}
 	}
 	panic!("airdrop event {event_id:?} never reached Registering");

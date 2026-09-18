@@ -174,10 +174,10 @@ fn outdated_game_schedule_multi_game() {
 		};
 
 		let game_1_player_process_end = GameTimes::<Test>::player_process_end(&game_1);
-		let minimal_next_game_play_time = game_1_player_process_end +
-			durations.registration +
-			durations.shuffle +
-			durations.post_shuffle_margin;
+		let minimal_next_game_play_time = game_1_player_process_end
+			+ durations.registration
+			+ durations.shuffle
+			+ durations.post_shuffle_margin;
 
 		let game_2 = GameSchedule::<u32, u128> {
 			game_play_time: minimal_next_game_play_time,
@@ -264,10 +264,18 @@ fn outdated_game_schedule_multi_game() {
 		MOCK_UNIX_TIME
 			.with(|v| *v.borrow_mut() = Duration::from_secs(game_2_registration_start as u64 + 1));
 
-		// 4. Attempting to start the second game fails with OutdatedGameSetup.
-		advance_process(); // on_poll tries to start the game but it is already too late -> skipped.
+		// 4. Starting the second game fails with OutdatedGameSetup. The schedule is dropped and the
+		//    drop is reported.
+		advance_process();
 		assert_eq!(GameSchedules::<Test>::get().len(), 0);
 		assert!(crate::Game::<Test>::get().is_none());
+		System::assert_has_event(
+			Event::<Test>::GameScheduleDropped {
+				game_play_time: game_2.game_play_time,
+				error: Error::<Test>::OutdatedGameSetup.into(),
+			}
+			.into(),
+		);
 	});
 }
 
@@ -874,10 +882,10 @@ mod games_scheduling {
 
 			let durations = <Test as Config>::DefaultPhaseDurations::get();
 			let game1_player_process_end = GameTimes::<Test>::player_process_end(&game1);
-			let minimal_next_game_play_time = game1_player_process_end +
-				durations.registration +
-				durations.shuffle +
-				durations.post_shuffle_margin;
+			let minimal_next_game_play_time = game1_player_process_end
+				+ durations.registration
+				+ durations.shuffle
+				+ durations.post_shuffle_margin;
 			let game2 = GameSchedule::<u32, u128> {
 				// game2 reporting would start at game1 estimated end, leaving no time for
 				// registration and shuffle
@@ -1095,8 +1103,8 @@ mod games_scheduling {
 	/// Initial state: no ongoing game, no scheduled games.
 	/// The flow goes as follows:
 	/// 1. A few games are scheduled: ManagerOrigin calls schedule_games.
-	/// 2. Enough time passes for the first scheduled game to become the ongoing game (through
-	///    on_poll trigger).
+	/// 2. Enough time passes for the first scheduled game to become the ongoing game (through the
+	///    `start_game` step).
 	/// 3. The first game passes through all of its phases and is no longer the ongoing game
 	///    (removed from the storage item).
 	/// 4. The second game from the schedule is scheduled as next game.
@@ -1180,8 +1188,8 @@ mod games_scheduling {
 			}
 
 			// Some weight: big enough to process some shuffle and player process, and small enough
-			// to not be able to process 1000 players in one block. We double because the hooks halve
-			// the available weight
+			// to not be able to process 1000 players in one block. The step budget is half of the
+			// block weight, hence the doubling.
 			let weights = Weight::from_parts(2 * (15 + 10 * 10), 2 * (15 + 10 * 10));
 
 			// Two games are scheduled
@@ -1233,13 +1241,13 @@ mod games_scheduling {
 					<GameSchedule<u32, u128> as GameTimes<Test>>::registration_end(game) as u64 + 1,
 				)
 			});
-			advance_process_with_weights(weights, Weight::zero()); // register to shuffle
+			advance_process_with_weights(weights); // register to shuffle
 			assert_eq!(
 				crate::Game::<Test>::get().unwrap().state,
 				GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } }
 			);
 
-			advance_process_with_weights(weights, weights); // some incomplete shuffle
+			advance_process_with_weights(weights); // some incomplete shuffle
 			assert!(
 				matches!(
 					crate::Game::<Test>::get().unwrap().state,
@@ -1254,7 +1262,7 @@ mod games_scheduling {
 
 			// Finish the shuffle
 			while matches!(crate::Game::<Test>::get().unwrap().state, GameState::Shuffle { .. }) {
-				advance_process_with_weights(weights, weights); // continue the shuffle
+				advance_process_with_weights(weights); // continue the shuffle
 				stop_at_step2 |= matches!(
 					crate::Game::<Test>::get().unwrap().state,
 					GameState::Shuffle { step: ShuffleStep::Step2Retrieve { .. }}
@@ -1296,7 +1304,7 @@ mod games_scheduling {
 					<GameSchedule<u32, u128> as GameTimes<Test>>::reporting_end(game) as u64 + 1,
 				)
 			});
-			advance_process_with_weights(weights, Weight::zero()); // report to player process
+			advance_process_with_weights(weights); // report to player process
 			assert!(matches!(
 				crate::Game::<Test>::get().unwrap().state,
 				GameState::PlayerProcess {
@@ -1304,7 +1312,7 @@ mod games_scheduling {
 				}
 			));
 
-			advance_process_with_weights(weights, weights); // some incomplete player process
+			advance_process_with_weights(weights); // some incomplete player process
 			assert!(
 				matches!(
 					crate::Game::<Test>::get().unwrap().state,
@@ -1320,14 +1328,13 @@ mod games_scheduling {
 
 			// finish the player process, then the clearing-indices and ending phases
 			while crate::Game::<Test>::get().is_some() {
-				// We use zero for idle weight in order not to trigger the next game in on_idle.
-				advance_process_with_weights(weights, Weight::zero());
+				advance_process_with_weights(weights);
 			}
 
 			// Now the game is finished
 			assert!(crate::Game::<Test>::get().is_none());
 
-			advance_process_with_weights(weights, weights); // finished game to next game
+			advance_process_with_weights(weights); // finished game to next game
 
 			// New game has started
 			assert_eq!(
@@ -2682,7 +2689,7 @@ fn statements_cleared() {
 		let registration_ends = GameTimes::<Test>::registration_end(&schedule);
 		crate::mock::MOCK_UNIX_TIME
 			.with(|t| *t.borrow_mut() = Duration::from_secs(registration_ends as u64 + 1));
-		advance_process_with_on_poll_only(); // registration -> shuffle
+		advance_process(); // registration -> shuffle
 		let game_play_time = GameTimes::<Test>::game_play_time(&schedule);
 		crate::mock::MOCK_UNIX_TIME
 			.with(|t| *t.borrow_mut() = Duration::from_secs(game_play_time as u64 + 1));
@@ -2773,7 +2780,7 @@ fn statements_cleared() {
 		let registration_ends = GameTimes::<Test>::registration_end(&schedule);
 		MOCK_UNIX_TIME
 			.with(|t| *t.borrow_mut() = Duration::from_secs(registration_ends as u64 + 1));
-		advance_process_with_on_poll_only(); // registration -> shuffle
+		advance_process(); // registration -> shuffle
 		advance_process(); // shuffle -> reporting
 
 		// Do NOT report for the alias (absent) -> they are externally recognised, so archiving
@@ -2844,7 +2851,7 @@ fn statements_cleared() {
 		let registration_ends = GameTimes::<Test>::registration_end(&schedule);
 		MOCK_UNIX_TIME
 			.with(|t| *t.borrow_mut() = Duration::from_secs(registration_ends as u64 + 1));
-		advance_process_with_on_poll_only(); // registration -> shuffle
+		advance_process(); // registration -> shuffle
 		advance_process(); // shuffle -> reporting
 
 		// Do NOT report for the account (absent) so it gets archived (score stays 0).
@@ -3019,7 +3026,7 @@ mod game_cancellation {
 				.with(|t| *t.borrow_mut() = Duration::from_secs((registration_ends + 1) as u64));
 
 			// Game should be in cancelling state
-			advance_process_with_on_poll_only();
+			advance_process();
 			assert!(crate::Game::<Test>::get().is_some());
 			assert!(matches!(
 				crate::Game::<Test>::get().unwrap().state,
@@ -3038,12 +3045,12 @@ mod game_cancellation {
 			let event_id = Game::airdrop_event_id(game_index, 0);
 			let event = indiv_pallet_airdrop::Events::<Test>::get(event_id);
 			assert!(
-				event.is_none() ||
-					matches!(
+				event.is_none()
+					|| matches!(
 						event.expect("checked").status,
-						indiv_pallet_airdrop::types::Status::ClearingRegistrations { .. } |
-							indiv_pallet_airdrop::types::Status::ClearingWinners { .. } |
-							indiv_pallet_airdrop::types::Status::Finalizing { .. },
+						indiv_pallet_airdrop::types::Status::ClearingRegistrations { .. }
+							| indiv_pallet_airdrop::types::Status::ClearingWinners { .. }
+							| indiv_pallet_airdrop::types::Status::Finalizing { .. },
 					),
 			);
 
@@ -3191,7 +3198,7 @@ fn candidate_and_people_vote_weights_applied() {
 			let mut partial: Vec<Report> = Vec::new();
 			for member_idx in groups.group_members(group_idx) {
 				if member_idx == reporter_idx {
-					continue
+					continue;
 				}
 				let member_player = IndexToPlayer::<Test>::get((0, member_idx)).unwrap();
 				let about_target =
@@ -3283,7 +3290,7 @@ fn recognised_people_are_evenly_distributed() {
 			advance_process(); // run on-poll / on-idle once
 			if let Some(g) = crate::Game::<Test>::get() {
 				if matches!(g.state, GameState::Reporting { .. }) {
-					break
+					break;
 				}
 			} else {
 				panic!("game vanished before Reporting phase");
@@ -3689,8 +3696,8 @@ fn game_cancelled_due_to_shuffle_deadline_missed() {
 		let shuffle_deadline = GameTimes::<Test>::shuffle_deadline(&schedule);
 		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
 
-		// One on_poll: Registration -> Shuffle (no shuffle work yet).
-		advance_process_with_on_poll_only();
+		// One step: Registration -> Shuffle (no shuffle work yet).
+		advance_process();
 		assert!(crate::Game::<Test>::get().is_some());
 		assert_eq!(
 			crate::Game::<Test>::get().unwrap().state,
@@ -3700,7 +3707,7 @@ fn game_cancelled_due_to_shuffle_deadline_missed() {
 		// Push time beyond shuffle_deadline so shuffles() cancels immediately.
 		MOCK_UNIX_TIME
 			.with(|t| *t.borrow_mut() = Duration::from_secs((shuffle_deadline + 1) as u64));
-		advance_process_with_on_poll_only();
+		advance_process();
 		assert!(crate::Game::<Test>::get().is_some());
 		assert!(matches!(crate::Game::<Test>::get().unwrap().state, GameState::Cancelling { .. }));
 
@@ -5190,8 +5197,8 @@ mod cancel_game {
 
 			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
 
-			// Game stays in storage with state flipped to `Cancelling`; the
-			// per-player cleanup runs on subsequent blocks via on_poll.
+			// Game stays in storage with state flipped to `Cancelling`. The
+			// per-player cleanup runs on subsequent blocks via `advance_cancelling` steps.
 			let game = crate::Game::<Test>::get().expect("game still in storage");
 			assert!(matches!(game.state, GameState::Cancelling { .. }));
 			let player = AccountOrPerson::<AccountId32>::Account(ALICE);
@@ -5229,7 +5236,7 @@ mod cancel_game {
 
 			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
 
-			// `advance_process` runs on_poll to completion (multiple iterations
+			// `advance_process` runs one step to completion (multiple iterations
 			// if needed), driving `process_cancelling` until Game is killed.
 			advance_process();
 
@@ -5270,10 +5277,10 @@ mod cancel_game {
 
 			let durations = <Test as Config>::DefaultPhaseDurations::get();
 			let next = GameSchedule::<u32, u128> {
-				game_play_time: GameTimes::<Test>::player_process_end(&current) +
-					durations.registration +
-					durations.shuffle +
-					durations.post_shuffle_margin,
+				game_play_time: GameTimes::<Test>::player_process_end(&current)
+					+ durations.registration
+					+ durations.shuffle
+					+ durations.post_shuffle_margin,
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
@@ -5293,13 +5300,13 @@ mod cancel_game {
 			);
 			assert_eq!(GameSchedules::<Test>::get().len(), 1, "successor must remain queued");
 
-			// With full weight, on_poll can finish the cancellation cleanup and
+			// With full weight, one step can finish the cancellation cleanup and
 			// remove the current game.
 			advance_process();
 			assert!(crate::Game::<Test>::get().is_none(), "cleanup must remove current game");
 			assert_eq!(GameSchedules::<Test>::get().len(), 1, "successor should still be queued");
 
-			// Once the current game is fully gone, the next on_poll may start the
+			// Once the current game is fully gone, the next step may start the
 			// queued successor.
 			advance_process();
 			let game = crate::Game::<Test>::get().expect("queued successor should start");
@@ -5860,7 +5867,7 @@ mod airdrop {
 			let game_registration_start = GameTimes::<Test>::registration_start(&schedule);
 			assert!(now < game_registration_start as u64);
 
-			// Queue the game and let the automation start it: `on_poll`/`on_idle` picks up the
+			// The game is queued and the automation starts it. The `start_game` step picks up the
 			// schedule and calls `new_game` itself.
 			assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]));
 			advance_process();
@@ -6238,6 +6245,7 @@ mod airdrop {
 				ALICE,
 				AccountAuthority(ALICE),
 				(
+					frame_system::AuthorizeCall::<Test>::new(),
 					crate::GameAsInvited::<Test>::new(Some(GameAsInvitedData {
 						nonce,
 						inviter: BOB,
@@ -6756,8 +6764,8 @@ mod airdrop {
 				assert!(!matches!(
 					record.event,
 					RuntimeEvent::Game(
-						crate::Event::<Test>::AirdropScheduled { .. } |
-							crate::Event::<Test>::AirdropScheduleFailed { .. }
+						crate::Event::<Test>::AirdropScheduled { .. }
+							| crate::Event::<Test>::AirdropScheduleFailed { .. }
 					),
 				));
 			}
@@ -6878,7 +6886,7 @@ mod airdrop {
 					GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } };
 			});
 			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(deadline as u64 + 1));
-			advance_process_with_on_poll_only();
+			advance_process();
 
 			assert!(matches!(
 				GameStorage::<Test>::get().expect("game cancelling").state,
@@ -8149,6 +8157,440 @@ mod sign_up_with_account_lite_invite {
 
 			assert!(LiteInvites::<Test>::iter().next().is_none());
 			assert!(Players::<Test>::iter().next().is_none());
+		});
+	}
+}
+
+mod game_steps {
+	use super::*;
+	use frame_support::{
+		dispatch::GetDispatchInfo,
+		storage::{with_transaction, TransactionOutcome},
+		traits::Authorize,
+		weights::WeightMeter,
+	};
+	use indiv_support::{
+		traits::{RingMembersState, RingMutationMode},
+		tx_priority,
+		weight_budget::OcwWeightBudget,
+	};
+	use sp_runtime::{
+		traits::Dispatchable,
+		transaction_validity::{TransactionSource, TransactionValidityError},
+		DispatchError, Weight,
+	};
+
+	/// Game 1 in the given state, with a group of three and one round.
+	fn put_game(state: GameState<AccountId32>, shuffle_deadline: u32) {
+		GameIndex::<Test>::put(1);
+		crate::Game::<Test>::put(GameInfo {
+			index: 1,
+			registration_ends: 100,
+			shuffle_deadline,
+			game_date: 150,
+			report_ends: 300,
+			state,
+			max_group_size: 3,
+			rounds: 1,
+			pending_attendance: 0,
+			airdrops_scheduled: 0,
+		});
+	}
+
+	fn set_time(secs: u64) {
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(secs));
+	}
+
+	fn not_due() -> TransactionValidityError {
+		InvalidTransaction::Custom(AuthorizeInvalidity::NotDue as u8).into()
+	}
+
+	fn wrong_game() -> TransactionValidityError {
+		InvalidTransaction::Custom(AuthorizeInvalidity::WrongGame as u8).into()
+	}
+
+	/// A game with one signed-up player, then forced into `state`. Returns the game index.
+	fn one_player_game(max_group_size: u32, state: GameState<AccountId32>) -> GameIdx {
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 1000,
+			rounds: 1,
+			max_group_size,
+			airdrops: Default::default(),
+		};
+		assert_ok!(Game::new_game(&schedule));
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(ALICE),
+			DEFAULT_IDENTIFIER_KEY,
+			None
+		));
+		crate::Game::<Test>::mutate(|game| game.as_mut().expect("game in storage").state = state);
+		GameIndex::<Test>::get()
+	}
+
+	/// Dispatches the step `call` with the authorized origin and checks its post-dispatch info.
+	/// `expected` is charged and is below the declared weight. No fee is paid.
+	fn assert_step_charges(call: Call<Test>, expected: Weight) {
+		let declared = call.get_dispatch_info().call_weight;
+		let post = RuntimeCall::from(call)
+			.dispatch(frame_system::RawOrigin::Authorized.into())
+			.expect("the step runs");
+		assert_eq!(post.actual_weight, Some(expected));
+		assert!(expected.all_lt(declared), "{expected:?} must be below {declared:?}");
+		assert_eq!(post.pays_fee, Pays::No);
+	}
+
+	/// Dispatches the metered step `call` and checks its refund. `inner` is the step function
+	/// the call wraps. The charge must equal what `inner` meters on the same state plus the
+	/// call's base.
+	fn assert_metered_step_refunds(call: Call<Test>, inner: impl FnOnce(&mut WeightMeter)) {
+		assert_eq!(
+			call.get_dispatch_info().call_weight,
+			OcwWeightBudget::from_normal_max::<Test>().weight()
+		);
+		// The inner step runs on a rolled-back copy of the state. The call below therefore sees
+		// the same state.
+		let mut meter = WeightMeter::new();
+		let _ = with_transaction(|| -> TransactionOutcome<Result<(), DispatchError>> {
+			inner(&mut meter);
+			TransactionOutcome::Rollback(Ok(()))
+		});
+		let inner_cost = meter.consumed();
+		assert!(!inner_cost.is_zero(), "the inner step must meter its work");
+		assert_step_charges(call, inner_cost.saturating_add(MockWeightInfo::game_step_base()));
+	}
+
+	#[test]
+	fn the_offchain_worker_submits_the_due_step_and_nothing_when_idle() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			clear_pool();
+
+			// No game and no schedule: nothing is due.
+			<Game as OffchainWorker<u64>>::offchain_worker(1);
+			assert!(submitted_calls().is_empty());
+
+			// A schedule makes `start_game` due.
+			let schedule = GameSchedule::<u32, u128> {
+				game_play_time: 100,
+				rounds: 1,
+				max_group_size: 3,
+				..Default::default()
+			};
+			assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule]));
+			<Game as OffchainWorker<u64>>::offchain_worker(1);
+			assert_eq!(
+				submitted_calls(),
+				vec![RuntimeCall::Game(Call::start_game { discriminator: 1 })]
+			);
+
+			// The submitted step is valid and opens the game.
+			dispatch_next_step();
+			assert_eq!(
+				crate::Game::<Test>::get().unwrap().state,
+				GameState::Registration { next_player_index: 0 }
+			);
+		});
+	}
+
+	#[test]
+	fn the_offchain_worker_waits_for_the_score_session_until_the_shuffle_deadline() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			clear_pool();
+
+			indiv_pallet_members::RingsState::<Test>::insert(
+				PEOPLE_MEMBER_IDENTIFIER,
+				RingMembersState { mode: RingMutationMode::Mutating(u8::MAX) },
+			);
+			assert!(!indiv_pallet_score::Pallet::<Test>::can_start_attendance_report_session());
+			put_game(
+				GameState::Shuffle { step: ShuffleStep::Step4AwaitSession { player_count: 0 } },
+				200,
+			);
+			set_time(150);
+
+			// The step stays due on chain. Only its submission is skipped.
+			<Game as OffchainWorker<u64>>::offchain_worker(1);
+			assert!(submitted_calls().is_empty());
+			assert_eq!(Game::next_step(), Some(NextStep::AdvanceShuffle));
+
+			// Past the shuffle deadline the step is submitted. It cancels the game.
+			set_time(201);
+			<Game as OffchainWorker<u64>>::offchain_worker(1);
+			assert_eq!(
+				submitted_calls(),
+				vec![RuntimeCall::Game(Call::advance_shuffle { game_index: 1, discriminator: 1 })]
+			);
+			dispatch_next_step();
+			assert!(matches!(
+				crate::Game::<Test>::get().unwrap().state,
+				GameState::Cancelling { .. }
+			));
+		});
+	}
+
+	#[test]
+	fn step_is_valid_only_when_due_for_the_current_game() {
+		new_test_ext().execute_with(|| {
+			put_game(GameState::Registration { next_player_index: 0 }, 200);
+			let authorize = |call: Call<Test>| {
+				call.authorize(TransactionSource::External).expect("the call is authorized")
+			};
+			let end_registration = |game_index, discriminator| Call::<Test>::end_registration {
+				game_index,
+				discriminator,
+			};
+
+			// The registration deadline has not passed.
+			assert_eq!(authorize(end_registration(1, 0)), Err(not_due()));
+
+			set_time(100);
+			// Another game, older or newer.
+			assert_eq!(authorize(end_registration(0, 0)), Err(wrong_game()));
+			assert_eq!(authorize(end_registration(2, 0)), Err(wrong_game()));
+			// Another step of the current game.
+			assert_eq!(
+				authorize(Call::<Test>::advance_shuffle { game_index: 1, discriminator: 0 }),
+				Err(not_due())
+			);
+
+			// The due step is valid from an external source.
+			let (validity, refund) = authorize(end_registration(1, 0)).expect("the step is due");
+			assert_eq!(refund, Weight::zero());
+			assert_eq!(
+				validity.provides,
+				vec![("indiv-pallet-game", (NextStep::EndRegistration as u8, 1u32)).encode()]
+			);
+			assert_eq!(validity.priority, tx_priority::PROTOCOL_LIVENESS);
+			assert!(validity.propagate);
+			// The discriminator does not change the tag.
+			assert_eq!(authorize(end_registration(1, 7)).unwrap().0.provides, validity.provides);
+
+			// A `start_game` step is tagged with the index the new game takes.
+			crate::Game::<Test>::kill();
+			let schedule = GameSchedule::<u32, u128> {
+				game_play_time: 1000,
+				rounds: 1,
+				max_group_size: 3,
+				..Default::default()
+			};
+			assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule]));
+			let (validity, _) =
+				authorize(Call::<Test>::start_game { discriminator: 0 }).expect("the step is due");
+			assert_eq!(
+				validity.provides,
+				vec![("indiv-pallet-game", (NextStep::StartGame as u8, 2u32)).encode()]
+			);
+		});
+	}
+
+	#[test]
+	fn start_game_is_not_due_with_a_game_or_without_a_schedule() {
+		new_test_ext().execute_with(|| {
+			let start_game = Call::<Test>::start_game { discriminator: 0 };
+			// Nothing scheduled.
+			assert_eq!(start_game.authorize(TransactionSource::External), Some(Err(not_due())));
+
+			// A schedule, but a game is ongoing.
+			let schedule = GameSchedule::<u32, u128> {
+				game_play_time: 1000,
+				rounds: 1,
+				max_group_size: 3,
+				..Default::default()
+			};
+			assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule]));
+			put_game(GameState::Registration { next_player_index: 0 }, 200);
+			assert_eq!(start_game.authorize(TransactionSource::External), Some(Err(not_due())));
+		});
+	}
+
+	#[test]
+	fn end_reporting_is_due_early_once_no_attendance_is_pending() {
+		new_test_ext().execute_with(|| {
+			let end_reporting = Call::<Test>::end_reporting { game_index: 1, discriminator: 0 };
+			// Before `report_ends`, with one attendance still pending.
+			put_game(GameState::Reporting { player_count: 1 }, 200);
+			crate::Game::<Test>::mutate(|game| game.as_mut().unwrap().pending_attendance = 1);
+			set_time(200);
+			assert_eq!(end_reporting.authorize(TransactionSource::External), Some(Err(not_due())));
+
+			// The last attendance settles.
+			crate::Game::<Test>::mutate(|game| game.as_mut().unwrap().pending_attendance = 0);
+			assert!(end_reporting.authorize(TransactionSource::External).unwrap().is_ok());
+		});
+	}
+
+	#[test]
+	fn the_offchain_worker_submits_the_shuffle_once_the_session_is_available() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			clear_pool();
+			assert!(indiv_pallet_score::Pallet::<Test>::can_start_attendance_report_session());
+			put_game(
+				GameState::Shuffle { step: ShuffleStep::Step4AwaitSession { player_count: 1 } },
+				200,
+			);
+			set_time(150);
+
+			<Game as OffchainWorker<u64>>::offchain_worker(1);
+			assert_eq!(
+				submitted_calls(),
+				vec![RuntimeCall::Game(Call::advance_shuffle { game_index: 1, discriminator: 1 })]
+			);
+		});
+	}
+
+	#[test]
+	fn the_offchain_worker_waits_for_credit_buffer_space() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			clear_pool();
+			// One player, whose worst case is two credits with a group of three and one round.
+			let game_index = one_player_game(
+				3,
+				GameState::PlayerProcess {
+					step: PlayerProcessStep::Step1ProcessPlayers {
+						last_iteration: None,
+						player_count: 1,
+					},
+				},
+			);
+			MockCreditCapacity::set(&1);
+
+			// The step stays due on chain. Only its submission is skipped.
+			<Game as OffchainWorker<u64>>::offchain_worker(1);
+			assert!(submitted_calls().is_empty());
+			assert_eq!(Game::next_step(), Some(NextStep::ProcessPlayers));
+
+			// Submitted by someone else, the step makes no progress and charges its base cost.
+			assert_step_charges(
+				Call::<Test>::process_players { game_index, discriminator: 0 },
+				MockWeightInfo::player_process_step1()
+					.saturating_add(MockWeightInfo::game_step_base()),
+			);
+			assert!(matches!(
+				crate::Game::<Test>::get().unwrap().state,
+				GameState::PlayerProcess {
+					step: PlayerProcessStep::Step1ProcessPlayers { last_iteration: None, .. },
+				}
+			));
+
+			// A committed tree frees the buffer and the step is submitted.
+			MockCreditCapacity::set(&2);
+			<Game as OffchainWorker<u64>>::offchain_worker(1);
+			assert_eq!(
+				submitted_calls(),
+				vec![RuntimeCall::Game(Call::process_players { game_index, discriminator: 1 })]
+			);
+		});
+	}
+
+	#[test]
+	fn advance_shuffle_refunds_the_unused_budget() {
+		new_test_ext().execute_with(|| {
+			let game_index = one_player_game(
+				2,
+				GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } },
+			);
+			assert_metered_step_refunds(
+				Call::<Test>::advance_shuffle { game_index, discriminator: 0 },
+				|meter| Game::shuffles(meter, crate::Game::<Test>::get().unwrap()),
+			);
+			assert!(
+				!matches!(
+					crate::Game::<Test>::get().unwrap().state,
+					GameState::Shuffle { step: ShuffleStep::Step1Insert { .. } }
+				),
+				"the shuffle made progress"
+			);
+		});
+	}
+
+	#[test]
+	fn process_players_refunds_the_unused_budget() {
+		new_test_ext().execute_with(|| {
+			// Step 1 with one player, whose attendance the step settles.
+			let game_index = one_player_game(
+				3,
+				GameState::PlayerProcess {
+					step: PlayerProcessStep::Step1ProcessPlayers {
+						last_iteration: None,
+						player_count: 1,
+					},
+				},
+			);
+			assert_ok!(indiv_pallet_score::Pallet::<Test>::start_attendance_report_session());
+			assert_metered_step_refunds(
+				Call::<Test>::process_players { game_index, discriminator: 0 },
+				Game::player_process_step1,
+			);
+			assert_eq!(
+				crate::Game::<Test>::get().unwrap().state,
+				GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices }
+			);
+
+			// Step 2 on the same game, which removes it.
+			assert_metered_step_refunds(
+				Call::<Test>::process_players { game_index, discriminator: 0 },
+				Game::player_process_step2,
+			);
+			assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+		});
+	}
+
+	#[test]
+	fn advance_cancelling_refunds_the_unused_budget() {
+		new_test_ext().execute_with(|| {
+			put_game(GameState::Cancelling { step: CancellingStep::Step1DrainShuffle }, 200);
+			let player = AccountOrPerson::<AccountId32>::Account(ALICE);
+			crate::ShuffleRecognized::<Test>::insert(0, [1u8; 32], &player);
+			crate::ShuffleNotRecognized::<Test>::insert(0, [2u8; 32], &player);
+
+			assert_metered_step_refunds(
+				Call::<Test>::advance_cancelling { game_index: 1, discriminator: 0 },
+				Game::process_cancelling,
+			);
+			assert!(crate::Game::<Test>::get().is_none(), "the drained game is removed");
+		});
+	}
+
+	#[test]
+	fn end_registration_charges_the_branch_taken() {
+		new_test_ext().execute_with(|| {
+			// Shuffle branch: a group of two needs one player.
+			let game_index = one_player_game(2, GameState::Registration { next_player_index: 1 });
+			let game = crate::Game::<Test>::get().unwrap();
+			set_time(game.registration_ends.into());
+			assert_step_charges(
+				Call::<Test>::end_registration { game_index, discriminator: 0 },
+				MockWeightInfo::end_registration_shuffle(),
+			);
+			assert_eq!(
+				crate::Game::<Test>::get().unwrap().state,
+				GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } }
+			);
+
+			// Cancel branch: nobody signed up for a game with two airdrops.
+			crate::Game::<Test>::kill();
+			Players::<Test>::remove(AccountOrPerson::<AccountId32>::Account(ALICE));
+			let schedule = GameSchedule::<u32, u128> {
+				game_play_time: 2000,
+				rounds: 1,
+				max_group_size: 2,
+				airdrops: test_airdrops(2),
+			};
+			assert_ok!(Game::new_game(&schedule));
+			let game = crate::Game::<Test>::get().unwrap();
+			assert_eq!(game.airdrops_scheduled, 2);
+			set_time(game.registration_ends.into());
+			assert_step_charges(
+				Call::<Test>::end_registration { game_index: game.index, discriminator: 0 },
+				MockWeightInfo::end_registration_cancel(2),
+			);
+			assert!(matches!(
+				crate::Game::<Test>::get().unwrap().state,
+				GameState::Cancelling { .. }
+			));
 		});
 	}
 }

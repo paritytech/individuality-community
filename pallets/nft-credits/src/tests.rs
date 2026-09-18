@@ -94,23 +94,20 @@ fn advance_to_reporting_phase(schedule: &GameSchedule<u32, u128>) {
 
 /// Take a scheduled game up to its registration phase, which is where a player can sign up.
 ///
-/// The game is scheduled and then reached through `on_poll`, the way a live chain does it, rather
-/// than started directly: `new_game` is the game pallet's own.
+/// The game is scheduled and then reached through the `start_game` step, the way a live chain does
+/// it. It is not started directly, as `new_game` is the game pallet's own.
 fn start_scheduled_game(schedule: &GameSchedule<u32, u128>) {
 	assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]));
-	// The clock stays where it is: `new_game` sets a game up *before* its registration starts, and
-	// `on_poll` takes the first schedule as soon as there is no game. It skips every
-	// `GAME_PROCESS_SKIPPED_BLOCK`th block, so give it a few.
-	for _ in 0..4 {
-		if matches!(
+	// The clock stays where it is. `new_game` sets a game up *before* its registration starts. The
+	// `start_game` step takes the first schedule in the next block.
+	advance_process();
+	assert!(
+		matches!(
 			GameStore::<Test>::get().map(|game| game.state),
 			Some(GameState::Registration { .. })
-		) {
-			return;
-		}
-		advance_process();
-	}
-	panic!("the scheduled game did not open registration");
+		),
+		"the scheduled game did not open registration"
+	);
 }
 
 /// The total number of leaves committed across all blocks' trees.
@@ -513,8 +510,8 @@ fn awarded_credits_are_committed_to_the_awarding_block_root() {
 		assert_eq!(CreditBuffers::<Test>::get(tree_block), None);
 		// The awards stay behind the root, so the block's claims are provable from state.
 		assert_eq!(awards_of(tree_block).len(), 2);
-		assert!(System::events().iter().any(|record| record.event ==
-			RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditRootRecorded {
+		assert!(System::events().iter().any(|record| record.event
+			== RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditRootRecorded {
 				block: tree_block,
 				credit_root: expected,
 			})));
@@ -569,8 +566,9 @@ fn leaves_from_events(block: BlockNumberFor<Test>) -> Vec<NftClaimCreditLeaf> {
 				credit,
 				block: awarded_in,
 				leaf_index,
-			}) if *awarded_in == block =>
-				Some((*leaf_index, NftCredits::compute_nft_claim_credit_leaf(claimant, credit))),
+			}) if *awarded_in == block => {
+				Some((*leaf_index, NftCredits::compute_nft_claim_credit_leaf(claimant, credit)))
+			},
 			_ => None,
 		})
 		.collect::<Vec<_>>();
@@ -857,8 +855,8 @@ fn a_full_tree_spills_into_the_next_block() {
 		// The spilled leaves are indexed within the tree that commits them, not within the block
 		// that earned them.
 		let last = claimants.last().expect("the block awarded").clone();
-		assert!(System::events().iter().any(|record| record.event ==
-			RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditAwarded {
+		assert!(System::events().iter().any(|record| record.event
+			== RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditAwarded {
 				claimant: last.clone(),
 				credit: sp_io::hashing::blake2_256(
 					&(AWARDS_PER_TREE + spilled - 1, b"credit").encode()
@@ -2406,13 +2404,13 @@ mod credit_tree_delivery {
 
 			assert_eq!(
 				one,
-				<MockWeightInfo as WeightInfo>::replay_credit_trees(1) +
-					NftClaimsRemoteWeight::get()
+				<MockWeightInfo as WeightInfo>::replay_credit_trees(1)
+					+ NftClaimsRemoteWeight::get()
 			);
 			assert_eq!(
 				two,
-				<MockWeightInfo as WeightInfo>::replay_credit_trees(2) +
-					NftClaimsRemoteWeight::get() * 2
+				<MockWeightInfo as WeightInfo>::replay_credit_trees(2)
+					+ NftClaimsRemoteWeight::get() * 2
 			);
 		});
 	}
@@ -2464,8 +2462,8 @@ mod testnet_granted_credits {
 				vec![NftClaimCreditAward { claimant: alice.clone(), credit }]
 			);
 			assert_eq!(NftClaimCreditBlocks::<Test>::get(&alice).to_vec(), vec![tree_block]);
-			assert!(System::events().iter().any(|record| record.event ==
-				RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditAwarded {
+			assert!(System::events().iter().any(|record| record.event
+				== RuntimeEvent::NftCredits(Event::<Test>::NftClaimCreditAwarded {
 					claimant: alice.clone(),
 					credit,
 					block: tree_block,

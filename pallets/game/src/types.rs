@@ -306,8 +306,8 @@ pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 	/// settled. Settlement happens *early* when an incoming `report` makes a
 	/// named player's tally decisive (via `try_early_attendance_enactment`),
 	/// or *late* when `player_process_step1` resolves the rest after `report_ends`.
-	/// When the counter reaches zero before `report_ends`, `process_reporting`
-	/// leaves the reporting phase early instead of waiting for the deadline.
+	/// When the counter reaches zero before `report_ends`, the `end_reporting` step
+	/// is due early instead of waiting for the deadline.
 	pub pending_attendance: u32,
 	/// The number of airdrop events successfully scheduled for this game; the events carry the
 	/// airdrop indices `0..airdrops_scheduled`. Scheduling stops at the first failure, so this
@@ -435,8 +435,8 @@ impl GroupsSetting {
 				}
 
 				// Special condition for one group.
-				if self.player_count == self.max_per_group ||
-					self.player_count + 1 == self.max_per_group
+				if self.player_count == self.max_per_group
+					|| self.player_count + 1 == self.max_per_group
 				{
 					return true;
 				}
