@@ -611,7 +611,7 @@ parameter_types! {
 	pub const PlayDepositReason: RuntimeHoldReason =
 		RuntimeHoldReason::Game(indiv_pallet_game::HoldReason::PlayDeposit);
 	pub const PlayDepositDefault: Balance = 2 * UNITS;
-	// TODO(<https://github.com/paritytech/individuality/issues/1124>): find a reasonable value.
+	// TODO(paritytech/individuality#1124): find a reasonable value.
 	pub PlayerStatementLimit: StatementAllowance = StatementAllowance {
 		max_size: 1_000_000,
 		max_count: 1_000_000,
