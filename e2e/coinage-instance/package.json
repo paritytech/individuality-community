@@ -1,0 +1,26 @@
+{
+  "name": "@individuality-e2e/coinage-instance",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.4",
+  "description": "Initializes Coinage with an example asset on a fresh local network.",
+  "scripts": {
+    "init-coinage": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint src/",
+    "format": "biome check --write src/"
+  },
+  "dependencies": {
+    "@polkadot-api/descriptors": "workspace:*",
+    "@polkadot-api/signers-common": "^0.3.0",
+    "@polkadot-api/substrate-bindings": "^0.21.0",
+    "polkadot-api": "^3.0.0"
+  },
+  "devDependencies": {
+    "@polkadot-labs/hdkd": "^0.0.25",
+    "@polkadot-labs/hdkd-helpers": "0.0.19",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}
