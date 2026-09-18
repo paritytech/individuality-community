@@ -362,6 +362,7 @@ fn game_sign_up_grants_player_allowance() {
 			rounds: 1,
 			max_group_size: 3,
 			airdrops: Default::default(),
+			claims: indiv_support::credit_trees::ClaimPath::Public,
 		};
 		Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]).unwrap();
 

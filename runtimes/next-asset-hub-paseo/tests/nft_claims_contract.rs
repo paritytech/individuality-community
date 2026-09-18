@@ -118,7 +118,13 @@ fn store_tree(
 	let root = binary_merkle_tree::merkle_root::<BlakeTwo256, _>(leaves.clone());
 	CreditTrees::<Runtime>::insert(
 		BLOCK,
-		NftClaimCreditTree { game_index: 1, root: root.into(), leaf_count: 1, timestamp: 1_000 },
+		NftClaimCreditTree {
+			game_index: 1,
+			root: root.into(),
+			leaf_count: 1,
+			timestamp: 1_000,
+			claim_path: indiv_support::credit_trees::ClaimPath::Public,
+		},
 	);
 	let proof = binary_merkle_tree::merkle_proof::<BlakeTwo256, _, _>(leaves, 0);
 	proof

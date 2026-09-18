@@ -30,9 +30,11 @@ xcm = { workspace = true }
 
 indiv-pallet-scarcity = { workspace = true }
 indiv-support = { workspace = true }
+verifiable = { workspace = true }
 
 [dev-dependencies]
 parking_lot = { workspace = true }
+verifiable = { workspace = true, features = ["mock", "prover"] }
 sp-io = { workspace = true }
 
 [features]
@@ -51,6 +53,7 @@ std = [
 	"sp-core/std",
 	"sp-io/std",
 	"sp-runtime/std",
+	"verifiable/std",
 	"xcm/std",
 ]
 runtime-benchmarks = [
