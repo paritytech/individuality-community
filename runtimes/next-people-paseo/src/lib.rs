@@ -1920,6 +1920,24 @@ impl_runtime_apis! {
 		}
 	}
 
+	impl indiv_pallet_coinage::runtime_api::CoinageApi<Block, Balance, Balance> for Runtime {
+		fn paid_unload_token_fee_in_native() -> Balance {
+		   Coinage::get_paid_unload_token_fee_in_native()
+		}
+
+		fn paid_unload_token_fee_in_asset(
+		   instance_id: indiv_pallet_coinage::InstanceId,
+		) -> Option<Balance> {
+		   Coinage::get_paid_unload_token_fee_in_asset(instance_id)
+		}
+
+		fn paid_unload_token_fee_quote_in_asset(
+		   instance_id: indiv_pallet_coinage::InstanceId,
+		   count: u32,
+		) -> Option<Balance> {
+		   Coinage::get_paid_unload_token_fee_quote_in_asset(instance_id, count)
+		}
+	}
 }
 
 cumulus_pallet_parachain_system::register_validate_block! {
