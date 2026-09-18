@@ -890,7 +890,7 @@ pub enum Statement {
 	/// particular place on somebody's body.
 	///
 	/// The particular tattoo is that which is defined by `design`. The place on the body it must
-	/// exist is yet to be specified — see TODO(paritytech/individuality#1118).
+	/// exist is yet to be specified — see TODO(<https://github.com/paritytech/individuality/issues/1118>).
 	///
 	/// The statement comes with `evidence` to provide a hint of what evidence should be considered
 	/// in the decision making. This may not be comprehensive.
