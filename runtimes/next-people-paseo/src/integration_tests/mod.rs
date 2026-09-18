@@ -1773,13 +1773,12 @@ fn drive_airdrop_to_registering(event_id: [u8; 32]) {
 				seen = true;
 				advance_block();
 			},
-			None => {
+			None =>
 				if seen {
 					panic!("airdrop event {event_id:?} is gone before reaching Registering");
 				} else {
 					advance_block();
-				}
-			},
+				},
 		}
 	}
 	panic!("airdrop event {event_id:?} never reached Registering");

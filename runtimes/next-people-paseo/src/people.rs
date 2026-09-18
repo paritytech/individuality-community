@@ -127,10 +127,10 @@ pub type RuntimeClock = BenchmarkClock;
 pub struct AccountContexts;
 impl frame_support::traits::Contains<Context> for AccountContexts {
 	fn contains(l: &Context) -> bool {
-		l == &indiv_pallet_mob_rule::MOB_CONTEXT
-			|| l == &indiv_pallet_score::Pallet::<Runtime>::score_context()
-			|| l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context()
-			|| l == &indiv_pallet_people_airdrops::Pallet::<Runtime>::people_airdrops_context()
+		l == &indiv_pallet_mob_rule::MOB_CONTEXT ||
+			l == &indiv_pallet_score::Pallet::<Runtime>::score_context() ||
+			l == &indiv_pallet_resources::Pallet::<Runtime>::resources_context() ||
+			l == &indiv_pallet_people_airdrops::Pallet::<Runtime>::people_airdrops_context()
 	}
 }
 
@@ -1272,8 +1272,8 @@ parameter_types! {
 pub struct LitePeopleAccountContexts;
 impl frame_support::traits::Contains<Context> for LitePeopleAccountContexts {
 	fn contains(l: &Context) -> bool {
-		l == &indiv_pallet_people_lite::Pallet::<Runtime>::auth_context()
-			|| l == &indiv_pallet_score::Pallet::<Runtime>::score_context()
+		l == &indiv_pallet_people_lite::Pallet::<Runtime>::auth_context() ||
+			l == &indiv_pallet_score::Pallet::<Runtime>::score_context()
 	}
 }
 

@@ -247,9 +247,8 @@ impl TransactionExtensionTrait<RuntimeCall> for DenyNotFundedAccount {
 		_: TransactionSource,
 	) -> ValidateResult<(), RuntimeCall> {
 		match origin.caller() {
-			OriginCaller::system(frame_system::RawOrigin::Signed(NOT_FUNDED_ACCOUNT)) => {
-				Err(InvalidTransaction::Payment.into())
-			},
+			OriginCaller::system(frame_system::RawOrigin::Signed(NOT_FUNDED_ACCOUNT)) =>
+				Err(InvalidTransaction::Payment.into()),
 			_ => Ok((ValidTransaction::default(), (), origin)),
 		}
 	}

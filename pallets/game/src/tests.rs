@@ -47,11 +47,11 @@ const EVE: AccountId32 = AccountId32::new(*b"50______________________________");
 /// and post-shuffle margin, and one `OcwStepLatency` for `start_game` to be included.
 fn minimal_next_game_play_time(previous: &GameSchedule<u32, u128>) -> u32 {
 	let durations = <Test as Config>::DefaultPhaseDurations::get();
-	GameTimes::<Test>::player_process_end(previous)
-		+ <<Test as Config>::OcwStepLatency as Get<u32>>::get()
-		+ durations.registration
-		+ durations.shuffle
-		+ durations.post_shuffle_margin
+	GameTimes::<Test>::player_process_end(previous) +
+		<<Test as Config>::OcwStepLatency as Get<u32>>::get() +
+		durations.registration +
+		durations.shuffle +
+		durations.post_shuffle_margin
 }
 
 // Test one game with votes, groups and reports including
@@ -3047,12 +3047,12 @@ mod game_cancellation {
 			let event_id = Game::airdrop_event_id(game_index, 0);
 			let event = indiv_pallet_airdrop::Events::<Test>::get(event_id);
 			assert!(
-				event.is_none()
-					|| matches!(
+				event.is_none() ||
+					matches!(
 						event.expect("checked").status,
-						indiv_pallet_airdrop::types::Status::ClearingRegistrations { .. }
-							| indiv_pallet_airdrop::types::Status::ClearingWinners { .. }
-							| indiv_pallet_airdrop::types::Status::Finalizing { .. },
+						indiv_pallet_airdrop::types::Status::ClearingRegistrations { .. } |
+							indiv_pallet_airdrop::types::Status::ClearingWinners { .. } |
+							indiv_pallet_airdrop::types::Status::Finalizing { .. },
 					),
 			);
 
@@ -6785,8 +6785,8 @@ mod airdrop {
 				assert!(!matches!(
 					record.event,
 					RuntimeEvent::Game(
-						crate::Event::<Test>::AirdropScheduled { .. }
-							| crate::Event::<Test>::AirdropScheduleFailed { .. }
+						crate::Event::<Test>::AirdropScheduled { .. } |
+							crate::Event::<Test>::AirdropScheduleFailed { .. }
 					),
 				));
 			}
