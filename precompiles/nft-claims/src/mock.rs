@@ -18,7 +18,9 @@ pub use super::*;
 
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{fungible::HoldConsideration, ConstU32, ConstU64, ConstU8, LinearStoragePrice},
+	traits::{
+		fungible::HoldConsideration, ConstU16, ConstU32, ConstU64, ConstU8, LinearStoragePrice,
+	},
 };
 use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateTransaction, CreateTransactionBase},
@@ -136,6 +138,7 @@ impl indiv_pallet_scarcity::Config for Test {
 	type MaxInstanceMetadata = ConstU32<3>;
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
+	type MaximumMoves = ConstU16<16>;
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Test>;
 	// The runtime maps a mint's destination here. These tests cover the registration surface
 	// and mint nothing, so the hook would never run.

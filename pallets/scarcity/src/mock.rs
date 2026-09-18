@@ -75,6 +75,8 @@ impl UnixTime for MockUnixTime {
 type TestStoragePrice = LinearStoragePrice<ConstU64<1>, ConstU64<1>, u64>;
 
 parameter_types! {
+	/// Feeless moves one instance gets. Tests that exhaust the budget lower it.
+	pub storage MaximumMoves: u16 = 16;
 	/// Metadata entries one instance may carry. The integrity tests raise it.
 	pub storage MaxInstanceMetadata: u32 = 3;
 	/// Weight the mock policy charges per metadata pair. The integrity tests raise it.
@@ -105,6 +107,7 @@ impl crate::Config for Test {
 	type MaxInstanceMetadata = MaxInstanceMetadata;
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
+	type MaximumMoves = MaximumMoves;
 	type OnCollectionDeleted = RecordCollectionDeletion;
 	type OnPurseOccupied = RecordPurseOccupancy;
 	type MetadataPolicy = RejectReservedValue;

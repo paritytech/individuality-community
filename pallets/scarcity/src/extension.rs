@@ -54,6 +54,12 @@
 //!
 //! A holder can also cancel an outstanding authorization at any time by moving the NFT, which
 //! increments its state nonce.
+//!
+//! # Feeless move budget
+//!
+//! An instance carries [`Config::MaximumMoves`] feeless moves and spends one per authorized
+//! transfer. Once they are gone only a paid move can move it, and that move sets the count back
+//! to zero. Burns stay feeless throughout, because they free storage.
 
 use crate::{pallet::*, weights::WeightInfo, Config, Nft, Transferability};
 use codec::{Decode, DecodeWithMemTracking, Encode};
@@ -115,6 +121,8 @@ pub enum CustomInvalidity {
 	/// unknown. Reported separately from [`Self::Soulbound`] because the cause is broken state
 	/// rather than a property of the token.
 	UnknownItem = 7,
+	/// The instance has spent its feeless moves. A paid move refills them.
+	MovesExhausted = 8,
 }
 
 impl From<CustomInvalidity> for TransactionValidityError {
@@ -251,6 +259,11 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 				Ok(Transferability::Transferable) => {},
 				Ok(Transferability::Soulbound) => return Err(CustomInvalidity::Soulbound.into()),
 				Err(_) => return Err(CustomInvalidity::UnknownItem.into()),
+			}
+			// Permanent for this transaction, like the two above: the paid move that refills the
+			// budget also increments the state nonce this authorization names.
+			if nft.moves >= T::MaximumMoves::get() {
+				return Err(CustomInvalidity::MovesExhausted.into());
 			}
 		}
 		let priority = now.saturating_sub(nft.last_moved).min(T::MaxTransferPriority::get());
