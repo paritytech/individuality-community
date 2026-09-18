@@ -268,6 +268,36 @@ impl<T: frame_system::Config> indiv_pallet_score::WeightInfo for WeightInfo<T> {
 			.saturating_add(Weight::from_parts(0, 0))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
+	/// Storage: `Members::Collections` (r:1 w:0)
+	/// Proof: `Members::Collections` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `Members::ActiveMembers` (r:1 w:0)
+	/// Proof: `Members::ActiveMembers` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// Storage: `Score::PersonhoodThresholdSchedule` (r:1 w:0)
+	/// Proof: `Score::PersonhoodThresholdSchedule` (`max_values`: Some(1), `max_size`: Some(129), added: 624, mode: `MaxEncodedLen`)
+	/// Storage: `Score::AbsenceGraceSchedule` (r:1 w:0)
+	/// Proof: `Score::AbsenceGraceSchedule` (`max_values`: Some(1), `max_size`: Some(49), added: 544, mode: `MaxEncodedLen`)
+	/// Storage: `Members::RingsState` (r:1 w:1)
+	/// Proof: `Members::RingsState` (`max_values`: None, `max_size`: Some(29), added: 2504, mode: `MaxEncodedLen`)
+	/// Storage: `Score::Participants` (r:1 w:1)
+	/// Proof: `Score::Participants` (`max_values`: None, `max_size`: Some(92), added: 2567, mode: `MaxEncodedLen`)
+	/// Storage: `Score::AbsenceGraceRatio` (r:1 w:1)
+	/// Proof: `Score::AbsenceGraceRatio` (`max_values`: Some(1), `max_size`: Some(2), added: 497, mode: `MaxEncodedLen`)
+	/// Storage: `People::People` (r:1 w:1)
+	/// Proof: `People::People` (`max_values`: None, `max_size`: Some(87), added: 2562, mode: `MaxEncodedLen`)
+	/// Storage: `Members::Members` (r:1 w:1)
+	/// Proof: `Members::Members` (`max_values`: None, `max_size`: Some(89), added: 2564, mode: `MaxEncodedLen`)
+	/// Storage: `Score::PersonhoodThreshold` (r:0 w:1)
+	/// Proof: `Score::PersonhoodThreshold` (`max_values`: Some(1), `max_size`: Some(1), added: 496, mode: `MaxEncodedLen`)
+	fn force_set_attendance() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `600`
+		//  Estimated: `3557`
+		// Minimum execution time: 100_000_000 picoseconds.
+		Weight::from_parts(100_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3557))
+			.saturating_add(T::DbWeight::get().reads(9))
+			.saturating_add(T::DbWeight::get().writes(6))
+	}
 	/// Storage: `Score::Participants` (r:1 w:0)
 	/// Proof: `Score::Participants` (`max_values`: None, `max_size`: Some(92), added: 2567, mode: `MaxEncodedLen`)
 	fn as_participant_tx_ext() -> Weight {
