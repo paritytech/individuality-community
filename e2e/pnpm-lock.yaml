@@ -85,7 +85,7 @@ importers:
   packages/descriptors/.papi/descriptors:
     dependencies:
       polkadot-api:
-        specifier: '>=2.0.0'
+        specifier: ^2.1.7
         version: 2.1.7(esbuild@0.28.1)(rxjs@7.8.2)
 
   packages/shared:
