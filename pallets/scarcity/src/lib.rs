@@ -626,12 +626,13 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		/// Check that every call whose worst case a runtime sizes still fits a share of a block.
+		/// Check the configuration values a runtime picks.
 		///
 		/// [`Config::MaxInstanceMetadata`] sets the entries a mint carries and a burn removes, and
 		/// the weights of [`Config::MetadataPolicy`], [`Config::OnPurseOccupied`] and
 		/// [`Config::OnCollectionDeleted`] ride on the calls that run them. A runtime that
 		/// overshoots on any of them produces a call that no block can hold.
+		/// [`Config::LockPeriod`] must pace the retries of a failing purse key.
 		fn integrity_test() {
 			let budget = OcwWeightBudget::from_normal_max::<T>();
 			let pairs = T::MaxInstanceMetadata::get();
@@ -649,6 +650,10 @@ pub mod pallet {
 				T::WeightInfo::delete_collection()
 					.saturating_add(T::OnCollectionDeleted::on_delete_weight()),
 			);
+
+			// A zero lock period expires the lock in the block that creates it, so a purse key
+			// that fails dispatch retries in the next block at no cost.
+			assert!(T::LockPeriod::get() > 0, "`LockPeriod` must be greater than zero");
 		}
 
 		#[cfg(feature = "try-runtime")]
