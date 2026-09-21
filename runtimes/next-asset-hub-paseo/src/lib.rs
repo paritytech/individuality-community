@@ -444,7 +444,8 @@ impl pallet_assets::Config<TrustBackedAssetsInstance> for Runtime {
 	type Holder = AssetsHolder;
 	type Extra = ();
 	type WeightInfo = weights::pallet_assets_local::WeightInfo<Runtime>;
-	type CallbackHandle = pallet_assets::AutoIncAssetId<Runtime, TrustBackedAssetsInstance>;
+	type CallbackHandle = ();
+	type AssetIdAllocator = pallet_assets::AutoIncAssetId<Runtime, TrustBackedAssetsInstance>;
 	type AssetAccountDeposit = AssetAccountDeposit;
 	type RemoveItemsLimit = frame_support::traits::ConstU32<1000>;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -524,6 +525,7 @@ impl pallet_assets::Config<ForeignAssetsInstance> for Runtime {
 	type Extra = ();
 	type WeightInfo = weights::pallet_assets_foreign::WeightInfo<Runtime>;
 	type CallbackHandle = ();
+	type AssetIdAllocator = ();
 	type AssetAccountDeposit = ForeignAssetsAssetAccountDeposit;
 	type RemoveItemsLimit = frame_support::traits::ConstU32<1000>;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -1195,6 +1197,7 @@ impl pallet_assets::Config<PoolAssetsInstance> for Runtime {
 	type Holder = ();
 	type Extra = ();
 	type CallbackHandle = ();
+	type AssetIdAllocator = ();
 	type WeightInfo = weights::pallet_assets_pool::WeightInfo<Runtime>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();
@@ -3002,6 +3005,7 @@ pub mod migrations {
 		cumulus_pallet_aura_ext::migration::MigrateV0ToV1<Runtime>,
 		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
+		pallet_staking_async::migrations::SetWeightedPointsFormulaStartEra<Runtime>,
 		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,

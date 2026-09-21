@@ -870,15 +870,20 @@ impl<T: frame_system::Config> pallet_staking_async::WeightInfo for WeightInfo<T>
 	/// Proof: `Staking::NextElectionPage` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
 	/// Storage: `Staking::ElectableStashes` (r:0 w:1)
 	/// Proof: `Staking::ElectableStashes` (`max_values`: Some(1), `max_size`: Some(32002), added: 32497, mode: `MaxEncodedLen`)
-	fn rc_on_session_report() -> Weight {
+	/// The range of component `v` is `[1, 1000]`.
+	fn rc_on_session_report(v: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `2272`
-		//  Estimated: `39483`
-		// Minimum execution time: 604_272_000 picoseconds.
-		Weight::from_parts(786_924_000, 0)
+		//  Measured:  `8505 + v * (61 ±0)`
+		//  Estimated: `39483 + v * (2543 ±0)`
+		// Minimum execution time: 317_237_000 picoseconds.
+		Weight::from_parts(275_445_651, 0)
 			.saturating_add(Weight::from_parts(0, 39483))
-			.saturating_add(T::DbWeight::get().reads(13))
-			.saturating_add(T::DbWeight::get().writes(7))
+			// Standard Error: 11_405
+			.saturating_add(Weight::from_parts(6_402_581, 0).saturating_mul(v.into()))
+			.saturating_add(T::DbWeight::get().reads(15))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(v.into())))
+			.saturating_add(T::DbWeight::get().writes(17))
+			.saturating_add(Weight::from_parts(0, 2543).saturating_mul(v.into()))
 	}
 	/// Storage: `Staking::ActiveEra` (r:1 w:0)
 	/// Proof: `Staking::ActiveEra` (`max_values`: Some(1), `max_size`: Some(13), added: 508, mode: `Measured`)
