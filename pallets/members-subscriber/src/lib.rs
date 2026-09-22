@@ -95,8 +95,8 @@ pub mod pallet {
 	// To enforce the values relation of these constants in the future.
 	const _: () = assert!(TX_LONGEVITY >= TX_RETRY_WINDOW as u64);
 
-	/// Number of blocks between repeated failure warnings for offchain-worker transactions,
-	/// so that an eventual transaction-pool stall is not logged at each block.
+	/// Number of offchain worker runs between repeated failure warnings, so that an eventual
+	/// transaction-pool stall is not logged at each run.
 	const STALL_WARN_PERIOD: u32 = 32;
 
 	#[pallet::pallet]
@@ -381,7 +381,7 @@ pub mod pallet {
 			let discriminator = block_number / TX_RETRY_WINDOW.into();
 
 			// Purging stale ring data also while the subscription is Terminated
-			Self::submit_ring_purge(block_number, discriminator);
+			Self::submit_ring_purge_if_due(block_number, discriminator);
 
 			if !matches!(Subscription::<T>::get(), SubscriptionStatus::Active { .. }) {
 				return;
@@ -390,8 +390,13 @@ pub mod pallet {
 			let now = T::UnixTime::now().as_secs();
 			let processing_state = ProcessingState::<T>::get();
 
-			Self::submit_gap_scan(block_number, discriminator, now);
-			Self::submit_replay_requests(block_number, discriminator, now, &processing_state);
+			Self::submit_gap_scan_if_due(block_number, discriminator, now);
+			Self::submit_replay_requests_if_due(
+				block_number,
+				discriminator,
+				now,
+				&processing_state,
+			);
 		}
 
 		fn integrity_test() {
@@ -1216,7 +1221,10 @@ pub mod pallet {
 		}
 
 		/// Submits a purge transaction when stale ring data awaits removal.
-		fn submit_ring_purge(block_number: BlockNumberFor<T>, discriminator: BlockNumberFor<T>) {
+		fn submit_ring_purge_if_due(
+			block_number: BlockNumberFor<T>,
+			discriminator: BlockNumberFor<T>,
+		) {
 			let Some(progress) = QueuedRingPurge::<T>::get() else {
 				return;
 			};
@@ -1231,7 +1239,7 @@ pub mod pallet {
 
 		/// Submits one gap-scan transaction for the first collection whose scan cursor is behind
 		/// the ring index frontier and whose batch cooldown has elapsed.
-		fn submit_gap_scan(
+		fn submit_gap_scan_if_due(
 			block_number: BlockNumberFor<T>,
 			discriminator: BlockNumberFor<T>,
 			now: u64,
@@ -1274,7 +1282,7 @@ pub mod pallet {
 		}
 
 		/// Submits a replay transaction for each collection with missing ring indices.
-		fn submit_replay_requests(
+		fn submit_replay_requests_if_due(
 			block_number: BlockNumberFor<T>,
 			discriminator: BlockNumberFor<T>,
 			now: u64,
@@ -1316,9 +1324,12 @@ pub mod pallet {
 			}
 		}
 
-		/// Logs a warning once per `STALL_WARN_PERIOD` blocks, and a debug message otherwise.
+		/// Logs a warning once per `STALL_WARN_PERIOD` offchain worker runs, and a debug message
+		/// otherwise. The offchain worker runs only at multiples of `OffchainWorkerInterval`,
+		/// so the run index advances by one per run whatever the interval.
 		fn warn_periodically(block_number: BlockNumberFor<T>, message: core::fmt::Arguments) {
-			if (block_number % STALL_WARN_PERIOD.into()).is_zero() {
+			let run = block_number / T::OffchainWorkerInterval::get();
+			if (run % STALL_WARN_PERIOD.into()).is_zero() {
 				log::warn!(target: LOG_TARGET, "offchain worker: {message}");
 			} else {
 				log::debug!(target: LOG_TARGET, "offchain worker: {message}");
@@ -1335,7 +1346,7 @@ pub mod pallet {
 			}
 			Self::warn_periodically(
 				block_number,
-				format_args!("`{call_name}` repeatedly rejected by the transaction pool"),
+				format_args!("`{call_name}` rejected by the transaction pool"),
 			);
 		}
 
