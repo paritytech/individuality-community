@@ -144,6 +144,7 @@ stateDiagram-v2
 | `redeem_credit` | Person / signed / participant | Income | Transfer accumulated credit to a destination account |
 | `register` | Signed / participant | Personhood | Register as a person (with key + proof), or resume after suspension |
 | `set_absence_grace_schedule` | `ScheduleOrigin` / root | Configuration | Override the default grace tiers for absence (max 8 tiers, sorted by population threshold, window ≤ 8) |
+| `force_set_attendance` | Root | Attendance | Set a participant's attendance for a game index inside a self-contained attendance report session, with the same scoring effects as a game report |
 
 ## Income
 
