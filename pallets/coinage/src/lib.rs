@@ -56,7 +56,7 @@ pub use weights::WeightInfo;
 use alloc::{collections::BTreeSet, vec::Vec};
 use codec::Encode;
 use frame_support::{
-	dispatch::{DispatchErrorWithPostInfo, PostDispatchInfo},
+	dispatch::{DispatchClass, DispatchErrorWithPostInfo, PostDispatchInfo},
 	pallet_prelude::*,
 	storage::types::{Key as NMapKey, StorageNMap},
 	traits::{
@@ -1993,26 +1993,33 @@ pub mod pallet {
 				at least 8",
 			);
 
-			let budget = OcwWeightBudget::from_normal_max::<T>();
-
 			let (g, e) = Self::max_mixed_output_counts(T::MaxSplitOutputs::get());
 			let unload_extension = T::WeightInfo::as_unload_token_people_tx_ext()
 				.max(T::WeightInfo::as_unload_token_lite_people_tx_ext())
 				.max(T::WeightInfo::as_unload_token_paid_tx_ext())
 				.max(T::WeightInfo::as_unload_token_from_output_tx_ext())
 				.saturating_add(T::WeightInfo::validate_unload_calls(1, T::MaxSplitOutputs::get()));
-			budget.assert_fits(
-				"unload_recycler_into_external_asset_and_loaded_coins",
-				Self::max_mixed_output_call_weight(
-					&UnloadWeightScope::AnyFeeMode,
-					Self::max_aliases_per_unload() as usize,
-					g,
-					e,
-				)
-				.saturating_add(unload_extension)
-				.saturating_add(T::WeightInfo::settle_load_deposits())
-				.saturating_add(T::WeightInfo::charge_load_deposit()),
+			let unload_weight = Self::max_mixed_output_call_weight(
+				&UnloadWeightScope::AnyFeeMode,
+				Self::max_aliases_per_unload() as usize,
+				g,
+				e,
+			)
+			.saturating_add(unload_extension)
+			.saturating_add(T::WeightInfo::settle_load_deposits())
+			.saturating_add(T::WeightInfo::charge_load_deposit());
+			// Users submit mixed unloads through AsCoinage. The OCW submits cleanup calls.
+			let normal_max = T::BlockWeights::get()
+				.get(DispatchClass::Normal)
+				.max_extrinsic
+				.expect("Normal class must have max_extrinsic configured");
+			assert!(
+				unload_weight.all_lte(normal_max),
+				"mixed-output unload weight {unload_weight:?} exceeds the Normal extrinsic \
+				budget {normal_max:?}",
 			);
+
+			let budget = OcwWeightBudget::from_normal_max::<T>();
 
 			let recycler_ring_capacity = T::RecyclerRingExponent::get().ring_capacity();
 			budget.assert_fits(
