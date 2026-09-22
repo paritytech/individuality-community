@@ -89,6 +89,7 @@ mod statement_allowance;
 mod transaction_era;
 mod tx_extension_pipeline;
 mod tx_payment_external_asset;
+mod xcm_fee_api;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
 
@@ -1492,6 +1493,12 @@ fn set_time(secs: u64) {
 /// The coinage instance created by [`setup_external_asset`].
 const COINAGE_INSTANCE_ID: indiv_pallet_coinage::InstanceId = 0;
 
+/// The native-per-external-asset rate [`setup_external_asset`] registers with `pallet-asset-rate`.
+///
+/// Native has 10 decimals, the external asset has 6, and the two are notionally worth the same, so
+/// the rate only reconciles the scales: 1 raw external asset ($10^-6) = 10^4 raw native ($10^-10).
+const EXTERNAL_ASSET_RATE: u32 = 10_000;
+
 /// Setup the external asset used by many pallets.
 fn setup_external_asset() {
 	Assets::force_create(
@@ -1504,12 +1511,10 @@ fn setup_external_asset() {
 	.expect("create asset should work");
 
 	// Set up the asset rate for native <-> external asset conversion.
-	// Native has 10 decimals, external asset has 6 decimals.
-	// 1 raw external asset ($10^-6) = 10^4 raw native ($10^-10), so rate = 10^4.
 	AssetRate::create(
 		RuntimeOrigin::root(),
 		alloc::boxed::Box::new(ExternalAssetLocation::get()),
-		sp_runtime::FixedU128::from_u32(10_000),
+		sp_runtime::FixedU128::from_u32(EXTERNAL_ASSET_RATE),
 	)
 	.expect("create asset rate should work");
 
