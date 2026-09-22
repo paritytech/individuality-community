@@ -318,7 +318,8 @@ fn multi_recycler_maximum_uses_max_consolidation() {
 #[test]
 fn counts_between_samples_are_interpolated_not_clamped() {
 	new_test_ext().execute_with(|| {
-		// 12 aliases lie between the `8` and `16` samples of the mock.
+		// The mock maximum of 16 aliases uses the maximum benchmark sample.
+		assert_eq!(MAX_ALIASES, 16);
 		let between = |lo: Weight, mid: Weight, hi: Weight| {
 			assert!(mid.all_gt(lo), "{mid:?} is not above {lo:?}");
 			assert!(mid.all_lt(hi), "{mid:?} is not below {hi:?}");
@@ -326,12 +327,12 @@ fn counts_between_samples_are_interpolated_not_clamped() {
 		between(
 			W::unload_recycler_into_external_asset_prepaid_8(),
 			Pallet::<Test>::unload_recycler_into_external_asset_prepaid_weight(12),
-			W::unload_recycler_into_external_asset_prepaid_16(),
+			W::unload_recycler_into_external_asset_prepaid_max(),
 		);
 		between(
 			W::unload_recycler_into_coins_prepaid_8(D),
 			Pallet::<Test>::unload_recycler_into_coins_prepaid_weight(12, D),
-			W::unload_recycler_into_coins_prepaid_16(D),
+			W::unload_recycler_into_coins_prepaid_max(D),
 		);
 		// 6 recyclers lie between the `4` and `8` samples.
 		between(
@@ -341,7 +342,7 @@ fn counts_between_samples_are_interpolated_not_clamped() {
 		);
 		// Halfway between two samples is their mean, rounded up.
 		let lo = W::unload_recycler_into_external_asset_prepaid_8();
-		let hi = W::unload_recycler_into_external_asset_prepaid_16();
+		let hi = W::unload_recycler_into_external_asset_prepaid_max();
 		let mean = Weight::from_parts(
 			(lo.ref_time() + hi.ref_time()).div_ceil(2),
 			(lo.proof_size() + hi.proof_size()).div_ceil(2),
