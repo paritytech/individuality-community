@@ -10,6 +10,7 @@
     "test:runtime-upgrade": "pnpm run test:runtime-upgrade:paseo-to-next-people-paseo && pnpm run test:runtime-upgrade:paseo-to-next-asset-hub-paseo",
     "test:runtime-upgrade:paseo-to-next-people-paseo": "LOG_LEVEL=warn RUN_RUNTIME_UPGRADE_TESTS=1 NODE_OPTIONS='--max-old-space-size=8192' vitest run --maxWorkers 1 tests/runtime-upgrade/paseo-to-next-people-paseo.test.ts",
     "test:runtime-upgrade:paseo-to-next-asset-hub-paseo": "LOG_LEVEL=warn RUN_RUNTIME_UPGRADE_TESTS=1 NODE_OPTIONS='--max-old-space-size=8192' vitest run --maxWorkers 1 tests/runtime-upgrade/paseo-to-next-asset-hub-paseo.test.ts",
+    "init-coinage": "pnpm --filter @individuality-e2e/coinage-instance run init-coinage",
     "descriptors:update": "pnpm --filter @individuality-e2e/descriptors-src run update",
     "test:watch": "LOG_LEVEL=warn NODE_OPTIONS='--max-old-space-size=8192' vitest",
     "test:verbose": "LOG_LEVEL=info NODE_OPTIONS='--max-old-space-size=8192' vitest run",
@@ -31,7 +32,7 @@
     "@polkadot/util": "14.0.3",
     "@polkadot/util-crypto": "14.0.3",
     "@types/node": "^24.0.0",
-    "polkadot-api": "^2.1.7",
+    "polkadot-api": "^3.0.0",
     "scale-ts": "1.6.1",
     "sqlite3": "6.0.1",
     "tsx": "^4.21.0",
@@ -53,16 +54,7 @@
     "tsup": "^8.5.1",
     "vite": "^7.3.2"
   },
-  "pnpm": {
-    "overrides": {
-      "sqlite3": "6.0.1",
-      "tar": "^7.5.15",
-      "@substrate/connect": "^2.1.8",
-      "global-agent": "^4.1.3",
-      "tsup": "^8.5.1"
-    },
     "onlyBuiltDependencies": [
       "sqlite3"
     ]
-  }
 }

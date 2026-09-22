@@ -10,7 +10,7 @@
   "dependencies": {
     "@individuality-e2e/shared": "workspace:*",
     "@polkadot-api/descriptors": "workspace:*",
-    "polkadot-api": "^2.1.7"
+    "polkadot-api": "^3.0.0"
   },
   "devDependencies": {
     "tsx": "^4.21.0",
