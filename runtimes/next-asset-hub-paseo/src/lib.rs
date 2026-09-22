@@ -2914,7 +2914,9 @@ pub type UncheckedExtrinsic =
 #[allow(missing_docs)]
 pub mod migrations {
 	use super::*;
-	use frame_support::{ensure, traits::OnRuntimeUpgrade};
+	#[cfg(feature = "try-runtime")]
+	use frame_support::ensure;
+	use frame_support::traits::OnRuntimeUpgrade;
 
 	/// Creates the PGAS asset with [`pallet_assets::Pallet::force_create`] from the root origin.
 	///
