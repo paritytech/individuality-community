@@ -975,6 +975,12 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 				};
 			let declared = call.get_dispatch_info().call_weight;
 			assert!(declared.all_gt(repeated_call.get_dispatch_info().call_weight));
+			let recipient_before = AssetsWithHolder::total_balance(TEST_ASSET_ID, &CHARLIE);
+			let market_before = AssetsWithHolder::total_balance(TEST_ASSET_ID, &MOCK_MARKET);
+			let fee_amount = match fee {
+				UnloadFee::Prepaid => 0,
+				UnloadFee::FromOutput { .. } => max_fee,
+			};
 			let post = Coinage::unload_recycler_into_external_asset_and_loaded_coins(
 				RuntimeOrigin::from(pallet::Origin::<Test>::UnloadToken {
 					alias_proofs: bounded_vec![proof],
@@ -998,6 +1004,18 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2));
 			assert_eq!(post.actual_weight, Some(expected));
 			assert!(expected.all_lt(declared));
+			assert_eq!(
+				AssetsWithHolder::total_balance(TEST_ASSET_ID, &CHARLIE) - recipient_before,
+				external_asset_amount - fee_amount
+			);
+			assert_eq!(
+				AssetsWithHolder::total_balance(TEST_ASSET_ID, &MOCK_MARKET) - market_before,
+				fee_amount
+			);
+			assert_eq!(
+				RecyclerAliasStates::<Test>::get((TEST_INSTANCE_ID, value, index, alias)),
+				Some(AliasState::Unloaded)
+			);
 			for (denomination, member) in loaded_coins {
 				assert_eq!(
 					RecyclersCoinToRecycler::<Test>::get(member),

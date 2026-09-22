@@ -361,30 +361,27 @@ fn worst_case_unload_covers_repeats_when_their_slope_is_larger() {
 			Weight::from_parts(100, 1),
 			Weight::from_parts(10_000, 100),
 		));
-		for outputs in [0, 1, MAX_SPLIT_OUTPUTS] {
+		for (outputs, expected_surcharge) in [
+			(0, Weight::zero()),
+			(1, Weight::from_parts(100, 1)),
+			(32, Weight::from_parts(310_100, 3_101)),
+		] {
 			for (scope, base) in [
 				(UnloadWeightScope::FromOutputOnly, from_output),
 				(UnloadWeightScope::AnyFeeMode, prepaid),
 			] {
 				let groups = outputs.min(10);
-				let extras = outputs - groups;
-				let distinct = base
-					.saturating_add(Weight::from_parts(100, 1).saturating_mul(groups.into()))
-					.saturating_add(Weight::from_parts(10_000, 100).saturating_mul(extras.into()));
-				let minimum_groups = u32::from(outputs > 0);
-				let repeated = base
-					.saturating_add(
-						Weight::from_parts(100, 1).saturating_mul(minimum_groups.into()),
-					)
-					.saturating_add(
-						Weight::from_parts(10_000, 100)
-							.saturating_mul((outputs - minimum_groups).into()),
-					);
-				let bound = Pallet::<Test>::max_unload_call_weight(scope, 1, groups, extras);
-				assert_eq!(bound, repeated);
-				assert!(bound.all_gte(distinct));
-				if outputs > 1 {
-					assert!(bound.all_gt(distinct));
+				let bound =
+					Pallet::<Test>::max_unload_call_weight(scope, 1, groups, outputs - groups);
+				assert_eq!(bound, base.saturating_add(expected_surcharge));
+				for distinct in u32::from(outputs > 0)..=groups {
+					let call = base
+						.saturating_add(Weight::from_parts(100, 1).saturating_mul(distinct.into()))
+						.saturating_add(
+							Weight::from_parts(10_000, 100)
+								.saturating_mul((outputs - distinct).into()),
+						);
+					assert!(bound.all_gte(call));
 				}
 			}
 		}

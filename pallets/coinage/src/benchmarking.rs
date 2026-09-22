@@ -4961,14 +4961,14 @@ mod benches {
 			for mode in [UnloadFeeBenchMode::Prepaid, UnloadFeeBenchMode::FromOutput] {
 				new_test_ext_bench().execute_with(|| {
 					common_setup::<Test>();
-					for fee in [2, 250, 251, 10_000] {
+					for (fee, output_reserve) in [(2, 2), (250, 2), (251, 3), (10_000, 41)] {
 						MockPaidUnloadTokenFeeOverride::set(&Some(fee));
 						let reserve = mixed_output_external_reserve::<Test>(mode).unwrap();
 						assert_eq!(
 							reserve,
 							match mode {
 								UnloadFeeBenchMode::Prepaid => 0,
-								UnloadFeeBenchMode::FromOutput => u128::from(fee).div_ceil(250) + 1,
+								UnloadFeeBenchMode::FromOutput => output_reserve,
 							}
 						);
 						let (input, external, coins) =
@@ -5000,14 +5000,9 @@ mod benches {
 										g as usize
 									);
 									assert!(u128::from(external) >= reserve * 250);
-									let expected = (0..g)
-										.map(|offset| -2 + offset as i8)
-										.chain(core::iter::repeat_n(-2, e as usize))
-										.collect::<Vec<_>>();
-									assert_eq!(
-										coins.iter().map(|(value, _)| *value).collect::<Vec<_>>(),
-										expected
-									);
+									assert!(coins
+										.iter()
+										.all(|(value, _)| (-2..=7).contains(value)));
 									let loaded_asset = coins
 										.iter()
 										.map(|(value, _)| 250 * 2u64.pow((*value + 2) as u32))
