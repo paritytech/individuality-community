@@ -1234,34 +1234,34 @@ mod games_scheduling {
 				)
 			});
 			advance_process_with_weights(weights, Weight::zero()); // register to shuffle
-			assert_eq!(
+			assert!(matches!(
 				crate::Game::<Test>::get().unwrap().state,
-				GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } }
-			);
+				GameState::Shuffle { step: ShuffleStep::Step1CaptureRandomness { .. } }
+			));
 
 			advance_process_with_weights(weights, weights); // some incomplete shuffle
 			assert!(
 				matches!(
 					crate::Game::<Test>::get().unwrap().state,
 					GameState::Shuffle {
-						step: ShuffleStep::Step1Insert { last_iteration: Some(_) }
+						step: ShuffleStep::Step2Insert { last_iteration: Some(_), .. }
 					},
 				),
 				"Phase must still be in shuffle, we are testing for multi block shuffle",
 			);
 
-			let mut stop_at_step2 = false;
+			let mut stop_at_retrieve = false;
 
 			// Finish the shuffle
 			while matches!(crate::Game::<Test>::get().unwrap().state, GameState::Shuffle { .. }) {
 				advance_process_with_weights(weights, weights); // continue the shuffle
-				stop_at_step2 |= matches!(
+				stop_at_retrieve |= matches!(
 					crate::Game::<Test>::get().unwrap().state,
-					GameState::Shuffle { step: ShuffleStep::Step2Retrieve { .. }}
+					GameState::Shuffle { step: ShuffleStep::Step3Retrieve { .. }}
 				);
 			}
 
-			assert!(stop_at_step2, "To ensure correct flow if step 2 take multiple steps, we must check that it stopped at least once in step 2");
+			assert!(stop_at_retrieve, "To ensure correct flow if the retrieve step takes multiple steps, we must check that it stopped at least once in the retrieve step");
 
 			// Now state is in report
 			assert_eq!(
@@ -3692,10 +3692,10 @@ fn game_cancelled_due_to_shuffle_deadline_missed() {
 		// One on_poll: Registration -> Shuffle (no shuffle work yet).
 		advance_process_with_on_poll_only();
 		assert!(crate::Game::<Test>::get().is_some());
-		assert_eq!(
+		assert!(matches!(
 			crate::Game::<Test>::get().unwrap().state,
-			GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } }
-		);
+			GameState::Shuffle { step: ShuffleStep::Step1CaptureRandomness { .. } }
+		));
 
 		// Push time beyond shuffle_deadline so shuffles() cancels immediately.
 		MOCK_UNIX_TIME
@@ -3720,6 +3720,64 @@ fn game_cancelled_due_to_shuffle_deadline_missed() {
 		// The corresponding GameHistory entry was removed.
 		let current_index = GameIndex::<Test>::get(); // == 1 in a fresh test ext
 		assert_eq!(GameHistory::<Test>::get(current_index), None);
+	});
+}
+
+#[test]
+fn shuffle_waits_for_fresh_randomness() {
+	new_test_ext().execute_with(|| {
+		// Stale randomness: its moment equals the current moment, so it was already
+		// determinable while registration was still open.
+		set_shuffle_randomness([9u8; 32], 10);
+
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 100,
+			rounds: 1,
+			max_group_size: 3,
+			..Default::default()
+		};
+		assert_ok!(Game::new_game(&schedule));
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(ALICE),
+			DEFAULT_IDENTIFIER_KEY,
+			None,
+		));
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(BOB),
+			DEFAULT_IDENTIFIER_KEY,
+			None,
+		));
+
+		// End registration; the transition records the current moment as the watermark the
+		// shuffle randomness must beat.
+		let reg_end = GameTimes::<Test>::registration_end(&schedule);
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
+		advance_process(); // registration -> shuffle
+		assert_eq!(
+			crate::Game::<Test>::get().unwrap().state,
+			GameState::Shuffle {
+				step: ShuffleStep::Step1CaptureRandomness { randomness_moment: 10 }
+			}
+		);
+
+		// The shuffle must not progress while the randomness was already public during
+		// registration.
+		advance_process();
+		advance_process();
+		assert_eq!(
+			crate::Game::<Test>::get().unwrap().state,
+			GameState::Shuffle {
+				step: ShuffleStep::Step1CaptureRandomness { randomness_moment: 10 }
+			}
+		);
+
+		// Randomness produced after registration closed unblocks the shuffle.
+		set_shuffle_randomness([9u8; 32], 11);
+		advance_process();
+		assert_eq!(
+			crate::Game::<Test>::get().unwrap().state,
+			GameState::Reporting { player_count: 2 }
+		);
 	});
 }
 
@@ -5363,7 +5421,7 @@ mod cancel_game {
 		new_test_ext().execute_with(|| {
 			setup_one_player_game();
 			force_game_state(GameState::Shuffle {
-				step: ShuffleStep::Step1Insert { last_iteration: None },
+				step: ShuffleStep::Step1CaptureRandomness { randomness_moment: 0 },
 			});
 
 			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
@@ -5391,7 +5449,7 @@ mod cancel_game {
 			}
 
 			force_game_state(GameState::Shuffle {
-				step: ShuffleStep::Step1Insert { last_iteration: None },
+				step: ShuffleStep::Step1CaptureRandomness { randomness_moment: 0 },
 			});
 			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
 
@@ -5573,7 +5631,7 @@ mod set_game_phases {
 	fn shuffle_phase_rejects_override() {
 		new_test_ext().execute_with(|| {
 			put_game_in_state(GameState::Shuffle {
-				step: ShuffleStep::Step1Insert { last_iteration: None },
+				step: ShuffleStep::Step1CaptureRandomness { randomness_moment: 0 },
 			});
 			assert_noop!(
 				Game::set_game_phases(RuntimeOrigin::root(), distinct_phases()),
@@ -6875,7 +6933,9 @@ mod airdrop {
 			let deadline = GameStorage::<Test>::get().expect("game exists").shuffle_deadline;
 			GameStorage::<Test>::mutate(|maybe_game| {
 				maybe_game.as_mut().expect("game exists").state =
-					GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } };
+					GameState::Shuffle {
+						step: ShuffleStep::Step1CaptureRandomness { randomness_moment: 0 },
+					};
 			});
 			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(deadline as u64 + 1));
 			advance_process_with_on_poll_only();
