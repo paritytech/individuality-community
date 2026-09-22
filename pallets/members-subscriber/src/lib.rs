@@ -144,7 +144,7 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxGapScanPerCall: Get<u32>;
 
-		/// Cooldown (in seconds) after receiving a batch before the gap scan runs.
+		/// Cooldown (in seconds) after a collection receives a batch before its gap scan runs.
 		/// Allows time for multi-part batches to arrive, so that indices still on the way are
 		/// not recorded as missing.
 		#[pallet::constant]
@@ -169,8 +169,9 @@ pub mod pallet {
 		/// Unix time source for timestamps.
 		type UnixTime: UnixTime;
 
-		/// Cooldown period (in seconds) after receiving a batch before sending replay requests.
-		/// Allows time for multi-part batches to arrive via XCM.
+		/// Cooldown period (in seconds) after a collection receives a batch before replay requests
+		/// for it are sent, and between consecutive replay requests. Allows time for multi-part
+		/// batches to arrive via XCM. The batch cooldown is counted per collection.
 		#[pallet::constant]
 		type ReplayCooldownSeconds: Get<u64>;
 
@@ -389,7 +390,7 @@ pub mod pallet {
 			let now = T::UnixTime::now().as_secs();
 			let processing_state = ProcessingState::<T>::get();
 
-			Self::submit_gap_scan(block_number, discriminator, now, &processing_state);
+			Self::submit_gap_scan(block_number, discriminator, now);
 			Self::submit_replay_requests(block_number, discriminator, now, &processing_state);
 		}
 
@@ -839,8 +840,9 @@ pub mod pallet {
 		/// Validates a gap scan request.
 		///
 		/// Checks that the transaction is local/in-block, the subscription is active, the gap scan
-		/// cooldown since the last received batch has elapsed, the scan cursor is behind the ring
-		/// index frontier and neither `deleted_indices` nor `missing_indices` is at capacity.
+		/// cooldown since the collection's last received batch has elapsed, the scan cursor is
+		/// behind the ring index frontier and neither `deleted_indices` nor `missing_indices` is
+		/// at capacity.
 		/// The scan cursor is part of the `provides` tag, so each page enters the pool once.
 		pub fn authorize_detect_missing_rings(
 			source: TransactionSource,
@@ -854,15 +856,15 @@ pub mod pallet {
 				return Err(InvalidTransaction::Call.into());
 			}
 
+			let state = RingCollectionStates::<T>::get(identifier);
 			let now = T::UnixTime::now().as_secs();
-			let last_batch = ProcessingState::<T>::get().last_batch_received_time;
-			if now.saturating_sub(last_batch) < T::GapScanCooldownSeconds::get() {
+			if now.saturating_sub(state.last_batch_received_time) < T::GapScanCooldownSeconds::get()
+			{
 				// The cooldown elapses on its own, so the pool keeps the transaction and
 				// revalidates it in a later view.
 				return Err(InvalidTransaction::Future.into());
 			}
 
-			let state = RingCollectionStates::<T>::get(identifier);
 			if state.next_scan_index >= state.next_ring_index {
 				return Err(AuthorizeInvalidity::NothingToScan.into());
 			}
@@ -1047,6 +1049,7 @@ pub mod pallet {
 				}
 			}
 
+			state.last_batch_received_time = T::UnixTime::now().as_secs();
 			RingCollectionStates::<T>::insert(identifier, state);
 
 			// One event per batch, so that a batch of untracked deletions reports once
@@ -1119,12 +1122,9 @@ pub mod pallet {
 			scanned
 		}
 
-		/// Updates timestamps and sequence after processing a batch.
+		/// Records the sequence of the last processed batch.
 		fn record_batch_processed(sequence: SequenceNumber) {
-			ProcessingState::<T>::mutate(|s| {
-				s.last_batch_received_time = T::UnixTime::now().as_secs();
-				s.last_processed_sequence = sequence;
-			});
+			ProcessingState::<T>::mutate(|s| s.last_processed_sequence = sequence);
 		}
 
 		/// Ensures the subscription is in Active state.
@@ -1230,23 +1230,22 @@ pub mod pallet {
 		}
 
 		/// Submits one gap-scan transaction for the first collection whose scan cursor is behind
-		/// the ring index frontier.
+		/// the ring index frontier and whose batch cooldown has elapsed.
 		fn submit_gap_scan(
 			block_number: BlockNumberFor<T>,
 			discriminator: BlockNumberFor<T>,
 			now: u64,
-			processing_state: &UpdatesProcessingState,
 		) {
-			// Some rest time after the last received batch is given to account
-			// for incoming batches that may contain indices considered as missing
-			// in the current state.
-			if now.saturating_sub(processing_state.last_batch_received_time)
-				< T::GapScanCooldownSeconds::get()
-			{
-				return;
-			}
-
 			for (identifier, state) in RingCollectionStates::<T>::iter() {
+				// Some rest time after the collection's last received batch is given to account
+				// for incoming batches that may contain indices considered as missing
+				// in the current state.
+				if now.saturating_sub(state.last_batch_received_time)
+					< T::GapScanCooldownSeconds::get()
+				{
+					continue;
+				}
+
 				if state.next_scan_index >= state.next_ring_index {
 					continue;
 				}
@@ -1283,17 +1282,17 @@ pub mod pallet {
 		) {
 			let cooldown = T::ReplayCooldownSeconds::get();
 
-			// Cooldown 1: Giving some time for multi-part batches to arrive
-			if now.saturating_sub(processing_state.last_batch_received_time) < cooldown {
-				return;
-			}
-
-			// Cooldown 2: So as not to send replay requests too frequently
+			// So as not to send replay requests too frequently
 			if now.saturating_sub(processing_state.last_replay_request_time) < cooldown {
 				return;
 			}
 
 			for (identifier, state) in RingCollectionStates::<T>::iter() {
+				// Giving some time for multi-part batches of this collection to arrive
+				if now.saturating_sub(state.last_batch_received_time) < cooldown {
+					continue;
+				}
+
 				if state.missing_indices.is_empty() {
 					continue;
 				}

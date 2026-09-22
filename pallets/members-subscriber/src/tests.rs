@@ -79,6 +79,15 @@ fn next_scan_index(identifier: Identifier) -> u32 {
 	RingCollectionStates::<Test>::get(identifier).next_scan_index
 }
 
+fn last_batch_received_time(identifier: Identifier) -> u64 {
+	RingCollectionStates::<Test>::get(identifier).last_batch_received_time
+}
+
+/// Records a batch for the collection at `secs`, as `store_ring_roots` does.
+fn stamp_batch_received(identifier: Identifier, secs: u64) {
+	RingCollectionStates::<Test>::mutate(identifier, |s| s.last_batch_received_time = secs);
+}
+
 /// Roots stored under the current generation prefix.
 fn ring_roots(
 	identifier: Identifier,
@@ -144,13 +153,12 @@ fn run_purge_to_completion() {
 	}
 }
 
-/// Active subscription with both cooldowns elapsed and no collection state. Each test inserts
-/// the collection it needs, so the setup says nothing about the scan cursor.
+/// Active subscription with the replay cooldown elapsed and no collection state. Each test
+/// inserts the collection it needs; a fresh collection state has its batch cooldown elapsed.
 fn setup_active_ocw_ready() {
 	Subscription::<Test>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
 	ProcessingState::<Test>::mutate(|s| {
 		s.last_processed_sequence = 1;
-		s.last_batch_received_time = 0;
 		s.last_replay_request_time = 0;
 	});
 	set_time_secs(1_700_000_000);
@@ -517,9 +525,9 @@ mod ring_roots_initialization {
 	#[test]
 	fn updates_last_batch_received_time() {
 		new_test_ext().execute_with(|| {
-			assert_eq!(ProcessingState::<Test>::get().last_batch_received_time, 0);
+			assert_eq!(last_batch_received_time(PEOPLE), 0);
 
-			let batch = RingRootUpdatesBatch::<Test>::default();
+			let batch = RingRootUpdatesBatch::<Test> { identifier: PEOPLE, ..Default::default() };
 
 			assert_ok!(MembersSubscriber::initialize_ring_roots(
 				RuntimeOrigin::root(),
@@ -527,8 +535,9 @@ mod ring_roots_initialization {
 				batch
 			));
 
-			// MockUnixTime returns 1_700_000_000 seconds
-			assert_eq!(ProcessingState::<Test>::get().last_batch_received_time, 1_700_000_000);
+			// MockUnixTime returns 1_700_000_000 seconds; only the batch's collection is stamped.
+			assert_eq!(last_batch_received_time(PEOPLE), 1_700_000_000);
+			assert_eq!(last_batch_received_time(PEOPLE_LITE), 0);
 		});
 	}
 
@@ -1108,14 +1117,19 @@ mod ring_roots_updates {
 	fn updates_last_batch_received_time() {
 		new_test_ext().execute_with(|| {
 			setup_active_subscription();
-			ProcessingState::<Test>::mutate(|s| s.last_batch_received_time = 0);
+			stamp_batch_received(PEOPLE, 0);
 
-			let batch = RingRootUpdatesBatch::<Test> { sequence: 2, ..Default::default() };
+			let batch = RingRootUpdatesBatch::<Test> {
+				sequence: 2,
+				identifier: PEOPLE,
+				..Default::default()
+			};
 
 			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch));
 
-			// MockUnixTime returns 1_700_000_000 seconds
-			assert_eq!(ProcessingState::<Test>::get().last_batch_received_time, 1_700_000_000);
+			// MockUnixTime returns 1_700_000_000 seconds; only the batch's collection is stamped.
+			assert_eq!(last_batch_received_time(PEOPLE), 1_700_000_000);
+			assert_eq!(last_batch_received_time(PEOPLE_LITE), 0);
 		});
 	}
 
@@ -1451,7 +1465,7 @@ mod subscription_termination {
 				batch
 			));
 			assert_eq!(RingRoots::<Test>::iter().count(), 3);
-			assert!(ProcessingState::<Test>::get().last_batch_received_time > 0);
+			assert!(last_batch_received_time(PEOPLE) > 0);
 			run_gap_scan(PEOPLE);
 			assert!(!RingCollectionStates::<Test>::get(PEOPLE).missing_indices.is_empty());
 
@@ -2224,10 +2238,7 @@ mod offchain_worker {
 	fn skips_when_no_missing_indices() {
 		new_test_ext().execute_with(|| {
 			Subscription::<Test>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
-			ProcessingState::<Test>::mutate(|s| {
-				s.last_batch_received_time = 0;
-				s.last_replay_request_time = 0;
-			});
+			ProcessingState::<Test>::mutate(|s| s.last_replay_request_time = 0);
 			set_time_secs(1_700_000_000);
 
 			Pallet::<Test>::offchain_worker(1);
@@ -2243,13 +2254,11 @@ mod offchain_worker {
 				PEOPLE,
 				make_collection_ring_state(0, 0, &[(1, 0)], &[]),
 			);
-			// Batch received very recently
+			// Batch for the collection received very recently
 			let now_secs = 1_700_000_000u64;
 			set_time_secs(now_secs);
-			ProcessingState::<Test>::mutate(|s| {
-				s.last_batch_received_time = now_secs; // Within cooldown
-				s.last_replay_request_time = 0;
-			});
+			stamp_batch_received(PEOPLE, now_secs);
+			ProcessingState::<Test>::mutate(|s| s.last_replay_request_time = 0);
 
 			Pallet::<Test>::offchain_worker(1);
 			assert_eq!(pending_ocw_tx_count(), 0);
@@ -2266,10 +2275,7 @@ mod offchain_worker {
 			);
 			let now_secs = 1_700_000_000u64;
 			set_time_secs(now_secs);
-			ProcessingState::<Test>::mutate(|s| {
-				s.last_batch_received_time = 0;
-				s.last_replay_request_time = now_secs; // Within cooldown
-			});
+			ProcessingState::<Test>::mutate(|s| s.last_replay_request_time = now_secs);
 
 			Pallet::<Test>::offchain_worker(1);
 			assert_eq!(pending_ocw_tx_count(), 0);
@@ -2322,6 +2328,32 @@ mod offchain_worker {
 					discriminator: 0,
 				}
 			)));
+		});
+	}
+
+	#[test]
+	fn submits_replay_for_quiet_collection_while_other_is_busy() {
+		new_test_ext().execute_with(|| {
+			// Both collections have missing indices. PEOPLE received a batch just now, PEOPLE_LITE
+			// has been quiet.
+			setup_active_with_missing(&[(1, 0)]);
+			stamp_batch_received(PEOPLE, now_secs());
+			RingCollectionStates::<Test>::insert(
+				PEOPLE_LITE,
+				make_collection_ring_state(0, 0, &[(5, 0)], &[]),
+			);
+
+			Pallet::<Test>::offchain_worker(1);
+
+			// Only the quiet collection's replay is submitted.
+			assert_eq!(
+				pending_ocw_calls(),
+				vec![RuntimeCall::MembersSubscriber(crate::pallet::Call::replay_missing_roots {
+					identifier: PEOPLE_LITE,
+					indices: bounded_vec![5],
+					discriminator: 0,
+				})]
+			);
 		});
 	}
 
@@ -2411,12 +2443,33 @@ mod offchain_worker {
 	fn skips_gap_scan_during_batch_cooldown() {
 		new_test_ext().execute_with(|| {
 			setup_active_with_scan_lag(5);
-			// A batch arrived just now.
-			ProcessingState::<Test>::mutate(|s| s.last_batch_received_time = now_secs());
+			// A batch for the collection arrived just now.
+			stamp_batch_received(PEOPLE, now_secs());
 
 			Pallet::<Test>::offchain_worker(1);
 
 			assert_eq!(pending_ocw_tx_count(), 0);
+		});
+	}
+
+	#[test]
+	fn submits_gap_scan_for_quiet_collection_while_other_is_busy() {
+		new_test_ext().execute_with(|| {
+			// Both collections lag. PEOPLE received a batch just now, PEOPLE_LITE has been quiet.
+			setup_active_with_scan_lag(5);
+			stamp_batch_received(PEOPLE, now_secs());
+			RingCollectionStates::<Test>::insert(
+				PEOPLE_LITE,
+				make_collection_ring_state(0, 5, &[], &[]),
+			);
+
+			Pallet::<Test>::offchain_worker(1);
+
+			// Only the quiet collection is scanned.
+			assert_eq!(
+				pending_ocw_calls(),
+				vec![RuntimeCall::MembersSubscriber(gap_scan_call(PEOPLE_LITE))]
+			);
 		});
 	}
 
@@ -3190,9 +3243,8 @@ mod gap_scan {
 	fn authorize_scan_rejects_within_batch_cooldown() {
 		new_test_ext().execute_with(|| {
 			setup_lagging_scan(5);
-			// A batch arrived just now.
-			let now = now_secs();
-			ProcessingState::<Test>::mutate(|s| s.last_batch_received_time = now);
+			// A batch for the collection arrived just now.
+			stamp_batch_received(PEOPLE, now_secs());
 			let call = gap_scan_call(PEOPLE);
 
 			let result = call.authorize(TransactionSource::InBlock).unwrap();
@@ -3202,6 +3254,28 @@ mod gap_scan {
 				result.unwrap_err(),
 				TransactionValidityError::from(InvalidTransaction::Future)
 			);
+		});
+	}
+
+	#[test]
+	fn authorize_scan_allows_quiet_collection_while_other_is_busy() {
+		new_test_ext().execute_with(|| {
+			// Both collections lag. PEOPLE received a batch just now, PEOPLE_LITE has been quiet.
+			setup_lagging_scan(5);
+			stamp_batch_received(PEOPLE, now_secs());
+			RingCollectionStates::<Test>::insert(
+				PEOPLE_LITE,
+				make_collection_ring_state(0, 5, &[], &[]),
+			);
+
+			// The busy collection's scan waits, the quiet collection's scan is valid.
+			let busy = gap_scan_call(PEOPLE).authorize(TransactionSource::InBlock).unwrap();
+			assert_eq!(
+				busy.unwrap_err(),
+				TransactionValidityError::from(InvalidTransaction::Future)
+			);
+			let quiet = gap_scan_call(PEOPLE_LITE).authorize(TransactionSource::InBlock).unwrap();
+			assert!(quiet.is_ok());
 		});
 	}
 

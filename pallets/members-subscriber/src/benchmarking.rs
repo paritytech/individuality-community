@@ -138,6 +138,7 @@ fn seed_gap_scan_worst_case<T: Config + BenchmarkHelper<T>>(n: u32) -> RingIndex
 				.collect::<BTreeSet<_>>()
 				.try_into()
 				.expect("one below the bound"),
+			last_batch_received_time: 0,
 		},
 	);
 	fill_in_ring_root_range::<T>(BENCH_IDENTIFIER, stored_from..scan_from);
@@ -322,7 +323,6 @@ mod benches {
 
 		ProcessingState::<T>::mutate(|s| {
 			s.last_processed_sequence = 1;
-			s.last_batch_received_time = 1000;
 			s.last_replay_request_time = 500;
 		});
 
