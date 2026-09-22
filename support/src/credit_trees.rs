@@ -40,6 +40,12 @@ use sp_runtime::{
 
 use crate::{identity::AccountOrPerson, offchain::TX_LONGEVITY, tx_priority, utils::BigEndianU32};
 
+/// The index a game runs under, as the game chain assigns it.
+///
+/// It is shared, so that a delivery encoded on the game chain decodes to the same type on the
+/// claim chain.
+pub type GameIdx = u32;
+
 /// An NFT claim credit earned by a player.
 /// Hashes one successful report of one player on another, in one round of one game.
 /// The claim chain mints an NFT from it.
@@ -227,12 +233,15 @@ where
 	// The tag is the timestamp, so every sweep that starts at one timestamp shares it and the pool
 	// keeps one attempt. A submitter that sweeps one timestamp over successive blocks replaces its
 	// own pending attempt, so one block holds at most one sweep of it.
+	//
+	// A sweep only frees storage, so it yields to every other transaction. Nothing waits on it:
+	// the entries it removes are past their deadline and no call reads them again.
 	let validity = ValidTransaction::with_tag_prefix(tx.tag)
 		.and_provides(filed)
-		.priority(
-			tx_priority::BACKGROUND_PROGRESS
-				.saturating_add(frame_system::Pallet::<T>::block_number().saturated_into::<u64>()),
-		)
+		.priority(tx_priority::add_tie_break(
+			tx_priority::CLEANUP,
+			frame_system::Pallet::<T>::block_number().saturated_into::<u64>(),
+		))
 		.longevity(TX_LONGEVITY)
 		.propagate(false)
 		.build()
@@ -270,6 +279,9 @@ pub struct NftClaimCreditTree {
 	/// The Unix timestamp of the buffer's first award, in seconds.
 	/// Each chain calculates expiry from this timestamp and its configured TTL.
 	pub timestamp: u32,
+	/// Which path the tree's game mints on. The claim chain refuses a public claim against a
+	/// private tree until the game is abandoned, the ladder arriving after the tree does.
+	pub claim_path: ClaimPath,
 }
 
 /// One credit tree's delivery to the claim chain, with its block and sequence.
@@ -318,6 +330,137 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 	pub source_time: u64,
 	/// The trees in the batch, in ascending block order.
 	pub trees: BoundedVec<CreditTreeDelivery, MaxTrees>,
+}
+
+/// One tier of a private game's ring ladder, which is one context a registered key proves under.
+///
+/// Ring `t` holds every registrant that earned at least `t` credits. A claimant proves tiers 1 to
+/// their credit count, once each, and each proof is one mint. Tiers are one-based, so tier 1 is
+/// every registrant.
+pub type PrivateClaimTier = u8;
+
+/// The most tiers one game's ring ladder carries, which both chains bound.
+///
+/// The game chain builds no more tiers than this and the claims chain decodes no more, so each
+/// runtime configuring it from here puts the two in that order. A full attendance of a game of
+/// `MaxRounds` rounds and `MaxGroupSize` groups earns `MaxRounds * (MaxGroupSize - 1)` credits,
+/// which this has to reach to pay one claimant in full.
+pub const PRIVATE_RING_TIERS: u32 = 15;
+
+/// Which path a game's NFT claim credits mint on.
+///
+/// A game's schedule names it and every tree the game's credits form carries it, so the claim
+/// chain reads the operator's choice from the tree. It names no payout: a registrant mints the
+/// credits they earned, which are not final when the tree is built.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	Clone,
+	Copy,
+	Default,
+	PartialEq,
+	Eq,
+)]
+pub enum ClaimPath {
+	/// The credits mint through [`NftClaimCreditTree::root`], one NFT per credit, to the claimant
+	/// the leaf names.
+	#[default]
+	Public,
+	/// The credits mint through the game's ring ladder, which names nobody. The claim chain
+	/// refuses a public claim against such a tree until the game is abandoned.
+	Private,
+}
+
+/// How a private game ended: with a ring ladder its claimants prove membership in, or without one.
+///
+/// A game reaches exactly one of the two. The claim chain needs both: the ladder opens the
+/// private path and the abandonment reopens the public one. `Members` is the crypto's ring root
+/// type, which only the runtime knows.
+#[derive(
+	CloneNoBound,
+	PartialEqNoBound,
+	EqNoBound,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	DebugNoBound,
+	TypeInfo,
+)]
+#[scale_info(skip_type_params(MaxTiers))]
+pub enum PrivateGameOutcome<Members: Clone + Eq + PartialEq + core::fmt::Debug, MaxTiers: Get<u32>>
+{
+	/// The game built a ladder of nested rings: root `t - 1` of `roots` is the ring of every
+	/// registrant that earned at least `t` credits, so ring 1 contains ring 2 contains ring 3.
+	Ring {
+		/// The ring root of each tier, tier 1 first. Its length is the ladder's height, which is
+		/// the most any one claimant mints.
+		roots: BoundedVec<Members, MaxTiers>,
+		/// The number of keys in tier 1, which is the widest anonymity set the game offers. It is
+		/// reported only: a proof does not need it.
+		key_count: u32,
+	},
+	/// The game built no ladder, so its credits mint over the public path instead. Either too few
+	/// claimants registered for tier 1 to hide anyone, or the build failed.
+	Abandoned {
+		/// The number of keys that were registered, which is what fell short.
+		key_count: u32,
+	},
+}
+
+/// One private game's outcome as it is delivered to the claim chain.
+#[derive(
+	CloneNoBound,
+	PartialEqNoBound,
+	EqNoBound,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	DebugNoBound,
+	TypeInfo,
+)]
+#[scale_info(skip_type_params(MaxTiers))]
+pub struct PrivateRingDelivery<
+	Members: Clone + Eq + PartialEq + core::fmt::Debug,
+	MaxTiers: Get<u32>,
+> {
+	/// The game the outcome belongs to.
+	pub game_index: GameIdx,
+	/// The ladder the game built, or its abandonment.
+	pub outcome: PrivateGameOutcome<Members, MaxTiers>,
+}
+
+/// A batch of private game outcomes sent from the game chain to the claim chain in one XCM
+/// message.
+///
+/// It is kept apart from [`CreditTreeBatch`]. A ring root is far larger than a Merkle root and a
+/// ladder carries one per tier, so a game's outcome cannot share a message with a block's trees.
+#[derive(
+	CloneNoBound,
+	PartialEqNoBound,
+	EqNoBound,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	DebugNoBound,
+	TypeInfo,
+	MaxEncodedLen,
+)]
+#[scale_info(skip_type_params(MaxTiers, MaxRings))]
+pub struct PrivateRingBatch<
+	Members: Clone + Eq + PartialEq + core::fmt::Debug,
+	MaxTiers: Get<u32>,
+	MaxRings: Get<u32>,
+> {
+	/// Unix timestamp in seconds when the batch was assembled on the game chain.
+	pub source_time: u64,
+	/// The outcomes in the batch, in ascending game order.
+	pub rings: BoundedVec<PrivateRingDelivery<Members, MaxTiers>, MaxRings>,
 }
 
 /// What the game needs from the pallet that owns the NFT claim credits.

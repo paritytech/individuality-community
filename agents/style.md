@@ -16,3 +16,4 @@
 - Target three short sentences in a field, variant or trait-method doc, one message each: what it is, then what a caller cannot get right unaided. Fewer is better; rationale belongs in the module doc
 - When editing an item, rewrite its doc comment rather than appending to it, so it does not grow with every change
 - Comments state facts plainly. Follow [ASD-STE100](https://asd-ste100.org/) Simplified Technical English: one idea per sentence, active voice, present tense, the same term for the same thing, and the plain verb over a noun phrase. Avoid editorialising ("this is what keeps it out of a block", "the two can never drift apart"); say what holds and why a caller cannot infer it. Delete a comment that only restates the code
+- Say what holds. Where a sentence pairs a claim with a negated counterpart, keep the claim alone. E.g. "The cap covers the whole game" not "the cap is on the game and not on a tier"

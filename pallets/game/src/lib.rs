@@ -1877,6 +1877,7 @@ pub mod pallet {
 				rounds: schedule.rounds,
 				pending_attendance: 0,
 				airdrops_scheduled,
+				claims: schedule.claims,
 			});
 			GameHistory::<T>::insert(index, game_play_time);
 

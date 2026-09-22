@@ -35,8 +35,9 @@ use indiv_pallet_scarcity::{
 };
 use indiv_support::{
 	credit_trees::{
-		credit_leaf, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, NftClaimCredit,
-		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
+		credit_leaf, ClaimPath, CreditProofNode, CreditTreeBlock, CreditTreeDelivery,
+		NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, PrivateClaimTier,
+		PrivateGameOutcome, PrivateRingDelivery, TreeSequence,
 	},
 	identity::AccountOrPerson,
 	traits::Alias,
@@ -50,6 +51,7 @@ use sp_core::{
 };
 use sp_runtime::{testing::UintAuthorityId, traits::BlakeTwo256, BuildStorage, DispatchError};
 use std::{cell::RefCell, sync::Arc, time::Duration};
+use verifiable::GenerateVerifiable;
 use xcm::latest::{Junction::Parachain, Location};
 
 pub type TransactionExtension = AuthorizeCall<Test>;
@@ -162,6 +164,18 @@ parameter_types! {
 	pub const MaxProofNodes: u32 = 16;
 	/// Wider than a byte, so the tests cover a bitmap of more than one byte.
 	pub storage MaxCreditsPerTree: u32 = 12;
+	pub const MaxPrivateRingsPerMessage: u32 = 4;
+	/// Short, so a test steps over the delay and through the window in a few blocks.
+	pub storage PrivateClaimDelay: u64 = 2;
+	pub storage PrivateClaimWindow: u64 = 10;
+	/// Two, so a test builds a ladder over a handful of keys.
+	pub storage MaxPrivateRingKeys: u32 = 2;
+	/// Two, so a test walks a whole ladder in two claims.
+	pub storage MaxPrivateRingTiers: u32 = 2;
+	pub const PrivateRingExponent: indiv_support::traits::RingExponent =
+		indiv_support::traits::RingExponent::R2e9;
+	pub PrivateClaimNetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"test".to_vec().try_into().expect("the test network suffix fits");
 	/// The instances the mock minter has handed out, as `(collection, item, owner)` in mint order.
 	pub storage MintedInstances: Vec<(CollectionId, ItemIndex, u64)> = Vec::new();
 	/// The collections the mock backend holds, as `(collection, owner, next_item_index)`.
@@ -428,13 +442,36 @@ impl CollectionSelector<u64> for MockSelector {
 #[cfg(feature = "runtime-benchmarks")]
 pub struct MockBenchmarkHelper;
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_nft_claims::BenchmarkHelper<u64> for MockBenchmarkHelper {
+impl pallet_nft_claims::BenchmarkHelper<u64, verifiable::mock::Mock> for MockBenchmarkHelper {
 	fn prepare_collection(owner: &u64, collection: CollectionId, item: ItemIndex) {
 		add_collection(collection, *owner, item.saturating_add(1));
 	}
 
 	fn prepare_contract(_owner: &u64) -> H160 {
 		H160::repeat_byte(1)
+	}
+
+	fn private_ring_and_proof(
+		context: &[u8; 32],
+		message: &[u8],
+	) -> (
+		<verifiable::mock::Mock as GenerateVerifiable>::Members,
+		<verifiable::mock::Mock as GenerateVerifiable>::Proof,
+		indiv_support::traits::Alias,
+	) {
+		let secret = verifiable::mock::Mock::new_secret([1u8; 32]);
+		let member = verifiable::mock::Mock::member_from_secret(&secret);
+		let delivery = private_ladder(0, 1, core::slice::from_ref(&member));
+		let commitment =
+			verifiable::mock::Mock::open(Default::default(), &member, core::iter::once(member))
+				.expect("the member is in the ring");
+		let (proof, alias) = verifiable::mock::Mock::create(commitment, &secret, context, message)
+			.expect("the mock creates a proof");
+		let PrivateGameOutcome::Ring { roots, .. } = delivery.outcome else {
+			unreachable!("the helper builds a ladder")
+		};
+		let root = roots.into_iter().next().expect("the ladder holds its one tier");
+		(root, proof, alias)
 	}
 
 	fn set_unix_time(secs: u64) {
@@ -455,6 +492,14 @@ impl pallet_nft_claims::Config for Test {
 	type CollectionSelector = MockSelector;
 	type MaxProofNodes = MaxProofNodes;
 	type MaxCreditsPerTree = MaxCreditsPerTree;
+	type RingVrf = verifiable::mock::Mock;
+	type PrivateRingExponent = PrivateRingExponent;
+	type PrivateClaimNetworkSuffix = PrivateClaimNetworkSuffix;
+	type MaxPrivateRingsPerMessage = MaxPrivateRingsPerMessage;
+	type PrivateClaimDelay = PrivateClaimDelay;
+	type PrivateClaimWindow = PrivateClaimWindow;
+	type MaxPrivateRingKeys = MaxPrivateRingKeys;
+	type MaxPrivateRingTiers = MaxPrivateRingTiers;
 	type UnixTime = MockTime;
 	type TreeTtl = TreeTtl;
 	type MaxQueuedTreeDeletions = MaxQueuedTreeDeletions;
@@ -509,6 +554,28 @@ impl pallet_nft_claims::WeightInfo for MockWeightInfo {
 
 	fn authorize_send_tree_deletions() -> Weight {
 		Weight::from_parts(60, 6)
+	}
+
+	/// Scales with the ladders and with the roots they carry, so a test sees the roots priced apart
+	/// from the games.
+	fn receive_private_rings(n: u32, r: u32) -> Weight {
+		Weight::from_parts(800 + 10 * n as u64 + 5 * r as u64, 80 + n as u64 + r as u64)
+	}
+
+	fn claim_private() -> Weight {
+		Weight::from_parts(900, 90)
+	}
+
+	fn authorize_claim_private() -> Weight {
+		Weight::from_parts(70, 7)
+	}
+
+	fn close_private_ring(n: u32) -> Weight {
+		Weight::from_parts(1_000 + 10 * n as u64, 100 + n as u64)
+	}
+
+	fn authorize_close_private_ring() -> Weight {
+		Weight::from_parts(80, 8)
 	}
 }
 
@@ -568,6 +635,7 @@ pub fn tree(block: CreditTreeBlock) -> NftClaimCreditTree {
 		root: CreditProofNode([block as u8; 32]),
 		leaf_count: 3,
 		timestamp: 1_000 + block,
+		claim_path: ClaimPath::Public,
 	}
 }
 
@@ -604,6 +672,7 @@ pub fn tree_of(block: CreditTreeBlock, awards: &[Award]) -> NftClaimCreditTree {
 		root: binary_merkle_tree::merkle_root::<BlakeTwo256, _>(leaves(awards)).into(),
 		leaf_count: awards.len() as u32,
 		timestamp: 1_000 + block,
+		claim_path: ClaimPath::Public,
 	}
 }
 
@@ -628,4 +697,68 @@ pub fn nft_claims_events() -> Vec<Event<Test>> {
 			_ => None,
 		})
 		.collect()
+}
+
+/// The ladder of `game_index` over the keys `tiers` names, one entry per tier, as the game chain
+/// builds and delivers it.
+///
+/// `tiers[t]` is the keys of tier `t + 1` alone. Tier `t`'s ring is those keys and every tier
+/// above, which is the order the game chain pushes them in.
+pub fn private_ladder_of(
+	game_index: crate::GameIdx,
+	tiers: &[Vec<<verifiable::mock::Mock as GenerateVerifiable>::Member>],
+) -> crate::PrivateRingDeliveryOf<Test> {
+	let mut intermediate = verifiable::mock::Mock::start_members(
+		PrivateRingExponent::get()
+			.try_into()
+			.expect("the mock accepts the test exponent"),
+	);
+
+	// Built from the top tier down, as the game chain builds it, with the roots put back in tier
+	// order.
+	let mut roots = Vec::new();
+	for own_keys in tiers.iter().rev() {
+		verifiable::mock::Mock::push_members(
+			&mut intermediate,
+			own_keys.iter().cloned(),
+			|range| Ok(vec![(); range.len()]),
+		)
+		.expect("the mock pushes every key");
+		roots.insert(0, verifiable::mock::Mock::finish_members(intermediate.clone()));
+	}
+
+	PrivateRingDelivery {
+		game_index,
+		outcome: PrivateGameOutcome::Ring {
+			roots: roots.try_into().expect("the ladder fits MaxPrivateRingTiers"),
+			key_count: tiers.iter().map(|own_keys| own_keys.len() as u32).sum(),
+		},
+	}
+}
+
+/// The ladder of `game_index` over `keys`, `height` tiers tall.
+///
+/// Every key is at the top tier, so every tier's ring is the whole set. That is a game whose
+/// registrants all earned the most it pays.
+pub fn private_ladder(
+	game_index: crate::GameIdx,
+	height: PrivateClaimTier,
+	keys: &[<verifiable::mock::Mock as GenerateVerifiable>::Member],
+) -> crate::PrivateRingDeliveryOf<Test> {
+	let mut tiers = vec![Vec::new(); usize::from(height)];
+	if let Some(top) = tiers.last_mut() {
+		*top = keys.to_vec();
+	}
+
+	private_ladder_of(game_index, &tiers)
+}
+
+/// A batch of `rings`, as the game pallet assembles it.
+pub fn private_ring_batch(
+	rings: Vec<crate::PrivateRingDeliveryOf<Test>>,
+) -> crate::PrivateRingBatchOf<Test> {
+	crate::PrivateRingBatchOf::<Test> {
+		source_time: 1_000,
+		rings: rings.try_into().expect("batch fits MaxPrivateRingsPerMessage"),
+	}
 }

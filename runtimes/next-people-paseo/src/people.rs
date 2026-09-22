@@ -34,6 +34,7 @@ use indiv_support::traits::PersonalId;
 #[cfg(feature = "runtime-benchmarks")]
 use indiv_support::traits::{Alias, RingIndex};
 use indiv_support::{
+	credit_trees::PRIVATE_RING_TIERS,
 	fungibles::CombineAssetsWithHolder,
 	traits::{AllocateStorage, Context, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER},
 	utils::TypedGetToGet,
@@ -765,6 +766,38 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// 64 a block clears in about 20 minutes. The root TTL is the longer of the two, so a sweep only
 	// removes roots the claims chain has already given up on, with a month of slack for a backlog.
 	type MaxRootsPerSweep = ConstU32<64>;
+	// The suite the claims chain verifies private claims with, which is the personhood one.
+	type RingVrf = BandersnatchVrfVerifiable;
+	type ChunksManager = ChunksManager;
+	// 2^10 holds 767 keys after the ring's own overhead, and it fixes what one proof costs to
+	// verify. The chunks of this exponent are already on chain for the recycler rings. A larger
+	// one takes a chunk set of its own, which governance has to upload before any ring builds.
+	type PrivateRingExponent = PrivateClaimRingExponent;
+	// The exponent's whole capacity, which is the anonymity set a game can reach and the number
+	// of claimants it registers. Registration is first-come, first-served: past it a claimant is
+	// refused and mints nothing, so keep it at what the exponent holds.
+	type MaxPrivateRingKeys = ConstU32<767>;
+	// A claim proves membership in this set and nothing narrower, so a ring below it names its
+	// claimants. A game that registers fewer than sixteen keys gets no ring.
+	type MinPrivateRingKeys = ConstU32<16>;
+	// Sixteen keys is a fixed price for a group that registers only to fill one target's
+	// anonymity set, and it buys the whole set in a game of hundreds. A quarter of the
+	// claimants that earned the entry price ties that price to the size of the game. A game
+	// this share turns away is abandoned and mints publicly, so the cost of setting it too high
+	// is a lost registration price, not a lost credit.
+	type MinPrivateRingParticipation = MinPrivateRingParticipation;
+	// Pushing is the expensive half of the path, so a ring is built over several blocks. The
+	// `integrity_test` holds one call's worst case to the block budget.
+	type PrivateKeysPerBuild = ConstU32<8>;
+	// Shared with the claims chain, which decodes no fewer tiers than this. A full attendance of
+	// a game of `MaxRounds` rounds and `MaxGroupSize` groups earns `3 * (6 - 1) = 15` credits, so
+	// the shared bound pays it in full. Each tier adds one 288-byte ring root to the delivery,
+	// which the claims channel carries with room to spare.
+	type MaxPrivateRingTiers = ConstU32<PRIVATE_RING_TIERS>;
+	// Two hours, counted from the end of the game's player process, when its credits are final.
+	// A claimant who misses the window mints nothing, unless the game turns out to build no ring
+	// at all, which puts its credits back on the public path.
+	type PrivateKeyRegistrationSeconds = ConstU32<7200>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
 }
@@ -777,6 +810,12 @@ parameter_types! {
 	/// roots for less time than the claims chain gives a claimant, which strands credits inside their
 	/// deadline. A value above it keeps roots after the last credit has expired.
 	pub const ClaimsChainTreeTtl: u64 = 90 * 24 * 60 * 60;
+	/// The share of a game's registration-eligible claimants that has to register before its
+	/// private claim ring is built.
+	pub const MinPrivateRingParticipation: Percent = Percent::from_percent(25);
+	/// The ring capacity every private claim ring is built at.
+	pub const PrivateClaimRingExponent: indiv_support::traits::RingExponent =
+		indiv_support::traits::RingExponent::R2e10;
 }
 
 /// Origin check for the parachain the credit trees are delivered to. Only that chain may name the
