@@ -1248,8 +1248,8 @@ pub mod pallet {
 				// Some rest time after the collection's last received batch is given to account
 				// for incoming batches that may contain indices considered as missing
 				// in the current state.
-				if now.saturating_sub(state.last_batch_received_time)
-					< T::GapScanCooldownSeconds::get()
+				if now.saturating_sub(state.last_batch_received_time) <
+					T::GapScanCooldownSeconds::get()
 				{
 					continue;
 				}
@@ -1258,8 +1258,8 @@ pub mod pallet {
 					continue;
 				}
 
-				if state.missing_indices.len() as u32 >= T::MaxMissingRootsPerCollection::get()
-					|| state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get()
+				if state.missing_indices.len() as u32 >= T::MaxMissingRootsPerCollection::get() ||
+					state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get()
 				{
 					Self::warn_periodically(
 						block_number,
