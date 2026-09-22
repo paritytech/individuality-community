@@ -54,6 +54,7 @@ mod test_unload_recycler_into_external_asset;
 mod test_unload_recycler_into_external_asset_and_loaded_coins;
 mod test_unload_recycler_into_external_asset_fee_from_output;
 mod test_unload_recycler_into_external_asset_non_anonymous_fee_from_signer;
+mod test_unload_weights;
 
 pub(super) fn get_recycler_alias_lock_until(
 	value: Denomination,
