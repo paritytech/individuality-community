@@ -19,7 +19,7 @@
 //! THIS FILE WAS AUTO-GENERATED USING THE SUBSTRATE BENCHMARK CLI VERSION 60.0.0
 //! DATE: 2026-09-23, STEPS: `50`, REPEAT: `20`, LOW RANGE: `[]`, HIGH RANGE: `[]`
 //! WORST CASE MAP SIZE: `1000000`
-//! HOSTNAME: `parity-weights-a57c01dfa0265114`, CPU: `Intel(R) Xeon(R) CPU @ 2.60GHz`
+//! HOSTNAME: `parity-weights-4629cb577dc99a90`, CPU: `Intel(R) Xeon(R) CPU @ 2.60GHz`
 //! WASM-EXECUTION: `Compiled`, CHAIN: `None`, DB CACHE: 1024
 
 // Executed Command:
@@ -67,19 +67,20 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 	/// Proof: `NftCredits::NftClaimCreditRoots` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::RootExpiries` (r:0 w:1)
 	/// Proof: `NftCredits::RootExpiries` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `MaxEncodedLen`)
-	/// The range of component `n` is `[1, 2048]`.
-	fn build_credit_tree(n: u32, ) -> Weight {
+	/// The range of component `c` is `[1, 64]`.
+	fn build_credit_tree(c: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `3412 + n * (129 ±0)`
-		//  Estimated: `296536 + n * (143 ±0)`
-		// Minimum execution time: 106_275_000 picoseconds.
-		Weight::from_parts(105_074_941, 0)
-			.saturating_add(Weight::from_parts(0, 296536))
-			// Standard Error: 1_300
-			.saturating_add(Weight::from_parts(1_189_100, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(69))
+		//  Measured:  `4314 + c * (4153 ±0)`
+		//  Estimated: `294110 + c * (4580 ±0)`
+		// Minimum execution time: 144_985_000 picoseconds.
+		Weight::from_parts(114_007_562, 0)
+			.saturating_add(Weight::from_parts(0, 294110))
+			// Standard Error: 35_892
+			.saturating_add(Weight::from_parts(37_733_190, 0).saturating_mul(c.into()))
+			.saturating_add(T::DbWeight::get().reads(68))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(c.into())))
 			.saturating_add(T::DbWeight::get().writes(70))
-			.saturating_add(Weight::from_parts(0, 143).saturating_mul(n.into()))
+			.saturating_add(Weight::from_parts(0, 4580).saturating_mul(c.into()))
 	}
 	/// Storage: `NftCredits::CreditBuffers` (r:1 w:0)
 	/// Proof: `NftCredits::CreditBuffers` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
@@ -87,8 +88,8 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		// Proof Size summary in bytes:
 		//  Measured:  `114`
 		//  Estimated: `3489`
-		// Minimum execution time: 4_039_000 picoseconds.
-		Weight::from_parts(4_428_000, 0)
+		// Minimum execution time: 4_086_000 picoseconds.
+		Weight::from_parts(4_463_000, 0)
 			.saturating_add(Weight::from_parts(0, 3489))
 			.saturating_add(T::DbWeight::get().reads(1))
 	}
@@ -112,12 +113,12 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 	fn send_credit_trees(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `5237 + n * (188 ±0)`
-		//  Estimated: `8592 + n * (2531 ±6)`
-		// Minimum execution time: 73_991_000 picoseconds.
-		Weight::from_parts(76_718_083, 0)
+		//  Estimated: `8592 + n * (2531 ±0)`
+		// Minimum execution time: 73_217_000 picoseconds.
+		Weight::from_parts(73_565_794, 0)
 			.saturating_add(Weight::from_parts(0, 8592))
-			// Standard Error: 19_963
-			.saturating_add(Weight::from_parts(5_054_434, 0).saturating_mul(n.into()))
+			// Standard Error: 19_177
+			.saturating_add(Weight::from_parts(5_123_141, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(3))
@@ -144,11 +145,11 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		// Proof Size summary in bytes:
 		//  Measured:  `434 + n * (63 ±0)`
 		//  Estimated: `3900 + n * (2531 ±0)`
-		// Minimum execution time: 48_596_000 picoseconds.
-		Weight::from_parts(46_785_862, 0)
+		// Minimum execution time: 48_197_000 picoseconds.
+		Weight::from_parts(46_452_183, 0)
 			.saturating_add(Weight::from_parts(0, 3900))
-			// Standard Error: 7_705
-			.saturating_add(Weight::from_parts(3_968_472, 0).saturating_mul(n.into()))
+			// Standard Error: 6_163
+			.saturating_add(Weight::from_parts(3_913_185, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(3))
@@ -160,8 +161,8 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		// Proof Size summary in bytes:
 		//  Measured:  `3276`
 		//  Estimated: `4559`
-		// Minimum execution time: 10_256_000 picoseconds.
-		Weight::from_parts(10_885_000, 0)
+		// Minimum execution time: 10_265_000 picoseconds.
+		Weight::from_parts(10_979_000, 0)
 			.saturating_add(Weight::from_parts(0, 4559))
 			.saturating_add(T::DbWeight::get().reads(1))
 	}
@@ -174,11 +175,11 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		// Proof Size summary in bytes:
 		//  Measured:  `171 + n * (62 ±0)`
 		//  Estimated: `990 + n * (2531 ±0)`
-		// Minimum execution time: 14_073_000 picoseconds.
-		Weight::from_parts(6_899_804, 0)
+		// Minimum execution time: 14_041_000 picoseconds.
+		Weight::from_parts(7_470_916, 0)
 			.saturating_add(Weight::from_parts(0, 990))
-			// Standard Error: 7_357
-			.saturating_add(Weight::from_parts(5_762_485, 0).saturating_mul(n.into()))
+			// Standard Error: 6_716
+			.saturating_add(Weight::from_parts(5_723_337, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 2531).saturating_mul(n.into()))
@@ -194,11 +195,11 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		// Proof Size summary in bytes:
 		//  Measured:  `264 + n * (15 ±0)`
 		//  Estimated: `3575 + n * (2486 ±1)`
-		// Minimum execution time: 10_026_000 picoseconds.
-		Weight::from_parts(15_489_534, 0)
+		// Minimum execution time: 10_138_000 picoseconds.
+		Weight::from_parts(15_245_671, 0)
 			.saturating_add(Weight::from_parts(0, 3575))
-			// Standard Error: 3_764
-			.saturating_add(Weight::from_parts(3_494_272, 0).saturating_mul(n.into()))
+			// Standard Error: 6_166
+			.saturating_add(Weight::from_parts(3_497_275, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
@@ -212,8 +213,8 @@ impl<T: frame_system::Config> indiv_pallet_nft_credits::WeightInfo for WeightInf
 		// Proof Size summary in bytes:
 		//  Measured:  `612`
 		//  Estimated: `3481`
-		// Minimum execution time: 11_187_000 picoseconds.
-		Weight::from_parts(12_405_000, 0)
+		// Minimum execution time: 11_318_000 picoseconds.
+		Weight::from_parts(12_555_000, 0)
 			.saturating_add(Weight::from_parts(0, 3481))
 			.saturating_add(T::DbWeight::get().reads(2))
 	}
