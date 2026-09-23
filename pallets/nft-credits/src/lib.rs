@@ -1110,6 +1110,8 @@ impl<T: Config> Pallet<T> {
 			return <T as Config>::WeightInfo::build_credit_tree_empty();
 		};
 
+		// The weight is charged per chunk read, which is what `block_awards` reads.
+		let chunks = buffered.div_ceil(AWARDS_PER_CHUNK);
 		let awards = Self::block_awards(block, buffered);
 		let leaf_count = awards.len() as u32;
 		if leaf_count != buffered {
@@ -1119,7 +1121,7 @@ impl<T: Config> Pallet<T> {
 		}
 		if leaf_count == 0 {
 			defensive!("indiv-pallet-nft-credits: a buffer must hold at least one award");
-			return <T as Config>::WeightInfo::build_credit_tree(leaf_count);
+			return <T as Config>::WeightInfo::build_credit_tree(chunks);
 		}
 
 		let leaves = Self::nft_claim_credit_leaves(&awards);
@@ -1131,7 +1133,7 @@ impl<T: Config> Pallet<T> {
 		Self::deposit_event(Event::<T>::NftClaimCreditRootRecorded { block, credit_root });
 		Self::queue_credit_tree_delivery(block);
 
-		<T as Config>::WeightInfo::build_credit_tree(leaf_count)
+		<T as Config>::WeightInfo::build_credit_tree(chunks)
 	}
 
 	/// Queue the credit tree of `block` for delivery to the NFT claims chain, under the next
@@ -1934,8 +1936,21 @@ impl<T: Config> Pallet<T> {
 		// `CHUNKS_PER_TREE` is the only bound on `on_initialize`, awarding filling a later block's
 		// buffer rather than stopping at the block. A tree that does not fit the block would
 		// overweigh every block that commits one.
-		let build_worst_case = <T as Config>::WeightInfo::build_credit_tree(AWARDS_PER_TREE);
+		let build_worst_case = <T as Config>::WeightInfo::build_credit_tree(CHUNKS_PER_TREE);
 		OcwWeightBudget::from_normal_max::<T>().assert_fits("build_credit_tree", build_worst_case);
+
+		// Building a full tree reads all its award chunks, so the weight must cover their proof
+		// size. Mock weights are zero and are skipped.
+		let chunk_size = BoundedVec::<
+			NftClaimCreditAward<T::AccountId>,
+			ConstU32<AWARDS_PER_CHUNK>,
+		>::max_encoded_len() as u64;
+		let min_proof_size = u64::from(CHUNKS_PER_TREE).saturating_mul(chunk_size);
+		let proof_size = build_worst_case.proof_size();
+		assert!(
+			proof_size == 0 || proof_size >= min_proof_size,
+			"`build_credit_tree` proof size {proof_size} is below {min_proof_size}, regenerate the weights",
+		);
 
 		// A message must be fillable from a full queue, otherwise the queue's tail could
 		// never be drained in one send.
