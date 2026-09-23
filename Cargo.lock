@@ -5983,6 +5983,7 @@ dependencies = [
  "pallet-pgas-allowance",
  "pallet-preimage",
  "pallet-proxy",
+ "pallet-psm",
  "pallet-referenda",
  "pallet-revive",
  "pallet-revive-fixtures",
@@ -7070,6 +7071,22 @@ dependencies = [
  "parity-scale-codec",
  "polkadot-sdk-frame",
  "scale-info",
+]
+
+[[package]]
+name = "pallet-psm"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d6061577bd7b1a42970fdf7f850f2f67f83349b984ee86b1a2186b155ae24e"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support 48.1.0",
+ "frame-system 48.0.0",
+ "log",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-io 48.0.0",
+ "sp-runtime 48.0.0",
 ]
 
 [[package]]
