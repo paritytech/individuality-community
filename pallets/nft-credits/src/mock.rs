@@ -108,7 +108,7 @@ pub fn claims_chain_origin() -> RuntimeOrigin {
 }
 
 impl CreditsWeightInfo for MockWeightInfo {
-	fn build_credit_tree(_n: u32) -> Weight {
+	fn build_credit_tree(_c: u32) -> Weight {
 		Weight::zero()
 	}
 	fn build_credit_tree_empty() -> Weight {

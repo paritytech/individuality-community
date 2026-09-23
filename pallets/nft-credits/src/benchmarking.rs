@@ -41,14 +41,15 @@ pub trait BenchmarkHelper {
 mod benches {
 	use super::*;
 
-	// The `on_initialize` path that records a block's root. `n` is the number of leaves the tree
-	// is built over, swept over the whole range one tree holds: the hashing, the awards'
-	// contribution to the proof size, and the retained ring all scale with it.
+	// The `on_initialize` path that records a block's root. `c` is the number of full award chunks
+	// the tree is built over: the chunk reads, the hashing, and the proof size all scale with it.
+	// The component counts chunks, not awards, so that each chunk adds one whole read.
 	//
 	// The ring is set up full, so the run includes dropping the oldest retained tree, which is the
 	// worst case and the one every block pays for once the chain has been running.
 	#[benchmark]
-	fn build_credit_tree(n: Linear<1, AWARDS_PER_TREE>) -> Result<(), BenchmarkError> {
+	fn build_credit_tree(c: Linear<1, CHUNKS_PER_TREE>) -> Result<(), BenchmarkError> {
+		let n = c * AWARDS_PER_CHUNK;
 		let retained = T::MaxRetainedCreditTrees::get();
 		frame_system::Pallet::<T>::set_block_number((retained + 10).into());
 		let block = frame_system::Pallet::<T>::block_number();
@@ -92,10 +93,7 @@ mod benches {
 		let credit_root =
 			NftClaimCreditRoots::<T>::get(block).expect("a root is recorded for the block");
 		assert_eq!(credit_root.leaf_count, n);
-		assert_eq!(
-			NftClaimCreditAwards::<T>::iter_prefix_values(block).count() as u32,
-			n.div_ceil(AWARDS_PER_CHUNK)
-		);
+		assert_eq!(NftClaimCreditAwards::<T>::iter_prefix_values(block).count() as u32, c);
 		assert_eq!(NftClaimCreditAwards::<T>::iter_prefix_values(dropped).count(), 0);
 
 		Ok(())
