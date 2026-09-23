@@ -87,6 +87,7 @@ mod score_game_invitation_flow;
 mod score_game_person_flow;
 mod statement_allowance;
 mod transaction_era;
+mod trusted_query;
 mod tx_payment_external_asset;
 mod xcm_fee_api;
 
