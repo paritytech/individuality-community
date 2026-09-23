@@ -1618,6 +1618,15 @@ impl_runtime_apis! {
 		}
 	}
 
+	impl xcm_runtime_apis::trusted_query::TrustedQueryApi<Block> for Runtime {
+		fn is_trusted_reserve(asset: VersionedAsset, location: VersionedLocation) -> xcm_runtime_apis::trusted_query::XcmTrustedQueryResult {
+			PolkadotXcm::is_trusted_reserve(asset, location)
+		}
+		fn is_trusted_teleporter(asset: VersionedAsset, location: VersionedLocation) -> xcm_runtime_apis::trusted_query::XcmTrustedQueryResult {
+			PolkadotXcm::is_trusted_teleporter(asset, location)
+		}
+	}
+
 	impl indiv_pallet_mob_rule::runtime_api::MobRuleApi<Block, AccountId, Balance> for Runtime {
 		fn voted_on(voter: &Alias, done_only: bool) -> Vec<indiv_pallet_mob_rule::CaseIndex> {
 			MobRule::voted_on(voter, done_only)
