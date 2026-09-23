@@ -53,7 +53,7 @@ use frame_support::{
 		AsEnsureOriginWithArg, ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, ContainsPair,
 		EitherOfDiverse, InstanceFilter, TransformOrigin,
 	},
-	weights::{ConstantMultiplier, Weight, WeightToFee as _},
+	weights::{ConstantMultiplier, Weight},
 	PalletId,
 };
 use frame_system::{
@@ -996,6 +996,7 @@ impl pallet_assets::Config for Runtime {
 	type Extra = ();
 	type WeightInfo = weights::pallet_assets_assets::WeightInfo<Runtime>;
 	type CallbackHandle = ();
+	type AssetIdAllocator = ();
 	type AssetAccountDeposit = AssetAccountDeposit;
 	type RemoveItemsLimit = frame_support::traits::ConstU32<1000>;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -1036,6 +1037,7 @@ impl pallet_assets::Config<PoolAssetsInstance> for Runtime {
 	type Holder = ();
 	type Extra = ();
 	type CallbackHandle = ();
+	type AssetIdAllocator = ();
 	type WeightInfo = weights::pallet_assets_pool::WeightInfo<Runtime>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();
@@ -1528,25 +1530,16 @@ impl_runtime_apis! {
 
 	impl xcm_runtime_apis::fees::XcmPaymentApi<Block> for Runtime {
 		fn query_acceptable_payment_assets(xcm_version: xcm::Version) -> Result<Vec<VersionedAssetId>, XcmPaymentApiError> {
-			let acceptable_assets = alloc::vec![AssetId(xcm_config::AssetHubLocation::get())];
+			let acceptable_assets = alloc::vec![
+				AssetId(xcm_config::RelayLocation::get()),
+				AssetId(people::ExternalAssetLocation::get()),
+			];
 			PolkadotXcm::query_acceptable_payment_assets(xcm_version, acceptable_assets)
 		}
 
 		fn query_weight_to_asset_fee(weight: Weight, asset: VersionedAssetId) -> Result<u128, XcmPaymentApiError> {
-			match asset.try_as::<AssetId>() {
-				Ok(asset_id) if asset_id.0 == xcm_config::AssetHubLocation::get() => {
-					// for native token
-					Ok(WeightToFee::weight_to_fee(&weight))
-				},
-				Ok(asset_id) => {
-					log::trace!(target: "xcm::xcm_runtime_apis", "query_weight_to_asset_fee - unhandled asset_id: {asset_id:?}!");
-					Err(XcmPaymentApiError::AssetNotFound)
-				},
-				Err(_) => {
-					log::trace!(target: "xcm::xcm_runtime_apis", "query_weight_to_asset_fee - failed to convert asset: {asset:?}!");
-					Err(XcmPaymentApiError::VersionedConversionFailed)
-				}
-			}
+			type Trader = <XcmConfig as xcm_executor::Config>::Trader;
+			PolkadotXcm::query_weight_to_asset_fee::<Trader>(weight, asset)
 		}
 
 		fn query_xcm_weight(message: VersionedXcm<()>) -> Result<Weight, XcmPaymentApiError> {
@@ -1558,7 +1551,8 @@ impl_runtime_apis! {
 			message: VersionedXcm<()>,
 			asset_id: VersionedAssetId,
 		) -> Result<VersionedAssets, XcmPaymentApiError> {
-			PolkadotXcm::query_delivery_fees::<()>(destination, message, asset_id)
+			type AssetExchanger = <xcm_config::XcmConfig as xcm_executor::Config>::AssetExchanger;
+			PolkadotXcm::query_delivery_fees::<AssetExchanger>(destination, message, asset_id)
 		}
 	}
 
@@ -1581,6 +1575,15 @@ impl_runtime_apis! {
 				AccountId,
 				xcm_config::LocationToAccountId,
 			>::convert_location(location)
+		}
+	}
+
+	impl xcm_runtime_apis::trusted_query::TrustedQueryApi<Block> for Runtime {
+		fn is_trusted_reserve(asset: VersionedAsset, location: VersionedLocation) -> xcm_runtime_apis::trusted_query::XcmTrustedQueryResult {
+			PolkadotXcm::is_trusted_reserve(asset, location)
+		}
+		fn is_trusted_teleporter(asset: VersionedAsset, location: VersionedLocation) -> xcm_runtime_apis::trusted_query::XcmTrustedQueryResult {
+			PolkadotXcm::is_trusted_teleporter(asset, location)
 		}
 	}
 

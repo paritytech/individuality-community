@@ -125,7 +125,7 @@ jobs:
       # would meet in a real deployment. To move more, set any of these:
       #
       # binary_polkadot: paritytech/release-automation@polkadot-weekly2026w34-rc1
-      # binary_polkadot_omni_node: paritytech/polkadot-sdk@polkadot-stable2606-1
+      # binary_polkadot_omni_node: paritytech/polkadot-sdk@polkadot-stable2606-2
       # runtime_relay: paseo-network/runtimes@v2.4.5
       # runtime_bulletin: paritytech/polkadot-bulletin-chain@v0.0.26-paseo
       # service_identity_backend: paritytech/device-uniqueness-backend@v0.5.0
