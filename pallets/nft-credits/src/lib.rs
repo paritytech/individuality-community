@@ -1937,6 +1937,25 @@ impl<T: Config> Pallet<T> {
 		let build_worst_case = <T as Config>::WeightInfo::build_credit_tree(AWARDS_PER_TREE);
 		OcwWeightBudget::from_normal_max::<T>().assert_fits("build_credit_tree", build_worst_case);
 
+		// That check only holds if the weight declares the proof the tree records. A full tree
+		// reads every one of its chunks, so a weight that charges less than that is stale, for
+		// instance benchmarked against a layout that kept a tree's awards under one key. A weight
+		// that declares no proof size, as a mock's weights do, is not checked.
+		let chunk_max_len = BoundedVec::<
+			NftClaimCreditAward<T::AccountId>,
+			ConstU32<AWARDS_PER_CHUNK>,
+		>::max_encoded_len();
+		let chunks_proof_size = u64::from(CHUNKS_PER_TREE).saturating_mul(chunk_max_len as u64);
+		if let 1.. = build_worst_case.proof_size() {
+			assert!(
+				build_worst_case.proof_size() >= chunks_proof_size,
+				"`build_credit_tree({AWARDS_PER_TREE})` declares a proof size of {declared}, less \
+			than the {chunks_proof_size} its {CHUNKS_PER_TREE} award chunks take, so the weights \
+			are stale",
+				declared = build_worst_case.proof_size(),
+			);
+		}
+
 		// A message must be fillable from a full queue, otherwise the queue's tail could
 		// never be drained in one send.
 		assert!(
