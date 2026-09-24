@@ -70,12 +70,13 @@ impl crate::Config for Test {
 	type MaxCreditTreesPerMessage = MaxCreditTreesPerMessage;
 	type ReplayCooldownSeconds = ReplayCooldownSeconds;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
-	type MaxRetainedCreditTrees = MaxRetainedCreditTrees;
+	type AwardRetentionTtl = AwardRetentionTtl;
 	type MaxCreditBlocksPerClaimant = MaxCreditBlocksPerClaimant;
 	type EnsureClaimsChainOrigin = MockEnsureClaimsChainOrigin;
 	type MaxTreeDeletionsPerMessage = MaxTreeDeletionsPerMessage;
 	type ClaimsChainTreeTtl = ClaimsChainTreeTtl;
 	type MaxRootsPerSweep = MaxRootsPerSweep;
+	type MaxAwardBlocksPerSweep = MaxAwardBlocksPerSweep;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockCreditsBenchmarkHelper;
 }
@@ -136,10 +137,15 @@ impl CreditsWeightInfo for MockWeightInfo {
 	fn authorize_sweep_expired_roots() -> Weight {
 		Weight::from_parts(60, 0)
 	}
+	fn sweep_expired_awards(n: u32) -> Weight {
+		Weight::from_parts(500 + 11 * n as u64, 50 + n as u64)
+	}
+	fn authorize_sweep_expired_awards() -> Weight {
+		Weight::from_parts(70, 0)
+	}
 }
 
 parameter_types! {
-	pub storage MaxRetainedCreditTrees: u32 = 16;
 	/// Tests covering the index dropping its oldest block lower it.
 	pub storage MaxCreditBlocksPerClaimant: u32 = 16;
 	pub const NftClaimsParaId: ParaId = ParaId::new(1000);
@@ -152,8 +158,12 @@ parameter_types! {
 	pub storage MaxTreeDeletionsPerMessage: u32 = 4;
 	/// Small, so a few roots outlast one sweep.
 	pub storage MaxRootsPerSweep: u32 = 2;
+	/// Small, so the awards of a few blocks outlast one sweep.
+	pub storage MaxAwardBlocksPerSweep: u32 = 2;
 	/// The TTL the pallet sweeps by is this plus `ROOT_TTL_GRACE`.
 	pub storage ClaimsChainTreeTtl: u64 = 2 * 24 * 60 * 60;
+	/// Below `root_ttl`, as the `integrity_test` requires.
+	pub storage AwardRetentionTtl: u64 = 24 * 60 * 60;
 }
 
 /// Captures the XCM messages the pallet sends to the NFT claims chain and can be made to fail
