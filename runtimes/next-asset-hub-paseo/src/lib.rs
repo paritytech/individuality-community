@@ -3041,12 +3041,11 @@ pub mod migrations {
 				Err(e) => log::error!(target: LOG_TARGET, "failed to create PGAS asset: {e:?}"),
 			}
 
-			// `force_create` is benchmarked with a single `Asset` write;
-			// `AutoIncAssetId::advance_from` adds a `NextAssetId` read and at most one write.
+			// The `contains_key` check above, then `force_create`, whose benchmark covers the
+			// `Asset` insert and `AutoIncAssetId::advance_from`'s `NextAssetId` read and write.
 			db_weight
 				.reads(1)
 				.saturating_add(<AssetsWeightInfo as pallet_assets::WeightInfo>::force_create())
-				.saturating_add(db_weight.reads_writes(1, 1))
 		}
 
 		#[cfg(feature = "try-runtime")]
