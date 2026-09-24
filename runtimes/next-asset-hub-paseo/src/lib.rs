@@ -192,7 +192,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 3_002_000,
+	spec_version: 3_003_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 22,
@@ -1160,6 +1160,9 @@ impl indiv_pallet_scarcity::Config for Runtime {
 	// Clears a collection's nft-claims minter registration when the collection is deleted, so no
 	// registration outlives the collection it names.
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
+	// Clears the registration on an ownership handover too, so a round trip back to the
+	// registering owner cannot reactivate it.
+	type OnCollectionOwnerChanged = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
 	// A purse key needs no account, so `AutoMapper` never sees one. Registering it at mint time
 	// is what lets the ERC-721 view resolve its address back to the key.
 	#[cfg(not(feature = "runtime-benchmarks"))]
@@ -2142,12 +2145,13 @@ impl
 }
 
 parameter_types! {
-	/// Metered ceiling for one collection minter contract call, reserved by every claim and
-	/// refunded to what the call really consumed.
+	/// Metered ceiling for one collection minter contract call. A claim into a
+	/// contract-registered collection reserves this plus revive's dispatch base, refunded to what
+	/// the call really consumed. Any other claim reserves nothing.
 	///
-	/// Deliberately far below the DotNS contract budget: a minter only picks an item index, and
-	/// the reservation prices every claim whether a contract runs or not. The nft-claims
-	/// `integrity_test` holds the claim worst case plus this ceiling to the block budget.
+	/// Deliberately far below the DotNS contract budget: a minter only picks an item index. The
+	/// nft-claims `integrity_test` holds the claim worst case plus this ceiling to the block
+	/// budget.
 	pub const NftClaimsSelectorWeightLimit: Weight =
 		Weight::from_parts(5_000_000_000, 512 * 1024);
 	/// Maximum storage deposit a collection owner may pay for one minter call.
@@ -2189,8 +2193,22 @@ impl NftClaimsCollectionSelector {
 }
 
 impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollectionSelector {
-	fn max_weight() -> Weight {
-		NftClaimsSelectorWeightLimit::get()
+	fn max_weight(collection: indiv_pallet_scarcity::CollectionId) -> Weight {
+		// Only a contract-registered collection reserves the minter ceiling. The claim's weight
+		// function makes this read, where it is not charged.
+		match indiv_pallet_nft_claims::CollectionMinters::<Runtime>::get(collection) {
+			Some(minter)
+				if matches!(
+					minter.selection,
+					indiv_pallet_nft_claims::ItemSelection::Contract(_)
+				) =>
+				Self::contract_max_weight(),
+			_ => Weight::zero(),
+		}
+	}
+
+	fn contract_max_weight() -> Weight {
+		NftClaimsSelectorWeightLimit::get().saturating_add(revive_call_overhead())
 	}
 
 	fn validate(contract: sp_core::H160) -> sp_runtime::DispatchResult {
@@ -2205,12 +2223,14 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 		owner: AccountId,
 		contract: sp_core::H160,
 		collection: indiv_pallet_scarcity::CollectionId,
-		entropy: indiv_support::credit_trees::NftClaimCredit,
+		credit: indiv_support::credit_trees::NftClaimCredit,
 	) -> Result<indiv_pallet_nft_claims::Selection, indiv_pallet_nft_claims::SelectionError> {
-		let cr = Self::call(owner, contract, minter_call_data(collection, entropy));
+		let cr = Self::call(owner, contract, minter_call_data(collection, credit));
 		// A trap, a revert and a malformed return all consumed metered weight, which the claim
 		// charges: refunding it would let a gas-burning contract occupy block space for free.
-		let weight_consumed = cr.weight_consumed;
+		// Every path adds the dispatch base, which `bare_call` spends outside
+		// `weight_consumed`.
+		let weight_consumed = cr.weight_consumed.saturating_add(revive_call_overhead());
 		let fail = |error: sp_runtime::DispatchError| indiv_pallet_nft_claims::SelectionError {
 			error,
 			weight_consumed,
@@ -2236,16 +2256,22 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 	}
 }
 
-/// ABI-encode `mint(uint32 collection, bytes32 entropy)`.
+/// Weight of revive's dispatch base for one contract call, spent on top of the metered weight
+/// `bare_call` reports.
+fn revive_call_overhead() -> Weight {
+	<<Runtime as pallet_revive::Config>::WeightInfo as pallet_revive::WeightInfo>::call()
+}
+
+/// ABI-encode `mint(uint32 collection, bytes32 credit)`.
 fn minter_call_data(
 	collection: indiv_pallet_scarcity::CollectionId,
-	entropy: indiv_support::credit_trees::NftClaimCredit,
+	credit: indiv_support::credit_trees::NftClaimCredit,
 ) -> Vec<u8> {
 	let mut data = Vec::with_capacity(68);
 	data.extend_from_slice(&sp_io::hashing::keccak_256(b"mint(uint32,bytes32)")[..4]);
 	data.extend_from_slice(&[0u8; 28]);
 	data.extend_from_slice(&collection.to_be_bytes());
-	data.extend_from_slice(&entropy);
+	data.extend_from_slice(&credit);
 	data
 }
 
@@ -3051,6 +3077,72 @@ pub type UncheckedExtrinsic =
 #[allow(missing_docs)]
 pub mod migrations {
 	use super::*;
+	#[cfg(feature = "try-runtime")]
+	use frame_support::ensure;
+	use frame_support::traits::OnRuntimeUpgrade;
+
+	/// Creates the PGAS asset with [`pallet_assets::Pallet::force_create`] from the root origin.
+	///
+	/// Asset creation through `fungibles::Create` must follow `AssetIdAllocator`.
+	/// With `AutoIncAssetId`, this path accepts only `NextAssetId`.
+	/// `force_create` from `ForceOrigin` may pick any unused id instead
+	/// (<https://github.com/paritytech/polkadot-sdk/pull/12378>).
+	///
+	/// `AutoIncAssetId::advance_from` only moves `NextAssetId` past [`PgasAssetId`] when the id is
+	/// at or beyond the sequence, so permissionless asset creation is not affected while
+	/// `NextAssetId` is above it.
+	///
+	/// Idempotent: a no-op if the asset already exists.
+	pub struct ForceCreatePgasAsset;
+	impl OnRuntimeUpgrade for ForceCreatePgasAsset {
+		fn on_runtime_upgrade() -> Weight {
+			const LOG_TARGET: &str = "runtime::asset-hub-paseo::migrations";
+			type AssetsWeightInfo =
+				<Runtime as pallet_assets::Config<TrustBackedAssetsInstance>>::WeightInfo;
+
+			let db_weight = <Runtime as frame_system::Config>::DbWeight::get();
+			let asset_id = PgasAssetId::get();
+
+			if pallet_assets::Asset::<Runtime, TrustBackedAssetsInstance>::contains_key(asset_id) {
+				log::info!(target: LOG_TARGET, "PGAS asset already exists; skipping.");
+				return db_weight.reads(1);
+			}
+
+			// Same asset as `indiv_pallet_pgas::Pallet::do_create_pgas_asset` would create: owned
+			// and administered by `PgasAdmin`, sufficient, with `PgasMinBalance` as the minimum
+			// balance.
+			match Assets::force_create(
+				RuntimeOrigin::root(),
+				asset_id.into(),
+				PgasAdmin::get().into(),
+				true,
+				PgasMinBalance::get(),
+			) {
+				Ok(()) => log::info!(target: LOG_TARGET, "PGAS asset created."),
+				Err(e) => log::error!(target: LOG_TARGET, "failed to create PGAS asset: {e:?}"),
+			}
+
+			// The `contains_key` check above, then `force_create`, whose benchmark covers the
+			// `Asset` insert and `AutoIncAssetId::advance_from`'s `NextAssetId` read and write.
+			db_weight
+				.reads(1)
+				.saturating_add(<AssetsWeightInfo as pallet_assets::WeightInfo>::force_create())
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn post_upgrade(_state: Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+			let details =
+				pallet_assets::Asset::<Runtime, TrustBackedAssetsInstance>::get(PgasAssetId::get())
+					.ok_or("PGAS asset must exist after migration")?;
+			ensure!(details.owner == PgasAdmin::get(), "PGAS asset must be owned by `PgasAdmin`");
+			ensure!(details.is_sufficient, "PGAS asset must be sufficient");
+			ensure!(
+				details.min_balance == PgasMinBalance::get(),
+				"PGAS asset must use `PgasMinBalance`"
+			);
+			Ok(())
+		}
+	}
 
 	/// Unreleased migrations. Add new ones here:
 	pub type Unreleased = (
@@ -3062,7 +3154,7 @@ pub mod migrations {
 		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
 		pallet_staking_async::migrations::SetWeightedPointsFormulaStartEra<Runtime>,
-		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
+		ForceCreatePgasAsset,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
@@ -4252,15 +4344,54 @@ mod tests {
 
 	#[test]
 	fn minter_abi_is_canonical() {
-		let entropy = [0x42u8; 32];
-		let data = minter_call_data(0x0102_0304, entropy);
+		let credit = [0x42u8; 32];
+		let data = minter_call_data(0x0102_0304, credit);
 		assert_eq!(data.len(), 68);
 		// The Solidity selector for `mint(uint32,bytes32)`, pinned independently of the
 		// keccak call that produces it.
 		assert_eq!(&data[..4], &[0xb3, 0x18, 0x24, 0xf2]);
 		assert_eq!(&data[4..32], &[0u8; 28]);
 		assert_eq!(&data[32..36], &0x0102_0304u32.to_be_bytes());
-		assert_eq!(&data[36..], &entropy);
+		assert_eq!(&data[36..], &credit);
+	}
+
+	/// The selector reservation follows the collection's registration, and the contract ceiling
+	/// carries revive's dispatch base on top of the metered limit.
+	#[test]
+	fn minter_selection_reservation_follows_the_registration() {
+		use indiv_pallet_nft_claims::{
+			CollectionMinter, CollectionMinters, CollectionSelector, ItemSelection,
+		};
+
+		sp_io::TestExternalities::default().execute_with(|| {
+			let collection = 7u32;
+			assert_eq!(NftClaimsCollectionSelector::max_weight(collection), Weight::zero());
+
+			CollectionMinters::<Runtime>::insert(
+				collection,
+				CollectionMinter {
+					owner: AccountId::new([1u8; 32]),
+					selection: ItemSelection::Random,
+				},
+			);
+			assert_eq!(NftClaimsCollectionSelector::max_weight(collection), Weight::zero());
+
+			CollectionMinters::<Runtime>::insert(
+				collection,
+				CollectionMinter {
+					owner: AccountId::new([1u8; 32]),
+					selection: ItemSelection::Contract(sp_core::H160::zero()),
+				},
+			);
+			assert_eq!(
+				NftClaimsCollectionSelector::max_weight(collection),
+				NftClaimsCollectionSelector::contract_max_weight()
+			);
+			// Above the metered limit in both dimensions, so a ceiling that drops the dispatch
+			// base fails here.
+			assert!(NftClaimsSelectorWeightLimit::get()
+				.all_lt(NftClaimsCollectionSelector::contract_max_weight()));
+		});
 	}
 
 	#[test]
