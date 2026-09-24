@@ -37,6 +37,7 @@ pub mod extension;
 pub mod paid_tkn_manager;
 pub mod pot;
 pub mod recycler_manager;
+pub mod runtime_api;
 #[cfg(any(test, feature = "runtime-benchmarks"))]
 mod testing_utils;
 mod weight_interpolation;
