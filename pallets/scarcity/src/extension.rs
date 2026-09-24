@@ -39,12 +39,11 @@
 //!
 //! # Replay
 //!
-//! Purse authorization is not account-nonce-based: a transaction stays valid while its purse
-//! holds the named instance at the named state nonce, and anyone who has seen it can submit it.
-//! Every dispatch moves that nonce on, a success by moving the NFT and a failure by restoring it
-//! at the next nonce, which retires every authorization signed for the old state. One that never
-//! executes stays valid until the NFT moves, so callers should sign mortal transactions to bound
-//! stale intent.
+//! An authorization specifies the instance it expects at the signer's purse key, and the state
+//! nonce it expects on that instance. Anyone who has seen the transaction can submit it while both
+//! still match. Every dispatch increments the nonce, which retires the authorizations signed for
+//! the old state. An authorization that never executes stays valid, so callers should sign mortal
+//! transactions.
 
 use crate::{pallet::*, weights::WeightInfo, Config, Nft, Transferability};
 use codec::{Decode, DecodeWithMemTracking, Encode};
