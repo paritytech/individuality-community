@@ -1835,8 +1835,9 @@ impl<T: Config> Pallet<T> {
 	/// Removes the awards of up to [`Config::MaxAwardBlocksPerSweep`] tree blocks whose TTL has
 	/// run out, as [`Pallet::sweep_expired_awards`] does once its origin is checked.
 	///
-	/// The roots of those blocks stay: they run on the longer [`Pallet::root_ttl`], and a claimant
-	/// holding their own proof can still mint against one for as long as it does.
+	/// This sweep leaves the roots in place. Root expiry uses the tree's original timestamp plus
+	/// [`Pallet::root_ttl`]. A claimant holding a proof can still mint while the claims chain
+	/// retains the corresponding tree.
 	pub(crate) fn do_sweep_expired_awards() -> PostDispatchInfo {
 		let expired = drain_due_expiries::<NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>(
 			T::AwardRetentionTtl::get(),
