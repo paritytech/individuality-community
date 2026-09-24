@@ -113,11 +113,11 @@ pub mod v1 {
 
 			let retained = alloc::vec::Vec::<BlockNumberFor<T>>::decode(&mut &state[..])
 				.map_err(|_| "retained tree blocks must decode")?;
+			let filed = NftClaimCreditAwardExpiries::<T>::iter_keys()
+				.map(|(_, block)| block)
+				.collect::<alloc::collections::BTreeSet<_>>();
 			for block in &retained {
-				ensure!(
-					NftClaimCreditAwardExpiries::<T>::iter().any(|(_, filed, _)| filed == *block),
-					"a retained tree block has no expiry entry"
-				);
+				ensure!(filed.contains(block), "a retained tree block has no expiry entry");
 			}
 
 			ensure!(
