@@ -21,11 +21,14 @@ use codec::{Decode, DecodeWithMemTracking, Encode};
 use indiv_pallet_scarcity::{CollectionId, ItemIndex};
 use indiv_support::credit_trees::NftClaimCredit;
 use scale_info::TypeInfo;
-use sp_core::H160;
-use sp_runtime::DispatchError;
+use sp_core::{ConstU32, H160};
+use sp_runtime::{BoundedVec, DispatchError};
 
 /// Maximum number of mint selections in one runtime API request.
 pub const MAX_PREVIEW_QUERIES: u32 = 32;
+
+/// A preview batch, bounded so an oversized request fails at decode.
+pub type PreviewQueries = BoundedVec<PreviewQuery, ConstU32<MAX_PREVIEW_QUERIES>>;
 
 /// One credit and collection whose mint selection is previewed.
 #[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
@@ -71,22 +74,13 @@ pub enum PreviewOutcome {
 	Fails { reason: PreviewFailure },
 }
 
-/// A preview batch request that cannot be evaluated.
-#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
-pub enum BatchError {
-	/// The batch exceeds the stable request ceiling and must be split by the caller.
-	TooLarge { max: u32 },
-}
-
 sp_api::decl_runtime_apis! {
 	/// Read-only previews of the item each NFT claim credit selects.
 	pub trait NftClaimsApi {
 		/// Executes the claim selector once per query and returns positionally aligned outcomes.
-		/// Contract state changes occur only in the runtime API overlay and are discarded with it.
-		/// Queries run sequentially on that one overlay, so two queries against the same stateful
-		/// minter compound, exactly as claiming in that order would.
-		fn preview_mints(
-			queries: Vec<PreviewQuery>,
-		) -> Result<Vec<PreviewOutcome>, BatchError>;
+		/// Every query runs in its own discarded storage layer, so each one is previewed
+		/// independently against the block's state and none observes another's contract writes.
+		/// A preview cannot bind a later claim, which runs against whatever state its block holds.
+		fn preview_mints(queries: PreviewQueries) -> Vec<PreviewOutcome>;
 	}
 }
