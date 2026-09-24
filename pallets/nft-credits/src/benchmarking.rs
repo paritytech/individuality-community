@@ -47,9 +47,15 @@ mod benches {
 	//
 	// Filing the block for expiry is a fixed pair of writes whatever `n` is, the awards being
 	// removed by a sweep of their own rather than by this path.
+	//
+	// The delivery queue is set up one entry short of `MaxQueuedCreditTrees`, so the run rewrites
+	// a queue that the tree just filled. A full queue instead drops the delivery, which rewrites
+	// nothing and costs less.
 	#[benchmark]
 	fn build_credit_tree(n: Linear<1, AWARDS_PER_TREE>) -> Result<(), BenchmarkError> {
-		frame_system::Pallet::<T>::set_block_number(10u32.into());
+		let capacity = T::MaxQueuedCreditTrees::get();
+		queue_credit_trees::<T>(capacity.saturating_sub(1));
+		frame_system::Pallet::<T>::set_block_number(capacity.saturating_add(10).into());
 		let block = frame_system::Pallet::<T>::block_number();
 
 		// The awards of one buffer, written chunk by chunk the way awarding fills them.
@@ -81,6 +87,7 @@ mod benches {
 		let credit_root =
 			NftClaimCreditRoots::<T>::get(block).expect("a root is recorded for the block");
 		assert_eq!(credit_root.leaf_count, n);
+		assert_eq!(CreditTreeDeliveryQueue::<T>::decode_len(), Some(capacity as usize));
 		assert_eq!(
 			NftClaimCreditAwards::<T>::iter_prefix_values(block).count() as u32,
 			n.div_ceil(AWARDS_PER_CHUNK)
