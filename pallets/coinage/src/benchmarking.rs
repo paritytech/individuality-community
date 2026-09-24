@@ -38,7 +38,7 @@ use sp_runtime::{
 		AppendZerosInput, Bounded, DispatchTransaction, Dispatchable, One, SaturatedConversion,
 	},
 	transaction_validity::TransactionSource,
-	Saturating,
+	Saturating, TokenError,
 };
 use verifiable::GenerateVerifiable;
 
@@ -2853,25 +2853,29 @@ mod benches {
 		Ok(())
 	}
 
-	/// A `max_fee` one below what the conversion costs, so the bound is what rejects the call.
+	/// A fresh signer that holds exactly the fee in the asset, and a `max_fee` equal to that fee.
 	///
-	/// Quoted outside the measured block: the exit performs one quote of its own, and measuring
-	/// this one too would charge callers for a quote that never happened.
-	fn max_fee_below_the_conversion<T: Config>() -> FungiblesBalanceOf<T> {
-		Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
-			.expect("fee conversion is set up by `common_setup`") -
-			1u32.into()
+	/// The fee check passes and the withdrawal fails, because it must keep the signer alive. No fee
+	/// failure occurs later in the call, so this path upper-bounds every fee failure. The quote is
+	/// outside the measured block because the call quotes again.
+	fn signer_holding_only_the_fee<T: Config>() -> (T::AccountId, FungiblesBalanceOf<T>) {
+		let fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
+			.expect("fee conversion is set up by `common_setup`");
+		let signer: T::AccountId = account("only_the_fee", 0, 0);
+		T::BenchmarkHelper::fund_account(&signer, fee);
+		(signer, fee)
 	}
 
-	/// The early exit `unload_recyclers_into_external_asset_non_anonymous` takes when the fee
-	/// conversion moved past the caller's `max_fee`, which it refunds down to.
+	/// The early exit `unload_recyclers_into_external_asset_non_anonymous` takes when the signer
+	/// cannot pay the fee, which it refunds down to.
 	///
-	/// To avoid paying the worst-case call fee if the fee changed suddently.
+	/// The signer differs from the account that the proofs bind. The call charges the fee before
+	/// it verifies a proof, so the measured path is the same.
 	#[benchmark]
 	fn unload_recyclers_into_external_asset_non_anonymous_fee_fail() -> Result<(), BenchmarkError> {
-		let (inputs, bounded_proofs, caller, dest, _total_asset_amount) =
+		let (inputs, bounded_proofs, _caller, dest, _total_asset_amount) =
 			setup_multi_recycler_unload_non_anonymous::<T>(1);
-		let max_fee = max_fee_below_the_conversion::<T>();
+		let (caller, max_fee) = signer_holding_only_the_fee::<T>();
 
 		let result;
 		#[block]
@@ -2889,25 +2893,26 @@ mod benches {
 
 		assert_eq!(
 			result.map(|_| ()).map_err(|e| e.error),
-			Err(Error::<T>::FeeExceedsMaxFee.into()),
-			"the call must be rejected on the fee bound",
+			Err(TokenError::NotExpendable.into()),
+			"the call must be rejected on the fee withdrawal",
 		);
 
 		Ok(())
 	}
 
-	/// The early exit `unload_archived_recycler_into_external_asset` takes when the fee conversion
-	/// moved past the caller's `max_fee`, which it refunds down to.
+	/// The early exit `unload_archived_recycler_into_external_asset` takes when the signer cannot
+	/// pay the fee, which it refunds down to.
 	///
-	/// To avoid paying the worst-case call fee if the fee changed suddently.
+	/// The signer differs from the account that the proofs bind. The call charges the fee before
+	/// it verifies a proof, so the measured path is the same.
 	#[benchmark]
 	fn unload_archived_recycler_into_external_asset_fee_fail() -> Result<(), BenchmarkError> {
-		let (input, bounded_proofs, caller, dest, _asset_amount) =
+		let (input, bounded_proofs, _caller, dest, _asset_amount) =
 			setup_single_recycler_unload_non_anonymous::<T>(1);
 		let recycler_root = Pallet::<T>::recycler_ring_root(INSTANCE_ID, input.value, input.index)
 			.expect("the ring root exists");
 		let alias_proof = bounded_proofs.into_iter().next().expect("one proof was generated");
-		let max_fee = max_fee_below_the_conversion::<T>();
+		let (caller, max_fee) = signer_holding_only_the_fee::<T>();
 
 		let result;
 		#[block]
@@ -2929,8 +2934,8 @@ mod benches {
 
 		assert_eq!(
 			result.map(|_| ()).map_err(|e| e.error),
-			Err(Error::<T>::FeeExceedsMaxFee.into()),
-			"the call must be rejected on the fee bound",
+			Err(TokenError::NotExpendable.into()),
+			"the call must be rejected on the fee withdrawal",
 		);
 
 		Ok(())
@@ -3078,7 +3083,7 @@ mod benches {
 				max_fee,
 			)?;
 
-			// additionally benchmark the worst-case proof hashing.
+			// Additionally benchmark the worst-case proof hashing.
 			let db = sp_trie::StorageProof::new(worst_case_proof)
 				.into_memory_db::<sp_runtime::traits::BlakeTwo256>();
 			core::hint::black_box(&db);
@@ -3143,7 +3148,7 @@ mod benches {
 				fee_native,
 			)?;
 
-			// additionally benchmark the worst-case proof hashing.
+			// Additionally benchmark the worst-case proof hashing.
 			let db = sp_trie::StorageProof::new(worst_case_proof)
 				.into_memory_db::<sp_runtime::traits::BlakeTwo256>();
 			core::hint::black_box(&db);
