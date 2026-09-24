@@ -412,7 +412,8 @@ impl WeightInfo for TestWeightInfo {
 		unload_recyclers_into_external_asset_non_anonymous_max();
 		unload_recyclers_into_external_asset_non_anonymous_fee_fail();
 		unload_archived_recycler_into_external_asset_fee_fail();
-		unload_archived_recycler_into_external_asset();
+		unload_archived_recycler_into_external_asset_fee_native();
+		unload_archived_recycler_into_external_asset_fee_external_asset();
 		unload_recycler_into_coins_from_output_1(d: u32);
 		unload_recycler_into_coins_from_output_2(d: u32);
 		unload_recycler_into_coins_from_output_4(d: u32);

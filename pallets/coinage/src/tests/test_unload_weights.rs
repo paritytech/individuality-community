@@ -318,36 +318,32 @@ fn multi_recycler_maximum_uses_max_consolidation() {
 #[test]
 fn counts_between_samples_are_interpolated_not_clamped() {
 	new_test_ext().execute_with(|| {
-		// The mock maximum of 16 aliases uses the maximum benchmark sample.
-		assert_eq!(MAX_ALIASES, 16);
+		// Each bound is the helper's own charge at a sampled coordinate. `MAX_ALIASES` is 16, so
+		// the `32` and maximum samples clamp onto the `16` coordinate and the charge there
+		// combines all three. `assert_samples` pins every coordinate to its `WeightInfo` samples.
 		let between = |lo: Weight, mid: Weight, hi: Weight| {
 			assert!(mid.all_gt(lo), "{mid:?} is not above {lo:?}");
 			assert!(mid.all_lt(hi), "{mid:?} is not below {hi:?}");
 		};
-		between(
-			W::unload_recycler_into_external_asset_prepaid_8(),
-			Pallet::<Test>::unload_recycler_into_external_asset_prepaid_weight(12),
-			W::unload_recycler_into_external_asset_prepaid_max(),
-		);
-		between(
-			W::unload_recycler_into_coins_prepaid_8(D),
-			Pallet::<Test>::unload_recycler_into_coins_prepaid_weight(12, D),
-			W::unload_recycler_into_coins_prepaid_max(D),
-		);
-		// 6 recyclers lie between the `4` and `8` samples.
-		between(
-			W::unload_recyclers_into_external_asset_non_anonymous_4(),
-			Pallet::<Test>::unload_recyclers_into_external_asset_non_anonymous_weight(6),
-			W::unload_recyclers_into_external_asset_non_anonymous_8(),
-		);
-		// Halfway between two samples is their mean, rounded up.
-		let lo = W::unload_recycler_into_external_asset_prepaid_8();
-		let hi = W::unload_recycler_into_external_asset_prepaid_max();
+		let prepaid =
+			|n: u32| Pallet::<Test>::unload_recycler_into_external_asset_prepaid_weight(n as usize);
+		let coins =
+			|n: u32| Pallet::<Test>::unload_recycler_into_coins_prepaid_weight(n as usize, D);
+		let recyclers = Pallet::<Test>::unload_recyclers_into_external_asset_non_anonymous_weight;
+
+		// 12 aliases lie between the `8` and `16` coordinates.
+		between(prepaid(8), prepaid(12), prepaid(16));
+		between(coins(8), coins(12), coins(16));
+		// 6 recyclers lie between the `4` and `8` coordinates.
+		between(recyclers(4), recyclers(6), recyclers(8));
+
+		// Halfway between two coordinates is their mean, rounded up.
+		let (lo, hi) = (prepaid(8), prepaid(16));
 		let mean = Weight::from_parts(
 			(lo.ref_time() + hi.ref_time()).div_ceil(2),
 			(lo.proof_size() + hi.proof_size()).div_ceil(2),
 		);
-		assert_eq!(Pallet::<Test>::unload_recycler_into_external_asset_prepaid_weight(12), mean);
+		assert_eq!(prepaid(12), mean);
 	});
 }
 

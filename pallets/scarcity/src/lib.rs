@@ -158,6 +158,32 @@ impl OnCollectionDeleted for () {
 	}
 }
 
+/// Notified when a collection changes owner, so other pallets can drop state the previous owner
+/// authorized without this pallet depending on theirs.
+///
+/// The handler runs inside `claim_collection_ownership` and must not fail. That call charges
+/// [`Self::on_owner_change_weight`], so an under-report undercharges the handover.
+pub trait OnCollectionOwnerChanged {
+	/// Runs after the collection record holds the new owner.
+	fn on_collection_owner_changed(collection: CollectionId);
+
+	/// Worst-case weight of one [`Self::on_collection_owner_changed`], added to
+	/// `claim_collection_ownership`.
+	///
+	/// A benchmark that runs a real handler measures it inside
+	/// `WeightInfo::claim_collection_ownership`, which the annotation adds again. Regenerate
+	/// weights with `OnCollectionOwnerChanged = ()` to avoid the double count.
+	fn on_owner_change_weight() -> frame_support::weights::Weight;
+}
+
+impl OnCollectionOwnerChanged for () {
+	fn on_collection_owner_changed(_collection: CollectionId) {}
+
+	fn on_owner_change_weight() -> frame_support::weights::Weight {
+		frame_support::weights::Weight::zero()
+	}
+}
+
 /// Notified when a mint gives a purse key its first instance, so a runtime can make that key
 /// addressable to its contract environment without this pallet depending on that environment.
 ///
@@ -242,7 +268,10 @@ pub use weights::WeightInfo;
 
 #[frame_support::pallet]
 pub mod pallet {
-	use crate::{weights::WeightInfo, OnCollectionDeleted, OnPurseOccupied, ValidateMetadata};
+	use crate::{
+		weights::WeightInfo, OnCollectionDeleted, OnCollectionOwnerChanged, OnPurseOccupied,
+		ValidateMetadata,
+	};
 	#[cfg(any(test, feature = "try-runtime"))]
 	use alloc::collections::BTreeMap;
 	use alloc::vec::Vec;
@@ -745,6 +774,10 @@ pub mod pallet {
 		/// with nothing keyed by a collection.
 		type OnCollectionDeleted: crate::OnCollectionDeleted;
 
+		/// Cross-pallet cleanup run when a collection changes owner. Defaults to `()` for
+		/// runtimes with nothing bound to a collection's owner.
+		type OnCollectionOwnerChanged: crate::OnCollectionOwnerChanged;
+
 		/// Cross-pallet registration run when a mint occupies a purse key. Defaults to `()` for
 		/// runtimes where holding an instance implies nothing about the key.
 		type OnPurseOccupied: crate::OnPurseOccupied<Self::AccountId>;
@@ -929,7 +962,10 @@ pub mod pallet {
 		/// previous owner's ticket is dropped. The operation is atomic: failure to establish the
 		/// claimant's consideration leaves ownership and both tickets unchanged.
 		#[pallet::call_index(8)]
-		#[pallet::weight(T::WeightInfo::claim_collection_ownership())]
+		#[pallet::weight(
+			T::WeightInfo::claim_collection_ownership()
+				.saturating_add(T::OnCollectionOwnerChanged::on_owner_change_weight())
+		)]
 		#[transactional]
 		pub fn claim_collection_ownership(
 			origin: OriginFor<T>,
@@ -945,6 +981,7 @@ pub mod pallet {
 			let old_owner = info.owner.clone();
 			let info = Self::change_collection_owner(info, new_owner.clone())?;
 			Collections::<T>::insert(collection, info);
+			T::OnCollectionOwnerChanged::on_collection_owner_changed(collection);
 			Self::deposit_event(Event::CollectionOwnerChanged { collection, old_owner, new_owner });
 			Ok(())
 		}
