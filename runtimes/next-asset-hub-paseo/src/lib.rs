@@ -3001,9 +3001,8 @@ pub mod migrations {
 
 	/// Creates the PGAS asset with [`pallet_assets::Pallet::force_create`] from the root origin.
 	///
-	/// [`indiv_pallet_pgas::migration::CreatePgasAsset`] is not usable here: it creates the asset
-	/// through `fungibles::Create`, an unprivileged path that must follow `AssetIdAllocator`, so
-	/// with `AutoIncAssetId` the only id it may use is `NextAssetId`, never [`PgasAssetId`].
+	/// Asset creation through `fungibles::Create` must follow `AssetIdAllocator`.
+	/// With `AutoIncAssetId`, this path accepts only `NextAssetId`.
 	/// `force_create` from `ForceOrigin` may pick any unused id instead
 	/// (<https://github.com/paritytech/polkadot-sdk/pull/12378>).
 	///
