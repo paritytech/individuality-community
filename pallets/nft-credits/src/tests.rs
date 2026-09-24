@@ -3112,13 +3112,14 @@ mod award_removal {
 	#[test]
 	fn a_tree_block_is_filed_under_the_timestamp_of_its_root() {
 		new_test_ext().execute_with(|| {
-			record_tree_blocks(&[10]);
+			let (block, _) = award_credits_in_one_block();
+			let root = NftClaimCreditRoots::<Test>::get(block).expect("the block awarded credits");
 
 			assert!(NftClaimCreditAwardExpiries::<Test>::contains_key(
-				ExpiryTimestamp::from(timestamp_of(10)),
-				10
+				ExpiryTimestamp::from(root.timestamp),
+				block
 			));
-			assert_eq!(oldest_filed(), Some(timestamp_of(10)));
+			assert_eq!(oldest_filed(), Some(root.timestamp));
 		});
 	}
 
