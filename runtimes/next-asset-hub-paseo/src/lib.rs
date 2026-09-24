@@ -2995,6 +2995,72 @@ pub type UncheckedExtrinsic =
 #[allow(missing_docs)]
 pub mod migrations {
 	use super::*;
+	#[cfg(feature = "try-runtime")]
+	use frame_support::ensure;
+	use frame_support::traits::OnRuntimeUpgrade;
+
+	/// Creates the PGAS asset with [`pallet_assets::Pallet::force_create`] from the root origin.
+	///
+	/// Asset creation through `fungibles::Create` must follow `AssetIdAllocator`.
+	/// With `AutoIncAssetId`, this path accepts only `NextAssetId`.
+	/// `force_create` from `ForceOrigin` may pick any unused id instead
+	/// (<https://github.com/paritytech/polkadot-sdk/pull/12378>).
+	///
+	/// `AutoIncAssetId::advance_from` only moves `NextAssetId` past [`PgasAssetId`] when the id is
+	/// at or beyond the sequence, so permissionless asset creation is not affected while
+	/// `NextAssetId` is above it.
+	///
+	/// Idempotent: a no-op if the asset already exists.
+	pub struct ForceCreatePgasAsset;
+	impl OnRuntimeUpgrade for ForceCreatePgasAsset {
+		fn on_runtime_upgrade() -> Weight {
+			const LOG_TARGET: &str = "runtime::asset-hub-paseo::migrations";
+			type AssetsWeightInfo =
+				<Runtime as pallet_assets::Config<TrustBackedAssetsInstance>>::WeightInfo;
+
+			let db_weight = <Runtime as frame_system::Config>::DbWeight::get();
+			let asset_id = PgasAssetId::get();
+
+			if pallet_assets::Asset::<Runtime, TrustBackedAssetsInstance>::contains_key(asset_id) {
+				log::info!(target: LOG_TARGET, "PGAS asset already exists; skipping.");
+				return db_weight.reads(1);
+			}
+
+			// Same asset as `indiv_pallet_pgas::Pallet::do_create_pgas_asset` would create: owned
+			// and administered by `PgasAdmin`, sufficient, with `PgasMinBalance` as the minimum
+			// balance.
+			match Assets::force_create(
+				RuntimeOrigin::root(),
+				asset_id.into(),
+				PgasAdmin::get().into(),
+				true,
+				PgasMinBalance::get(),
+			) {
+				Ok(()) => log::info!(target: LOG_TARGET, "PGAS asset created."),
+				Err(e) => log::error!(target: LOG_TARGET, "failed to create PGAS asset: {e:?}"),
+			}
+
+			// The `contains_key` check above, then `force_create`, whose benchmark covers the
+			// `Asset` insert and `AutoIncAssetId::advance_from`'s `NextAssetId` read and write.
+			db_weight
+				.reads(1)
+				.saturating_add(<AssetsWeightInfo as pallet_assets::WeightInfo>::force_create())
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn post_upgrade(_state: Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+			let details =
+				pallet_assets::Asset::<Runtime, TrustBackedAssetsInstance>::get(PgasAssetId::get())
+					.ok_or("PGAS asset must exist after migration")?;
+			ensure!(details.owner == PgasAdmin::get(), "PGAS asset must be owned by `PgasAdmin`");
+			ensure!(details.is_sufficient, "PGAS asset must be sufficient");
+			ensure!(
+				details.min_balance == PgasMinBalance::get(),
+				"PGAS asset must use `PgasMinBalance`"
+			);
+			Ok(())
+		}
+	}
 
 	/// Unreleased migrations. Add new ones here:
 	pub type Unreleased = (
@@ -3006,7 +3072,7 @@ pub mod migrations {
 		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
 		pallet_staking_async::migrations::SetWeightedPointsFormulaStartEra<Runtime>,
-		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
+		ForceCreatePgasAsset,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
