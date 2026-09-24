@@ -51,7 +51,6 @@ extern crate alloc;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
-pub mod migration;
 pub mod weights;
 
 #[cfg(test)]
@@ -473,10 +472,8 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Create the PGAS asset and emit [`Event::PgasAssetCreated`].
-		///
-		/// Shared between the [`Call::create_pgas_asset`] extrinsic and the
-		/// [`migration::CreatePgasAsset`] runtime upgrade.
+		/// Create the PGAS asset for [`Call::create_pgas_asset`] and emit
+		/// [`Event::PgasAssetCreated`].
 		pub fn do_create_pgas_asset() -> DispatchResult {
 			T::Fungibles::create(
 				T::PgasAssetId::get(),
