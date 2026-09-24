@@ -60,6 +60,7 @@ extern crate alloc;
 pub mod bridge_to_ethereum_config;
 pub mod genesis_config_presets;
 pub mod governance;
+mod psm;
 pub mod staking;
 pub mod treasury;
 mod weights;
@@ -123,16 +124,16 @@ use frame_support::{
 		fungible::{self, HoldConsideration},
 		fungibles,
 		tokens::imbalance::ResolveAssetTo,
-		AsEnsureOriginWithArg, ConstBool, ConstU32, ConstU64, ConstU8, ContainsPair, EitherOf,
-		EitherOfDiverse, Equals, InstanceFilter, LinearStoragePrice, PrivilegeCmp, TransformOrigin,
-		WithdrawReasons,
+		AsEnsureOriginWithArg, ConstBool, ConstU32, ConstU64, ConstU8, ConstantStoragePrice,
+		ContainsPair, EitherOf, EitherOfDiverse, Equals, InstanceFilter, LinearStoragePrice,
+		PrivilegeCmp, TransformOrigin, WithdrawReasons,
 	},
 	weights::{ConstantMultiplier, Weight},
 	PalletId,
 };
 use frame_system::{
 	limits::{BlockLength, BlockWeights},
-	EnsureRoot, EnsureSigned, EnsureSignedBy,
+	EnsureRoot, EnsureRootWithSuccess, EnsureSigned, EnsureSignedBy,
 };
 use pallet_nfts::PalletFeatures;
 use parachains_common::{
@@ -191,7 +192,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 3_002_000,
+	spec_version: 3_003_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 21,
@@ -443,7 +444,8 @@ impl pallet_assets::Config<TrustBackedAssetsInstance> for Runtime {
 	type Holder = AssetsHolder;
 	type Extra = ();
 	type WeightInfo = weights::pallet_assets_local::WeightInfo<Runtime>;
-	type CallbackHandle = pallet_assets::AutoIncAssetId<Runtime, TrustBackedAssetsInstance>;
+	type CallbackHandle = ();
+	type AssetIdAllocator = pallet_assets::AutoIncAssetId<Runtime, TrustBackedAssetsInstance>;
 	type AssetAccountDeposit = AssetAccountDeposit;
 	type RemoveItemsLimit = frame_support::traits::ConstU32<1000>;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -523,6 +525,7 @@ impl pallet_assets::Config<ForeignAssetsInstance> for Runtime {
 	type Extra = ();
 	type WeightInfo = weights::pallet_assets_foreign::WeightInfo<Runtime>;
 	type CallbackHandle = ();
+	type AssetIdAllocator = ();
 	type AssetAccountDeposit = ForeignAssetsAssetAccountDeposit;
 	type RemoveItemsLimit = frame_support::traits::ConstU32<1000>;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -1197,6 +1200,7 @@ impl pallet_assets::Config<PoolAssetsInstance> for Runtime {
 	type Holder = ();
 	type Extra = ();
 	type CallbackHandle = ();
+	type AssetIdAllocator = ();
 	type WeightInfo = weights::pallet_assets_pool::WeightInfo<Runtime>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();
@@ -1273,6 +1277,85 @@ impl pallet_asset_conversion::Config for Runtime {
 		xcm_config::TrustBackedAssetsPalletIndex,
 		Self::AssetKind,
 	>;
+}
+
+// PSM configuration, copied from Asset Hub Polkadot (polkadot-fellows/runtimes#1252).
+// The pallet takes index 59 because 56 is already `AssetsFreezer` in this runtime.
+parameter_types! {
+	/// Deposit held from the asset owner on `create_psm`.
+	pub const PsmCreationDeposit: Balance = 100 * UNITS;
+	pub PsmHoldReason: RuntimeHoldReason =
+		RuntimeHoldReason::Psm(pallet_psm::HoldReason::CreationDeposit);
+	/// Root creates a PSM without a depositor and pays no deposit.
+	pub const NoPsmDepositor: Option<AccountId> = None;
+	pub const PsmPalletId: PalletId = PalletId(*b"py/pegsm");
+}
+
+type PsmAssets = psm::UnionOf<
+	Assets,
+	ForeignAssets,
+	LocalFromLeft<
+		AssetIdForTrustBackedAssetsConvert<TrustBackedAssetsPalletLocation, Location>,
+		AssetIdForTrustBackedAssets,
+		Location,
+	>,
+	Location,
+	AccountId,
+>;
+
+type PsmCreateOrigin = EitherOf<
+	pallet_psm::EnsureAssetOwner<Runtime>,
+	EnsureRootWithSuccess<AccountId, NoPsmDepositor>,
+>;
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct PsmBenchmarkHelper;
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_psm::BenchmarkHelper<Location, AccountId> for PsmBenchmarkHelper {
+	fn get_asset_id(asset_index: u32) -> Location {
+		Location::new(0, [PalletInstance(50), GeneralIndex(asset_index.into())])
+	}
+
+	fn create_asset(asset_id: Location, owner: &AccountId, decimals: u8) {
+		use frame_support::traits::fungibles::{
+			metadata::Mutate as MetadataMutate, Create, Inspect,
+		};
+		if !<PsmAssets as Inspect<AccountId>>::asset_exists(asset_id.clone()) {
+			let _ =
+				<PsmAssets as Create<AccountId>>::create(asset_id.clone(), owner.clone(), true, 1);
+		}
+		let _ = Balances::force_set_balance(
+			RuntimeOrigin::root(),
+			owner.clone().into(),
+			10u128.pow(18),
+		);
+		let _ = <PsmAssets as MetadataMutate<AccountId>>::set(
+			asset_id,
+			owner,
+			b"Benchmark".to_vec(),
+			b"BNC".to_vec(),
+			decimals,
+		);
+	}
+}
+
+impl pallet_psm::Config for Runtime {
+	type Fungibles = PsmAssets;
+	type Consideration = HoldConsideration<
+		AccountId,
+		Balances,
+		PsmHoldReason,
+		ConstantStoragePrice<PsmCreationDeposit, Balance>,
+	>;
+	type CreateOrigin = PsmCreateOrigin;
+	type RuntimeOrigin = RuntimeOrigin;
+	type PalletsOrigin = OriginCaller;
+	type AssetId = Location;
+	type WeightInfo = weights::pallet_psm::WeightInfo<Runtime>;
+	type PalletId = PsmPalletId;
+	type MaxExternals = ConstU32<5>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = PsmBenchmarkHelper;
 }
 
 parameter_types! {
@@ -2773,6 +2856,7 @@ construct_runtime!(
 		AssetsFreezer: pallet_assets_freezer::<Instance1> = 56,
 		AssetsHolder: pallet_assets_holder::<Instance1> = 57,
 		Scarcity: indiv_pallet_scarcity = 58,
+		Psm: pallet_psm = 59,
 
 		// OpenGov stuff
 		Treasury: pallet_treasury = 60,
@@ -2947,6 +3031,7 @@ pub mod migrations {
 		cumulus_pallet_aura_ext::migration::MigrateV0ToV1<Runtime>,
 		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
+		pallet_staking_async::migrations::SetWeightedPointsFormulaStartEra<Runtime>,
 		indiv_pallet_pgas::migration::CreatePgasAsset<Runtime>,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
@@ -3058,6 +3143,7 @@ mod benches {
 		[pallet_assets, Foreign]
 		[pallet_assets, Pool]
 		[pallet_asset_conversion, AssetConversion]
+		[pallet_psm, Psm]
 		[pallet_asset_conversion_tx_payment, AssetTxPayment]
 		[pallet_balances, Balances]
 		[pallet_indices, Indices]
