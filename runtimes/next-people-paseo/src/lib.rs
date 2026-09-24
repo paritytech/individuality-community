@@ -22,8 +22,6 @@ include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
 extern crate alloc;
 
-#[cfg(feature = "runtime-benchmarks")]
-mod benchmarking;
 mod genesis_config_presets;
 pub mod parameters;
 pub mod people;
@@ -1906,7 +1904,7 @@ impl_runtime_apis! {
 				}
 
 				fn alias_origin() -> Result<(Location, Location), BenchmarkError> {
-					Ok(crate::benchmarking::set_up_worst_case_authorized_alias())
+					Ok(system_parachains_common::benchmarking::set_up_worst_case_authorized_alias::<Runtime>())
 				}
 			}
 

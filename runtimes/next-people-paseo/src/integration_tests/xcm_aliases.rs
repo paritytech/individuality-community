@@ -7,11 +7,12 @@
 use super::new_test_ext;
 use crate::{
 	xcm_config::{
-		AssetHubLocation, AuthorizeAliasHoldReason, Barrier, CheapTrustedAliasers, XcmConfig,
+		AssetHubLocation, AuthorizeAliasHoldReason, Barrier, CheapTrustedAliasers, NextAhLocation,
+		XcmConfig,
 	},
 	AccountId, Balances, Block, PolkadotXcm, Runtime, RuntimeOrigin, System,
 };
-use codec::MaxEncodedLen;
+use codec::{Encode, MaxEncodedLen};
 use frame_support::{
 	assert_noop, assert_ok,
 	traits::{fungible::InspectHold, ContainsPair},
@@ -220,7 +221,11 @@ fn authorization_requires_a_funded_signed_account_and_future_expiry() {
 fn barrier_accepts_cheap_aliases_only_when_the_result_has_unpaid_permission() {
 	let parent = Location::parent();
 	let governance = Location::new(1, Plurality { id: BodyId::Executive, part: BodyPart::Voice });
-	for (target, expected) in [(governance, true), (Location::new(1, Parachain(4242)), false)] {
+	for (target, expected) in [
+		(governance, true),
+		(Location::new(1, Parachain(4242)), false),
+		(NextAhLocation::get(), false),
+	] {
 		let mut instructions =
 			[AliasOrigin(target), UnpaidExecution { weight_limit: Unlimited, check_origin: None }];
 		let mut properties = Properties { weight_credit: Weight::zero(), message_id: None };
@@ -317,17 +322,70 @@ fn metered_execution_applies_authorized_aliases_and_rejects_other_origins() {
 	});
 }
 
+#[test]
+fn aliases_cannot_grant_root_dispatch() {
+	for origin in [AssetHubLocation::get(), Location::parent(), NextAhLocation::get()] {
+		new_test_ext().execute_with(|| {
+			let message = Xcm(vec![AliasOrigin(NextAhLocation::get()), root_storage_write()]);
+			let outcome = execute_with_credit(origin, message);
+			assert!(
+				matches!(
+					outcome,
+					Outcome::Incomplete {
+						error: InstructionError { index: 0, error: XcmError::NoPermission },
+						..
+					}
+				),
+				"{outcome:?}"
+			);
+			assert_eq!(sp_io::storage::get(b"alias-root-test"), None);
+		});
+	}
+}
+
+#[test]
+fn next_asset_hub_can_still_dispatch_as_root_without_aliasing() {
+	new_test_ext().execute_with(|| {
+		let message =
+			Xcm(vec![root_storage_write(), ExpectTransactStatus(MaybeErrorCode::Success)]);
+		let outcome = execute_with_credit(NextAhLocation::get(), message);
+		assert!(matches!(outcome, Outcome::Complete { .. }), "{outcome:?}");
+		assert_eq!(sp_io::storage::get(b"alias-root-test").unwrap().as_ref(), b"written");
+	});
+}
+
+fn root_storage_write() -> Instruction<crate::RuntimeCall> {
+	Transact {
+		origin_kind: OriginKind::Superuser,
+		fallback_max_weight: None,
+		call: crate::RuntimeCall::System(frame_system::Call::set_storage {
+			items: vec![(b"alias-root-test".to_vec(), b"written".to_vec())],
+		})
+		.encode()
+		.into(),
+	}
+}
+
+fn execute_with_credit(origin: Location, message: Xcm<crate::RuntimeCall>) -> Outcome {
+	let limit = Weight::from_parts(1_000_000_000, 100_000);
+	xcm_executor::XcmExecutor::<XcmConfig>::prepare_and_execute(
+		origin,
+		message,
+		&mut [0; 32],
+		limit,
+		limit,
+	)
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 #[test]
-fn alias_benchmark_fills_storage_and_bypasses_the_cheap_rules() {
+fn benchmark_authorization_allows_metered_alias_execution() {
 	new_test_ext().execute_with(|| {
-		let (origin, target) = crate::benchmarking::set_up_worst_case_authorized_alias();
+		let (origin, target) =
+			system_parachains_common::benchmarking::set_up_worst_case_authorized_alias::<Runtime>();
 		assert!(!CheapTrustedAliasers::contains(&origin, &target));
-		assert!(Aliasers::contains(&origin, &target));
-		let entries =
-			<Runtime as AuthorizedAliasersApi<Block>>::authorized_aliasers(target.into()).unwrap();
-		assert_eq!(entries.len(), pallet_xcm::MaxAuthorizedAliases::get() as usize);
-		assert!(entries.iter().all(|entry| entry.expiry == Some(u64::MAX)));
-		assert_eq!(entries.last().unwrap().location, origin.into());
+		let message = Xcm(vec![AliasOrigin(target.clone()), ExpectOrigin(Some(target))]);
+		let outcome = execute_with_credit(origin, message);
+		assert!(matches!(outcome, Outcome::Complete { .. }), "{outcome:?}");
 	});
 }

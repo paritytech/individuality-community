@@ -284,18 +284,30 @@ pub type WaivedLocations = (
 	LocalPlurality,
 );
 
+/// Rejects aliases into the location that `LocationAsSuperuser` converts to Root.
+pub struct DenyAliasIntoSuperuser<Inner>(core::marker::PhantomData<Inner>);
+impl<Inner: ContainsPair<Location, Location>> ContainsPair<Location, Location>
+	for DenyAliasIntoSuperuser<Inner>
+{
+	fn contains(origin: &Location, target: &Location) -> bool {
+		target != &NextAhLocation::get() && Inner::contains(origin, target)
+	}
+}
+
 /// Aliasing rules that the barrier evaluates before charging fees.
 /// These filters must not read storage selected by an untrusted message.
 /// Stored authorizations belong only in [`TrustedAliasers`].
-pub type CheapTrustedAliasers = (
+pub type CheapTrustedAliasers = DenyAliasIntoSuperuser<UnguardedCheapAliasers>;
+
+type UnguardedCheapAliasers = (
 	AliasChildLocation,
 	AliasAccountId32FromSiblingSystemChain,
 	AliasOriginRootUsingFilter<AssetHubLocation, Everything>,
 );
 
-/// Defines origin aliasing rules for execution. This includes [`CheapTrustedAliasers`] and origins
-/// explicitly authorized by the alias target location.
-pub type TrustedAliasers = (CheapTrustedAliasers, AuthorizedAliasers<Runtime>);
+/// Execution permits cheap aliases and stored authorizations except into the superuser location.
+pub type TrustedAliasers =
+	DenyAliasIntoSuperuser<(UnguardedCheapAliasers, AuthorizedAliasers<Runtime>)>;
 
 /// Accept an external asset as a teleport only when it comes from Asset Hub.
 pub struct ExternalAssetFromAssetHub;
