@@ -27,6 +27,7 @@
 //! separately.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![recursion_limit = "256"]
 
 extern crate alloc;
 
@@ -3524,7 +3525,10 @@ pub mod pallet {
 		/// transaction validation, therefore resolving such conflicts without charging fees by
 		/// marking outdated proofs as invalid.
 		#[pallet::call_index(17)]
-		#[pallet::weight(T::WeightInfo::unload_archived_recycler_into_external_asset())]
+		#[pallet::weight(match fee_currency {
+			FeeCurrency::Native => T::WeightInfo::unload_archived_recycler_into_external_asset_fee_native(),
+			FeeCurrency::ExternalAsset => T::WeightInfo::unload_archived_recycler_into_external_asset_fee_external_asset(),
+		})]
 		pub fn unload_archived_recycler_into_external_asset(
 			origin: OriginFor<T>,
 			instance_id: InstanceId,
