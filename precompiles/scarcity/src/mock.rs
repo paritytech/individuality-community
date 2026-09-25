@@ -85,8 +85,10 @@ impl indiv_pallet_scarcity::Config for Test {
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
 	type MaximumMoves = ConstU16<16>;
-	// Nothing in this mock keys state by a collection, so deletion needs no cleanup hook.
+	// Nothing in this mock keys state by a collection or its owner, so neither deletion nor a
+	// handover needs a cleanup hook.
 	type OnCollectionDeleted = ();
+	type OnCollectionOwnerChanged = ();
 	// Mirrors the runtime: a mint makes its purse key addressable to the contract environment.
 	type OnPurseOccupied = crate::MapPurseKey<Test>;
 	type MetadataPolicy = crate::Erc721MetadataPolicy<Test>;
