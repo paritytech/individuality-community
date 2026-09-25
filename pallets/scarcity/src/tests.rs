@@ -1698,15 +1698,21 @@ fn a_failed_transaction_cannot_be_replayed_after_the_lock_expires() {
 		);
 		MockNow::set(60);
 
-		// The destination is empty and the purse holds the same instance, so the state nonce is
-		// what refuses it.
-		assert!(!NftsByOwner::<Test>::contains_key(6));
+		// The instance that made the transfer fail still sits at the destination. Burn it, so that
+		// the replayed call would otherwise succeed.
+		let (_, val, origin) = validate_burn(4).unwrap();
+		let pre = prepare_burn(val, &origin);
+		assert_ok!(Scarcity::burn(origin));
+		post_dispatch(pre, Ok(()));
+
+		// The purse holds the same instance, so the state nonce is what refuses the replay.
+		assert!(!NftsByOwner::<Test>::contains_key(4));
 		assert_state_mismatch(
-			validate_transfer_as(OWNER, 6, signed).err().expect("the state nonce moved on"),
+			validate_transfer_as(OWNER, 4, signed).err().expect("the state nonce moved on"),
 		);
 
-		// The holder retries by signing for the purse's current state.
-		assert!(validate_transfer(OWNER, 6).is_ok());
+		// The same call validates with an authorization for the current state.
+		assert!(validate_transfer(OWNER, 4).is_ok());
 	});
 }
 
