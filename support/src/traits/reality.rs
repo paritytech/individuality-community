@@ -178,6 +178,7 @@ impl RecognitionPeriod {
 /// [`MAX_RECOGNITION_PERIODS`] closed periods are kept individually. Older ones survive only as
 /// their summed length in `settled`.
 #[frame_support::stored]
+#[derive(Default)]
 pub struct RecognitionHistory {
 	/// Start of the open period, in seconds since the UNIX epoch. `None` while suspended.
 	pub recognized_since: Option<u64>,
@@ -188,14 +189,20 @@ pub struct RecognitionHistory {
 }
 
 impl RecognitionHistory {
-	/// Creates a history with a single period open since `now`.
-	pub fn new(now: u64) -> Self {
-		Self { recognized_since: Some(now), periods: BoundedVec::new(), settled: 0 }
+	/// Creates a history with one period open since `now`.
+	pub fn open_since(now: u64) -> Self {
+		Self { recognized_since: Some(now), ..Default::default() }
 	}
 
-	/// Opens a period at `now`. A period already open is replaced.
-	pub fn open(&mut self, now: u64) {
+	/// Opens a period at `now` and returns whether there was none open.
+	///
+	/// A period already open is kept.
+	pub fn open(&mut self, now: u64) -> bool {
+		if self.recognized_since.is_some() {
+			return false;
+		}
 		self.recognized_since = Some(now);
+		true
 	}
 
 	/// Closes the open period at `now` and returns whether there was one to close.
@@ -204,13 +211,10 @@ impl RecognitionHistory {
 	pub fn close(&mut self, now: u64) -> bool {
 		let Some(start) = self.recognized_since.take() else { return false };
 		let period = RecognitionPeriod { start, end: now.max(start) };
-		if self.periods.is_full() {
-			let oldest = self.periods.remove(0);
+		let len = self.periods.len();
+		if let Ok(Some(oldest)) = self.periods.force_insert_keep_right(len, period) {
 			self.settled.saturating_accrue(oldest.length());
 		}
-		self.periods
-			.try_push(period)
-			.expect("a slot was freed when the list was full; qed");
 		true
 	}
 
@@ -1150,18 +1154,18 @@ mod recognition_history_tests {
 	#[test]
 	fn tenure_sums_closed_and_open_periods() {
 		// Recognized at 100, suspended at 150, recognized again at 200.
-		let mut history = RecognitionHistory::new(100);
+		let mut history = RecognitionHistory::open_since(100);
 		assert_eq!(history.tenure(120), 20);
 		assert!(history.close(150));
 		assert_eq!(history.tenure(1_000), 50);
-		history.open(200);
+		assert!(history.open(200));
 		// Tenure counts the closed period and the open one.
 		assert_eq!(history.tenure(230), 80);
 	}
 
 	#[test]
 	fn close_without_open_period_is_noop() {
-		let mut history = RecognitionHistory::new(100);
+		let mut history = RecognitionHistory::open_since(100);
 		assert!(history.close(150));
 		// A second close has no period to close.
 		assert!(!history.close(200));
@@ -1170,12 +1174,20 @@ mod recognition_history_tests {
 	}
 
 	#[test]
+	fn open_twice_keeps_the_first_period() {
+		let mut history = RecognitionHistory::open_since(100);
+		// A second open has no effect while a period is open.
+		assert!(!history.open(200));
+		assert_eq!(history.recognized_since, Some(100));
+	}
+
+	#[test]
 	fn close_folds_oldest_period_when_full() {
 		// One more cycle than the list holds, each period 10 seconds long.
-		let mut history = RecognitionHistory::new(0);
+		let mut history = RecognitionHistory::default();
 		for i in 0..=MAX_RECOGNITION_PERIODS as u64 {
 			let start = i * 100;
-			history.open(start);
+			assert!(history.open(start));
 			assert!(history.close(start + 10));
 		}
 		// The list stays full and the oldest period is folded into `settled`.
@@ -1187,7 +1199,7 @@ mod recognition_history_tests {
 
 	#[test]
 	fn close_before_start_yields_empty_period() {
-		let mut history = RecognitionHistory::new(100);
+		let mut history = RecognitionHistory::open_since(100);
 		assert!(history.close(50));
 		assert_eq!(history.periods[0], RecognitionPeriod { start: 100, end: 100 });
 		assert_eq!(history.tenure(1_000), 0);

@@ -908,8 +908,11 @@ pub mod pallet {
 					);
 					T::MemberService::add_members(PEOPLE_MEMBER_IDENTIFIER, vec![key.clone()])?;
 					ReservedPersonalId::<T>::remove(who);
-					let record =
-						PersonRecord { key, account: None, history: RecognitionHistory::new(now) };
+					let record = PersonRecord {
+						key,
+						account: None,
+						history: RecognitionHistory::open_since(now),
+					};
 					Keys::<T>::insert(&record.key, who);
 					People::<T>::insert(who, &record);
 					Self::deposit_event(Event::<T>::PersonhoodRecognized { who, key: record.key });
@@ -922,7 +925,12 @@ pub mod pallet {
 						PEOPLE_MEMBER_IDENTIFIER,
 						vec![record.key.clone()],
 					)?;
-					record.history.open(now);
+					if !record.history.open(now) {
+						log::error!(
+							target: LOG_TARGET,
+							"person {who} resumed with an open recognition period"
+						);
+					}
 					People::<T>::insert(who, &record);
 					Self::deposit_event(Event::<T>::PersonOnboarding { who, key: record.key });
 				},

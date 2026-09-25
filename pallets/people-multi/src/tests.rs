@@ -1750,10 +1750,7 @@ fn set_alias_account_fails_for_invalid_context_in_extension() {
 mod tenure {
 	use super::*;
 	use frame_support::traits::{GetStorageVersion, StorageVersion};
-	use migration::{
-		v1::{OldPeople, OldPersonRecord},
-		MigrateV0ToV1,
-	};
+	use migration::{v0, MigrateV0ToV1};
 
 	fn create_collection() {
 		assert_ok!(Members::create_collection(
@@ -1911,6 +1908,27 @@ mod tenure {
 	}
 
 	#[test]
+	fn failed_suspension_leaves_records_untouched() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			let people = generate_people_with_index(0, 1);
+			let (a, _, _) = people[0];
+			let (b, _, _) = people[1];
+			Members::process_maintenance();
+			// Person A holds an account and no mutation session is open.
+			System::set_block_number(1);
+			let origin = RuntimeOrigin::from(PeopleOrigin::PersonalIdentity(a));
+			assert_ok!(PeoplePallet::set_personal_id_account(origin, 42, 0));
+
+			// Suspending A and B fails in the member collection and writes nothing for A.
+			assert_noop!(
+				PeoplePallet::suspend_personhood(&[a, b]),
+				indiv_pallet_members::Error::<Test>::NoRemovalSession
+			);
+		});
+	}
+
+	#[test]
 	fn migration_adds_history_from_member_status() {
 		TestExt::new().execute_with(|| {
 			create_collection();
@@ -1923,11 +1941,18 @@ mod tenure {
 			let (onboarding, _, _) = generate_people_with_index(2, 2)[0];
 			for id in [included, onboarding, suspended] {
 				let record = People::<Test>::get(id).expect("person exists");
-				OldPeople::<Test>::insert(
+				v0::People::<Test>::insert(
 					id,
-					OldPersonRecord { key: record.key, account: record.account },
+					v0::PersonRecord { key: record.key, account: record.account },
 				);
 			}
+			// A person whose key the collection has never seen.
+			let unknown = 99;
+			let unknown_key = MockCrypto::member_from_secret(&MockCrypto::new_secret([77; 32]));
+			v0::People::<Test>::insert(
+				unknown,
+				v0::PersonRecord { key: unknown_key, account: None },
+			);
 			StorageVersion::new(0).put::<PeoplePallet>();
 			MockNow::set(&5_000);
 
@@ -1938,11 +1963,12 @@ mod tenure {
 			#[cfg(feature = "try-runtime")]
 			assert_ok!(MigrateV0ToV1::<Test>::post_upgrade(state));
 
-			// Active members get a period open since the upgrade, the suspended one none.
+			// Active members get a period open since the upgrade, the others none.
 			assert_eq!(history(included).recognized_since, Some(5_000));
 			assert_eq!(history(onboarding).recognized_since, Some(5_000));
 			assert_eq!(history(suspended).recognized_since, None);
-			for id in [included, onboarding, suspended] {
+			assert_eq!(history(unknown).recognized_since, None);
+			for id in [included, onboarding, suspended, unknown] {
 				let record = People::<Test>::get(id).expect("person exists");
 				assert!(record.history.periods.is_empty());
 				assert_eq!(record.history.settled, 0);

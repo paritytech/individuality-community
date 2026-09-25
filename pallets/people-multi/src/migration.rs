@@ -18,14 +18,17 @@
 
 extern crate alloc;
 
-use crate::{Config, MemberOf, Pallet, People, PeopleCollectionCreated, PersonRecord, WeightInfo};
+use crate::{
+	Config, MemberOf, Pallet, People, PeopleCollectionCreated, PersonRecord, WeightInfo,
+	PEOPLE_MEMBER_IDENTIFIER,
+};
 use frame_support::{
 	migrations::VersionedMigration,
 	pallet_prelude::*,
 	storage_alias,
 	traits::{OnRuntimeUpgrade, UncheckedOnRuntimeUpgrade, UnixTime},
 };
-use indiv_support::traits::{AppendOnlyMembers, RecognitionHistory, PEOPLE_IDENTIFIER};
+use indiv_support::traits::{AppendOnlyMembers, RecognitionHistory};
 use sp_runtime::Saturating;
 
 const LOG_TARGET: &str = "runtime::people::migration";
@@ -35,6 +38,8 @@ const LOG_TARGET: &str = "runtime::people::migration";
 /// The real recognition time of an existing person is unknown, so a recognized person gets a
 /// period open since the upgrade and tenure counts from there. A suspended person gets no open
 /// period.
+///
+/// Runs in one block, so the number of people must fit the block's proof size.
 pub type MigrateV0ToV1<T> = VersionedMigration<
 	0,
 	1,
@@ -43,24 +48,28 @@ pub type MigrateV0ToV1<T> = VersionedMigration<
 	<T as frame_system::Config>::DbWeight,
 >;
 
-pub mod v1 {
+pub mod v0 {
 	use super::*;
 
 	/// A person record as stored before recognition history was tracked.
 	#[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, PartialEq, Eq, Debug)]
-	pub struct OldPersonRecord<Member, AccountId> {
+	pub struct PersonRecord<Member, AccountId> {
 		pub key: Member,
 		pub account: Option<AccountId>,
 	}
 
-	/// The [`People`] map under the old record layout.
+	/// The [`crate::People`] map under the old record layout.
 	#[storage_alias]
-	pub type OldPeople<T: Config> = StorageMap<
+	pub type People<T: Config> = StorageMap<
 		Pallet<T>,
 		Blake2_128Concat,
 		indiv_support::traits::PersonalId,
-		OldPersonRecord<MemberOf<T>, <T as frame_system::Config>::AccountId>,
+		PersonRecord<MemberOf<T>, <T as frame_system::Config>::AccountId>,
 	>;
+}
+
+pub mod v1 {
+	use super::*;
 
 	/// Use [`MigrateV0ToV1`] rather than this directly.
 	///
@@ -72,9 +81,9 @@ pub mod v1 {
 		fn on_runtime_upgrade() -> Weight {
 			let now = T::Clock::now().as_secs();
 			let mut translated = 0u64;
-			People::<T>::translate::<OldPersonRecord<MemberOf<T>, T::AccountId>, _>(|id, old| {
+			People::<T>::translate::<v0::PersonRecord<MemberOf<T>, T::AccountId>, _>(|id, old| {
 				translated.saturating_inc();
-				let status = T::MemberService::member_status(PEOPLE_IDENTIFIER, &old.key);
+				let status = T::MemberService::member_status(PEOPLE_MEMBER_IDENTIFIER, &old.key);
 				let recognized = match status {
 					Some(position) => !position.suspended(),
 					None => {
@@ -83,13 +92,9 @@ pub mod v1 {
 					},
 				};
 				let history = if recognized {
-					RecognitionHistory::new(now)
+					RecognitionHistory::open_since(now)
 				} else {
-					RecognitionHistory {
-						recognized_since: None,
-						periods: BoundedVec::new(),
-						settled: 0,
-					}
+					RecognitionHistory::default()
 				};
 				Some(PersonRecord { key: old.key, account: old.account, history })
 			});
@@ -100,7 +105,7 @@ pub mod v1 {
 
 		#[cfg(feature = "try-runtime")]
 		fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
-			Ok((OldPeople::<T>::iter().count() as u64).encode())
+			Ok((v0::People::<T>::iter().count() as u64).encode())
 		}
 
 		#[cfg(feature = "try-runtime")]
@@ -109,8 +114,9 @@ pub mod v1 {
 			let mut after = 0u64;
 			for (_, record) in People::<T>::iter() {
 				after.saturating_inc();
-				let suspended = T::MemberService::member_status(PEOPLE_IDENTIFIER, &record.key)
-					.is_none_or(|position| position.suspended());
+				let suspended =
+					T::MemberService::member_status(PEOPLE_MEMBER_IDENTIFIER, &record.key)
+						.is_none_or(|position| position.suspended());
 				ensure!(
 					record.history.recognized_since.is_none() == suspended,
 					"an open period must match an active member"
