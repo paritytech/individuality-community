@@ -3191,7 +3191,7 @@ fn candidate_and_people_vote_weights_applied() {
 			let mut partial: Vec<Report> = Vec::new();
 			for member_idx in groups.group_members(group_idx) {
 				if member_idx == reporter_idx {
-					continue
+					continue;
 				}
 				let member_player = IndexToPlayer::<Test>::get((0, member_idx)).unwrap();
 				let about_target =
@@ -3283,7 +3283,7 @@ fn recognised_people_are_evenly_distributed() {
 			advance_process(); // run on-poll / on-idle once
 			if let Some(g) = crate::Game::<Test>::get() {
 				if matches!(g.state, GameState::Reporting { .. }) {
-					break
+					break;
 				}
 			} else {
 				panic!("game vanished before Reporting phase");

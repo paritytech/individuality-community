@@ -93,7 +93,7 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a8a88e3dd7409f195fd52db` (r:1 w:1)
 	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
 	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
-	fn register_person_standalone() -> Weight {
+	fn register_person() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1069`
 		//  Estimated: `7352`
@@ -102,32 +102,6 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 			.saturating_add(Weight::from_parts(0, 7352))
 			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().writes(6))
-	}
-	/// Storage: `Resources::AccountOfAlias` (r:1 w:1)
-	/// Proof: `Resources::AccountOfAlias` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
-	/// Storage: `Resources::UsernameReservationQueue` (r:1 w:1)
-	/// Proof: `Resources::UsernameReservationQueue` (`max_values`: None, `max_size`: Some(450), added: 2925, mode: `MaxEncodedLen`)
-	/// Storage: `Resources::Consumers` (r:1 w:1)
-	/// Proof: `Resources::Consumers` (`max_values`: None, `max_size`: Some(222), added: 2697, mode: `MaxEncodedLen`)
-	/// Storage: `Timestamp::Now` (r:1 w:0)
-	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a8a88e3dd7409f195fd52db` (r:1 w:1)
-	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a8a88e3dd7409f195fd52db` (r:1 w:1)
-	/// Storage: `Resources::UsernameOwnerOf` (r:0 w:1)
-	/// Proof: `Resources::UsernameOwnerOf` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
-	/// Storage: `Resources::ReservationOf` (r:0 w:10)
-	/// Proof: `Resources::ReservationOf` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
-	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
-	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
-	fn register_person_reservation() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `761`
-		//  Estimated: `4738`
-		// Minimum execution time: 91_337_000 picoseconds.
-		Weight::from_parts(112_283_000, 0)
-			.saturating_add(Weight::from_parts(0, 4738))
-			.saturating_add(T::DbWeight::get().reads(6))
-			.saturating_add(T::DbWeight::get().writes(15))
 	}
 	/// Storage: `Resources::AccountOfAlias` (r:1 w:0)
 	/// Proof: `Resources::AccountOfAlias` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
@@ -149,35 +123,6 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
-	/// Storage: `Resources::UsernameReservationQueue` (r:1 w:0)
-	/// Proof: `Resources::UsernameReservationQueue` (`max_values`: None, `max_size`: Some(450), added: 2925, mode: `MaxEncodedLen`)
-	/// Storage: `Timestamp::Now` (r:1 w:0)
-	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	/// Storage: `Resources::UsernameReservationDuration` (r:1 w:0)
-	/// Proof: `Resources::UsernameReservationDuration` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	fn validate_reservation_expiry() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `598`
-		//  Estimated: `3915`
-		// Minimum execution time: 10_995_000 picoseconds.
-		Weight::from_parts(11_673_000, 0)
-			.saturating_add(Weight::from_parts(0, 3915))
-			.saturating_add(T::DbWeight::get().reads(3))
-	}
-	/// Storage: `Resources::UsernameReservationQueue` (r:1 w:1)
-	/// Proof: `Resources::UsernameReservationQueue` (`max_values`: None, `max_size`: Some(450), added: 2925, mode: `MaxEncodedLen`)
-	/// Storage: `Resources::ReservationOf` (r:0 w:1)
-	/// Proof: `Resources::ReservationOf` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
-	fn remove_expired_username_reservation() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `524`
-		//  Estimated: `3915`
-		// Minimum execution time: 17_020_000 picoseconds.
-		Weight::from_parts(17_717_000, 0)
-			.saturating_add(Weight::from_parts(0, 3915))
-			.saturating_add(T::DbWeight::get().reads(1))
-			.saturating_add(T::DbWeight::get().writes(2))
-	}
 	/// Storage: `Resources::Consumers` (r:1 w:1)
 	/// Proof: `Resources::Consumers` (`max_values`: None, `max_size`: Some(222), added: 2697, mode: `MaxEncodedLen`)
 	fn update_identifier_key() -> Weight {
@@ -188,17 +133,6 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 		Weight::from_parts(13_947_000, 0)
 			.saturating_add(Weight::from_parts(0, 3687))
 			.saturating_add(T::DbWeight::get().reads(1))
-			.saturating_add(T::DbWeight::get().writes(1))
-	}
-	/// Storage: `Resources::UsernameReservationDuration` (r:0 w:1)
-	/// Proof: `Resources::UsernameReservationDuration` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	fn set_username_reservation_duration() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `0`
-		//  Estimated: `0`
-		// Minimum execution time: 5_457_000 picoseconds.
-		Weight::from_parts(5_740_000, 0)
-			.saturating_add(Weight::from_parts(0, 0))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `Resources::Consumers` (r:1 w:1)
@@ -560,5 +494,29 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 		Weight::from_parts(8_576_000, 0)
 			.saturating_add(Weight::from_parts(0, 3517))
 			.saturating_add(T::DbWeight::get().reads(2))
+	}
+	/// Storage: `Resources::Consumers` (r:1 w:1)
+	/// Proof: `Resources::Consumers` (`max_values`: None, `max_size`: Some(222), added: 2697, mode: `MaxEncodedLen`)
+	fn migrate_v1_translate_consumer() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `255`
+		//  Estimated: `3687`
+		// Minimum execution time: 13_000_000 picoseconds.
+		Weight::from_parts(14_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3687))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	/// Storage: `Resources::UsernameOwnerOf` (r:1 w:1)
+	/// Proof: `Resources::UsernameOwnerOf` (`max_values`: None, `max_size`: Some(81), added: 2556, mode: `MaxEncodedLen`)
+	fn migrate_v1_clear_username_entry() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `114`
+		//  Estimated: `3546`
+		// Minimum execution time: 6_000_000 picoseconds.
+		Weight::from_parts(7_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3546))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 }

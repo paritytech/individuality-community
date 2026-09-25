@@ -5380,8 +5380,9 @@ pub mod pallet {
 				}) => {
 					// For this call for Prepaid, `max_fee` must be zero.
 					match fee {
-						UnloadFee::Prepaid =>
-							ensure!(max_fee.is_zero(), CustomInvalidity::MaxFeeNotAllowedForPrepaid),
+						UnloadFee::Prepaid => {
+							ensure!(max_fee.is_zero(), CustomInvalidity::MaxFeeNotAllowedForPrepaid)
+						},
 						UnloadFee::FromOutput { .. } => {},
 					}
 					(
