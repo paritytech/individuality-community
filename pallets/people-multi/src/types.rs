@@ -20,7 +20,7 @@
 
 use super::*;
 use frame_support::pallet_prelude::*;
-use indiv_support::traits::ValidateProof;
+use indiv_support::traits::{RecognitionHistory, ValidateProof};
 
 pub type RevisionIndex = u32;
 pub type PageIndex = u32;
@@ -95,4 +95,9 @@ pub struct PersonRecord<Member, AccountId> {
 	/// that sets the field must `inc_sufficients` on the account and every write that clears
 	/// it must `dec_sufficients`.
 	pub account: Option<AccountId>,
+	/// The periods during which the person was recognized.
+	///
+	/// Invariant: a period is open exactly while the key is an active member of the people
+	/// collection. `recognize_personhood` opens it and `suspend_personhood` closes it.
+	pub history: RecognitionHistory,
 }

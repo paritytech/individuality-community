@@ -942,6 +942,7 @@ impl indiv_pallet_people::Config for Test {
 	type AccountContexts = Everything;
 	type OnboardingQueuePageSize = ConstUint<512>;
 	type MemberService = Members;
+	type Clock = Test;
 	type CollectionOwner = MockCollectionOwner;
 	type RingExponent = FlexibleRingExp;
 	type StaleAliasCleanupInterval = ConstUint<5>;
