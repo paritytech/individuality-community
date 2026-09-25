@@ -124,9 +124,9 @@ use frame_support::{
 		fungible::{self, HoldConsideration},
 		fungibles,
 		tokens::imbalance::ResolveAssetTo,
-		AsEnsureOriginWithArg, ConstBool, ConstU32, ConstU64, ConstU8, ConstantStoragePrice,
-		ContainsPair, EitherOf, EitherOfDiverse, Equals, InstanceFilter, LinearStoragePrice,
-		PrivilegeCmp, TransformOrigin, WithdrawReasons,
+		AsEnsureOriginWithArg, ConstBool, ConstU16, ConstU32, ConstU64, ConstU8,
+		ConstantStoragePrice, ContainsPair, EitherOf, EitherOfDiverse, Equals, InstanceFilter,
+		LinearStoragePrice, PrivilegeCmp, TransformOrigin, WithdrawReasons,
 	},
 	weights::{ConstantMultiplier, Weight},
 	PalletId,
@@ -1132,6 +1132,9 @@ impl indiv_pallet_scarcity::Config for Runtime {
 	// Matches Coinage's `CoinFailureLockPeriod` and paces retries of a failing purse key.
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
+	// Matches Coinage's `MaximumAge`: the feeless moves one mint buys, after which a move is paid
+	// for and the budget refills.
+	type MaximumMoves = ConstU16<16>;
 	// Clears a collection's nft-claims minter registration when the collection is deleted, so no
 	// registration outlives the collection it names.
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
@@ -3099,6 +3102,7 @@ pub mod migrations {
 		pallet_staking_async::migrations::SetWeightedPointsFormulaStartEra<Runtime>,
 		ForceCreatePgasAsset,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_scarcity::migration::MigrateV1ToV2<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
 	);
@@ -4442,6 +4446,7 @@ mod tests {
 					minted_at: 0,
 					last_moved: 0,
 					state_nonce,
+					moves: 0,
 				},
 			);
 			indiv_pallet_scarcity::Instances::<Runtime>::insert(0, &from);
@@ -4492,9 +4497,56 @@ mod tests {
 			assert!(Balances::free_balance(&from).is_zero());
 			assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&from));
 			assert_eq!(
-				indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&to).map(|nft| nft.state_nonce),
-				Some(1),
+				indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&to)
+					.map(|nft| (nft.state_nonce, nft.moves)),
+				Some((1, 1)),
+				"the move lands and spends one of the instance's feeless moves",
 			);
+		});
+	}
+
+	/// An instance that has spent its budget buys no more block space: the move is refused at
+	/// validation, before it reaches a block (paritytech/individuality#1270).
+	///
+	/// This is what bounds the feeless block space one mint buys. Without it a holder of enough
+	/// instances fills whole blocks for free.
+	#[test]
+	fn a_spent_move_budget_stops_a_feeless_transfer() {
+		use frame_support::dispatch::GetDispatchInfo;
+		use sp_runtime::{
+			traits::DispatchTransaction,
+			transaction_validity::{InvalidTransaction, TransactionValidityError},
+		};
+
+		let (mut ext, from) = scarcity_purse_test_state(0);
+		ext.execute_with(|| {
+			let spent = <Runtime as indiv_pallet_scarcity::Config>::MaximumMoves::get();
+			indiv_pallet_scarcity::NftsByOwner::<Runtime>::mutate(&from, |maybe_nft| {
+				maybe_nft.as_mut().expect("the purse holds the seeded NFT").moves = spent;
+			});
+
+			let to = AccountId::from([2u8; 32]);
+			let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer {
+				to: to.clone(),
+			});
+			let info = call.get_dispatch_info();
+			let result = scarcity_tx_extension(0, 0).dispatch_transaction(
+				RuntimeOrigin::signed(from.clone()),
+				call,
+				&info,
+				0,
+				0,
+			);
+
+			assert_eq!(
+				result.unwrap_err(),
+				TransactionValidityError::Invalid(InvalidTransaction::Custom(
+					indiv_pallet_scarcity::extension::CustomInvalidity::MovesExhausted as u8
+				)),
+			);
+			// Refused at the pool, so the NFT stays put and earns no backoff lock.
+			assert!(indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&from));
+			assert!(!indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&from));
 		});
 	}
 

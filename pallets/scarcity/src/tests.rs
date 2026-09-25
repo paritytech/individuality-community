@@ -2791,9 +2791,96 @@ fn try_state_accepts_issuer_depositless_transferred_and_burned_states() {
 	});
 }
 
+/// One feeless move through the whole extension pipeline.
+fn feeless_move(from: u64, to: u64) {
+	let (_, val, origin) = validate_transfer(from, to).expect("the move is authorized");
+	let pre = prepare_transfer(val, &origin, to);
+	assert_ok!(Scarcity::transfer(origin, to));
+	post_dispatch(pre, Ok(()));
+}
+
+/// Spend the whole feeless budget of the instance held by `holder`, one key per move.
+///
+/// Returns the key holding it afterwards.
+fn spend_the_budget(holder: u64) -> u64 {
+	let mut holder = holder;
+	for step in 0..MaximumMoves::get() {
+		let next = 10 + u64::from(step);
+		feeless_move(holder, next);
+		holder = next;
+	}
+	holder
+}
+
+/// The budget is what stops a holder of many instances filling blocks with feeless moves.
+#[test]
+fn feeless_moves_stop_at_the_budget() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&2);
+		setup_item();
+		mint(0, RECIPIENT);
+		assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("minted").moves, 0);
+
+		feeless_move(RECIPIENT, OTHER);
+		assert_eq!(NftsByOwner::<Test>::get(OTHER).expect("moved once").moves, 1);
+		feeless_move(OTHER, 4);
+		assert_eq!(NftsByOwner::<Test>::get(4).expect("moved twice").moves, 2);
+
+		assert_invalidity(
+			validate_transfer(4, 5).err().expect("the budget is spent"),
+			CustomInvalidity::MovesExhausted,
+		);
+		// Pool rejection is side-effect free: NFT untouched, no failure lock written.
+		assert!(NftsByOwner::<Test>::contains_key(4));
+		assert_eq!(Locked::<Test>::get(4), None);
+	});
+}
+
+/// Both paid move paths refill the budget, so an instance is never stuck.
+#[test]
+fn paid_moves_refill_the_budget() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&1);
+		setup_item();
+		mint(0, RECIPIENT);
+
+		let holder = spend_the_budget(RECIPIENT);
+		assert!(validate_transfer(holder, 5).is_err());
+		assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, 5));
+		assert_eq!(NftsByOwner::<Test>::get(5).expect("force-transferred").moves, 0);
+
+		let holder = spend_the_budget(5);
+		assert!(validate_transfer(holder, 6).is_err());
+		assert_ok!(Scarcity::do_transfer_by_holder(&holder, 0, 6));
+		assert_eq!(NftsByOwner::<Test>::get(6).expect("transferred by holder").moves, 0);
+
+		assert!(validate_transfer(6, 7).is_ok());
+	});
+}
+
+/// A burn is exempt: it frees storage and cannot be repeated, so it needs no budget.
+#[test]
+fn a_burn_needs_no_feeless_move() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&1);
+		setup_item();
+		mint(0, RECIPIENT);
+		let holder = spend_the_budget(RECIPIENT);
+
+		let (_, val, origin) = validate_burn(holder).expect("a burn needs no budget");
+		let pre = prepare_burn(val, &origin);
+		assert_ok!(Scarcity::burn(origin));
+		post_dispatch(pre, Ok(()));
+		assert!(!NftsByOwner::<Test>::contains_key(holder));
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
 mod migration {
 	use super::*;
-	use crate::migration::{v1::MigrateToTransferability, MigrateV0ToV1};
+	use crate::migration::{
+		v1::MigrateToTransferability, v2::MigrateToMoves, MigrateV0ToV1, MigrateV1ToV2,
+	};
 	#[cfg(feature = "try-runtime")]
 	use codec::Decode;
 	use frame_support::{
@@ -3038,6 +3125,158 @@ mod migration {
 				"the gate must leave a soulbound item alone"
 			);
 			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));
+		});
+	}
+
+	/// Write an NFT in the shape stored before the feeless move budget existed.
+	///
+	/// Encoded as the bare field sequence rather than through the migration's own `OldNft`, so a
+	/// mistake in that struct fails here instead of round-tripping through itself and passing.
+	fn put_old_nft(owner: u64, instance: u64) {
+		let old = (instance, 0u32, 0u32, 7u64, 9u64, 3u64);
+		unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(owner), &old.encode());
+	}
+
+	/// Mint through the pallet, then downgrade only the stored NFT.
+	///
+	/// Leaves every counter, deposit and index exactly as a chain running the old code would have
+	/// them, which is what lets the state be checked as a whole after migrating.
+	fn downgrade_a_real_nft() {
+		setup_item();
+		mint(0, RECIPIENT);
+		let nft = NftsByOwner::<Test>::get(RECIPIENT).expect("the instance was minted");
+		let old = (
+			nft.instance,
+			nft.collection,
+			nft.item,
+			nft.minted_at,
+			nft.last_moved,
+			nft.state_nonce,
+		);
+		unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(RECIPIENT), &old.encode());
+		assert_eq!(NftsByOwner::<Test>::get(RECIPIENT), None, "the downgrade must be unreadable");
+	}
+
+	/// The old encoding is unreadable under the current type, and the migration recovers it.
+	///
+	/// The first assertion is the whole reason this migration exists: a trailing field turns
+	/// every pre-existing NFT into `None`, which reads as an empty purse key and takes transfer,
+	/// burn and every authorization with it.
+	#[test]
+	fn translates_nfts_written_before_the_move_budget() {
+		new_test_ext().execute_with(|| {
+			for (owner, instance) in [(RECIPIENT, 4), (OTHER, 5), (6, 6)] {
+				put_old_nft(owner, instance);
+			}
+			assert_eq!(NftsByOwner::<Test>::iter().count(), 0, "the old encoding must not decode");
+
+			MigrateToMoves::<Test>::on_runtime_upgrade();
+
+			assert_eq!(NftsByOwner::<Test>::iter().count(), 3, "every NFT is translated");
+			let nft = NftsByOwner::<Test>::get(RECIPIENT).expect("the migration restored the NFT");
+			assert_eq!(nft.instance, 4);
+			assert_eq!(nft.minted_at, 7);
+			assert_eq!(nft.last_moved, 9);
+			assert_eq!(nft.state_nonce, 3);
+			// Moves made before the budget existed were feeless and unbounded. Charging for them
+			// now would strand an instance that is already past the new limit.
+			assert_eq!(nft.moves, 0);
+		});
+	}
+
+	/// A translated NFT is usable again, and the state it belongs to stays consistent.
+	#[test]
+	fn a_translated_nft_is_usable_again() {
+		new_test_ext().execute_with(|| {
+			downgrade_a_real_nft();
+			assert!(validate_transfer_as(RECIPIENT, OTHER, authorization(0, 0)).is_err());
+
+			MigrateToMoves::<Test>::on_runtime_upgrade();
+
+			assert_ok!(Scarcity::do_try_state());
+			feeless_move(RECIPIENT, OTHER);
+			assert_eq!(NftsByOwner::<Test>::get(OTHER).expect("moved").moves, 1);
+		});
+	}
+
+	/// The gate runs the translation on a chain still at version 1, and closes behind it.
+	#[test]
+	fn the_move_migration_translates_and_bumps_the_version() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(1).put::<Scarcity>();
+			put_old_nft(RECIPIENT, 4);
+
+			let weight = <MigrateV1ToV2<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("translated").moves, 0);
+			assert_eq!(Scarcity::on_chain_storage_version(), 2, "the gate must close behind it");
+			// One read and write for the one NFT, one more read for the end of the prefix
+			// iteration, and a read and write for the version the gate checks and stamps.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			assert_eq!(weight, db.reads_writes(3, 2), "the translation must charge what it did");
+		});
+	}
+
+	/// A chain built from this code is already at version 2, so the gate holds shut.
+	///
+	/// Without it a second run would decode a migrated NFT as its own six-field prefix and reset
+	/// a spent budget, which is the refill this migration must not hand out for free.
+	#[test]
+	fn a_fresh_chain_skips_the_move_migration() {
+		new_test_ext().execute_with(|| {
+			MaximumMoves::set(&2);
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_move(RECIPIENT, OTHER);
+
+			let weight = <MigrateV1ToV2<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				NftsByOwner::<Test>::get(OTHER).expect("the NFT exists").moves,
+				1,
+				"the gate must leave a spent budget alone"
+			);
+			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));
+		});
+	}
+
+	/// The try-runtime checks pass over the state the migration is meant for.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_try_runtime_checks_span_the_move_translation() {
+		new_test_ext().execute_with(|| {
+			for (owner, instance) in [(RECIPIENT, 0), (OTHER, 1), (4, 2)] {
+				put_old_nft(owner, instance);
+			}
+			assert_eq!(
+				NftsByOwner::<Test>::iter().count(),
+				0,
+				"nothing decodes before the migration"
+			);
+
+			let state = MigrateToMoves::<Test>::pre_upgrade().expect("counts the keys");
+			assert_eq!(u32::decode(&mut &state[..]).unwrap(), 3, "keys are counted, not entries");
+
+			MigrateToMoves::<Test>::on_runtime_upgrade();
+
+			assert_ok!(MigrateToMoves::<Test>::post_upgrade(state));
+		});
+	}
+
+	/// `post_upgrade` fails when an NFT does not survive, rather than reporting success.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_post_upgrade_check_catches_a_lost_nft() {
+		new_test_ext().execute_with(|| {
+			put_old_nft(RECIPIENT, 0);
+			let state = MigrateToMoves::<Test>::pre_upgrade().expect("counts the keys");
+
+			// A value that decodes as neither shape is dropped by `translate_values`, which is
+			// the loss the count is there to notice.
+			unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(RECIPIENT), &[0xffu8]);
+			MigrateToMoves::<Test>::on_runtime_upgrade();
+
+			assert!(MigrateToMoves::<Test>::post_upgrade(state).is_err());
 		});
 	}
 }
