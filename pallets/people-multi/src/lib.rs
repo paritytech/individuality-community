@@ -42,13 +42,14 @@ use frame_support::{
 		extract_actual_weight, DispatchInfo, DispatchResultWithPostInfo, GetDispatchInfo,
 		PostDispatchInfo,
 	},
-	traits::{EnsureOriginWithArg, IsSubType, OriginTrait},
+	traits::{EnsureOriginWithArg, IsSubType, OriginTrait, UnixTime},
 };
 use indiv_support::{
 	traits::{
 		AddOnlyPeopleTrait, AppendOnlyMembers, CleanUpAlias, Context, ContextualAlias,
 		CountedMembers, FlexibleMembers, Identifier, MembershipProver, PeopleTrait, PersonalId,
-		RevisedAlias, RevisedContextualAlias, RingExponent, RingIndex, RingMode, PEOPLE_IDENTIFIER,
+		RecognitionHistory, RevisedAlias, RevisedContextualAlias, RingExponent, RingIndex,
+		RingMode, PEOPLE_IDENTIFIER,
 	},
 	tx_priority,
 	weight_budget::OcwWeightBudget,
@@ -103,7 +104,10 @@ pub mod pallet {
 		}
 	}
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -141,6 +145,9 @@ pub mod pallet {
 					Config: TryFrom<RingExponent>,
 				>,
 			>;
+
+		/// The clock that dates recognition periods, in seconds since the UNIX epoch.
+		type Clock: UnixTime;
 
 		/// The ring exponent used to operate the people member collection in `MemberService`.
 		#[pallet::constant]
@@ -888,6 +895,7 @@ pub mod pallet {
 			who: PersonalId,
 			maybe_key: Option<Self::Member>,
 		) -> Result<(), DispatchError> {
+			let now = T::Clock::now().as_secs();
 			match maybe_key {
 				Some(key) => {
 					// If the key is already in use by another person then error.
@@ -900,22 +908,30 @@ pub mod pallet {
 					);
 					T::MemberService::add_members(PEOPLE_MEMBER_IDENTIFIER, vec![key.clone()])?;
 					ReservedPersonalId::<T>::remove(who);
-					let record = PersonRecord { key, account: None };
+					let record =
+						PersonRecord { key, account: None, history: RecognitionHistory::new(now) };
 					Keys::<T>::insert(&record.key, who);
 					People::<T>::insert(who, &record);
 					Self::deposit_event(Event::<T>::PersonhoodRecognized { who, key: record.key });
 				},
 				None => {
-					let record = People::<T>::get(who).ok_or(Error::<T>::NotPerson)?;
+					let mut record = People::<T>::get(who).ok_or(Error::<T>::NotPerson)?;
 					ensure!(Keys::<T>::get(&record.key) == Some(who), Error::<T>::NoKey);
+					ensure!(record.history.recognized_since.is_none(), Error::<T>::NotSuspended);
 					T::MemberService::add_members(
 						PEOPLE_MEMBER_IDENTIFIER,
 						vec![record.key.clone()],
 					)?;
+					record.history.open(now);
+					People::<T>::insert(who, &record);
 					Self::deposit_event(Event::<T>::PersonOnboarding { who, key: record.key });
 				},
 			}
 			Ok(())
+		}
+
+		fn recognition_history(who: PersonalId) -> Option<RecognitionHistory> {
+			People::<T>::get(who).map(|record| record.history)
 		}
 
 		#[cfg(feature = "runtime-benchmarks")]
@@ -969,17 +985,28 @@ pub mod pallet {
 
 	impl<T: Config> PeopleTrait for Pallet<T> {
 		fn suspend_personhood(suspensions: &[PersonalId]) -> DispatchResult {
-			let mut keys = vec![];
+			let now = T::Clock::now().as_secs();
+			let mut records = Vec::with_capacity(suspensions.len());
 			for personal_id in suspensions {
-				let mut record = People::<T>::get(personal_id).ok_or(Error::<T>::NotPerson)?;
+				let record = People::<T>::get(personal_id).ok_or(Error::<T>::NotPerson)?;
+				records.push((*personal_id, record));
+			}
+			let keys = records.iter().map(|(_, record)| record.key.clone()).collect::<Vec<_>>();
+			T::MemberService::remove_members(PEOPLE_MEMBER_IDENTIFIER, &keys[..])?;
+			for (personal_id, mut record) in records {
 				if let Some(account) = record.account.take() {
 					AccountToPersonalId::<T>::remove(&account);
 					frame_system::Pallet::<T>::dec_sufficients(&account);
 				}
+				if !record.history.close(now) {
+					log::error!(
+						target: LOG_TARGET,
+						"person {personal_id} suspended without an open recognition period"
+					);
+				}
 				People::<T>::insert(personal_id, &record);
-				keys.push(record.key);
 			}
-			T::MemberService::remove_members(PEOPLE_MEMBER_IDENTIFIER, &keys[..])
+			Ok(())
 		}
 		fn can_start_people_set_mutation_session() -> bool {
 			let current_state = T::MemberService::rings_state(PEOPLE_MEMBER_IDENTIFIER);
