@@ -2853,13 +2853,16 @@ mod benches {
 		Ok(())
 	}
 
-	/// A fresh signer that holds exactly the fee in the asset, and a `max_fee` equal to that fee.
+	/// A fresh signer that holds exactly the fee for `count` recyclers, and a `max_fee` equal to
+	/// that fee.
 	///
 	/// The fee check passes and the withdrawal fails, because it must keep the signer alive. No fee
 	/// failure occurs later in the call, so this path upper-bounds every fee failure. The quote is
 	/// outside the measured block because the call quotes again.
-	fn signer_holding_only_the_fee<T: Config>() -> (T::AccountId, FungiblesBalanceOf<T>) {
-		let fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, 1)
+	fn signer_holding_only_the_fee<T: Config>(
+		count: u32,
+	) -> (T::AccountId, FungiblesBalanceOf<T>) {
+		let fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, count)
 			.expect("fee conversion is set up by `common_setup`");
 		let signer: T::AccountId = account("only_the_fee", 0, 0);
 		T::BenchmarkHelper::fund_account(&signer, fee);
@@ -2871,11 +2874,15 @@ mod benches {
 	///
 	/// The signer differs from the account that the proofs bind. The call charges the fee before
 	/// it verifies a proof, so the measured path is the same.
+	///
+	/// One constant weight covers 1 to `MaxConsolidation` inputs, so the benchmark measures the
+	/// largest. The call iterates `inputs` before it charges the fee.
 	#[benchmark]
 	fn unload_recyclers_into_external_asset_non_anonymous_fee_fail() -> Result<(), BenchmarkError> {
+		let count = T::MaxConsolidation::get();
 		let (inputs, bounded_proofs, _caller, dest, _total_asset_amount) =
-			setup_multi_recycler_unload_non_anonymous::<T>(1);
-		let (caller, max_fee) = signer_holding_only_the_fee::<T>();
+			setup_multi_recycler_unload_non_anonymous::<T>(count);
+		let (caller, max_fee) = signer_holding_only_the_fee::<T>(count);
 
 		let result;
 		#[block]
@@ -2912,7 +2919,7 @@ mod benches {
 		let recycler_root = Pallet::<T>::recycler_ring_root(INSTANCE_ID, input.value, input.index)
 			.expect("the ring root exists");
 		let alias_proof = bounded_proofs.into_iter().next().expect("one proof was generated");
-		let (caller, max_fee) = signer_holding_only_the_fee::<T>();
+		let (caller, max_fee) = signer_holding_only_the_fee::<T>(1);
 
 		let result;
 		#[block]
