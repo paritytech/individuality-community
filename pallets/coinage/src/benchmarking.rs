@@ -2859,9 +2859,7 @@ mod benches {
 	/// The fee check passes and the withdrawal fails, because it must keep the signer alive. No fee
 	/// failure occurs later in the call, so this path upper-bounds every fee failure. The quote is
 	/// outside the measured block because the call quotes again.
-	fn signer_holding_only_the_fee<T: Config>(
-		count: u32,
-	) -> (T::AccountId, FungiblesBalanceOf<T>) {
+	fn signer_holding_only_the_fee<T: Config>(count: u32) -> (T::AccountId, FungiblesBalanceOf<T>) {
 		let fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, count)
 			.expect("fee conversion is set up by `common_setup`");
 		let signer: T::AccountId = account("only_the_fee", 0, 0);
