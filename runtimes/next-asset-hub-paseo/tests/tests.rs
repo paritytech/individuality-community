@@ -1268,6 +1268,7 @@ mod pgas_fees {
 					&bob,
 					indiv_pallet_alias_accounts::AliasAccountInfo {
 						collection: *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER,
+						incarnation: 0,
 						revision: 0,
 						ring: 0,
 						ca: indiv_support::traits::ContextualAlias { context: [0u8; 32], alias },
@@ -1568,6 +1569,17 @@ mod credit_claimant_origin {
 		);
 	}
 
+	/// Records a re-creation of the People collection, as a batch from the notifier does.
+	fn observe_collection_re_creation() {
+		indiv_pallet_members_subscriber::CollectionIncarnations::<Runtime>::insert(
+			PEOPLE_IDENTIFIER,
+			indiv_pallet_members_subscriber::IncarnationRecord {
+				incarnation: 1,
+				raised_at: SOURCE_TIME + 1,
+			},
+		);
+	}
+
 	/// Moves the clock the retention check reads to `SOURCE_TIME + offset` seconds. Writes `Now`
 	/// directly, since `set_timestamp` runs Aura's `OnTimestampSet` hook, which requires the slot
 	/// to match.
@@ -1591,6 +1603,7 @@ mod credit_claimant_origin {
 			signer(),
 			AliasAccountInfo {
 				collection: *PEOPLE_IDENTIFIER,
+				incarnation: 0,
 				ring: 0,
 				revision: 0,
 				ca: ContextualAlias { alias: ALIAS, context: CONTEXT },
@@ -1662,6 +1675,26 @@ mod credit_claimant_origin {
 		});
 	}
 
+	/// The grace for a stale revision does not extend to a binding from an earlier collection.
+	#[test]
+	fn a_binding_from_an_earlier_collection_cannot_claim_as_a_person() {
+		sp_io::TestExternalities::default().execute_with(|| {
+			bind_alias();
+			seed_ring(1);
+			set_now(0);
+			assert_eq!(
+				claimant(RuntimeOrigin::signed(signer()), ClaimantKind::Person),
+				Some(AccountOrPerson::Person(ALIAS)),
+				"the binding resolves while the collection is the one it was proved against"
+			);
+
+			observe_collection_re_creation();
+
+			let origin = RuntimeOrigin::signed(signer());
+			assert_eq!(claimant(origin, ClaimantKind::Person), None);
+		});
+	}
+
 	#[test]
 	fn an_unsigned_origin_cannot_claim() {
 		sp_io::TestExternalities::default().execute_with(|| {
@@ -1702,6 +1735,7 @@ mod members_subscriber_xcm_budget {
 			.collect::<Vec<_>>();
 		RingRootUpdatesBatch {
 			identifier: *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER,
+			incarnation: 1,
 			sequence: 1,
 			source_time: 1,
 			updates: BoundedVec::try_from(updates).expect("within MaxUpdatesPerBatch"),

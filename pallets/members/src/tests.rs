@@ -17,8 +17,8 @@
 use crate::{mock::*, *};
 use frame_support::{assert_noop, assert_ok};
 use indiv_support::traits::{
-	AppendOnlyMembers, FlexibleMembers, MembershipProver, RingExponent, RingMembershipProof,
-	RingStatus,
+	AppendOnlyMembers, FlexibleMembers, Incarnation, MembershipProver, RingExponent,
+	RingMembershipProof, RingRootsProvider, RingStatus,
 };
 use sp_runtime::transaction_validity::InvalidTransaction;
 use verifiable::GenerateVerifiable;
@@ -45,6 +45,11 @@ fn generate_members_with_offset(
 		.expect("Failed to add members");
 
 	members
+}
+
+/// The incarnation as the notifier reads it.
+fn incarnation(identifier: Identifier) -> Incarnation {
+	<MembersPallet as RingRootsProvider<MembersOf<Test>>>::collection_incarnation(identifier)
 }
 
 mod collection_tests {
@@ -81,6 +86,22 @@ mod collection_tests {
 			let owner_key = CollectionOwner::External(owner);
 			let identifiers = IdentifiersOf::<Test>::get(&owner_key).unwrap();
 			assert!(identifiers.contains(&identifier));
+		});
+	}
+
+	/// Each identifier has its own incarnation, and both traits report it.
+	#[test]
+	fn distinct_identifiers_count_separately() {
+		TestExt::new().execute_with(|| {
+			create_test_collection(TEST_IDENTIFIER, 5);
+			CollectionIncarnation::<Test>::insert(TEST_IDENTIFIER, 4);
+
+			assert_eq!(incarnation(TEST_IDENTIFIER), 4);
+			assert_eq!(
+				<MembersPallet as MembershipProver>::collection_incarnation(&TEST_IDENTIFIER),
+				4
+			);
+			assert_eq!(incarnation([9u8; 32]), 0);
 		});
 	}
 
@@ -2124,6 +2145,100 @@ mod collection_deletion_tests {
 			None,
 		)
 		.expect("Failed to create collection");
+	}
+
+	#[test]
+	fn the_incarnation_rises_on_deletion_and_separates_the_two_collections() {
+		TestExt::new().execute_with(|| {
+			let owner = MockLocation(1);
+
+			// A first collection reads zero, so a proof from before the counter still matches.
+			create_owned_collection(DELETION_IDENTIFIER, owner.clone(), 5);
+			assert_eq!(incarnation(DELETION_IDENTIFIER), 0);
+
+			// The mark raises the incarnation, before the identifier is reused.
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::delete_collection(
+				owner.clone(),
+				&DELETION_IDENTIFIER
+			));
+			assert_eq!(incarnation(DELETION_IDENTIFIER), 1);
+
+			// The incarnation outlives the collection.
+			MembersPallet::finalize_collection_deletion(DELETION_IDENTIFIER);
+			create_owned_collection(DELETION_IDENTIFIER, owner, 5);
+			assert_eq!(incarnation(DELETION_IDENTIFIER), 1);
+		});
+	}
+
+	/// A marked collection reports no roots, so the notifier sends its queued rings as deleted.
+	#[test]
+	fn a_marked_collection_reports_no_roots() {
+		TestExt::new().execute_with(|| {
+			let owner = MockLocation(1);
+			create_owned_collection(DELETION_IDENTIFIER, owner.clone(), 5);
+			setup_collection_with_members(DELETION_IDENTIFIER, 10, true);
+			let paginated = || {
+				<MembersPallet as RingRootsProvider<MembersOf<Test>>>::get_ring_roots_paginated(
+					DELETION_IDENTIFIER,
+					None,
+					10,
+				)
+			};
+			let indices = paginated().into_iter().map(|(index, _, _)| index).collect::<Vec<_>>();
+			let by_index = || {
+				<MembersPallet as RingRootsProvider<MembersOf<Test>>>::get_ring_roots(
+					DELETION_IDENTIFIER,
+					&indices,
+				)
+			};
+			assert!(!indices.is_empty(), "the collection has a built ring");
+			assert_eq!(by_index().len(), indices.len());
+
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::delete_collection(
+				owner,
+				&DELETION_IDENTIFIER
+			));
+
+			assert!(paginated().is_empty());
+			assert!(by_index().is_empty());
+		});
+	}
+
+	/// A subscriber learns of a deletion only through the ring-root hook. Every deletion
+	/// notification must see the raised incarnation, which the notifier stamps on its batch.
+	#[test]
+	fn a_deletion_notifies_the_subscriber_only_after_the_incarnation_rises() {
+		TestExt::new().execute_with(|| {
+			let owner = MockLocation(1);
+			create_owned_collection(DELETION_IDENTIFIER, owner.clone(), 5);
+			setup_collection_with_members(DELETION_IDENTIFIER, 10, true);
+
+			// Building the ring notifies at the original incarnation.
+			assert!(
+				RingRootNotifications::get()
+					.iter()
+					.any(|(id, _, count)| *id == DELETION_IDENTIFIER && *count == 0),
+				"the build notification carries the live count"
+			);
+			RingRootNotifications::set(&Vec::new());
+
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::delete_collection(
+				owner,
+				&DELETION_IDENTIFIER
+			));
+			// The maintenance pass after the mark deletes the rings.
+			MembersPallet::process_maintenance();
+
+			let seen = RingRootNotifications::get()
+				.into_iter()
+				.filter(|(id, _, _)| *id == DELETION_IDENTIFIER)
+				.collect::<Vec<_>>();
+			assert!(!seen.is_empty(), "the deletion reaches the subscriber");
+			assert!(
+				seen.iter().all(|(_, _, count)| *count == 1),
+				"every deletion notification carries the raised count, got {seen:?}"
+			);
+		});
 	}
 
 	/// Helper to add members and optionally onboard/build ring.

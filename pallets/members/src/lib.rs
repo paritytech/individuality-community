@@ -49,7 +49,7 @@ use indiv_pallet_chunks_manager::ChunksApi;
 use indiv_support::{
 	traits::{
 		AppendOnlyMembers, AppendOnlyMembersWeightInfo, Context, ContextualAlias, FlexibleMembers,
-		MembershipMultiProver, MembershipProver, OnRingRootChange, PageIndex,
+		Incarnation, MembershipMultiProver, MembershipProver, OnRingRootChange, PageIndex,
 		RevisedContextualAlias, RingExponent, RingIndex, RingMembersState, RingMembershipProof,
 		RingRootOp,
 	},
@@ -187,6 +187,12 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type Collections<T: Config> =
 		StorageMap<_, Identity, Identifier, CollectionInfo<T::AccountId, T::Location>>;
+
+	/// Number of collections the identifier has lost. It increases when a collection is marked
+	/// for deletion. Reads zero for an identifier that never lost one.
+	#[pallet::storage]
+	pub type CollectionIncarnation<T: Config> =
+		StorageMap<_, Identity, Identifier, Incarnation, ValueQuery>;
 
 	/// Collections that have been marked for deletion and are being processed.
 	/// Once a collection is moved here, normal operations will fail with CollectionNotFound.
@@ -2911,6 +2917,10 @@ pub mod pallet {
 				.map(|old_root| old_root.archived_at)
 		}
 
+		fn collection_incarnation(identifier: &Identifier) -> Incarnation {
+			CollectionIncarnation::<T>::get(identifier)
+		}
+
 		fn old_root_retention() -> u64 {
 			T::OldRootRetentionDuration::get()
 		}
@@ -3142,6 +3152,11 @@ pub mod pallet {
 			Collections::<T>::remove(identifier);
 			SuspendedCollections::<T>::insert(identifier, collection_info);
 
+			// Retire the collection's proofs at the mark, not when the identifier is reused.
+			CollectionIncarnation::<T>::mutate(identifier, |count| {
+				*count = count.saturating_add(1)
+			});
+
 			Self::deposit_event(Event::CollectionMarkedForDeletion { identifier: *identifier });
 
 			Ok(())
@@ -3192,6 +3207,9 @@ impl<T: Config> RingRootsProvider<MembersOf<T>> for Pallet<T> {
 		identifier: Identifier,
 		indices: &[RingIndex],
 	) -> Vec<(RingIndex, MembersOf<T>, RevisionIndex)> {
+		if !Collections::<T>::contains_key(identifier) {
+			return Vec::new();
+		}
 		indices
 			.iter()
 			.filter_map(|&idx| Root::<T>::get(identifier, idx).map(|r| (idx, r.root, r.revision)))
@@ -3207,11 +3225,18 @@ impl<T: Config> RingRootsProvider<MembersOf<T>> for Pallet<T> {
 		}
 	}
 
+	fn collection_incarnation(identifier: Identifier) -> Incarnation {
+		CollectionIncarnation::<T>::get(identifier)
+	}
+
 	fn get_ring_roots_paginated(
 		identifier: Identifier,
 		after_key: Option<RingIndex>,
 		limit: u32,
 	) -> Vec<(RingIndex, MembersOf<T>, RevisionIndex)> {
+		if !Collections::<T>::contains_key(identifier) {
+			return Vec::new();
+		}
 		match after_key {
 			Some(key) => {
 				let raw_key = Root::<T>::hashed_key_for(identifier, key);

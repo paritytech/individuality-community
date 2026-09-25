@@ -289,6 +289,11 @@ impl MembershipProver for MockMemberService {
 		MOCK_COLLECTION_REVISIONS.with(|revisions| revisions.borrow().get(identifier).copied())
 	}
 
+	fn collection_incarnation(_identifier: &Identifier) -> u32 {
+		// The mock never re-creates a collection.
+		0
+	}
+
 	fn is_revision_valid(
 		identifier: &Identifier,
 		_ring_index: RingIndex,

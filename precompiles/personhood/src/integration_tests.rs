@@ -32,8 +32,8 @@ use frame_support::{derive_impl, parameter_types, traits::Get};
 use indiv_pallet_alias_accounts::types::AliasAccountInfo;
 use indiv_pallet_members_subscriber::types::NotifierEndpoint;
 use indiv_support::traits::{
-	Alias, Context, ContextualAlias, Identifier, RevisionIndex, RingExponent, RingIndex,
-	PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER,
+	Alias, Context, ContextualAlias, Identifier, MembershipProver, RevisionIndex, RingExponent,
+	RingIndex, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER,
 };
 use pallet_revive::{
 	precompiles::{alloy::sol_types::SolCall, AddressMapper},
@@ -373,8 +373,13 @@ fn seed_alias_at_revision(
 	context: Context,
 	revision: RevisionIndex,
 ) {
-	let info =
-		AliasAccountInfo { collection, revision, ring: 0, ca: ContextualAlias { alias, context } };
+	let info = AliasAccountInfo {
+		collection,
+		incarnation: MembersSubscriber::collection_incarnation(&collection),
+		revision,
+		ring: 0,
+		ca: ContextualAlias { alias, context },
+	};
 	indiv_pallet_alias_accounts::AccountToAlias::<IntegrationTest>::insert(account, info);
 }
 

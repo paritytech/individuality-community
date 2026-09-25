@@ -420,6 +420,11 @@ impl MembershipProver for MockProver {
 		})
 	}
 
+	fn collection_incarnation(_identifier: &Identifier) -> u32 {
+		// The mock never re-creates a collection.
+		0
+	}
+
 	fn is_revision_valid(
 		identifier: &Identifier,
 		ring_index: RingIndex,

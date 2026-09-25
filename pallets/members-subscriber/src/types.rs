@@ -23,7 +23,7 @@ use frame_support::{
 };
 pub use indiv_support::{
 	members_notifier_subscriber::{MembersTypeConfig, RingRootOp, SequenceNumber},
-	traits::{Alias, Context, Identifier, RevisionIndex, RingIndex},
+	traits::{Alias, Context, Identifier, Incarnation, RevisionIndex, RingIndex},
 };
 use scale_info::TypeInfo;
 use verifiable::DecodeUnchecked;
@@ -110,6 +110,34 @@ impl<T: Config> Decode for RingCommitmentRecord<T> {
 			source_time: Decode::decode(input)?,
 			source_sequence: Decode::decode(input)?,
 		})
+	}
+}
+
+/// A collection's incarnation, as the notifier last reported it.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	Clone,
+	PartialEq,
+	Eq,
+	Debug,
+	TypeInfo,
+	MaxEncodedLen,
+	Default,
+)]
+pub struct IncarnationRecord {
+	/// Deletions of the collection's identifier.
+	pub incarnation: Incarnation,
+	/// Source time of the batch that first reported `incarnation`. A ring window whose newest
+	/// root is older belongs to a deleted collection.
+	pub raised_at: u64,
+}
+
+impl IncarnationRecord {
+	/// Whether `roots` holds the roots of a deleted collection.
+	pub fn is_retired<T: Config>(&self, roots: &[RingCommitmentRecord<T>]) -> bool {
+		roots.last().is_some_and(|newest| newest.source_time < self.raised_at)
 	}
 }
 

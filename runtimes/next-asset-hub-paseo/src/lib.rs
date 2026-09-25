@@ -2083,12 +2083,16 @@ impl
 			indiv_pallet_nft_claims::ClaimantKind::Account =>
 				Ok(indiv_support::identity::AccountOrPerson::Account(who)),
 
-			// The direct read skips the grace policy, so a stale binding resolves.
+			// The direct read skips the grace policy, so a binding on a stale revision resolves.
+			// A binding from an earlier collection under the identifier does not.
 			indiv_pallet_nft_claims::ClaimantKind::Person =>
 				match indiv_pallet_alias_accounts::AccountToAlias::<Runtime>::get(&who) {
-					Some(info) =>
+					Some(info)
+						if indiv_pallet_alias_accounts::Pallet::<Runtime>::is_incarnation_current(
+							&info,
+						) =>
 						Ok(indiv_support::identity::AccountOrPerson::Person(info.ca.alias)),
-					None => Err(o),
+					_ => Err(o),
 				},
 		}
 	}
@@ -2103,6 +2107,10 @@ impl
 				&who,
 				indiv_pallet_alias_accounts::AliasAccountInfo {
 					collection: *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER,
+					incarnation: <MembersSubscriber as indiv_support::traits::MembershipProver>::
+						collection_incarnation(
+							indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER,
+						),
 					revision: 0,
 					ring: 0,
 					ca: indiv_support::traits::ContextualAlias {
@@ -3010,6 +3018,7 @@ pub mod migrations {
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_alias_accounts::migration::MigrateV0ToV1<Runtime>,
 	);
 
 	/// Migrations/checks that do not need to be versioned and can run on every update.

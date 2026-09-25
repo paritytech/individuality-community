@@ -336,6 +336,12 @@ impl MembershipProver for MockMemberService {
 	fn ring_revision(_identifier: &Identifier, _ring_index: RingIndex) -> Option<RevisionIndex> {
 		Some(0)
 	}
+
+	fn collection_incarnation(_identifier: &Identifier) -> u32 {
+		// The mock never re-creates a collection.
+		0
+	}
+
 	fn is_revision_valid(
 		_identifier: &Identifier,
 		_ring_index: RingIndex,

@@ -99,7 +99,13 @@ fn make_alias_info<T: Config + BenchmarkHelper<T>>(
 	let mut alias: Alias = [0u8; 32];
 	alias[..4].copy_from_slice(&alias_seed.to_le_bytes());
 	let context = <T as BenchmarkHelper<T>>::allowed_context();
-	AliasAccountInfo { collection, revision, ring, ca: ContextualAlias { alias, context } }
+	AliasAccountInfo {
+		collection,
+		incarnation: T::MemberService::collection_incarnation(&collection),
+		revision,
+		ring,
+		ca: ContextualAlias { alias, context },
+	}
 }
 
 /// Pre-populate a full alias <-> account mapping so the "replace existing" / "clean up stale"
@@ -198,6 +204,7 @@ mod benches {
 		let old_account: T::AccountId = account("paid_old", 0, 0);
 		let existing_info = AliasAccountInfo {
 			collection,
+			incarnation: T::MemberService::collection_incarnation(&collection),
 			revision: target_revision,
 			ring,
 			ca: ContextualAlias { alias, context },
@@ -535,6 +542,7 @@ mod benches {
 
 		let stored = AliasAccountInfo {
 			collection,
+			incarnation: T::MemberService::collection_incarnation(&collection),
 			revision: old_revision,
 			ring,
 			ca: ContextualAlias { alias, context },

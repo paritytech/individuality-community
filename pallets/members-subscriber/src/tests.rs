@@ -28,7 +28,7 @@ use crate::{
 	},
 	Pallet,
 };
-use indiv_support::traits::RingExponent;
+use indiv_support::traits::{Incarnation, MembershipProver, RingExponent};
 
 const TEST_RING_EXPONENT: RingExponent = RingExponent::R2e9;
 use alloc::collections::BTreeSet;
@@ -151,7 +151,14 @@ fn mock_ring_root_updates_batch(
 			.unwrap();
 	}
 
-	RingRootUpdatesBatch::<Test> { identifier, sequence, source_time, updates, next_ring_index }
+	RingRootUpdatesBatch::<Test> {
+		identifier,
+		incarnation: 0,
+		sequence,
+		source_time,
+		updates,
+		next_ring_index,
+	}
 }
 
 /// Verify that the default mock configuration passes all integrity checks,
@@ -213,6 +220,7 @@ mod ring_roots_initialization {
 		new_test_ext().execute_with(|| {
 			let batch1 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 5,
 				source_time: 1000,
 				updates: BoundedVec::new(),
@@ -231,6 +239,7 @@ mod ring_roots_initialization {
 			// Lower sequence while Active leads to error.
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates: BoundedVec::new(),
@@ -263,6 +272,7 @@ mod ring_roots_initialization {
 				}];
 			let batch1 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 1,
 				source_time: 1000,
 				updates,
@@ -287,6 +297,7 @@ mod ring_roots_initialization {
 				}];
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 10,
 				source_time: 2000,
 				updates: new_updates,
@@ -326,6 +337,7 @@ mod ring_roots_initialization {
 			// Initialized with sequence 1.
 			let batch1 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 1,
 				source_time: 1000,
 				updates: BoundedVec::new(),
@@ -344,6 +356,7 @@ mod ring_roots_initialization {
 			// Re-init with equal sequence succeeds (continuation).
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 1,
 				source_time: 1000,
 				updates: BoundedVec::new(),
@@ -377,6 +390,7 @@ mod ring_roots_initialization {
 
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 1,
 				source_time: 12345,
 				updates,
@@ -414,6 +428,7 @@ mod ring_roots_initialization {
 
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 42,
 				source_time: 1000,
 				updates: BoundedVec::new(),
@@ -575,6 +590,7 @@ mod ring_roots_initialization {
 
 			let batch1 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 1,
 				source_time: 1000,
 				updates: updates1,
@@ -605,6 +621,7 @@ mod ring_roots_initialization {
 
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2,
 				source_time: 2000,
 				updates: updates2,
@@ -650,6 +667,7 @@ mod ring_roots_initialization {
 
 			let batch1 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 1,
 				source_time: 1000,
 				updates: updates1,
@@ -677,6 +695,7 @@ mod ring_roots_initialization {
 
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 1, // Same sequence = continuation
 				source_time: 1000,
 				updates: updates2,
@@ -701,6 +720,7 @@ mod ring_roots_initialization {
 			// Init for PEOPLE with R2e9.
 			let batch_people = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 1,
 				source_time: 1000,
 				updates: bounded_vec![RingRootUpdate {
@@ -718,6 +738,7 @@ mod ring_roots_initialization {
 			// Init for PEOPLE_LITE with R2e14 (same sequence = continuation, no re-init clear).
 			let batch_lite = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE_LITE,
+				incarnation: 0,
 				sequence: 1,
 				source_time: 1000,
 				updates: bounded_vec![RingRootUpdate {
@@ -902,6 +923,7 @@ mod ring_roots_updates {
 
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 1, // Same as last processed
 				source_time: 1000,
 				updates,
@@ -924,6 +946,7 @@ mod ring_roots_updates {
 			ProcessingState::<Test>::mutate(|s| s.last_processed_sequence = 5);
 
 			let batch = RingRootUpdatesBatch::<Test> {
+				incarnation: 0,
 				sequence: 3, // Older than last processed (5)
 				..Default::default()
 			};
@@ -950,6 +973,7 @@ mod ring_roots_updates {
 
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2,
 				source_time: 2000,
 				updates,
@@ -1007,6 +1031,7 @@ mod ring_roots_updates {
 
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2,
 				source_time: 2000,
 				updates,
@@ -1042,6 +1067,7 @@ mod ring_roots_updates {
 
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2,
 				source_time: 2000,
 				updates,
@@ -1093,6 +1119,7 @@ mod ring_roots_updates {
 
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2,
 				source_time: 2000,
 				updates,
@@ -1124,6 +1151,7 @@ mod ring_roots_updates {
 
 			let batch1 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2,
 				source_time: 1000,
 				updates: updates1,
@@ -1145,6 +1173,7 @@ mod ring_roots_updates {
 
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates: updates2,
@@ -1169,6 +1198,7 @@ mod ring_roots_updates {
 
 			let batch3 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 4,
 				source_time: 3000,
 				updates: updates3,
@@ -1206,6 +1236,7 @@ mod ring_roots_updates {
 
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates,
@@ -1242,6 +1273,7 @@ mod ring_roots_updates {
 
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2,
 				source_time: 1000,
 				updates,
@@ -1422,6 +1454,169 @@ mod subscription_termination {
 	}
 }
 
+mod collection_incarnations {
+	use super::*;
+
+	/// Builds a batch for rings `indices` of `PEOPLE`, stamped with `incarnation`.
+	fn people_batch(
+		sequence: u64,
+		source_time: u64,
+		indices: impl IntoIterator<Item = u32>,
+		incarnation: Incarnation,
+	) -> RingRootUpdatesBatch<Test> {
+		let mut batch = mock_ring_root_updates_batch(sequence, source_time, indices, PEOPLE, 3);
+		batch.incarnation = incarnation;
+		batch
+	}
+
+	#[test]
+	fn a_batch_records_the_count_it_carries() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(MembersSubscriber::collection_incarnation(&PEOPLE), 0);
+
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				people_batch(1, 1000, 0..3, 0)
+			));
+			assert_eq!(MembersSubscriber::collection_incarnation(&PEOPLE), 0);
+
+			// The notifier chain re-created the collection.
+			assert_ok!(MembersSubscriber::process_ring_updates(
+				RuntimeOrigin::root(),
+				people_batch(2, 1000, 0..3, 1)
+			));
+			assert_eq!(MembersSubscriber::collection_incarnation(&PEOPLE), 1);
+		});
+	}
+
+	#[test]
+	fn a_lower_count_never_lowers_the_record() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				people_batch(1, 1000, 0..3, 2)
+			));
+
+			// A batch built before the deletion must not lower the record.
+			assert_ok!(MembersSubscriber::process_ring_updates(
+				RuntimeOrigin::root(),
+				people_batch(2, 1000, 0..3, 1)
+			));
+			assert_eq!(MembersSubscriber::collection_incarnation(&PEOPLE), 2);
+		});
+	}
+
+	#[test]
+	fn each_collection_counts_separately() {
+		new_test_ext().execute_with(|| {
+			let mut lite = mock_ring_root_updates_batch(1, 1000, 0..3, PEOPLE_LITE, 3);
+			lite.incarnation = 1;
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				lite
+			));
+
+			assert_eq!(MembersSubscriber::collection_incarnation(&PEOPLE_LITE), 1);
+			assert_eq!(MembersSubscriber::collection_incarnation(&PEOPLE), 0);
+		});
+	}
+
+	/// The first batch that reports a deletion retires every ring it does not mention.
+	#[test]
+	fn a_deletion_retires_the_windows_stored_before_it() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				people_batch(1, 1000, 0..3, 0)
+			));
+			assert!(MembersSubscriber::is_revision_valid(&PEOPLE, 0, 1));
+
+			assert_ok!(MembersSubscriber::process_ring_updates(
+				RuntimeOrigin::root(),
+				people_batch(2, 2000, core::iter::empty(), 1)
+			));
+
+			for ring in 0..3 {
+				assert!(!MembersSubscriber::is_revision_valid(&PEOPLE, ring, 1));
+				assert_eq!(MembersSubscriber::ring_revision(&PEOPLE, ring), None);
+			}
+		});
+	}
+
+	/// The new collection's first root on a ring the deleted one left stored starts a new window.
+	#[test]
+	fn a_rebuilt_ring_replaces_the_retired_window() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				people_batch(1, 1000, 0..3, 0)
+			));
+			assert_ok!(MembersSubscriber::process_ring_updates(
+				RuntimeOrigin::root(),
+				people_batch(2, 2000, core::iter::empty(), 1)
+			));
+			assert_ok!(MembersSubscriber::process_ring_updates(
+				RuntimeOrigin::root(),
+				people_batch(3, 3000, [0], 1)
+			));
+
+			let roots = ring_roots(PEOPLE, 0).expect("the rebuilt ring verifies");
+			assert_eq!(roots.len(), 1, "no root of the deleted collection remains");
+			assert!(MembersSubscriber::is_revision_valid(&PEOPLE, 0, 1));
+			assert!(!has_ring_root(PEOPLE, 1));
+			assert_eq!(get_ring_count(PEOPLE), 3, "the reset ring is counted once");
+		});
+	}
+
+	/// A subscriber that initializes after a deletion receives the live rings in the batch that
+	/// raises the incarnation.
+	#[test]
+	fn the_batch_that_raises_the_count_keeps_its_own_roots() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				people_batch(1, 1000, 0..3, 1)
+			));
+
+			assert_eq!(MembersSubscriber::collection_incarnation(&PEOPLE), 1);
+			for ring in 0..3 {
+				assert!(MembersSubscriber::is_revision_valid(&PEOPLE, ring, 1));
+			}
+		});
+	}
+
+	#[test]
+	fn discarding_ring_data_leaves_the_incarnation_alone() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				people_batch(1, 1000, 0..3, 1)
+			));
+
+			// A higher sequence rebuilds the window from the same collection, so the incarnation
+			// stays.
+			assert_ok!(MembersSubscriber::initialize_ring_roots(
+				RuntimeOrigin::root(),
+				TEST_RING_EXPONENT,
+				people_batch(2, 1000, 0..3, 1)
+			));
+			assert!(CurrentGeneration::<Test>::get() > 0, "the window was discarded");
+			assert_eq!(MembersSubscriber::collection_incarnation(&PEOPLE), 1);
+
+			// Termination discards the window but not the incarnation.
+			assert_ok!(MembersSubscriber::terminate_subscription(RuntimeOrigin::root()));
+			assert_eq!(MembersSubscriber::collection_incarnation(&PEOPLE), 1);
+		});
+	}
+}
+
 mod replay_logic {
 	use super::*;
 
@@ -1549,6 +1744,7 @@ mod missing_rings_detection {
 
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates,
@@ -1584,6 +1780,7 @@ mod missing_rings_detection {
 
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates,
@@ -1617,6 +1814,7 @@ mod missing_rings_detection {
 
 			let del_batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates: del_updates,
@@ -1632,6 +1830,7 @@ mod missing_rings_detection {
 
 			let replay_batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3, // Replay uses the same sequence
 				source_time: 2000,
 				updates: replay_updates,
@@ -1664,6 +1863,7 @@ mod missing_rings_detection {
 				.unwrap();
 			let del_batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates: del_updates,
@@ -1685,6 +1885,7 @@ mod missing_rings_detection {
 
 			let readd_batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 4,
 				source_time: 3000,
 				updates: readd_updates,
@@ -1725,6 +1926,7 @@ mod missing_rings_detection {
 
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates,
@@ -1795,6 +1997,7 @@ mod missing_rings_detection {
 				.unwrap();
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2,
 				source_time: 1000,
 				updates,
@@ -1831,6 +2034,7 @@ mod missing_rings_detection {
 				.unwrap();
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2, // Replays use the same sequence
 				source_time: 2000,
 				updates,
@@ -1897,6 +2101,7 @@ mod deleted_indices_overflow {
 				.unwrap();
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 2,
 				source_time: 1000,
 				updates,
@@ -1953,6 +2158,7 @@ mod recent_ring_roots {
 				.unwrap();
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates,
@@ -1992,6 +2198,7 @@ mod recent_ring_roots {
 				.unwrap();
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates: updates2,
@@ -2009,6 +2216,7 @@ mod recent_ring_roots {
 				.unwrap();
 			let batch3 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 4,
 				source_time: 3000,
 				updates: updates3,
@@ -2044,6 +2252,7 @@ mod recent_ring_roots {
 				.unwrap();
 			let batch2 = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates: updates2,
@@ -2059,6 +2268,7 @@ mod recent_ring_roots {
 				.unwrap();
 			let del_batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 4,
 				source_time: 3000,
 				updates: del_updates,
@@ -2085,6 +2295,7 @@ mod recent_ring_roots {
 				.unwrap();
 			let del_batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 3,
 				source_time: 2000,
 				updates: del,
@@ -2103,6 +2314,7 @@ mod recent_ring_roots {
 				.unwrap();
 			let readd_batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 4,
 				source_time: 3000,
 				updates: readd,
@@ -2293,6 +2505,7 @@ mod proof_verification {
 		Subscription::<Test>::put(SubscriptionStatus::Active { initialized_at_sequence: 1 });
 		RingCollectionExponents::<Test>::insert(identifier, TEST_RING_EXPONENT);
 		let batch = RingRootUpdatesBatch::<Test> {
+			incarnation: 0,
 			identifier,
 			sequence: revision as u64,
 			source_time: now_secs(),
@@ -2309,6 +2522,7 @@ mod proof_verification {
 	/// mock time as source time.
 	fn push_revision(identifier: Identifier, revision: u32, seed: u64) {
 		let batch = RingRootUpdatesBatch::<Test> {
+			incarnation: 0,
 			identifier,
 			sequence: revision as u64,
 			source_time: now_secs(),
@@ -2975,6 +3189,7 @@ mod generation_and_purge {
 				.unwrap();
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 10,
 				source_time: 2000,
 				updates,
@@ -3013,6 +3228,7 @@ mod generation_and_purge {
 				.unwrap();
 			let batch = RingRootUpdatesBatch::<Test> {
 				identifier: PEOPLE,
+				incarnation: 0,
 				sequence: 10,
 				source_time: 2000,
 				updates,

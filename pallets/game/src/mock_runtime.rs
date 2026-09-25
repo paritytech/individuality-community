@@ -754,6 +754,11 @@ impl indiv_support::traits::MembershipProver for MockAirdropMemberService {
 		Some(0)
 	}
 
+	fn collection_incarnation(_identifier: &indiv_support::traits::Identifier) -> u32 {
+		// The mock never re-creates a collection.
+		0
+	}
+
 	fn is_revision_valid(
 		_identifier: &indiv_support::traits::Identifier,
 		_ring_index: indiv_support::traits::RingIndex,

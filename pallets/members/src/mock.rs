@@ -395,6 +395,29 @@ impl GenerateVerifiable for MockCrypto {
 
 parameter_types! {
 	pub const FlexibleRingExp: indiv_support::traits::RingExponent = indiv_support::traits::RingExponent::R2e9;
+	/// Every ring-root notification, with the collection's incarnation when it fired.
+	pub storage RingRootNotifications: Vec<(Identifier, RingIndex, Incarnation)> = Vec::new();
+}
+
+/// Records the notifications in order.
+pub struct RecordRingRootChanges;
+
+impl OnRingRootChange<MembersOf<Test>> for RecordRingRootChanges {
+	fn on_ring_root_change(
+		identifier: Identifier,
+		ring_index: RingIndex,
+		_op: RingRootOp<&MembersOf<Test>>,
+	) {
+		let mut seen = RingRootNotifications::get();
+		seen.push((
+			identifier,
+			ring_index,
+			<MembersPallet as RingRootsProvider<MembersOf<Test>>>::collection_incarnation(
+				identifier,
+			),
+		));
+		RingRootNotifications::set(&seen);
+	}
 }
 
 impl crate::Config for Test {
@@ -412,7 +435,7 @@ impl crate::Config for Test {
 	type MaxFlexibleRingExponent = FlexibleRingExp;
 	type RingBuildingMemberLimit = ConstU32<100>;
 	type OldRootRetentionDuration = ConstU64<600>; // 10 minutes in seconds for old root retention.
-	type OnRingRootChange = ();
+	type OnRingRootChange = RecordRingRootChanges;
 	type OffchainWorkerInterval = ConstU64<1>;
 	type ManagerOrigin = frame_system::EnsureRoot<Self::AccountId>;
 	#[cfg(feature = "runtime-benchmarks")]

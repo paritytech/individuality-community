@@ -269,6 +269,13 @@ pub const PEOPLE_LITE_IDENTIFIER: &Identifier = b"pop:polkadot.network/people-li
 /// Index type for ring revisions.
 pub type RevisionIndex = u32;
 
+/// Number of collections an identifier has held and lost.
+///
+/// The next collection under an identifier holds a different member set and restarts its ring
+/// revisions at zero. A stored ring and revision identify a member set only together with the
+/// incarnation.
+pub type Incarnation = u32;
+
 /// Index type for queue pages.
 pub type PageIndex = u32;
 
@@ -573,6 +580,11 @@ pub trait MembershipProver {
 		let revision = Self::ring_revision(identifier, ring_index)?;
 		Self::revision_source_time(identifier, ring_index, revision)
 	}
+	/// The live [`Incarnation`] of `identifier`, which increases on every deletion.
+	///
+	/// A caller that stores a ring and revision must store this with them and compare it on read.
+	/// Zero for an identifier that never lost a collection.
+	fn collection_incarnation(identifier: &Identifier) -> Incarnation;
 	/// How long, in seconds, a superseded revision keeps verifying once its successor is
 	/// committed.
 	///

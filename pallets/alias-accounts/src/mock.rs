@@ -91,6 +91,9 @@ parameter_types! {
 	pub storage OffchainWorkerInterval: u64 = 1;
 	/// Small, so a test can fill a batch without seeding dozens of mappings.
 	pub storage MaxStaleAliasBatch: u32 = 4;
+	/// Incarnation the mock reports for every collection. A test raises it to re-create a
+	/// collection under the same identifier.
+	pub storage CollectionIncarnation: u32 = 0;
 }
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -277,6 +280,10 @@ impl MembershipProver for MockMemberService {
 				.position(|r| r.revision == revision)
 				.is_some_and(|index| Self::record_is_retained(&rs, index))
 		})
+	}
+
+	fn collection_incarnation(_identifier: &Identifier) -> u32 {
+		CollectionIncarnation::get()
 	}
 
 	fn revision_source_time(
@@ -573,7 +580,13 @@ pub fn make_alias_info_for(
 	revision: RevisionIndex,
 	ring: RingIndex,
 ) -> AliasAccountInfo {
-	AliasAccountInfo { collection, revision, ring, ca: ContextualAlias { alias, context } }
+	AliasAccountInfo {
+		collection,
+		incarnation: CollectionIncarnation::get(),
+		revision,
+		ring,
+		ca: ContextualAlias { alias, context },
+	}
 }
 
 /// Helper to create an AliasAccountInfo for the People collection with default

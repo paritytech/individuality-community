@@ -18,8 +18,8 @@
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 pub use indiv_support::traits::{
-	Alias, Context, ContextualAlias, Identifier, MembershipProver, RevisedContextualAlias,
-	RevisionIndex, RingIndex,
+	Alias, Context, ContextualAlias, Identifier, Incarnation, MembershipProver,
+	RevisedContextualAlias, RevisionIndex, RingIndex,
 };
 use scale_info::TypeInfo;
 
@@ -38,6 +38,9 @@ pub type ProofOf<T> =
 pub struct AliasAccountInfo {
 	/// The collection the member belongs to.
 	pub collection: Identifier,
+	/// Incarnation of the collection when the proof was verified. `ring` and `revision` identify
+	/// a member set only together with it.
+	pub incarnation: Incarnation,
 	/// Revision of the ring at the time of proof verification.
 	pub revision: RevisionIndex,
 	/// Index of the ring within the collection.
@@ -47,8 +50,14 @@ pub struct AliasAccountInfo {
 }
 
 impl AliasAccountInfo {
-	/// Creates an instance from a collection identifier and a validated revised contextual alias.
-	pub fn from_validated(collection: Identifier, rca: &RevisedContextualAlias) -> Self {
-		Self { collection, revision: rca.revision, ring: rca.ring, ca: rca.ca.clone() }
+	/// Builds a mapping from a validated proof.
+	///
+	/// `incarnation` must be the current value from the member service.
+	pub fn from_validated(
+		collection: Identifier,
+		incarnation: Incarnation,
+		rca: &RevisedContextualAlias,
+	) -> Self {
+		Self { collection, incarnation, revision: rca.revision, ring: rca.ring, ca: rca.ca.clone() }
 	}
 }

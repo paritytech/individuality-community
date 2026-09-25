@@ -45,16 +45,28 @@
 //! once fixes the deadline against later changes to the ring's history.
 //!
 //! A stamp is not permanent. Every path that rewrites [`AccountToAlias`] drops it, and so does a
-//! sweep that finds the revision verifying again, which a collection torn down and re-created under
-//! the same identifier can cause by restarting its revisions at zero. That last case is only
-//! noticed when a sweep runs, so it bounds how far the stamp can be trusted rather than removing
-//! the problem: a mapping that goes stale, resolves again and goes stale once more between two
-//! sweeps still carries its first stamp.
+//! sweep that finds its revision verifying again.
+//!
+//! ## Collection incarnations
+//!
+//! A collection re-created under the same identifier restarts its revisions at zero, so a stored
+//! ring and revision can verify against a member set the mapping was never proved against. Each
+//! mapping stores the incarnation it was proved under, and [`Pallet::is_incarnation_current`]
+//! compares it with [`Config::MemberService`]. Every reader of [`AccountToAlias`] applies this
+//! check, including one that accepts a stale revision.
+//!
+//! The incarnation never falls, so a deletion strands a mapping permanently. If the alias is
+//! unchanged, the holder re-proves the mapping for free with [`Pallet::reprove_alias_account`].
+//! Otherwise the holder calls [`Pallet::unset_alias_account`] or waits for the sweep.
+//!
+//! [`Config::MemberService`] rejects the deleted collection's roots once the incarnation rises. A
+//! proof taken before then stores the old incarnation, so the deletion strands that mapping too.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
+pub mod migration;
 pub mod types;
 pub mod weights;
 
@@ -114,7 +126,10 @@ pub mod pallet {
 		<T as frame_system::Config>::AccountId,
 	>>::Balance;
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -448,7 +463,9 @@ pub mod pallet {
 				&Self::proof_message(&who, proof_valid_at),
 			)?;
 
-			let alias_info = AliasAccountInfo::from_validated(collection, &validated_rca);
+			let incarnation = T::MemberService::collection_incarnation(&collection);
+			let alias_info =
+				AliasAccountInfo::from_validated(collection, incarnation, &validated_rca);
 			let old_account = AliasToAccount::<T>::get(collection, &alias_info.ca);
 			let is_new_account = old_account.as_ref() != Some(&who);
 
@@ -535,18 +552,20 @@ pub mod pallet {
 
 			ensure!(validated_rca.ca.alias == old_info.ca.alias, Error::<T>::ReproveMismatch);
 
-			// On the same ring, the new revision must be strictly greater than the
-			// stored one — re-prove must move the mapping forward, never sideways
-			// or backwards. A different ring index (e.g. after a ring merge) is
-			// always accepted: ring revisions are independent across rings, so
-			// there's no meaningful ordering to enforce.
+			// A re-prove must move forward: on the same ring and incarnation, to a greater
+			// revision. Revisions are independent across rings and restart in a new incarnation,
+			// so any revision of another ring (e.g. after a merge) or incarnation counts.
+			let incarnation = T::MemberService::collection_incarnation(&old_info.collection);
+			let same_ring =
+				incarnation == old_info.incarnation && validated_rca.ring == old_info.ring;
 			ensure!(
-				validated_rca.ring != old_info.ring || validated_rca.revision > old_info.revision,
+				!same_ring || validated_rca.revision > old_info.revision,
 				Error::<T>::AliasAccountAlreadySet
 			);
 
 			let new_info = AliasAccountInfo {
 				collection: old_info.collection,
+				incarnation,
 				revision: validated_rca.revision,
 				ring: validated_rca.ring,
 				ca: old_info.ca.clone(),
@@ -655,15 +674,14 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Drop the [`StaleSince`] stamp of each mapping in `accounts`, which verifies again.
+		/// Drop the [`StaleSince`] stamp of each mapping in `accounts` whose revision verifies.
 		///
-		/// A revision can verify again after it stopped: a collection torn down and re-created
-		/// under the same identifier restarts its revisions at zero, so a stored revision can be
-		/// reissued. Dropping the stamp keeps the next staleness to a full
-		/// [`Config::MappingRetention`] rather than letting it remove the mapping on the spot.
+		/// A revision verifies again when the subscriber rebuilds its ring window from the same
+		/// collection. Without this call, the next staleness removes the mapping at once instead
+		/// of after [`Config::MappingRetention`].
 		///
 		/// `accounts` must be in strictly ascending order, and every one of them must hold a
-		/// stamped mapping whose revision verifies.
+		/// stamped mapping from the live collection whose revision verifies.
 		#[pallet::authorize(|source, accounts| {
 			Self::authorize_sweep(source, accounts, StaleAliasAction::ClearReport)
 		})]
@@ -726,14 +744,15 @@ pub mod pallet {
 		) -> (Option<(Identifier, Alias)>, Weight) {
 			let max = Self::personhood_info_weight();
 
-			let saved_one_read = T::DbWeight::get().reads(1);
+			// An early return skips the incarnation and revision reads.
+			let saved_reads = T::DbWeight::get().reads(2);
 			let Some(info) = AccountToAlias::<T>::get(account) else {
-				return (None, max.saturating_sub(saved_one_read));
+				return (None, max.saturating_sub(saved_reads));
 			};
 			if info.ca.context != *context {
-				return (None, max.saturating_sub(saved_one_read));
+				return (None, max.saturating_sub(saved_reads));
 			}
-			if !T::MemberService::is_revision_valid(&info.collection, info.ring, info.revision) {
+			if !Self::is_mapping_current(&info) {
 				return (None, max);
 			}
 			(Some((info.collection, info.ca.alias)), max)
@@ -767,16 +786,31 @@ pub mod pallet {
 	// ========== Helper Functions ==========
 
 	impl<T: Config> Pallet<T> {
+		/// Whether `info` was proved against the collection now live under its identifier.
+		///
+		/// `is_revision_valid` alone accepts a mapping from an earlier collection, because the
+		/// live one restarts its revisions. A reader that accepts a stale revision must still
+		/// apply this.
+		pub fn is_incarnation_current(info: &AliasAccountInfo) -> bool {
+			info.incarnation == T::MemberService::collection_incarnation(&info.collection)
+		}
+
+		/// Whether `info` is from the live collection and its revision still verifies.
+		pub fn is_mapping_current(info: &AliasAccountInfo) -> bool {
+			Self::is_incarnation_current(info) &&
+				T::MemberService::is_revision_valid(&info.collection, info.ring, info.revision)
+		}
+
 		/// Which sweep call applies to `account`'s mapping at `now`, or `None` when none does.
 		///
-		/// `None` covers a missing mapping, one whose revision verifies and carries no stamp, and
-		/// one waiting out [`Config::MappingRetention`]. The offchain worker skips those and
+		/// `None` covers a missing mapping, one that is current and carries no stamp, and one
+		/// waiting out [`Config::MappingRetention`]. The offchain worker skips those and
 		/// `authorize` rejects them, so the two agree on what a sweep may carry.
 		pub fn stale_alias_action(account: &T::AccountId, now: u64) -> Option<StaleAliasAction> {
 			let info = AccountToAlias::<T>::get(account)?;
 			let stamped = StaleSince::<T>::get(account);
 
-			if T::MemberService::is_revision_valid(&info.collection, info.ring, info.revision) {
+			if Self::is_mapping_current(&info) {
 				return stamped.is_some().then_some(StaleAliasAction::ClearReport);
 			}
 

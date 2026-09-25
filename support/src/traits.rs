@@ -19,9 +19,9 @@ pub use crate::members_notifier_subscriber::{OnRingRootChange, RingRootOp, RingR
 pub use reality::{
 	AddOnlyPeopleTrait, Alias, AllocateStorage, AppendOnlyMembers, AppendOnlyMembersWeightInfo,
 	Callback, CleanUpAlias, CommunicationIdentifier, ConsumerRegistrar, Context, ContextualAlias,
-	CountedMembers, EvidenceHash, FlexibleMembers, Identifier, IdentityData, InkSpec, Judgement,
-	JudgementContext, MembershipMultiProver, MembershipProver, MomentRandomness, PageIndex,
-	PeopleTrait, PersonalId, PersonhoodLookup, PersonhoodProofRequest, RevisedAlias,
+	CountedMembers, EvidenceHash, FlexibleMembers, Identifier, IdentityData, Incarnation, InkSpec,
+	Judgement, JudgementContext, MembershipMultiProver, MembershipProver, MomentRandomness,
+	PageIndex, PeopleTrait, PersonalId, PersonhoodLookup, PersonhoodProofRequest, RevisedAlias,
 	RevisedContextualAlias, RevisionIndex, RingExponent, RingIndex, RingMembersState,
 	RingMembershipProof, RingMode, RingMutationMode, RingPosition, RingSize, RingStatus, Social,
 	Statement, StatementOracle, Truth, Username, ValidateProof, CONTEXT_SIZE, PEOPLE_IDENTIFIER,

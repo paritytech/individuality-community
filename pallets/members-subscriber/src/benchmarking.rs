@@ -137,6 +137,7 @@ mod benches {
 		}
 		let batch = RingRootUpdatesBatch::<T> {
 			identifier: BENCH_IDENTIFIER,
+			incarnation: 0,
 			sequence: 5,
 			source_time: 2000,
 			updates,
@@ -197,6 +198,7 @@ mod benches {
 
 		let batch = RingRootUpdatesBatch::<T> {
 			identifier: BENCH_IDENTIFIER,
+			incarnation: 0,
 			sequence: 2,
 			source_time: 2000,
 			updates,
@@ -231,6 +233,7 @@ mod benches {
 
 		let batch = RingRootUpdatesBatch::<T> {
 			identifier: BENCH_IDENTIFIER,
+			incarnation: 0,
 			sequence: 1, // older than `last_processed_sequence` → stale
 			source_time: 0,
 			updates: BoundedVec::new(),
@@ -491,6 +494,7 @@ mod benches {
 		// comes from the stored state's frontier and scan cursor.
 		let batch = RingRootUpdatesBatch::<T> {
 			identifier: BENCH_IDENTIFIER,
+			incarnation: 0,
 			sequence: 2,
 			source_time: 2000,
 			updates: BoundedVec::new(),

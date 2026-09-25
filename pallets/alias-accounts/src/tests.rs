@@ -22,7 +22,7 @@ use crate::{
 	WeightInfo as _,
 };
 use frame_support::{assert_noop, assert_ok, dispatch::GetDispatchInfo};
-use indiv_support::traits::{Alias, Context, ContextualAlias, Identifier};
+use indiv_support::traits::{Alias, Context, ContextualAlias, Identifier, MembershipProver};
 use sp_runtime::DispatchError;
 
 const ALICE: u64 = 1;
@@ -77,6 +77,35 @@ mod set_alias_account {
 			);
 			// Fee was burned.
 			assert_eq!(pgas_balance(ALICE), 1_000 - PAID_FEE);
+		});
+	}
+
+	/// The stored incarnation comes from the member service. A constant zero would stay current
+	/// on a collection that already lost one.
+	#[test]
+	fn records_the_live_incarnation() {
+		new_test_ext().execute_with(|| {
+			AliasFee::set(&Some(PAID_FEE));
+			setup_pgas_for(ALICE, 1_000);
+			CollectionIncarnation::set(&7);
+
+			assert_ok!(AliasAccounts::set_alias_account(
+				RuntimeOrigin::signed(ALICE),
+				make_valid_proof(ALIAS_A),
+				PeopleCollection::get(),
+				0,
+				1,
+				CUSTOM_CONTEXT,
+				MOCK_GENESIS_TIME
+			));
+
+			let info = AccountToAlias::<Test>::get(ALICE).unwrap();
+			assert_eq!(info.incarnation, 7);
+			assert!(AliasAccounts::is_mapping_current(&info));
+
+			// The next deletion retires the mapping only if it stored the live incarnation.
+			CollectionIncarnation::set(&8);
+			assert!(!AliasAccounts::is_incarnation_current(&info));
 		});
 	}
 
@@ -497,6 +526,39 @@ mod stale_alias_sweeps {
 
 	fn batch(accounts: &[u64]) -> BoundedVec<u64, MaxStaleAliasBatch> {
 		BoundedVec::try_from(accounts.to_vec()).expect("test batch is within the bound")
+	}
+
+	#[test]
+	fn a_superseded_incarnation_is_reported_and_never_cleared() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			seed_alias_at_rev(ALIAS_A, PEOPLE_CONTEXT, 1, 0);
+			let now = MOCK_GENESIS_TIME;
+
+			// The revision keeps verifying, so only the incarnation makes the mapping stale.
+			CollectionIncarnation::set(&1);
+			assert!(MockMemberService::is_revision_valid(&PeopleCollection::get(), 0, 1));
+
+			assert_eq!(
+				AliasAccounts::stale_alias_action(&ALICE, now),
+				Some(StaleAliasAction::Report)
+			);
+			assert_ok!(authorize(StaleAliasAction::Report, &[ALICE]));
+			assert_ok!(report(&[ALICE]));
+
+			// The incarnation never comes back, so the mapping stays stale until the retention
+			// runs out.
+			assert_eq!(
+				AliasAccounts::stale_alias_action(&ALICE, now),
+				None,
+				"the retention has not run out yet"
+			);
+			let retired = now + MappingRetention::get();
+			assert_eq!(
+				AliasAccounts::stale_alias_action(&ALICE, retired),
+				Some(StaleAliasAction::Retire)
+			);
+		});
 	}
 
 	/// The sweeps as the offchain worker dispatches them, on the authorized origin `authorize`
@@ -1177,6 +1239,26 @@ mod personhood_lookup {
 	}
 
 	#[test]
+	fn returns_none_for_a_superseded_incarnation() {
+		new_test_ext().execute_with(|| {
+			let info = make_alias_info(ALIAS_A, PEOPLE_CONTEXT);
+			AccountToAlias::<Test>::insert(ALICE, &info);
+			assert!(AliasAccounts::personhood_info(&ALICE, &PEOPLE_CONTEXT).0.is_some());
+
+			// Re-create the collection. The stored revision still verifies, so only the
+			// incarnation separates the two.
+			CollectionIncarnation::set(&(info.incarnation + 1));
+			assert!(MockMemberService::is_revision_valid(
+				&info.collection,
+				info.ring,
+				info.revision
+			));
+
+			assert!(AliasAccounts::personhood_info(&ALICE, &PEOPLE_CONTEXT).0.is_none());
+		});
+	}
+
+	#[test]
 	fn returns_none_for_wrong_context() {
 		new_test_ext().execute_with(|| {
 			let info = make_alias_info(ALIAS_A, PEOPLE_CONTEXT);
@@ -1456,6 +1538,7 @@ mod personhood_lookup_by_proof {
 
 mod reprove_alias_account {
 	use super::*;
+	use crate::StaleAliasAction;
 	use frame_support::traits::UnixTime;
 
 	const CUSTOM_CONTEXT: Context = [42u8; 32];
@@ -1557,7 +1640,6 @@ mod reprove_alias_account {
 	#[test]
 	fn rejects_revision_regression_on_same_ring() {
 		new_test_ext().execute_with(|| {
-			// Set up the paid mapping at revision 5.
 			AliasFee::set(&Some(100u64));
 			setup_pgas_for(ALICE, 10_000);
 			set_mock_ring_revision(PeopleCollection::get(), 0, 5);
@@ -1586,6 +1668,49 @@ mod reprove_alias_account {
 				),
 				crate::Error::<Test>::AliasAccountAlreadySet
 			);
+		});
+	}
+
+	#[test]
+	fn repairs_a_mapping_stranded_by_a_re_created_collection() {
+		new_test_ext().execute_with(|| {
+			// Set up the paid mapping at revision 5.
+			AliasFee::set(&Some(PAID_FEE));
+			setup_pgas_for(ALICE, 10_000);
+			set_mock_ring_revision(PeopleCollection::get(), 0, 5);
+			assert_ok!(AliasAccounts::set_alias_account(
+				RuntimeOrigin::signed(ALICE),
+				make_valid_proof(ALIAS_A),
+				PeopleCollection::get(),
+				0,
+				5,
+				CUSTOM_CONTEXT,
+				MOCK_GENESIS_TIME,
+			));
+			let pgas_after_setup = pgas_balance(ALICE);
+
+			// Re-create the collection. The live ring restarts at revision 1.
+			CollectionIncarnation::set(&1);
+			set_mock_ring_revision(PeopleCollection::get(), 0, 1);
+			assert_eq!(
+				AliasAccounts::stale_alias_action(&ALICE, MOCK_GENESIS_TIME),
+				Some(StaleAliasAction::Report)
+			);
+
+			// The free re-prove must accept a lower revision on the same ring.
+			assert_ok!(AliasAccounts::reprove_alias_account(
+				RuntimeOrigin::signed(ALICE),
+				make_valid_proof(ALIAS_A),
+				0,
+				1,
+				MOCK_GENESIS_TIME,
+			));
+
+			let info = AccountToAlias::<Test>::get(ALICE).unwrap();
+			assert_eq!(info.incarnation, 1);
+			assert_eq!(info.revision, 1);
+			assert_eq!(AliasAccounts::stale_alias_action(&ALICE, MOCK_GENESIS_TIME), None);
+			assert_eq!(pgas_balance(ALICE), pgas_after_setup);
 		});
 	}
 
@@ -1674,6 +1799,73 @@ mod integrity {
 		new_test_ext().execute_with(|| {
 			MappingRetention::set(&(MOCK_OLD_ROOT_RETENTION + 1));
 			<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+		});
+	}
+}
+
+// ========== migration tests ==========
+
+mod migration {
+	use super::*;
+	use crate::migration::v1::{AliasAccountInfoV0, MigrateToIncarnation};
+	use codec::Encode;
+	use frame_support::traits::UncheckedOnRuntimeUpgrade;
+
+	#[test]
+	fn a_mapping_stored_before_the_incarnation_survives() {
+		new_test_ext().execute_with(|| {
+			let old = AliasAccountInfoV0 {
+				collection: PeopleCollection::get(),
+				revision: 1,
+				ring: 0,
+				ca: ContextualAlias { alias: ALIAS_A, context: PEOPLE_CONTEXT },
+			};
+			let key = AccountToAlias::<Test>::hashed_key_for(ALICE);
+			frame_support::storage::unhashed::put_raw(&key, &old.encode());
+
+			// The stored value carries no incarnation, so it does not decode.
+			assert!(AccountToAlias::<Test>::get(ALICE).is_none());
+
+			MigrateToIncarnation::<Test>::on_runtime_upgrade();
+
+			let info = AccountToAlias::<Test>::get(ALICE).expect("the mapping is readable again");
+			assert_eq!(info.incarnation, 0);
+			assert_eq!(info.revision, 1);
+			assert_eq!(info.ring, 0);
+			assert_eq!(info.ca.alias, ALIAS_A);
+			// The member service reports zero until a deletion, so the mapping is live.
+			assert!(AliasAccounts::is_mapping_current(&info));
+		});
+	}
+
+	/// `translate_values` silently removes an entry it cannot decode. The count from
+	/// `pre_upgrade` catches it.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_checks_catch_a_dropped_mapping() {
+		new_test_ext().execute_with(|| {
+			let old = AliasAccountInfoV0 {
+				collection: PeopleCollection::get(),
+				revision: 1,
+				ring: 0,
+				ca: ContextualAlias { alias: ALIAS_A, context: PEOPLE_CONTEXT },
+			};
+			frame_support::storage::unhashed::put_raw(
+				&AccountToAlias::<Test>::hashed_key_for(ALICE),
+				&old.encode(),
+			);
+			// A corrupt entry that no version of the mapping decodes.
+			frame_support::storage::unhashed::put_raw(
+				&AccountToAlias::<Test>::hashed_key_for(BOB),
+				&[0u8; 4],
+			);
+
+			let state = MigrateToIncarnation::<Test>::pre_upgrade().expect("counts both keys");
+			MigrateToIncarnation::<Test>::on_runtime_upgrade();
+
+			assert!(AccountToAlias::<Test>::get(ALICE).is_some());
+			assert!(AccountToAlias::<Test>::get(BOB).is_none(), "the corrupt entry is gone");
+			assert!(MigrateToIncarnation::<Test>::post_upgrade(state).is_err());
 		});
 	}
 }

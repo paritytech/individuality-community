@@ -24,7 +24,7 @@ use crate::{
 		SubscribersWithCurrentBatch, SubscriptionWhitelist,
 	},
 	weights::WeightInfo,
-	Error, GenesisWhitelistEntry,
+	Error, GenesisWhitelistEntry, RingRootUpdatesBatch,
 };
 use alloc::vec::Vec;
 use cumulus_primitives_core::ParaId;
@@ -1557,6 +1557,64 @@ mod unsubscription {
 			// remaining_subscribers remains unchanged
 			let current_batch = CurrentBatch::<Test>::get().unwrap();
 			assert_eq!(current_batch.remaining_subscribers, 1);
+		});
+	}
+}
+
+mod collection_incarnation {
+	use super::*;
+
+	/// Every `RingRootUpdatesBatch` the notifier sent, in order.
+	fn sent_batches() -> Vec<RingRootUpdatesBatch<Test>> {
+		get_sent_xcms()
+			.iter()
+			.filter_map(|(_, enc)| decode_subscriber_call(enc))
+			.filter_map(|call| match call {
+				crate::pallet::SubscriberCall::InitializeRingRoots { roots, .. } => Some(roots),
+				crate::pallet::SubscriberCall::UpdateRingRoots { updates } => Some(updates),
+				crate::pallet::SubscriberCall::TerminateSubscription => None,
+			})
+			.collect()
+	}
+
+	#[test]
+	fn an_init_batch_carries_the_incarnation() {
+		new_test_ext().execute_with(|| {
+			set_mock_ring_roots_count(2);
+			set_mock_collection_incarnation(3);
+			clear_sent_xcms();
+			TestSubscriber::new(1000).subscribe_to(&[PEOPLE_IDENTIFIER]);
+
+			assert_ok!(do_send_init_page(ParaId::from(1000)));
+
+			let batches = sent_batches();
+			assert_eq!(batches.len(), 1);
+			assert_eq!(batches[0].incarnation, 3);
+		});
+	}
+
+	#[test]
+	fn an_update_batch_carries_the_incarnation() {
+		new_test_ext().execute_with(|| {
+			TestSubscriber::new(1000).subscribe_to(&[PEOPLE_IDENTIFIER]);
+			finalize_subscriptions();
+			TestCollection::people().add_pending_update(0, 1);
+			assert_ok!(do_enqueue_updates());
+
+			// The collection was deleted and re-created under the same identifier.
+			set_mock_collection_incarnation(4);
+			clear_sent_xcms();
+
+			assert_ok!(MembersNotifier::send_batch(
+				authorized_origin(),
+				ParaId::from(1000),
+				current_batch_sequence(),
+				0
+			));
+
+			let batches = sent_batches();
+			assert_eq!(batches.len(), 1);
+			assert_eq!(batches[0].incarnation, 4);
 		});
 	}
 }

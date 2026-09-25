@@ -198,6 +198,7 @@ impl EnsureOrigin<RuntimeOrigin> for MockManageOrigin {
 std::thread_local! {
 	pub static MOCK_RING_ROOTS_COUNT: RefCell<u32> = const { RefCell::new(0) };
 	pub static MOCK_NEXT_RING_INDEX: RefCell<u32> = const { RefCell::new(0) };
+	pub static MOCK_COLLECTION_INCARNATION: RefCell<u32> = const { RefCell::new(0) };
 	pub static MOCK_UPDATE_TRIGGER_BLOCKS: RefCell<u64> = const { RefCell::new(0) };
 	pub static MOCK_UPDATE_TRIGGER_THRESHOLD: RefCell<u32> = const { RefCell::new(1) };
 	pub static XCM_SEND_SHOULD_FAIL: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
@@ -216,6 +217,12 @@ std::thread_local! {
 pub fn set_mock_ring_roots_count(count: u32) {
 	MOCK_RING_ROOTS_COUNT.with(|c| *c.borrow_mut() = count);
 	MOCK_NEXT_RING_INDEX.with(|c| *c.borrow_mut() = count);
+}
+
+/// Sets the incarnation the provider reports. A test raises it to re-create a collection under
+/// the same identifier.
+pub fn set_mock_collection_incarnation(incarnation: u32) {
+	MOCK_COLLECTION_INCARNATION.with(|c| *c.borrow_mut() = incarnation);
 }
 
 pub fn set_throttle_config(blocks: u64, threshold: u32) {
@@ -258,6 +265,10 @@ impl indiv_support::traits::RingRootsProvider<<Mock as verifiable::GenerateVerif
 
 	fn next_ring_index(_identifier: Identifier) -> u32 {
 		MOCK_NEXT_RING_INDEX.with(|c| *c.borrow())
+	}
+
+	fn collection_incarnation(_identifier: Identifier) -> u32 {
+		MOCK_COLLECTION_INCARNATION.with(|c| *c.borrow())
 	}
 
 	fn get_ring_roots_paginated(

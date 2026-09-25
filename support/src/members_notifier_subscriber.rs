@@ -16,7 +16,7 @@
 
 //! Shared types for the members-notifier and members-subscriber pallets.
 
-use crate::traits::{Identifier, RevisionIndex, RingIndex};
+use crate::traits::{Identifier, Incarnation, RevisionIndex, RingIndex};
 use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use frame_support::{
@@ -105,6 +105,9 @@ pub struct RingRootUpdate<T: MembersTypeConfig> {
 pub struct RingRootUpdatesBatch<T: MembersTypeConfig> {
 	/// Collection identifier for all updates in this batch.
 	pub identifier: Identifier,
+	/// Incarnation of the collection when the notifier built the batch. The subscriber keeps the
+	/// highest value it receives.
+	pub incarnation: Incarnation,
 	/// Sequence number for this batch.
 	pub sequence: SequenceNumber,
 	/// Unix timestamp in seconds when this batch was created.
@@ -151,6 +154,9 @@ pub trait RingRootsProvider<RingRoot> {
 	/// Get specific ring roots by their indices.
 	/// Returns a vector of (ring_index, root, revision).
 	/// Output order must match the input `indices` order.
+	///
+	/// A collection marked for deletion has no roots, so a subscriber receives its rings only as
+	/// deletions.
 	fn get_ring_roots(
 		identifier: Identifier,
 		indices: &[RingIndex],
@@ -160,9 +166,15 @@ pub trait RingRootsProvider<RingRoot> {
 	/// The subscriber scans `0..next_ring_index` to detect missing or deleted rings.
 	fn next_ring_index(identifier: Identifier) -> RingIndex;
 
+	/// Number of collections `identifier` has lost. The notifier stamps it on every batch. Zero
+	/// for an identifier that never lost one.
+	fn collection_incarnation(identifier: Identifier) -> Incarnation;
+
 	/// Get ring roots in a collection with pagination.
 	/// Returns a vector of (ring_index, root, revision) starting after `after_key` (exclusive),
 	/// up to `limit` items. Pass `None` to start from the beginning.
+	///
+	/// A collection marked for deletion has no roots, as in [`Self::get_ring_roots`].
 	fn get_ring_roots_paginated(
 		identifier: Identifier,
 		after_key: Option<RingIndex>,
@@ -179,6 +191,10 @@ impl<RingRoot> RingRootsProvider<RingRoot> for () {
 	}
 
 	fn next_ring_index(_identifier: Identifier) -> RingIndex {
+		0
+	}
+
+	fn collection_incarnation(_identifier: Identifier) -> Incarnation {
 		0
 	}
 

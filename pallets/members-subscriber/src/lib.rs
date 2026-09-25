@@ -67,8 +67,8 @@ pub mod pallet {
 	};
 	use indiv_support::{
 		traits::{
-			Context, ContextualAlias, MembershipMultiProver, MembershipProver, RingExponent,
-			RingMembershipProof,
+			Context, ContextualAlias, Incarnation, MembershipMultiProver, MembershipProver,
+			RingExponent, RingMembershipProof,
 		},
 		tx_priority,
 		weight_budget::OcwWeightBudget,
@@ -213,6 +213,13 @@ pub mod pallet {
 	/// is unreachable for notifier-driven re-initializations.
 	#[pallet::storage]
 	pub type CurrentGeneration<T: Config> = StorageValue<_, Generation, ValueQuery>;
+
+	/// Incarnation of each collection, as the notifier last reported it. Clearing the ring data
+	/// keeps the entry, so a proof against an earlier collection cannot match the live one. Reads
+	/// the default until the collection's first batch.
+	#[pallet::storage]
+	pub type CollectionIncarnations<T: Config> =
+		StorageMap<_, Blake2_128Concat, Identifier, IncarnationRecord, ValueQuery>;
 
 	/// Position of the purge that removes the stale `RingRoots` prefixes. Absent when no stale
 	/// ring data remains.
@@ -839,7 +846,11 @@ pub mod pallet {
 			identifier: &Identifier,
 			ring_index: RingIndex,
 		) -> Option<BoundedVec<RingCommitmentRecord<T>, T::MaxRecentRootsPerRing>> {
-			RingRoots::<T>::get((CurrentGeneration::<T>::get(), identifier, ring_index))
+			let roots =
+				RingRoots::<T>::get((CurrentGeneration::<T>::get(), identifier, ring_index))?;
+			// The deletions of a deleted collection's rings arrive over later batches. Its roots
+			// stop verifying when the first batch reports the deletion.
+			(!CollectionIncarnations::<T>::get(identifier).is_retired(&roots)).then_some(roots)
 		}
 
 		/// Writes the roots for `(identifier, ring_index)` under the current generation prefix.
@@ -891,6 +902,17 @@ pub mod pallet {
 		pub(crate) fn store_ring_roots(batch: &RingRootUpdatesBatch<T>) {
 			let identifier = batch.identifier;
 			let generation = CurrentGeneration::<T>::get();
+			// A batch with a lower incarnation must not lower the record, or retired mappings
+			// would verify again.
+			let incarnation = CollectionIncarnations::<T>::mutate(identifier, |record| {
+				if batch.incarnation > record.incarnation {
+					*record = IncarnationRecord {
+						incarnation: batch.incarnation,
+						raised_at: batch.source_time,
+					};
+				}
+				record.clone()
+			});
 			let mut state = RingCollectionStates::<T>::get(identifier);
 
 			state.next_ring_index = state.next_ring_index.max(batch.next_ring_index);
@@ -922,6 +944,11 @@ pub mod pallet {
 						}
 						// If this index was previously deleted, un-deleting it
 						state.deleted_indices.remove(&update.ring_index);
+						// The new collection restarts the revisions, so its roots must not join
+						// the deleted collection's window.
+						if incarnation.is_retired(&roots) {
+							roots.clear();
+						}
 						// Evicting oldest root when the window is full
 						if roots.is_full() {
 							roots.remove(0);
@@ -1293,6 +1320,10 @@ pub mod pallet {
 				.iter()
 				.find(|r| r.revision == revision)
 				.map(|r| r.source_time)
+		}
+
+		fn collection_incarnation(identifier: &Identifier) -> Incarnation {
+			CollectionIncarnations::<T>::get(identifier).incarnation
 		}
 
 		fn old_root_retention() -> u64 {

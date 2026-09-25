@@ -560,6 +560,7 @@ pub mod pallet {
 
 			let batch = RingRootUpdatesBatch {
 				identifier,
+				incarnation: T::RingRootsProvider::collection_incarnation(identifier),
 				sequence: SealedBatchSequence::<T>::get(),
 				source_time: T::Clock::now().as_secs(),
 				updates,
@@ -707,6 +708,7 @@ pub mod pallet {
 					actual_count = actual_count.saturating_add(indices.len() as u32);
 					let updates = Self::resolve_updates_for_indices(*collection, &indices);
 					let next = T::RingRootsProvider::next_ring_index(*collection);
+					let incarnation = T::RingRootsProvider::collection_incarnation(*collection);
 
 					for chunk in updates.chunks(max_per_xcm) {
 						let bounded: BoundedVec<RingRootUpdate<T>, T::MaxUpdatesPerBatch> =
@@ -724,6 +726,7 @@ pub mod pallet {
 						let update_count = bounded.len() as u32;
 						let batch = RingRootUpdatesBatch {
 							identifier: *collection,
+							incarnation,
 							sequence,
 							source_time,
 							updates: bounded,
@@ -1341,6 +1344,7 @@ pub mod pallet {
 		pub(crate) fn xcm_overhead() -> usize {
 			let empty_batch = RingRootUpdatesBatch::<T> {
 				identifier: [0u8; 32],
+				incarnation: 0,
 				sequence: 0,
 				source_time: 0,
 				updates: BoundedVec::default(),
@@ -1542,6 +1546,7 @@ pub mod pallet {
 
 			RingRootUpdatesBatch {
 				identifier,
+				incarnation: T::RingRootsProvider::collection_incarnation(identifier),
 				sequence: state.sequence,
 				source_time: state.source_time,
 				updates,
