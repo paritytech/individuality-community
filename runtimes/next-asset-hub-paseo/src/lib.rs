@@ -1135,6 +1135,9 @@ impl indiv_pallet_scarcity::Config for Runtime {
 	// Clears a collection's nft-claims minter registration when the collection is deleted, so no
 	// registration outlives the collection it names.
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
+	// Clears the registration on an ownership handover too, so a round trip back to the
+	// registering owner cannot reactivate it.
+	type OnCollectionOwnerChanged = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
 	// A purse key needs no account, so `AutoMapper` never sees one. Registering it at mint time
 	// is what lets the ERC-721 view resolve its address back to the key.
 	#[cfg(not(feature = "runtime-benchmarks"))]
@@ -2117,12 +2120,13 @@ impl
 }
 
 parameter_types! {
-	/// Metered ceiling for one collection minter contract call, reserved by every claim and
-	/// refunded to what the call really consumed.
+	/// Metered ceiling for one collection minter contract call. A claim into a
+	/// contract-registered collection reserves this plus revive's dispatch base, refunded to what
+	/// the call really consumed. Any other claim reserves nothing.
 	///
-	/// Deliberately far below the DotNS contract budget: a minter only picks an item index, and
-	/// the reservation prices every claim whether a contract runs or not. The nft-claims
-	/// `integrity_test` holds the claim worst case plus this ceiling to the block budget.
+	/// Deliberately far below the DotNS contract budget: a minter only picks an item index. The
+	/// nft-claims `integrity_test` holds the claim worst case plus this ceiling to the block
+	/// budget.
 	pub const NftClaimsSelectorWeightLimit: Weight =
 		Weight::from_parts(5_000_000_000, 512 * 1024);
 	/// Maximum storage deposit a collection owner may pay for one minter call.
@@ -2164,8 +2168,22 @@ impl NftClaimsCollectionSelector {
 }
 
 impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollectionSelector {
-	fn max_weight() -> Weight {
-		NftClaimsSelectorWeightLimit::get()
+	fn max_weight(collection: indiv_pallet_scarcity::CollectionId) -> Weight {
+		// Only a contract-registered collection reserves the minter ceiling. The claim's weight
+		// function makes this read, where it is not charged.
+		match indiv_pallet_nft_claims::CollectionMinters::<Runtime>::get(collection) {
+			Some(minter)
+				if matches!(
+					minter.selection,
+					indiv_pallet_nft_claims::ItemSelection::Contract(_)
+				) =>
+				Self::contract_max_weight(),
+			_ => Weight::zero(),
+		}
+	}
+
+	fn contract_max_weight() -> Weight {
+		NftClaimsSelectorWeightLimit::get().saturating_add(revive_call_overhead())
 	}
 
 	fn validate(contract: sp_core::H160) -> sp_runtime::DispatchResult {
@@ -2180,12 +2198,14 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 		owner: AccountId,
 		contract: sp_core::H160,
 		collection: indiv_pallet_scarcity::CollectionId,
-		entropy: indiv_support::credit_trees::NftClaimCredit,
+		credit: indiv_support::credit_trees::NftClaimCredit,
 	) -> Result<indiv_pallet_nft_claims::Selection, indiv_pallet_nft_claims::SelectionError> {
-		let cr = Self::call(owner, contract, minter_call_data(collection, entropy));
+		let cr = Self::call(owner, contract, minter_call_data(collection, credit));
 		// A trap, a revert and a malformed return all consumed metered weight, which the claim
 		// charges: refunding it would let a gas-burning contract occupy block space for free.
-		let weight_consumed = cr.weight_consumed;
+		// Every path adds the dispatch base, which `bare_call` spends outside
+		// `weight_consumed`.
+		let weight_consumed = cr.weight_consumed.saturating_add(revive_call_overhead());
 		let fail = |error: sp_runtime::DispatchError| indiv_pallet_nft_claims::SelectionError {
 			error,
 			weight_consumed,
@@ -2211,16 +2231,22 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 	}
 }
 
-/// ABI-encode `mint(uint32 collection, bytes32 entropy)`.
+/// Weight of revive's dispatch base for one contract call, spent on top of the metered weight
+/// `bare_call` reports.
+fn revive_call_overhead() -> Weight {
+	<<Runtime as pallet_revive::Config>::WeightInfo as pallet_revive::WeightInfo>::call()
+}
+
+/// ABI-encode `mint(uint32 collection, bytes32 credit)`.
 fn minter_call_data(
 	collection: indiv_pallet_scarcity::CollectionId,
-	entropy: indiv_support::credit_trees::NftClaimCredit,
+	credit: indiv_support::credit_trees::NftClaimCredit,
 ) -> Vec<u8> {
 	let mut data = Vec::with_capacity(68);
 	data.extend_from_slice(&sp_io::hashing::keccak_256(b"mint(uint32,bytes32)")[..4]);
 	data.extend_from_slice(&[0u8; 28]);
 	data.extend_from_slice(&collection.to_be_bytes());
-	data.extend_from_slice(&entropy);
+	data.extend_from_slice(&credit);
 	data
 }
 
@@ -4260,15 +4286,54 @@ mod tests {
 
 	#[test]
 	fn minter_abi_is_canonical() {
-		let entropy = [0x42u8; 32];
-		let data = minter_call_data(0x0102_0304, entropy);
+		let credit = [0x42u8; 32];
+		let data = minter_call_data(0x0102_0304, credit);
 		assert_eq!(data.len(), 68);
 		// The Solidity selector for `mint(uint32,bytes32)`, pinned independently of the
 		// keccak call that produces it.
 		assert_eq!(&data[..4], &[0xb3, 0x18, 0x24, 0xf2]);
 		assert_eq!(&data[4..32], &[0u8; 28]);
 		assert_eq!(&data[32..36], &0x0102_0304u32.to_be_bytes());
-		assert_eq!(&data[36..], &entropy);
+		assert_eq!(&data[36..], &credit);
+	}
+
+	/// The selector reservation follows the collection's registration, and the contract ceiling
+	/// carries revive's dispatch base on top of the metered limit.
+	#[test]
+	fn minter_selection_reservation_follows_the_registration() {
+		use indiv_pallet_nft_claims::{
+			CollectionMinter, CollectionMinters, CollectionSelector, ItemSelection,
+		};
+
+		sp_io::TestExternalities::default().execute_with(|| {
+			let collection = 7u32;
+			assert_eq!(NftClaimsCollectionSelector::max_weight(collection), Weight::zero());
+
+			CollectionMinters::<Runtime>::insert(
+				collection,
+				CollectionMinter {
+					owner: AccountId::new([1u8; 32]),
+					selection: ItemSelection::Random,
+				},
+			);
+			assert_eq!(NftClaimsCollectionSelector::max_weight(collection), Weight::zero());
+
+			CollectionMinters::<Runtime>::insert(
+				collection,
+				CollectionMinter {
+					owner: AccountId::new([1u8; 32]),
+					selection: ItemSelection::Contract(sp_core::H160::zero()),
+				},
+			);
+			assert_eq!(
+				NftClaimsCollectionSelector::max_weight(collection),
+				NftClaimsCollectionSelector::contract_max_weight()
+			);
+			// Above the metered limit in both dimensions, so a ceiling that drops the dispatch
+			// base fails here.
+			assert!(NftClaimsSelectorWeightLimit::get()
+				.all_lt(NftClaimsCollectionSelector::contract_max_weight()));
+		});
 	}
 
 	#[test]
