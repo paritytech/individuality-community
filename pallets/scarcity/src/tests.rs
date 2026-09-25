@@ -1661,7 +1661,9 @@ fn failed_dispatch_restores_and_locks() {
 		let dispatch = Scarcity::transfer(origin, 4);
 		assert_noop!(dispatch, Error::<Test>::AddressOccupied);
 		post_dispatch(pre, Err(Error::<Test>::AddressOccupied.into()));
+		// The instance comes back at the next state nonce, which retires the failed transaction.
 		assert_eq!(NftsByOwner::<Test>::get(OWNER).map(|nft| nft.instance), Some(0));
+		assert_eq!(NftsByOwner::<Test>::get(OWNER).map(|nft| nft.state_nonce), Some(1));
 		assert_eq!(Locked::<Test>::get(OWNER), Some(LockInfo { retries: 1, until: 60 }));
 		assert_ok!(Scarcity::do_try_state());
 		// While locked, even a fresh empty destination is rejected at the pool.
@@ -1675,6 +1677,48 @@ fn failed_dispatch_restores_and_locks() {
 		assert_noop!(dispatch, Error::<Test>::AddressOccupied);
 		post_dispatch(pre, Err(Error::<Test>::AddressOccupied.into()));
 		assert_eq!(Locked::<Test>::get(OWNER), Some(LockInfo { retries: 2, until: 180 }));
+	});
+}
+
+#[test]
+fn a_failed_transaction_cannot_be_replayed_after_the_lock_expires() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		define(0);
+		mint(0, OWNER);
+
+		// The authorization a third party sees on the wire.
+		let signed = current_authorization(OWNER);
+
+		let (_, val, origin) = validate_transfer_as(OWNER, 4, signed.clone()).unwrap();
+		mint(1, 4);
+		let pre = prepare_transfer(val, &origin, 4);
+		assert_noop!(Scarcity::transfer(origin, 4), Error::<Test>::AddressOccupied);
+		post_dispatch(pre, Err(Error::<Test>::AddressOccupied.into()));
+
+		assert_invalidity(
+			validate_transfer_as(OWNER, 6, signed.clone())
+				.err()
+				.expect("the purse is locked"),
+			CustomInvalidity::NftTemporarilyLocked,
+		);
+		MockNow::set(60);
+
+		// The instance that made the transfer fail still sits at the destination. Burn it, so that
+		// the replayed call would otherwise succeed.
+		let (_, val, origin) = validate_burn(4).unwrap();
+		let pre = prepare_burn(val, &origin);
+		assert_ok!(Scarcity::burn(origin));
+		post_dispatch(pre, Ok(()));
+
+		// The purse holds the same instance, so the state nonce is what refuses the replay.
+		assert!(!NftsByOwner::<Test>::contains_key(4));
+		assert_state_mismatch(
+			validate_transfer_as(OWNER, 4, signed).err().expect("the state nonce moved on"),
+		);
+
+		// The same call validates with an authorization for the current state.
+		assert!(validate_transfer(OWNER, 4).is_ok());
 	});
 }
 
