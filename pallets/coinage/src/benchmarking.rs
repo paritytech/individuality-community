@@ -2853,13 +2853,15 @@ mod benches {
 		Ok(())
 	}
 
-	/// A fresh signer that holds exactly the fee for `count` recyclers, and a `max_fee` equal to
-	/// that fee.
+	/// Sets up a fresh signer that holds exactly the fee for `count` recyclers, and returns it with
+	/// a `max_fee` equal to that fee.
 	///
 	/// The fee check passes and the withdrawal fails, because it must keep the signer alive. No fee
 	/// failure occurs later in the call, so this path upper-bounds every fee failure. The quote is
 	/// outside the measured block because the call quotes again.
-	fn signer_holding_only_the_fee<T: Config>(count: u32) -> (T::AccountId, FungiblesBalanceOf<T>) {
+	fn set_up_signer_holding_only_the_fee<T: Config>(
+		count: u32,
+	) -> (T::AccountId, FungiblesBalanceOf<T>) {
 		let fee = Pallet::<T>::quote_paid_unload_token_fees_in_asset(INSTANCE_ID, count)
 			.expect("fee conversion is set up by `common_setup`");
 		let signer: T::AccountId = account("only_the_fee", 0, 0);
@@ -2880,7 +2882,7 @@ mod benches {
 		let count = T::MaxConsolidation::get();
 		let (inputs, bounded_proofs, _caller, dest, _total_asset_amount) =
 			setup_multi_recycler_unload_non_anonymous::<T>(count);
-		let (caller, max_fee) = signer_holding_only_the_fee::<T>(count);
+		let (caller, max_fee) = set_up_signer_holding_only_the_fee::<T>(count);
 
 		let result;
 		#[block]
@@ -2917,7 +2919,7 @@ mod benches {
 		let recycler_root = Pallet::<T>::recycler_ring_root(INSTANCE_ID, input.value, input.index)
 			.expect("the ring root exists");
 		let alias_proof = bounded_proofs.into_iter().next().expect("one proof was generated");
-		let (caller, max_fee) = signer_holding_only_the_fee::<T>(1);
+		let (caller, max_fee) = set_up_signer_holding_only_the_fee::<T>(1);
 
 		let result;
 		#[block]
