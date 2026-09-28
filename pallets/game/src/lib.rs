@@ -152,12 +152,9 @@
 //! their own error type: a dispatch reports an [`Error`], an extension reports an
 //! `InvalidTransaction` code.
 //!
-//! The extension validates a sign-up with an invite before it consumes the invite, and it checks
-//! every precondition of that path: the three helpers, the statement-account check, a dry run of
-//! `register_for_airdrop` and the `can_onboard_for_recognition` predictor. An invited player is a
-//! new, non-recognized account, so the remaining work in dispatch (onboarding, player insertion
-//! and airdrop registration) has no failure case, and the invite buys a sign-up.
-//! `GameAsInvited::post_dispatch_details` raises a defensive error if the dispatch fails anyway.
+//! The extension checks every precondition of the invite path before it consumes the invite. An
+//! invited player is a new, non-recognized account, so the remaining work in dispatch cannot fail
+//! and the invite buys a sign-up.
 //!
 //! # Statement store usage
 //!
