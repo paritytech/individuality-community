@@ -473,6 +473,63 @@ mod benches {
 	}
 
 	#[benchmark]
+	fn force_set_attendance() -> Result<(), BenchmarkError> {
+		frame_system::Pallet::<T>::set_block_number(1u32.into());
+		T::People::initialize_people_collection();
+
+		// Onboard a participant who reached personhood and register them as a person.
+		let caller: T::AccountId = whitelisted_caller();
+		Score::<T>::onboard_for_recognition(&caller)?;
+		let who = AccountOrPerson::Account(caller.clone());
+		Participants::<T>::mutate(&who, |maybe_p| {
+			let mut p = maybe_p.take().expect("participant must exist");
+			p.score = PersonhoodThreshold::<T>::get();
+			p.reached_personhood = true;
+			*maybe_p = Some(p);
+		});
+		let sk = T::Crypto::new_secret([12; 32]);
+		let pk = T::Crypto::member_from_secret(&sk);
+		let proof_of_ownership = {
+			let mut msg = b"pop register using".to_vec();
+			msg.extend_from_slice(&caller.encode());
+			T::Crypto::sign(&sk, &msg[..]).unwrap()
+		};
+		Score::<T>::register(
+			SystemOrigin::Signed(caller.clone()).into(),
+			Some((pk, proof_of_ownership)),
+		)?;
+		let Recognition::Recognized(id) = Participants::<T>::get(&who).expect("exists").recognition
+		else {
+			return Err(BenchmarkError::Stop("participant must be Recognized"));
+		};
+
+		// No grace period so any absence suspends.
+		let no_grace: AbsenceGraceTiers = BoundedVec::try_from(alloc::vec![AbsenceGraceTier {
+			population_size_threshold: u32::MAX,
+			window: 0,
+			allowed_misses: 0,
+		}])
+		.unwrap();
+		AbsenceGraceSchedule::<T>::put(no_grace);
+
+		let game_index = 3u32;
+
+		#[extrinsic_call]
+		_(SystemOrigin::Root, who.clone(), false, game_index);
+
+		let after = Participants::<T>::get(&who).expect("entry must exist");
+		assert_eq!(after.recognition, Recognition::Suspended(id), "person must be suspended");
+		assert!(!after.reached_personhood, "personhood must be lost");
+		assert_eq!(after.streak, Streak::Absent(1), "absence streak started");
+
+		frame_system::Pallet::<T>::assert_last_event(
+			Event::AttendanceForced { who, attended: false, game_index }.into(),
+		);
+
+		Ok(())
+	}
+
+	#[benchmark]
 	fn as_participant_tx_ext() -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
 		Score::<T>::onboard_for_recognition(&caller)?;

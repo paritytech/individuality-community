@@ -23,6 +23,7 @@ use frame_support::{traits::Get, weights::Weight};
 ///
 /// This mirrors the logic in `coin_lifecycle_weight` but uses maximum values
 /// instead of averages for all variable parameters.
+/// It enumerates unload paths independently to detect omissions in the shared maximum helper.
 fn worst_case_lifecycle_weight<T: Config>() -> Weight {
 	let max_aliases = T::MaxConsolidation::get().max(1);
 	let max_ring_capacity = T::RecyclerRingExponent::get().ring_capacity();
@@ -115,6 +116,39 @@ fn average_weight_is_reasonable_compared_to_worst_case() {
 			 Minimum reasonable: {min_reasonable:?}. \
 			 This indicates the weight formula may need adjustment."
 		);
+	});
+}
+
+#[test]
+fn average_lifecycle_includes_each_phase_and_deposit_surcharge_once() {
+	new_test_ext().execute_with(|| {
+		type W = <Test as Config>::WeightInfo;
+		// Eight aliases is an exact sample, independent of the interpolation implementation.
+		assert_eq!(MAX_CONSOLIDATION / 2, 8);
+		let outputs = MAX_SPLIT_OUTPUTS / 2;
+		let unload = W::unload_recycler_into_coin_8()
+			.max(W::unload_recycler_into_external_asset_prepaid_8())
+			.max(W::unload_recycler_into_external_asset_from_output_8())
+			.max(W::unload_recycler_into_external_asset_non_anonymous_8())
+			.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(outputs))
+			.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(outputs))
+			.max(W::unload_recycler_into_coins_prepaid_8(outputs))
+			.max(W::unload_recycler_into_coins_from_output_8(outputs));
+		let pay = W::pay_for_recycler_unload_fee_token_with_coin()
+			.max(W::pay_for_recycler_unload_fee_token_with_native())
+			.max(W::pay_for_recycler_unload_fee_token_with_external_asset());
+		let load = W::load_recycler_with_coin()
+			.max(W::load_recycler_with_external_asset())
+			.saturating_add(W::charge_load_deposit());
+		let background = <Test as Config>::MemberService::add_member_background_weight();
+		let transfers = W::transfer().max(W::split(outputs));
+		let expected = pay
+			.saturating_add(background.saturating_mul(9))
+			.saturating_add(load.saturating_mul(8))
+			.saturating_add(unload)
+			.saturating_add(W::settle_load_deposits())
+			.saturating_add(transfers.saturating_mul(u64::from(MAXIMUM_AGE / 2)));
+		assert_eq!(Pallet::<Test>::coin_lifecycle_weight(), expected);
 	});
 }
 
