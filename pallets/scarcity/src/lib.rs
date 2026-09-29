@@ -1106,8 +1106,7 @@ pub mod pallet {
 
 		/// Move the instance the signer holds, with the fee paid from the signer's account.
 		///
-		/// The move refills the feeless move budget of [`Config::MaximumMoves`]. A purse needs no
-		/// funds for feeless moves, so it must receive a fee asset such as PGAS first.
+		/// The move refills the feeless move budget of [`Config::MaximumMoves`].
 		///
 		/// Fails for an instance of a [`Transferability::Soulbound`] definition.
 		#[pallet::call_index(14)]

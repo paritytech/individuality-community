@@ -1953,10 +1953,8 @@ fn instance_info_reports_nft_fields() {
 
 		// `AsScarcity` takes the NFT out of the purse before it dispatches a feeless move.
 		let nft = NftsByOwner::<Test>::take(&holder).unwrap();
-		let origin = RuntimeOrigin::from(indiv_pallet_scarcity::Origin::<Test>::Nft {
-			owner: holder,
-			nft,
-		});
+		let origin =
+			RuntimeOrigin::from(indiv_pallet_scarcity::Origin::<Test>::Nft { owner: holder, nft });
 		assert_ok!(Scarcity::transfer(origin, later_holder.clone()));
 
 		let info = info_of();
