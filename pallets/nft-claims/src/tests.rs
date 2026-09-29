@@ -117,7 +117,35 @@ fn a_conflicting_root_keeps_the_stored_tree() {
 }
 
 #[test]
-fn an_empty_or_zero_rooted_tree_is_skipped() {
+fn a_sequenced_conflicting_delivery_does_not_consume_its_sequence() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(NftClaims::receive_credit_trees(
+			game_chain_origin(),
+			batch(vec![update(0, 10)])
+		));
+		System::reset_events();
+
+		// The delivery is not accepted, so its sequence stays unconsumed and the next batch's
+		// gap check reports it.
+		let conflicting = NftClaimCreditTree { root: CreditProofNode([0xff; 32]), ..tree(10) };
+		assert_ok!(NftClaims::receive_credit_trees(
+			game_chain_origin(),
+			batch(vec![CreditTreeDelivery { sequence: Some(1), block: 10, tree: conflicting }])
+		));
+		assert_eq!(NextExpectedSequence::<Test>::get(), 1);
+
+		assert_ok!(NftClaims::receive_credit_trees(
+			game_chain_origin(),
+			batch(vec![update(2, 12)])
+		));
+		assert_eq!(NextExpectedSequence::<Test>::get(), 3);
+		assert!(nft_claims_events()
+			.contains(&Event::CreditTreesMissing { from_sequence: 1, to_sequence: 1 }));
+	});
+}
+
+#[test]
+fn an_empty_or_zero_rooted_tree_is_rejected_without_consuming_its_sequence() {
 	new_test_ext().execute_with(|| {
 		let empty = NftClaimCreditTree { leaf_count: 0, ..tree(10) };
 		let zero_rooted = NftClaimCreditTree { root: CreditProofNode([0u8; 32]), ..tree(11) };
@@ -133,7 +161,47 @@ fn an_empty_or_zero_rooted_tree_is_skipped() {
 		assert!(!CreditTrees::<Test>::contains_key(10));
 		assert!(!CreditTrees::<Test>::contains_key(11));
 		assert_eq!(CreditTrees::<Test>::get(12), Some(tree(12)));
-		assert_eq!(nft_claims_events(), vec![Event::CreditTreesReceived { count: 3, stored: 1 }]);
+		// The rejected sequences stay unconsumed, so the accepted tree's gap check names them.
+		assert_eq!(NextExpectedSequence::<Test>::get(), 3);
+		assert_eq!(
+			nft_claims_events(),
+			vec![
+				Event::CreditTreeRejected { block: 10 },
+				Event::CreditTreeRejected { block: 11 },
+				Event::CreditTreesMissing { from_sequence: 0, to_sequence: 1 },
+				Event::CreditTreesReceived { count: 3, stored: 1 },
+			]
+		);
+	});
+}
+
+#[test]
+fn a_rejected_trees_genuine_tree_is_recovered_by_a_resend() {
+	new_test_ext().execute_with(|| {
+		let zero_rooted = NftClaimCreditTree { root: CreditProofNode([0u8; 32]), ..tree(11) };
+		assert_ok!(NftClaims::receive_credit_trees(
+			game_chain_origin(),
+			batch(vec![
+				update(0, 10),
+				CreditTreeDelivery { sequence: Some(1), block: 11, tree: zero_rooted },
+			])
+		));
+
+		// The rejection ends the batch's accepted run, so the gap surfaces with the next
+		// sequenced batch.
+		assert_eq!(NextExpectedSequence::<Test>::get(), 1);
+		assert_ok!(NftClaims::receive_credit_trees(
+			game_chain_origin(),
+			batch(vec![update(2, 12)])
+		));
+		assert_eq!(NextExpectedSequence::<Test>::get(), 3);
+		assert!(nft_claims_events()
+			.contains(&Event::CreditTreesMissing { from_sequence: 1, to_sequence: 1 }));
+
+		// The genuine tree arrives as a replay, which carries no sequence, and is stored.
+		assert_ok!(NftClaims::receive_credit_trees(game_chain_origin(), batch(vec![replay(11)])));
+		assert_eq!(CreditTrees::<Test>::get(11), Some(tree(11)));
+		assert_eq!(NextExpectedSequence::<Test>::get(), 3);
 	});
 }
 
@@ -365,35 +433,69 @@ mod claim {
 	/// The alias lookup a person claimant needs is charged only to that kind.
 	#[test]
 	fn the_declared_weight_follows_the_claimant_kind() {
-		let weight_of = |claimant| {
-			crate::Call::<Test>::claim {
-				claimant,
-				block: BLOCK,
-				credit: [1u8; 32],
-				leaf_index: 0,
-				proof: BoundedVec::truncate_from(vec![CreditProofNode([7u8; 32]); 4]),
-				collection: COLLECTION,
-				mint_to: PURSE,
-			}
-			.get_dispatch_info()
-			.call_weight
-		};
+		new_test_ext().execute_with(|| {
+			register_collection(ItemSelection::Contract(CONTRACT));
+			let weight_of = |claimant| {
+				crate::Call::<Test>::claim {
+					claimant,
+					block: BLOCK,
+					credit: [1u8; 32],
+					leaf_index: 0,
+					proof: BoundedVec::truncate_from(vec![CreditProofNode([7u8; 32]); 4]),
+					collection: COLLECTION,
+					mint_to: PURSE,
+				}
+				.get_dispatch_info()
+				.call_weight
+			};
 
-		// Both kinds are charged the draining branch, and reserve the selector's ceiling and the
-		// mint hooks on top of it.
-		assert_eq!(
-			weight_of(ClaimantKind::Account),
-			<Test as Config>::WeightInfo::claim_last_account(4)
-				.saturating_add(SELECTOR_MAX_WEIGHT)
-				.saturating_add(MINT_HOOK_WEIGHT)
-		);
-		assert_eq!(
-			weight_of(ClaimantKind::Person),
-			<Test as Config>::WeightInfo::claim_last_person(4)
-				.saturating_add(SELECTOR_MAX_WEIGHT)
-				.saturating_add(MINT_HOOK_WEIGHT)
-		);
-		assert!(weight_of(ClaimantKind::Account).all_lt(weight_of(ClaimantKind::Person)));
+			// Both kinds are charged the draining branch, plus the contract collection's
+			// selector ceiling and the mint hooks.
+			assert_eq!(
+				weight_of(ClaimantKind::Account),
+				<Test as Config>::WeightInfo::claim_last_account(4)
+					.saturating_add(SELECTOR_MAX_WEIGHT)
+					.saturating_add(MINT_HOOK_WEIGHT)
+			);
+			assert_eq!(
+				weight_of(ClaimantKind::Person),
+				<Test as Config>::WeightInfo::claim_last_person(4)
+					.saturating_add(SELECTOR_MAX_WEIGHT)
+					.saturating_add(MINT_HOOK_WEIGHT)
+			);
+			assert!(weight_of(ClaimantKind::Account).all_lt(weight_of(ClaimantKind::Person)));
+		});
+	}
+
+	/// Only a contract-registered collection reserves the selector ceiling. A random or
+	/// unregistered one runs no contract, so its claims must not pay for one.
+	#[test]
+	fn the_declared_weight_follows_the_collection_registration() {
+		new_test_ext().execute_with(|| {
+			register_named_collection(COLLECTION, 2, ItemSelection::Random);
+			register_named_collection(COLLECTION + 1, 2, ItemSelection::Contract(CONTRACT));
+			let weight_of = |collection| {
+				crate::Call::<Test>::claim {
+					claimant: ClaimantKind::Account,
+					block: BLOCK,
+					credit: [1u8; 32],
+					leaf_index: 0,
+					proof: BoundedVec::truncate_from(vec![CreditProofNode([7u8; 32]); 4]),
+					collection,
+					mint_to: PURSE,
+				}
+				.get_dispatch_info()
+				.call_weight
+			};
+			let unreserved = <Test as Config>::WeightInfo::claim_last_account(4)
+				.saturating_add(MINT_HOOK_WEIGHT);
+
+			assert_eq!(weight_of(COLLECTION), unreserved);
+			assert_eq!(weight_of(COLLECTION + 1), unreserved.saturating_add(SELECTOR_MAX_WEIGHT));
+			// An unregistered collection reserves nothing: its claim fails before a selector
+			// runs.
+			assert_eq!(weight_of(COLLECTION + 2), unreserved);
+		});
 	}
 
 	#[test]
@@ -653,15 +755,15 @@ mod claim {
 			)
 			.expect("the claim goes through");
 
-			// A random selection consumes nothing, so the refund covers the selector's reservation
-			// only. The draining branch itself is charged in full.
+			// A random registration reserves no selector weight, so a draining claim reports what
+			// it was charged: the draining branch and the mint hooks.
 			let actual = post.actual_weight.expect("a claim reports its weight");
 			assert_eq!(
 				actual,
 				<MockWeightInfo as crate::WeightInfo>::claim_last_account(nodes)
 					.saturating_add(MINT_HOOK_WEIGHT)
 			);
-			assert!(actual.all_lt(charged), "the selector's reservation is refunded");
+			assert_eq!(actual, charged, "a random claim has no reservation to refund");
 		});
 	}
 
@@ -1325,8 +1427,8 @@ mod claim {
 				PURSE
 			));
 
-			// The contract is called with the credit as the only entropy and the claim mints
-			// exactly the item it picked.
+			// The contract is called with the claimed credit and the claim mints the item it
+			// picked.
 			assert_eq!(
 				SelectorCalls::get(),
 				vec![(COLLECTION_OWNER, CONTRACT, COLLECTION, [1u8; 32])]
@@ -1538,26 +1640,33 @@ mod claim {
 			store_tree(&awards);
 
 			let proof = proof_of(&awards, 0);
-			let charged = crate::Call::<Test>::claim {
-				claimant: ClaimantKind::Account,
-				block: BLOCK,
-				credit: [1u8; 32],
-				leaf_index: 0,
-				proof: proof.clone(),
-				collection: COLLECTION,
-				mint_to: PURSE,
-			}
-			.get_dispatch_info()
-			.call_weight;
-			// A successful claim mints, so it also pays for the mint's runtime hooks. Only the
-			// selector reservation is refundable.
+			let charged_for = |claimant| {
+				crate::Call::<Test>::claim {
+					claimant,
+					block: BLOCK,
+					credit: [1u8; 32],
+					leaf_index: 0,
+					proof: proof.clone(),
+					collection: COLLECTION,
+					mint_to: PURSE,
+				}
+				.get_dispatch_info()
+				.call_weight
+			};
+			// A successful claim mints, so it also pays for the mint's runtime hooks. Every claim
+			// is charged the draining branch, which only the tree's last claim takes.
 			let account_minted = <Test as Config>::WeightInfo::claim_account(proof.len() as u32)
 				.saturating_add(MINT_HOOK_WEIGHT);
 			let person_minted = <Test as Config>::WeightInfo::claim_person(proof.len() as u32)
 				.saturating_add(MINT_HOOK_WEIGHT);
+			let account_last = <Test as Config>::WeightInfo::claim_last_account(proof.len() as u32)
+				.saturating_add(MINT_HOOK_WEIGHT);
+			let person_last = <Test as Config>::WeightInfo::claim_last_person(proof.len() as u32)
+				.saturating_add(MINT_HOOK_WEIGHT);
 
-			// The random branch consumes no selector weight, so the whole reservation comes
-			// back.
+			// The random branch reserves no selector weight, so its refund covers only the
+			// draining branch it did not take.
+			assert_eq!(charged_for(ClaimantKind::Account), account_last);
 			let post = NftClaims::claim(
 				RuntimeOrigin::signed(ALICE),
 				ClaimantKind::Account,
@@ -1570,11 +1679,12 @@ mod claim {
 			)
 			.expect("random-branch claim succeeds");
 			assert_eq!(post.actual_weight, Some(account_minted));
-			assert!(account_minted.all_lt(charged));
 
-			// The contract branch pays what the selector really consumed, still below the
-			// reservation.
+			// The contract branch reserves the ceiling and pays what the selector consumed, which
+			// is below it.
 			register_collection(ItemSelection::Contract(CONTRACT));
+			let charged = charged_for(ClaimantKind::Person);
+			assert_eq!(charged, person_last.saturating_add(SELECTOR_MAX_WEIGHT));
 			let post = NftClaims::claim(
 				RuntimeOrigin::signed(PERSON),
 				ClaimantKind::Person,
@@ -1602,19 +1712,23 @@ mod claim {
 		new_test_ext().execute_with(|| {
 			let awards = awards();
 			store_tree(&awards);
+			// The contract registration puts a refundable reservation on every charge below.
+			register_collection(ItemSelection::Contract(CONTRACT));
 
 			let proof = proof_of(&awards, 0);
-			let charged = crate::Call::<Test>::claim {
-				claimant: ClaimantKind::Account,
-				block: BLOCK,
-				credit: [1u8; 32],
-				leaf_index: 0,
-				proof: proof.clone(),
-				collection: COLLECTION,
-				mint_to: PURSE,
-			}
-			.get_dispatch_info()
-			.call_weight;
+			let charged_for = |claimant| {
+				crate::Call::<Test>::claim {
+					claimant,
+					block: BLOCK,
+					credit: [1u8; 32],
+					leaf_index: 0,
+					proof: proof.clone(),
+					collection: COLLECTION,
+					mint_to: PURSE,
+				}
+				.get_dispatch_info()
+				.call_weight
+			};
 			let account_base = <Test as Config>::WeightInfo::claim_account(proof.len() as u32);
 			let person_base = <Test as Config>::WeightInfo::claim_person(proof.len() as u32);
 
@@ -1633,11 +1747,10 @@ mod claim {
 			.expect_err("the wrong leaf index fails the proof");
 			assert_eq!(err.error, Error::<Test>::InvalidProof.into());
 			assert_eq!(err.post_info.actual_weight, Some(account_base));
-			assert!(account_base.all_lt(charged));
+			assert!(account_base.all_lt(charged_for(ClaimantKind::Account)));
 
 			// A failing contract selection pays what the contract really burned before failing,
 			// above the pre-selection floor and still below the reservation.
-			register_collection(ItemSelection::Contract(CONTRACT));
 			SelectorFails::set(&true);
 			let err = NftClaims::claim(
 				RuntimeOrigin::signed(PERSON),
@@ -1654,7 +1767,100 @@ mod claim {
 			let actual = err.post_info.actual_weight.expect("a failure refunds to a weight");
 			assert_eq!(actual, person_base.saturating_add(SELECTOR_FAILED_WEIGHT));
 			assert!(person_base.all_lt(actual));
-			assert!(actual.all_lt(charged));
+			assert!(actual.all_lt(charged_for(ClaimantKind::Person)));
+		});
+	}
+
+	/// The pallet enforces the selector's ceiling itself. A selection that reports more than the
+	/// reservation is charged the reservation, on the success and the failure exit.
+	#[test]
+	fn a_selection_overreporting_weight_is_clamped_to_the_reservation() {
+		use crate::weights::WeightInfo;
+
+		new_test_ext().execute_with(|| {
+			let awards = awards();
+			store_tree(&awards);
+			register_collection(ItemSelection::Contract(CONTRACT));
+			SelectorOverreports::set(&true);
+			assert!(SELECTOR_MAX_WEIGHT.all_lt(SELECTOR_OVERREPORTED_WEIGHT));
+
+			let proof = proof_of(&awards, 0);
+			let account_base = <Test as Config>::WeightInfo::claim_account(proof.len() as u32);
+
+			// The failure exit: the over-report is cut to the reservation.
+			SelectorFails::set(&true);
+			let err = NftClaims::claim(
+				RuntimeOrigin::signed(ALICE),
+				ClaimantKind::Account,
+				BLOCK,
+				[1u8; 32],
+				0,
+				proof.clone(),
+				COLLECTION,
+				PURSE,
+			)
+			.expect_err("the contract selection fails");
+			assert_eq!(
+				err.post_info.actual_weight,
+				Some(account_base.saturating_add(SELECTOR_MAX_WEIGHT))
+			);
+
+			// The success exit: the mint and its hooks are paid on top of the clamp.
+			SelectorFails::set(&false);
+			let post = NftClaims::claim(
+				RuntimeOrigin::signed(ALICE),
+				ClaimantKind::Account,
+				BLOCK,
+				[1u8; 32],
+				0,
+				proof,
+				COLLECTION,
+				PURSE,
+			)
+			.expect("the claim succeeds");
+			assert_eq!(
+				post.actual_weight,
+				Some(
+					account_base
+						.saturating_add(SELECTOR_MAX_WEIGHT)
+						.saturating_add(MINT_HOOK_WEIGHT)
+				)
+			);
+		});
+	}
+
+	/// An ownership handover clears the registration through the owner-change hook, so an A to B
+	/// to A round trip cannot reactivate it.
+	#[test]
+	fn an_ownership_round_trip_does_not_reactivate_a_registration() {
+		new_test_ext().execute_with(|| {
+			let awards = awards();
+			store_tree(&awards);
+			register_collection(ItemSelection::Contract(CONTRACT));
+
+			// Scarcity hands the collection to a new owner and back, calling the hook on each
+			// handover as `claim_collection_ownership` does.
+			add_collection(COLLECTION, COLLECTION_OWNER + 1, 2);
+			<crate::ClearCollectionMinter<Test> as indiv_pallet_scarcity::OnCollectionOwnerChanged>::on_collection_owner_changed(COLLECTION);
+			add_collection(COLLECTION, COLLECTION_OWNER, 2);
+			<crate::ClearCollectionMinter<Test> as indiv_pallet_scarcity::OnCollectionOwnerChanged>::on_collection_owner_changed(COLLECTION);
+
+			// The registering owner holds the collection again, but the registration is gone: a
+			// claim needs a fresh opt-in.
+			assert_eq!(CollectionMinters::<Test>::get(COLLECTION), None);
+			assert_claim_noop!(
+				NftClaims::claim(
+					RuntimeOrigin::signed(ALICE),
+					ClaimantKind::Account,
+					BLOCK,
+					[1u8; 32],
+					0,
+					proof_of(&awards, 0),
+					COLLECTION,
+					PURSE
+				),
+				Error::<Test>::CollectionNotRegistered
+			);
 		});
 	}
 }

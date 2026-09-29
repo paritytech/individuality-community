@@ -26,7 +26,7 @@ use crate::{
 	CollectionMetadata, Collections, Error, Event, InstanceDeposits, InstanceMetadata,
 	InstanceMetadataCount, Instances, ItemDefs, ItemMetadata, LockInfo, Locked, MetadataKeyOf,
 	MetadataValueOf, MintWithoutDeposit, NextCollectionId, NextInstanceId, Nft, NftsByOwner,
-	OnCollectionDeleted, Origin, Transferability,
+	OnCollectionDeleted, OnCollectionOwnerChanged, Origin, Transferability,
 };
 use codec::Encode;
 #[cfg(feature = "try-runtime")]
@@ -317,6 +317,8 @@ fn claim_fails_atomically_when_nominee_cannot_back_the_deposit() {
 		assert_eq!(after.owner_deposit, before.owner_deposit);
 		assert_eq!(held(OWNER), owner_hold);
 		assert_eq!(held(99), 0);
+		// The failed claim changed no owner, so the owner-change hook did not run.
+		assert_eq!(LastOwnerChangedCollection::get(), None);
 		assert_ok!(Scarcity::do_try_state());
 	});
 }
@@ -352,6 +354,10 @@ fn claim_moves_exact_collection_deposit_and_authority() {
 			Some(OTHER),
 		));
 		assert_ok!(Scarcity::claim_collection_ownership(RuntimeOrigin::signed(OTHER), 0));
+
+		// The owner-change hook ran for this collection, so state the previous owner authorized
+		// is cleared.
+		assert_eq!(LastOwnerChangedCollection::get(), Some(0));
 
 		let claimed = Collections::<Test>::get(0).expect("claimed collection exists");
 		assert_eq!(claimed.owner, OTHER);
@@ -1655,7 +1661,9 @@ fn failed_dispatch_restores_and_locks() {
 		let dispatch = Scarcity::transfer(origin, 4);
 		assert_noop!(dispatch, Error::<Test>::AddressOccupied);
 		post_dispatch(pre, Err(Error::<Test>::AddressOccupied.into()));
+		// The instance comes back at the next state nonce, which retires the failed transaction.
 		assert_eq!(NftsByOwner::<Test>::get(OWNER).map(|nft| nft.instance), Some(0));
+		assert_eq!(NftsByOwner::<Test>::get(OWNER).map(|nft| nft.state_nonce), Some(1));
 		assert_eq!(Locked::<Test>::get(OWNER), Some(LockInfo { retries: 1, until: 60 }));
 		assert_ok!(Scarcity::do_try_state());
 		// While locked, even a fresh empty destination is rejected at the pool.
@@ -1669,6 +1677,48 @@ fn failed_dispatch_restores_and_locks() {
 		assert_noop!(dispatch, Error::<Test>::AddressOccupied);
 		post_dispatch(pre, Err(Error::<Test>::AddressOccupied.into()));
 		assert_eq!(Locked::<Test>::get(OWNER), Some(LockInfo { retries: 2, until: 180 }));
+	});
+}
+
+#[test]
+fn a_failed_transaction_cannot_be_replayed_after_the_lock_expires() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		define(0);
+		mint(0, OWNER);
+
+		// The authorization a third party sees on the wire.
+		let signed = current_authorization(OWNER);
+
+		let (_, val, origin) = validate_transfer_as(OWNER, 4, signed.clone()).unwrap();
+		mint(1, 4);
+		let pre = prepare_transfer(val, &origin, 4);
+		assert_noop!(Scarcity::transfer(origin, 4), Error::<Test>::AddressOccupied);
+		post_dispatch(pre, Err(Error::<Test>::AddressOccupied.into()));
+
+		assert_invalidity(
+			validate_transfer_as(OWNER, 6, signed.clone())
+				.err()
+				.expect("the purse is locked"),
+			CustomInvalidity::NftTemporarilyLocked,
+		);
+		MockNow::set(60);
+
+		// The instance that made the transfer fail still sits at the destination. Burn it, so that
+		// the replayed call would otherwise succeed.
+		let (_, val, origin) = validate_burn(4).unwrap();
+		let pre = prepare_burn(val, &origin);
+		assert_ok!(Scarcity::burn(origin));
+		post_dispatch(pre, Ok(()));
+
+		// The purse holds the same instance, so the state nonce is what refuses the replay.
+		assert!(!NftsByOwner::<Test>::contains_key(4));
+		assert_state_mismatch(
+			validate_transfer_as(OWNER, 4, signed).err().expect("the state nonce moved on"),
+		);
+
+		// The same call validates with an authorization for the current state.
+		assert!(validate_transfer(OWNER, 4).is_ok());
 	});
 }
 
@@ -2369,6 +2419,21 @@ fn delete_collection_weight_includes_the_deletion_hook() {
 				.saturating_add(RecordCollectionDeletion::on_delete_weight())
 		);
 	});
+}
+
+#[test]
+fn claim_collection_ownership_weight_includes_the_owner_change_hook() {
+	use crate::weights::WeightInfo;
+	use frame_support::dispatch::GetDispatchInfo;
+
+	let declared = crate::Call::<Test>::claim_collection_ownership { collection: 0 }
+		.get_dispatch_info()
+		.call_weight;
+	assert_eq!(
+		declared,
+		<() as WeightInfo>::claim_collection_ownership()
+			.saturating_add(RecordCollectionOwnerChange::on_owner_change_weight())
+	);
 }
 
 #[test]
