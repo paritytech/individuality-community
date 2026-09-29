@@ -240,6 +240,51 @@ fn a_pgas_funded_purse_pays_to_refill_the_move_budget() {
 	});
 }
 
+/// A purse with a spent budget and no funds cannot pay for the move that refills it. The NFT
+/// stays put until someone funds the purse.
+#[test]
+fn an_unfunded_purse_cannot_refill_the_move_budget() {
+	let (mut ext, from) = scarcity_purse_test_state(0);
+	ext.execute_with(|| {
+		let spent = <Runtime as indiv_pallet_scarcity::Config>::MaximumMoves::get();
+		indiv_pallet_scarcity::NftsByOwner::<Runtime>::mutate(&from, |maybe_nft| {
+			maybe_nft.as_mut().expect("the purse holds the seeded NFT").moves = spent;
+		});
+		// The PGAS asset exists, so `ChargePGAS` tries its PGAS path before it falls back.
+		assert_ok!(<Assets as Create<_>>::create(
+			PgasAssetId::get(),
+			PgasAdmin::get(),
+			true,
+			PgasMinBalance::get()
+		));
+
+		let to = AccountId::from([2u8; 32]);
+		let call =
+			RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer_by_holder {
+				instance: 0,
+				to: to.clone(),
+			});
+		let info = call.get_dispatch_info();
+		let result = purse_tx_extension(0, None).dispatch_transaction(
+			RuntimeOrigin::signed(from.clone()),
+			call,
+			&info,
+			0,
+			0,
+		);
+
+		assert_eq!(
+			result.unwrap_err(),
+			TransactionValidityError::Invalid(InvalidTransaction::Payment)
+		);
+		let nft = indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&from)
+			.expect("the purse keeps the NFT");
+		assert_eq!((nft.state_nonce, nft.moves), (0, spent));
+		assert_eq!(indiv_pallet_scarcity::Instances::<Runtime>::get(0), Some(from));
+		assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&to));
+	});
+}
+
 /// A failed purse dispatch restores the NFT behind the backoff lock and charges no fee —
 /// Coinage's retry model.
 #[test]
