@@ -49,7 +49,8 @@
 //!
 //! An instance carries [`Config::MaximumMoves`] feeless moves and spends one per authorized
 //! transfer. Once they are gone only a paid move can move it, and that move sets the count back
-//! to zero. Burns stay feeless throughout, because they free storage.
+//! to zero. The holder's paid move is [`Call::transfer_by_holder`], signed without this
+//! extension. Burns stay feeless throughout, because they free storage.
 
 use crate::{pallet::*, weights::WeightInfo, Config, Nft, Transferability};
 use codec::{Decode, DecodeWithMemTracking, Encode};
@@ -111,7 +112,8 @@ pub enum CustomInvalidity {
 	/// unknown. Reported separately from [`Self::Soulbound`] because the cause is broken state
 	/// rather than a property of the token.
 	UnknownItem = 7,
-	/// The instance has spent its feeless moves. A paid move refills them.
+	/// The instance has spent its feeless moves. The holder refills them with a paid
+	/// [`Call::transfer_by_holder`].
 	MovesExhausted = 8,
 }
 

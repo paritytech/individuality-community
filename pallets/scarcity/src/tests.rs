@@ -31,7 +31,11 @@ use crate::{
 use codec::Encode;
 #[cfg(feature = "try-runtime")]
 use frame_support::traits::Hooks;
-use frame_support::{assert_noop, assert_ok, dispatch::Pays, traits::OriginTrait};
+use frame_support::{
+	assert_noop, assert_ok,
+	dispatch::{GetDispatchInfo, Pays},
+	traits::OriginTrait,
+};
 use sp_runtime::{
 	traits::{TransactionExtension, TxBaseImplication},
 	transaction_validity::{
@@ -2108,6 +2112,11 @@ fn soulbound_instances_reject_both_holder_paths() {
 			Scarcity::do_transfer_by_holder(&RECIPIENT, 0, OTHER),
 			Error::<Test>::Soulbound
 		);
+		// The paid signed call.
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER),
+			Error::<Test>::Soulbound
+		);
 
 		assert_eq!(Instances::<Test>::get(0), Some(RECIPIENT));
 		assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("still held").state_nonce, 0);
@@ -2873,6 +2882,110 @@ fn a_burn_needs_no_feeless_move() {
 		post_dispatch(pre, Ok(()));
 		assert!(!NftsByOwner::<Test>::contains_key(holder));
 		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+/// A holder whose instance has spent its budget refills it by paying for one move.
+#[test]
+fn the_paid_holder_call_refills_the_budget() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&1);
+		setup_item();
+		mint(0, RECIPIENT);
+		let holder = spend_the_budget(RECIPIENT);
+		assert!(validate_transfer(holder, 5).is_err());
+
+		assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(holder), 0, 5));
+
+		let moved = NftsByOwner::<Test>::get(5).expect("destination holds the NFT");
+		assert_eq!(moved.moves, 0);
+		assert_eq!(moved.state_nonce, 2);
+		assert!(!NftsByOwner::<Test>::contains_key(holder));
+		assert_eq!(Instances::<Test>::get(0), Some(5));
+		System::assert_has_event(
+			Event::<Test>::Transferred { instance: 0, collection: 0, from: holder, to: 5 }.into(),
+		);
+		assert!(validate_transfer(5, 6).is_ok());
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+/// The fee is what bounds the block space a refill buys, so the call must never be feeless.
+#[test]
+fn the_paid_holder_call_pays_its_fee() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		let call = crate::Call::<Test>::transfer_by_holder { instance: 0, to: OTHER };
+
+		assert_eq!(call.get_dispatch_info().pays_fee, Pays::Yes);
+	});
+}
+
+#[test]
+fn the_paid_holder_call_needs_the_signing_holder() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		define(0);
+		mint(0, RECIPIENT);
+		mint(1, OTHER);
+
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::root(), 0, 4),
+			sp_runtime::DispatchError::BadOrigin
+		);
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::none(), 0, 4),
+			sp_runtime::DispatchError::BadOrigin
+		);
+		// The signer holds nothing, or holds another instance.
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(OWNER), 0, 4),
+			Error::<Test>::UnknownInstance
+		);
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(OTHER), 0, 4),
+			Error::<Test>::UnknownInstance
+		);
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER),
+			Error::<Test>::AddressOccupied
+		);
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, RECIPIENT),
+			Error::<Test>::SelfTransfer
+		);
+
+		assert_eq!(Instances::<Test>::get(0), Some(RECIPIENT));
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+/// The extension must leave the signed origin in place, or the payment extension has no account
+/// to charge.
+#[test]
+fn the_extension_passes_the_paid_holder_call_through() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&1);
+		setup_item();
+		mint(0, RECIPIENT);
+		let holder = spend_the_budget(RECIPIENT);
+		let call = RuntimeCall::Scarcity(crate::Call::transfer_by_holder { instance: 0, to: 5 });
+
+		let (_, val, origin) = scarcity_extension(current_authorization(holder))
+			.validate(
+				RuntimeOrigin::signed(holder),
+				&call,
+				&Default::default(),
+				0,
+				(),
+				&TxBaseImplication(()),
+				TransactionSource::External,
+			)
+			.expect("the spent budget does not gate the paid call");
+
+		assert!(matches!(val, Val::NotUsing));
+		assert!(matches!(origin.as_system_ref(), Some(frame_system::Origin::<Test>::Signed(who)) if *who == holder));
 	});
 }
 

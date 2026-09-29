@@ -75,7 +75,8 @@
 //!
 //! Each instance carries [`Config::MaximumMoves`] feeless moves, spends one per transfer, and any
 //! paid move refills them. The budget bounds the block space one mint buys, as Coinage's
-//! `MaximumAge` does for coins.
+//! `MaximumAge` does for coins. The holder refills it with
+//! [`transfer_by_holder`](Pallet::transfer_by_holder), which the purse key signs and pays for.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -1102,6 +1103,27 @@ pub mod pallet {
 			let owner = ensure_signed(origin)?;
 			Self::do_force_transfer(&owner, instance, to)
 		}
+
+		/// Move the instance the signer holds, with the fee paid from the signer's account.
+		///
+		/// The move refills the feeless move budget of [`Config::MaximumMoves`]. A purse needs no
+		/// funds for feeless moves, so it must receive a fee asset such as PGAS first.
+		///
+		/// Fails for an instance of a [`Transferability::Soulbound`] definition.
+		#[pallet::call_index(14)]
+		#[pallet::weight(
+			T::WeightInfo::transfer_by_holder()
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
+		)]
+		#[transactional]
+		pub fn transfer_by_holder(
+			origin: OriginFor<T>,
+			instance: InstanceId,
+			to: T::AccountId,
+		) -> DispatchResult {
+			let holder = ensure_signed(origin)?;
+			Self::do_transfer_by_holder(&holder, instance, to)
+		}
 	}
 
 	impl<T: Config> Pallet<T> {
@@ -1648,10 +1670,11 @@ pub mod pallet {
 		///
 		/// [`Self::transfer`] is the fee-less holder path and needs an `Origin::Nft`, which only
 		/// the [`AsScarcity`](crate::extension::AsScarcity) extension can produce from a
-		/// purse-signed transaction. This entry serves paid callers that have established holder
-		/// consent by other means, such as a contract environment resolving an approval, and
-		/// therefore applies no consent check beyond `holder` currently holding `instance`. The
-		/// rest-time priority machinery guards the fee-less path only, so it does not apply here.
+		/// purse-signed transaction. This entry serves the paid paths: the signed
+		/// [`Self::transfer_by_holder`] call and contract environments that establish holder
+		/// consent by other means. It applies no consent check beyond `holder` currently holding
+		/// `instance`. The rest-time priority and the feeless move budget guard the fee-less path
+		/// only, so neither applies here.
 		///
 		/// Clearing the source lock keeps the `Locked` entry paired with an NFT, matching both
 		/// other move paths.

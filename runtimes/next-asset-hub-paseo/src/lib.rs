@@ -4396,16 +4396,35 @@ mod tests {
 		assert!(ProxyType::NonTransfer.is_superset(&ProxyType::ParaRegistration));
 	}
 
+	type ChargeFee = pallet_pgas_allowance::ChargePGAS<
+		Runtime,
+		pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
+	>;
+
 	fn scarcity_tx_extension(nonce: u32, state_nonce: u64) -> TxExtension {
+		purse_tx_extension(
+			nonce,
+			Some(indiv_pallet_scarcity::extension::AsScarcityInfo::AsNft {
+				instance: 0,
+				state_nonce,
+			}),
+			ChargeFee::new_skip_pgas(pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<
+				Runtime,
+			>::from(0, None)),
+		)
+	}
+
+	/// A purse-signed transaction with `as_scarcity` in the origin slot and `charge_fee` as the
+	/// payment extension.
+	fn purse_tx_extension(
+		nonce: u32,
+		as_scarcity: Option<indiv_pallet_scarcity::extension::AsScarcityInfo>,
+		charge_fee: ChargeFee,
+	) -> TxExtension {
 		TxExtension::from((
 			(
 				(),
-				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(Some(
-					indiv_pallet_scarcity::extension::AsScarcityInfo::AsNft {
-						instance: 0,
-						state_nonce,
-					},
-				)),
+				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(as_scarcity),
 				frame_system::AuthorizeCall::<Runtime>::new(),
 				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
 				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
@@ -4418,12 +4437,7 @@ mod tests {
 			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
 			frame_system::CheckNonce::<Runtime>::from(nonce),
 			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_pgas_allowance::ChargePGAS::<
-				Runtime,
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::new_skip_pgas(
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
-			),
+			charge_fee,
 			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
 		))
@@ -4547,6 +4561,66 @@ mod tests {
 			// Refused at the pool, so the NFT stays put and earns no backoff lock.
 			assert!(indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&from));
 			assert!(!indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&from));
+		});
+	}
+
+	/// A purse that holds only PGAS pays for the move that refills a spent budget
+	/// (paritytech/individuality#1270). Without this path an instance is stuck once its feeless
+	/// moves are gone.
+	#[test]
+	fn a_pgas_funded_purse_pays_to_refill_the_move_budget() {
+		use frame_support::{
+			assert_ok,
+			dispatch::GetDispatchInfo,
+			traits::fungibles::{Create, Inspect, Mutate},
+		};
+		use sp_runtime::traits::DispatchTransaction;
+
+		let (mut ext, from) = scarcity_purse_test_state(0);
+		ext.execute_with(|| {
+			let spent = <Runtime as indiv_pallet_scarcity::Config>::MaximumMoves::get();
+			indiv_pallet_scarcity::NftsByOwner::<Runtime>::mutate(&from, |maybe_nft| {
+				maybe_nft.as_mut().expect("the purse holds the seeded NFT").moves = spent;
+			});
+			// A claim mints PGAS into the purse. It is sufficient, so the purse needs no DOT.
+			assert_ok!(<Assets as Create<_>>::create(
+				PgasAssetId::get(),
+				PgasAdmin::get(),
+				true,
+				PgasMinBalance::get()
+			));
+			assert_ok!(<Assets as Mutate<_>>::mint_into(PgasAssetId::get(), &from, 1u128 << 60));
+			let pgas_before = <Assets as Inspect<_>>::balance(PgasAssetId::get(), &from);
+
+			let to = AccountId::from([2u8; 32]);
+			let call =
+				RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer_by_holder {
+					instance: 0,
+					to: to.clone(),
+				});
+			let info = call.get_dispatch_info();
+			let result =
+				purse_tx_extension(
+					0,
+					None,
+					ChargeFee::from(pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<
+						Runtime,
+					>::from(0, None)),
+				)
+				.dispatch_transaction(RuntimeOrigin::signed(from.clone()), call, &info, 0, 0);
+			assert!(matches!(result, Ok(Ok(_))), "transaction failed: {result:?}");
+
+			assert!(Balances::free_balance(&from).is_zero());
+			assert!(
+				<Assets as Inspect<_>>::balance(PgasAssetId::get(), &from) < pgas_before,
+				"the purse pays the fee in PGAS",
+			);
+			assert_eq!(
+				indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&to)
+					.map(|nft| (nft.state_nonce, nft.moves)),
+				Some((1, 0)),
+				"the paid move lands and refills the budget",
+			);
 		});
 	}
 
