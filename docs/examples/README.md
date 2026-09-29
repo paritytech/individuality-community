@@ -12,6 +12,7 @@ typed from the chain's own metadata.
 | `airdrop.ts` | operations | Enable an asset and schedule an airdrop event (`Airdrop.enable_asset` / `schedule_event`). |
 | `subscriptions.ts` | operations | Subscribe a parachain to ring-root updates (`MembersNotifier.subscribe`). |
 | `dotns.ts` | operations | Set the dotNS dispatcher and grant attestation allowance (`DotnsGateway.*`). Runs against the Asset Hub. |
+| [`coinage-demo`](coinage-demo/README.md) | usage | Live PreviewNet recycler holdings, dev-account transfers and verified receipts (standalone package). |
 | `coinage.ts` | usage | Build coin calls — split / transfer / load / unload (`Coinage.*`, encode-only). |
 | `game_participation.ts` | usage | Sign up for a game and build a report (`Game.sign_up_with_account` / `report`). |
 

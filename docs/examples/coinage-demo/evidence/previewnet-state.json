@@ -1,0 +1,85 @@
+{
+  "instance": 0,
+  "denomination": 8,
+  "rawUnitsPerHolding": "2560000",
+  "holdings": 10,
+  "transfers": [
+    {
+      "type": "coin-state",
+      "owner": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+      "coin": {
+        "instance_id": 0,
+        "value": 8,
+        "age": 1
+      },
+      "block": {
+        "index": 2,
+        "number": 164875,
+        "hash": "0xecd03806e663521a2fdf568762bb0b106145b67147c9ff7ef4fee29c89507882"
+      }
+    },
+    {
+      "type": "coin-state",
+      "owner": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+      "coin": {
+        "instance_id": 0,
+        "value": 8,
+        "age": 2
+      },
+      "block": {
+        "index": 2,
+        "number": 164881,
+        "hash": "0xb0ce300d5f92409846f261485a8395b7106fe8ce6f176ea66a69c03d5dfbf0a9"
+      }
+    },
+    {
+      "type": "coin-state",
+      "owner": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+      "coin": {
+        "instance_id": 0,
+        "value": 8,
+        "age": 3
+      },
+      "block": {
+        "index": 2,
+        "number": 164887,
+        "hash": "0xf570556f399a8556cfaa4db59d776ac25b2b1a8afc10ad3b57038d018a4f30ac"
+      }
+    },
+    {
+      "type": "coin-state",
+      "owner": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+      "coin": {
+        "instance_id": 0,
+        "value": 8,
+        "age": 4
+      },
+      "block": {
+        "index": 2,
+        "number": 164893,
+        "hash": "0x0266b61466b7707521e8d0b247e2ca6de3a90e648611398910ae5313c9fba820"
+      }
+    },
+    {
+      "type": "coin-state",
+      "owner": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      "coin": {
+        "instance_id": 0,
+        "value": 8,
+        "age": 5
+      },
+      "block": {
+        "index": 2,
+        "number": 164899,
+        "hash": "0x85986b6c658c4d57d08e216b080874af92afe2e2d76984d8058a7225b8762578"
+      }
+    }
+  ],
+  "recycledMember": "0xc18f995b75c23f6c29723e330b721a06f7871ed5fa65b242b0f6adf7a611ba86",
+  "recyclerRing": {
+    "index": 0,
+    "revision": 37,
+    "includedMembers": 46,
+    "finalizedBlock": "0x154bd623583b2d44fa467a57cdab6a26f5d439cca648f10a7adc12028a39df3c"
+  }
+}

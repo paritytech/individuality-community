@@ -1,0 +1,27 @@
+{
+  "name": "coinage-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "tsx demo.ts",
+    "check": "tsc --noEmit",
+    "test": "tsx --test *.test.ts",
+    "verify": "tsx verify.ts"
+  },
+  "dependencies": {
+    "@polkadot-api/metadata-builders": "0.14.3",
+    "@polkadot-api/substrate-bindings": "0.20.3",
+    "@polkadot-labs/hdkd": "0.0.28",
+    "@polkadot-labs/hdkd-helpers": "0.0.30",
+    "polkadot-api": "2.1.2",
+    "verifiablejs": "1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
