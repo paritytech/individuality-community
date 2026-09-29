@@ -61,11 +61,28 @@ are made.
   Ten holdings remain in the recycler when the default run finishes.
 
 The bot creates traffic and liquidity for a cash demo. It does **not** exercise the
-mobile app's full-privacy setting, chat delivery or wallet UI. The inspected iOS
-policy also has a minimum ring size of ten and a randomized waiting period of up
+mobile app's full-privacy setting, chat delivery or wallet UI. The inspected [iOS policy](https://github.com/paritytech/polkadot-app-ios-v2/blob/88f790aa05bfcf532fa24d94a451611da33bed1b/Packages/Coinage/Sources/CoinageConstants.swift) also has a minimum ring size of ten and a randomized waiting period of up
 to six hours. Background traffic must match the demo wallet's instance and
 denominations, and it does not bypass that waiting policy. These publicly known
 accounts are test identities, not private users.
+
+## What an outside observer sees
+
+The direct transfers in this example are public. A transaction hash is a lookup
+key for the transaction, not an encryption boundary: the signed extrinsic reveals
+the sender, the call contains the recipient and `CoinTransferred` exposes the
+instance, denomination and new age. With well-known dev addresses, an observer
+can identify Alice → Bob without access to this script or its labels. See the
+[transfer call and event](https://github.com/paritytech/individuality-community/blob/fce93ef38a15c673a8b0b208362bc46ae755c7d7/pallets/coinage/src/lib.rs#L2440)
+and the [verified transaction](evidence/README.md).
+
+The recycler unload uses a ring proof to avoid revealing which loaded member is
+being spent. Its output address and denomination are still public. That breaks a
+direct cryptographic link to a particular input; it does not conceal subsequent
+coin transfers or eliminate timing/amount correlations. Real wallets can use
+fresh coin-owner keys, so visible addresses need not identify real people. This
+demo deliberately uses recognizable, reused dev accounts and does not demonstrate
+end-to-end user anonymity.
 
 ## Receipts and recovery
 
@@ -127,10 +144,10 @@ Coinage instance/asset setup; the preflight reports missing configuration.
 
 ## Sources
 
-The protocol signing pattern follows `paritytech/triangle-e2e`'s Coinage helpers
-at commit `4a7ecb9`, adapted for the deployed multi-instance runtime, bounded proof
+The protocol signing pattern follows [`paritytech/triangle-e2e`'s Coinage helpers](https://github.com/paritytech/triangle-e2e/blob/4a7ecb90baf4854c17e95c85d140033b8fd3cda2/packages/chain-tests/src/lib/coinage.ts)
+at commit [`4a7ecb9` (`coinage-signer.ts`)](https://github.com/paritytech/triangle-e2e/blob/4a7ecb90baf4854c17e95c85d140033b8fd3cda2/packages/chain-tests/src/lib/coinage-signer.ts), adapted for the deployed multi-instance runtime, bounded proof
 bytes and current `verifiablejs`. Runtime references are
-`pallets/coinage/src/{lib,extension,paid_tkn_manager}.rs`.
-Denomination references are iOS `Packages/Coinage/Sources/Denomination/Denomination.swift`
-and Android `RealCoinAmountBreakdownContext.kt`. Brevity's wallet UI delegates
-Coinage operations to its core; it is not required by this standalone example.
+[pallets/coinage/src/lib.rs](https://github.com/paritytech/individuality-community/blob/fce93ef38a15c673a8b0b208362bc46ae755c7d7/pallets/coinage/src/lib.rs), [pallets/coinage/src/extension.rs](https://github.com/paritytech/individuality-community/blob/fce93ef38a15c673a8b0b208362bc46ae755c7d7/pallets/coinage/src/extension.rs), [pallets/coinage/src/paid_tkn_manager.rs](https://github.com/paritytech/individuality-community/blob/fce93ef38a15c673a8b0b208362bc46ae755c7d7/pallets/coinage/src/paid_tkn_manager.rs).
+Denomination references are iOS [Packages/Coinage/Sources/Denomination/Denomination.swift](https://github.com/paritytech/polkadot-app-ios-v2/blob/88f790aa05bfcf532fa24d94a451611da33bed1b/Packages/Coinage/Sources/Denomination/Denomination.swift)
+and Android [RealCoinAmountBreakdownContext.kt](https://github.com/paritytech/polkadot-app-android-v2/blob/ba3e157498e6f89c5feb46272092ae952181f3c2/feature/coinage/impl/src/main/java/io/pcf/polkadotapp/feature_coinage_impl/domain/common/RealCoinAmountBreakdownContext.kt). Brevity's wallet UI delegates
+Coinage operations to its [core](https://github.com/paritytech/brevity-dozer/blob/0fb3fa214c8abeb7a33a7db0db60c257ea069c8e/core/crates/brevity-viewmodel/src/coinage.rs); it is not required by this standalone example.
