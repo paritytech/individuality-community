@@ -29,7 +29,6 @@ use frame_support::{
 	traits::{
 		tokens::{imbalance::ResolveTo, ConversionToAssetBalance},
 		ConstU32, Contains, ContainsPair, Disabled, Equals, Everything, EverythingBut, Nothing,
-		ProcessMessageError,
 	},
 };
 use frame_system::EnsureRoot;
@@ -58,10 +57,7 @@ use xcm_builder::{
 	TrailingSetTopicAsId, UsingComponents, WeightInfoBounds, WithComputedOrigin,
 	WithLatestLocationConverter, WithUniqueTopic, XcmFeeManagerFromComponents,
 };
-use xcm_executor::{
-	traits::{Properties, ShouldExecute},
-	XcmExecutor,
-};
+use xcm_executor::XcmExecutor;
 
 parameter_types! {
 	pub const RootLocation: Location = Location::here();
@@ -213,21 +209,10 @@ impl Contains<Location> for ParentOrParentsPlurality {
 	}
 }
 
-/// Custom barrier for Asset Hub - allows any execution from Asset Hub
-pub struct AllowAssetHubExecution;
-impl ShouldExecute for AllowAssetHubExecution {
-	fn should_execute<RuntimeCall>(
-		origin: &Location,
-		_instructions: &mut [Instruction<RuntimeCall>],
-		_max_weight: Weight,
-		_properties: &mut Properties,
-	) -> Result<(), ProcessMessageError> {
-		if origin == &AssetHubLocation::get() {
-			log::trace!(target: "xcm::barriers", "AllowAssetHubExecution: Asset Hub origin allowed");
-			Ok(())
-		} else {
-			Err(ProcessMessageError::Unsupported)
-		}
+pub struct AssetHubPlurality;
+impl Contains<Location> for AssetHubPlurality {
+	fn contains(location: &Location) -> bool {
+		matches!(location.unpack(), (1, [Parachain(ASSET_HUB_ID), Plurality { .. }]))
 	}
 }
 
@@ -239,18 +224,17 @@ pub type Barrier = TrailingSetTopicAsId<
 			TakeWeightCredit,
 			// Expected responses are OK.
 			AllowKnownQueryResponses<PolkadotXcm>,
-			AllowAssetHubExecution,
 			WithComputedOrigin<
 				(
 					// If the message is one that immediately attempts to pay for execution, then
 					// allow it.
 					AllowTopLevelPaidExecutionFrom<Everything>,
-					// Parent and its pluralities (i.e. governance bodies) get free execution.
-					AllowExplicitUnpaidExecutionFrom<ParentOrParentsPlurality>,
-					// The chain the credit trees are delivered to. It sends back the roots it is
-					// finished with. Unlike `AllowAssetHubExecution` above, this accepts only a
-					// message that asks for free execution.
-					AllowExplicitUnpaidExecutionFrom<Equals<NextAhLocation>>,
+					// Parent and its pluralities get free execution.
+					AllowExplicitUnpaidExecutionFrom<(
+						ParentOrParentsPlurality,
+						AssetHubPlurality,
+						Equals<NextAhLocation>,
+					)>,
 					// Subscriptions for version tracking are OK.
 					AllowSubscriptionsFrom<ParentRelayOrSiblingParachains>,
 					// HRMP notifications from the relay chain are OK.
