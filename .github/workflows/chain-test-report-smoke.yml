@@ -1,0 +1,108 @@
+name: Chain report smoke test
+
+on:
+  pull_request:
+    paths: [".github/workflows/chain-test-report-smoke.yml"]
+
+permissions: {}
+
+jobs:
+  simulated-chain-tests:
+    if: >-
+      github.event.pull_request.number == 137 &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    name: chain-tests / gate (${{ matrix.network }} · smoke-test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        network: [previewnet, paseo-next-v2]
+    steps:
+      - name: Intentional test failure
+        run: |
+          mkdir results
+          printf '%s\n' '<testsuite name="Smoke test" failures="1"><testcase name="intentional failure"><failure message="Expected smoke-test failure"/></testcase></testsuite>' > results/junit.xml
+          exit 1
+      - name: Upload the failure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-test-results-${{ matrix.network }}-smoke-test
+          path: results/
+
+  report:
+    needs: simulated-chain-tests
+    if: >-
+      always() && github.event.pull_request.number == 137 &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-gate-test-results-*-smoke-test
+          path: ${{ runner.temp }}/chain-test-smoke-results
+      - name: Exercise the reporter twice and verify one comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS_DIR: ${{ runner.temp }}/chain-test-smoke-results
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, '.github/scripts')
+          import chain_test_report as reporter
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          prefix = f'repos/{repository}'
+          run_path = f"{prefix}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          run = reporter.api(run_path)
+          jobs = [job for page in reporter.api(f'{run_path}/jobs?filter=latest&per_page=100', paginate=True)
+                  for job in page['jobs']]
+          failed = [job for job in jobs if job['name'].startswith('chain-tests / gate (')
+                    and job['conclusion'] == 'failure']
+          assert len(failed) == 2, f'Expected two real failed job records: {jobs}'
+
+          reporter.MARKER = ('<!-- individuality-chain-tests-smoke -->\n'
+                             '> **Smoke test:** These failures are intentional fixtures, not live chain results. '
+                             'This tests one warning comment for both networks. The reporter is called twice; '
+                             'the second call must reuse this comment.')
+          writes = []
+
+          def request(endpoint, **kwargs):
+              # A workflow cannot receive its own completion event. Simulate only
+              # that event boundary; job outcomes, artifacts and comment API calls
+              # are real. The production completion guard is unchanged.
+              if endpoint == run_path:
+                  return {**run, 'status': 'completed'}
+              if kwargs.get('method', 'GET') != 'GET':
+                  writes.append((kwargs['method'], endpoint))
+              return reporter.api(endpoint, **kwargs)
+
+          results = Path(os.environ['RESULTS_DIR'])
+          reporter.report(run, repository, results, request)
+          reporter.report(run, repository, results, request)
+          assert len(writes) == 1, f'Expected one write across two calls: {writes}'
+          comments = [comment for page in reporter.api(f'{prefix}/issues/137/comments?per_page=100', paginate=True)
+                      for comment in page if comment.get('body', '').startswith(reporter.MARKER)
+                      and comment['user']['login'] == 'github-actions[bot]']
+          assert len(comments) == 1, f'Expected one smoke-test comment, got {len(comments)}'
+          body = comments[0]['body']
+          assert 'previewnet-smoke-test: Smoke test / intentional failure' in body
+          assert 'paseo-next-v2-smoke-test: Smoke test / intentional failure' in body
+          print(f"Verified two failures, one comment and an idempotent second call: {comments[0]['html_url']}")
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(
+              f"Two intentional job failures were reported in [one PR comment]({comments[0]['html_url']}). "
+              'A second reporter call made no additional write.\n')
+          PY
