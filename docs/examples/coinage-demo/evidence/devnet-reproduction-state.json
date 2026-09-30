@@ -1,0 +1,223 @@
+{
+  "endpoint": "wss://people-paseo.rotko.net",
+  "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+  "date": "2026-09-30",
+  "timingMeaning": "Client-observed signing start to finalized notification; includes RPC and finality latency, not mobile UI clearing time.",
+  "transactions": [
+    {
+      "time": "2026-09-30T09:58:28.946Z",
+      "label": "setup-load",
+      "txHash": "0xc45bb873cf6e6a0988ee0878d6820c4f6f807c2df6b7e4617f140f80230a91ed",
+      "block": {
+        "index": 2,
+        "number": 7177405,
+        "hash": "0xbf4f3807e2fa6b8230fdcd5cbacdea245104ecc167cab51fa3853e2df878b65b"
+      },
+      "elapsedMs": 65263,
+      "explorer": "https://dev.papi.how/explorer/0xbf4f3807e2fa6b8230fdcd5cbacdea245104ecc167cab51fa3853e2df878b65b#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "time": "2026-09-30T09:59:34.299Z",
+      "label": "setup-buy-token",
+      "txHash": "0xe445bff80da0eb20b7d1eb7916321da3d79b43da9654c0bed05b0f31d9a2889f",
+      "block": {
+        "index": 2,
+        "number": 7177424,
+        "hash": "0xcb6ef6d5e142350eb5d416ccca747d0c059f9629c1ad4b08fe8ac6b521bf42b5"
+      },
+      "elapsedMs": 65351,
+      "explorer": "https://dev.papi.how/explorer/0xcb6ef6d5e142350eb5d416ccca747d0c059f9629c1ad4b08fe8ac6b521bf42b5#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "time": "2026-09-30T10:00:15.015Z",
+      "label": "setup-unload",
+      "txHash": "0x0525079f3e6b2db8aab8e0becadf33ddf23337298e26a3fd0c87ccfd7320447e",
+      "block": {
+        "index": 2,
+        "number": 7177444,
+        "hash": "0x0bcc68a7c2dbf601be090e6470393b330efda75b9ee65f2895963614325519f7"
+      },
+      "elapsedMs": 28255,
+      "explorer": "https://dev.papi.how/explorer/0x0bcc68a7c2dbf601be090e6470393b330efda75b9ee65f2895963614325519f7#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "time": "2026-09-30T10:00:47.542Z",
+      "label": "direct-Alice-to-Bob",
+      "txHash": "0x78f2705e1237b01ec212b703e9b63289133674c49f1843897f44b3772babd393",
+      "block": {
+        "index": 2,
+        "number": 7177458,
+        "hash": "0x6de94d0839f558791f567e41dfc1e1d18fcb9473c781b4600a191ee2f6a5f425"
+      },
+      "elapsedMs": 32525,
+      "explorer": "https://dev.papi.how/explorer/0x6de94d0839f558791f567e41dfc1e1d18fcb9473c781b4600a191ee2f6a5f425#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "time": "2026-09-30T10:01:16.510Z",
+      "label": "exact-match-recipient-claim",
+      "txHash": "0x64d4661bbbb126ae2c8dbd964489cd41cc7aca58d940f01d23320bbd976fdd2f",
+      "block": {
+        "index": 2,
+        "number": 7177474,
+        "hash": "0x20125eb2baf7cc36196623a2648eadef4e183b69180ed83250bebb773be6091e"
+      },
+      "elapsedMs": 28816,
+      "explorer": "https://dev.papi.how/explorer/0x20125eb2baf7cc36196623a2648eadef4e183b69180ed83250bebb773be6091e#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "time": "2026-09-30T10:01:44.868Z",
+      "label": "prepare-split-Charlie",
+      "txHash": "0xbb1810efba0e5d740bf59f6aca94a3b574761f36c2927e7b656036306c0c4094",
+      "block": {
+        "index": 2,
+        "number": 7177489,
+        "hash": "0x132a7c9a1bc3fdb4ac73d4e28e74abdc30e722c4a8f427f9c0b72781be3b1df0"
+      },
+      "elapsedMs": 27917,
+      "explorer": "https://dev.papi.how/explorer/0x132a7c9a1bc3fdb4ac73d4e28e74abdc30e722c4a8f427f9c0b72781be3b1df0#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "time": "2026-09-30T10:02:17.531Z",
+      "label": "prepared-recipient-claim",
+      "txHash": "0x1bf02bca07b644050416366a056d6f5964112348bcf5c0f04c01f0282cb0f5dc",
+      "block": {
+        "index": 2,
+        "number": 7177503,
+        "hash": "0xb7a492f5c168910c7c00d3928adf3803baf1717c7a86be6b4592ee4aa01940ad"
+      },
+      "elapsedMs": 32393,
+      "explorer": "https://dev.papi.how/explorer/0xb7a492f5c168910c7c00d3928adf3803baf1717c7a86be6b4592ee4aa01940ad#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "time": "2026-09-30T10:02:45.978Z",
+      "label": "explicit-recycle-Ferdie",
+      "txHash": "0x0194e9daa8908ef659b0f1d6637d3d8b5d14f9191be771149accd8ecd04afa87",
+      "block": {
+        "index": 2,
+        "number": 7177519,
+        "hash": "0x33c6900a4e46e2e0bf7c948c7f1c2bb765ee9943fe29460d4650f2be114e8961"
+      },
+      "elapsedMs": 28299,
+      "explorer": "https://dev.papi.how/explorer/0x33c6900a4e46e2e0bf7c948c7f1c2bb765ee9943fe29460d4650f2be114e8961#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    }
+  ],
+  "stateChecks": [
+    {
+      "time": "2026-09-30T09:59:45.703Z",
+      "type": "ready",
+      "label": "setup-recycler",
+      "elapsedMs": 11403,
+      "included": 464,
+      "ringIndex": 1,
+      "revision": 384,
+      "at": "0x8b510cd63852d621dffeabb1f46c62cf043e1f26040672a3072b816773caefe6"
+    },
+    {
+      "time": "2026-09-30T09:59:46.754Z",
+      "type": "ready",
+      "label": "setup-paid-token",
+      "elapsedMs": 467,
+      "included": 1,
+      "ringIndex": 0,
+      "revision": 0,
+      "at": "0x8b510cd63852d621dffeabb1f46c62cf043e1f26040672a3072b816773caefe6"
+    },
+    {
+      "time": "2026-09-30T10:00:47.694Z",
+      "type": "coin-state",
+      "label": "direct-received",
+      "address": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+      "state": {
+        "instance_id": 0,
+        "value": 5,
+        "age": 1
+      },
+      "at": "0x6de94d0839f558791f567e41dfc1e1d18fcb9473c781b4600a191ee2f6a5f425"
+    },
+    {
+      "time": "2026-09-30T10:00:47.694Z",
+      "type": "handoff",
+      "label": "exact-match-Bob-to-Charlie",
+      "senderExtrinsicCount": 0,
+      "source": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+      "recipient": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y"
+    },
+    {
+      "time": "2026-09-30T10:01:16.950Z",
+      "type": "coin-state",
+      "label": "exact-match-received",
+      "address": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+      "state": {
+        "instance_id": 0,
+        "value": 5,
+        "age": 2
+      },
+      "at": "0x20125eb2baf7cc36196623a2648eadef4e183b69180ed83250bebb773be6091e"
+    },
+    {
+      "time": "2026-09-30T10:01:45.025Z",
+      "type": "coin-state",
+      "label": "prepared-payment-coin",
+      "address": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+      "state": {
+        "instance_id": 0,
+        "value": 4,
+        "age": 3
+      },
+      "at": "0x132a7c9a1bc3fdb4ac73d4e28e74abdc30e722c4a8f427f9c0b72781be3b1df0"
+    },
+    {
+      "time": "2026-09-30T10:01:45.137Z",
+      "type": "coin-state",
+      "label": "sender-change",
+      "address": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+      "state": {
+        "instance_id": 0,
+        "value": 4,
+        "age": 3
+      },
+      "at": "0x132a7c9a1bc3fdb4ac73d4e28e74abdc30e722c4a8f427f9c0b72781be3b1df0"
+    },
+    {
+      "time": "2026-09-30T10:01:45.138Z",
+      "type": "handoff",
+      "label": "prepared-payment-to-Ferdie",
+      "source": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+      "recipient": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL"
+    },
+    {
+      "time": "2026-09-30T10:02:17.678Z",
+      "type": "coin-state",
+      "label": "prepared-payment-received",
+      "address": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+      "state": {
+        "instance_id": 0,
+        "value": 4,
+        "age": 4
+      },
+      "at": "0xb7a492f5c168910c7c00d3928adf3803baf1717c7a86be6b4592ee4aa01940ad"
+    },
+    {
+      "time": "2026-09-30T10:02:56.855Z",
+      "type": "ready",
+      "label": "recycled-Fastest-ready",
+      "elapsedMs": 10877,
+      "included": 229,
+      "ringIndex": 1,
+      "revision": 201,
+      "at": "0xc94640acd4c75be69e16c75416ee6ee5f91bca5257e63033c1b65802ebb8d7f1"
+    },
+    {
+      "time": "2026-09-30T10:02:56.856Z",
+      "type": "complete",
+      "note": "One change coin remains at Eve; one voucher remains in the recycler. Phone transport and UI were not exercised."
+    }
+  ],
+  "limitations": [
+    "Local key handoff; no phone, chat delivery or app submission/recovery queue.",
+    "Paid unload token instead of personhood allowance.",
+    "Single bounded run with known dev keys, not a privacy demonstration.",
+    "The recycler-ready duration starts after load finalization, not at initial submission.",
+    "This run does not identify Alex\u2019s transaction or reproduce his historical app state."
+  ]
+}

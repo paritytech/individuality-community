@@ -60,11 +60,56 @@ are made.
 - Alice reloads the coin, and the script waits for its new finalized ring membership.
   Ten holdings remain in the recycler when the default run finishes.
 
-The bot creates traffic and liquidity for a cash demo. It does **not** exercise the
-mobile app's full-privacy setting, chat delivery or wallet UI. The inspected [iOS policy](https://github.com/paritytech/polkadot-app-ios-v2/blob/88f790aa05bfcf532fa24d94a451611da33bed1b/Packages/Coinage/Sources/CoinageConstants.swift) also has a minimum ring size of ten and a randomized waiting period of up
-to six hours. Background traffic must match the demo wallet's instance and
-denominations, and it does not bypass that waiting policy. These publicly known
-accounts are test identities, not private users.
+The bot creates traffic and holdings for a cash demo. It does **not** exercise the
+mobile app's chat delivery or wallet UI. The current community apps' Fastest mode
+adds no privacy wait after confirmed recycler inclusion. Balanced and Most private
+require 20% and 90% ring fill respectively, or at least 32 members and ten minutes
+since confirmed inclusion. See the exact [iOS policy](https://github.com/paritytech/polkadot-ios-community/blob/97f9b5849be097d805140d30e82d75da397a3a7f/Packages/Coinage/Sources/Recycling/Strategy/RecyclingStrategyType.swift)
+and [Android policy](https://github.com/paritytech/polkadot-android-community/blob/d49c5e6db17bfca48bf4872014f676e9fdb884b3/feature/coinage/api/src/main/java/io/paritytech/polkadotapp/feature_coinage_api/domain/recycling/RecyclingStrategyType.kt).
+These publicly known accounts are test identities, not private users.
+
+## Reproduce payment stages on Devnet
+
+`reproduce.ts` measures a bounded sequence on public Paseo People, using the
+Devnet endpoint and a pinned genesis hash. It defaults to a read-only preflight.
+The [verified live run and timing results](evidence/README.md#devnet-payment-reproduction--30-september-2026)
+include clickable transaction proofs; the five-minute delay was not reproduced.
+
+```sh
+pnpm reproduce --output runs/repro-check
+pnpm reproduce --run --output runs/repro-live
+# After inspecting any interrupted submission:
+pnpm reproduce --run --resume --output runs/repro-live
+```
+
+Bob supplies 320000 raw backing-asset units (denomination 5, unit 10000), pays
+native fees and buys one paid unload token. The script refuses a fresh run if any
+of the six dev accounts already holds a coin. Do not run it alongside other bots
+using these accounts.
+
+1. Load one voucher and unload it into Alice, measuring confirmed ring inclusion.
+2. Direct transfer: Alice sends the coin to Bob.
+3. Exact handoff: Bob's coin key is handed to the simulated Charlie wallet locally;
+   Charlie claims into his own address using Bob's key. No sender extrinsic is
+   submitted for the handoff, matching [iOS ExactMatchStrategy.swift](https://github.com/paritytech/polkadot-ios-community/blob/97f9b5849be097d805140d30e82d75da397a3a7f/Packages/Coinage/Sources/Transfer/Plan/Strategies/ExactMatchStrategy.swift)
+   and [Android ExactMatchStrategy.kt](https://github.com/paritytech/polkadot-android-community/blob/d49c5e6db17bfca48bf4872014f676e9fdb884b3/feature/coinage/impl/src/main/java/io/paritytech/polkadotapp/feature_coinage_impl/domain/planner/strategies/ExactMatchStrategy.kt).
+4. Prepared payment: split Charlie's coin into a payment coin at Dave and change
+   at Eve; Ferdie claims the payment using Dave's key.
+5. Explicitly recycle Ferdie's coin and wait for committed membership. Fastest
+   would not voluntarily recycle this young coin; this step isolates recycler
+   latency from the payment path.
+
+`receipts.jsonl` contains elapsed times, transaction bytes, finalized results,
+explorer URLs and coin-state assertions. `vouchers.json` contains private voucher
+material and stays in the ignored run directory. The finished run leaves one
+change coin at Eve and one voucher in the recycler. Resume skips finalized steps
+and refuses unresolved submissions rather than sending them twice.
+
+This is a protocol reproduction: key handoff is local and claims wait for finalized
+inputs. It does not run the mobile apps, their message transport, concurrent
+submission queues or their five-minute input-wait recovery logic. A successful run
+cannot rule out a phone-side delay. It uses a paid unload token instead of the
+apps' personhood allowance, so allowance acquisition is also outside its scope.
 
 ## What an outside observer sees
 

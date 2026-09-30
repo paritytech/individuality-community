@@ -1,0 +1,578 @@
+{
+  "endpoint": "wss://rpc.interweb-it.com/people-paseo",
+  "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+  "runtime": {
+    "specName": "people-paseo",
+    "implName": "people-paseo",
+    "authoringVersion": 1,
+    "specVersion": 2005002,
+    "implVersion": 0,
+    "apis": [
+      [
+        "0x12c8e3d4d7e06de0",
+        1
+      ],
+      [
+        "0xf3ff14d5ab527059",
+        3
+      ],
+      [
+        "0xdf6acb689907609b",
+        5
+      ],
+      [
+        "0xea93e3f16f3d6962",
+        3
+      ],
+      [
+        "0x6ff52ee858e6c5bd",
+        2
+      ],
+      [
+        "0xa2ddb6a58477bf63",
+        1
+      ],
+      [
+        "0x9287fb0e021bc854",
+        1
+      ],
+      [
+        "0x40fe3ad401f8959a",
+        6
+      ],
+      [
+        "0x37c8bb1350a9a2a8",
+        4
+      ],
+      [
+        "0xd2bc9897eed08f15",
+        3
+      ],
+      [
+        "0x91b1c8b16328eb92",
+        2
+      ],
+      [
+        "0x9ffb505aa738d69c",
+        1
+      ],
+      [
+        "0xd7bdd8a272ca0d65",
+        2
+      ],
+      [
+        "0x2609be83ac4468dc",
+        1
+      ],
+      [
+        "0x843b6f8cec8098c7",
+        1
+      ],
+      [
+        "0xdd718d5cc53262d4",
+        1
+      ],
+      [
+        "0x04e70521a0d3d2f8",
+        2
+      ],
+      [
+        "0xbc9d89904f5b923f",
+        1
+      ],
+      [
+        "0xf78b278be53f454c",
+        2
+      ],
+      [
+        "0xd0bac7be4a6b0920",
+        1
+      ],
+      [
+        "0xab3c0572291feb8b",
+        2
+      ],
+      [
+        "0x37e397fc7c91f5e4",
+        2
+      ],
+      [
+        "0xccd9de6396c899ca",
+        1
+      ],
+      [
+        "0xfbc577b9d747efd6",
+        1
+      ]
+    ],
+    "transactionVersion": 3,
+    "systemVersion": 1,
+    "stateVersion": 1
+  },
+  "checkedAt": "2026-09-30T10:04:39.836Z",
+  "finalizedHead": {
+    "hash": "0xcccb3610149a43cdcccf935e92836b8f5e9faf19225de81e155f8381b7674248",
+    "number": 7177531
+  },
+  "verified": [
+    {
+      "label": "setup-load",
+      "txHash": "0xc45bb873cf6e6a0988ee0878d6820c4f6f807c2df6b7e4617f140f80230a91ed",
+      "block": {
+        "index": 2,
+        "number": 7177405,
+        "hash": "0xbf4f3807e2fa6b8230fdcd5cbacdea245104ecc167cab51fa3853e2df878b65b"
+      },
+      "extrinsic": "0x710384008eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a4801fa7a75ddb8da6068d722ef2e9b346b49652799c08e7583a40d314cdeeb52e3525f85c95dda30033764ee4750e8fd7922a4ea02e9ea6b920f647bdfd59ef8948800000000000000000000009503140000004403000000000205accdca94f9390733a83aa1798c4f952544f516c9a314bd63b6cd56fe6a49f7b830864a1ae948427180b7bb24b823651c2a8563fc9849b26f4fa33392778cacc9c897a6fea47640fd7af6b3d9eb7caca795026cecf465a9a42a5fa23f069f840c",
+      "events": [
+        {
+          "type": "Balances",
+          "value": {
+            "type": "Withdraw",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "amount": "14520801"
+            }
+          }
+        },
+        {
+          "type": "Members",
+          "value": {
+            "type": "MemberAdded",
+            "value": {
+              "key": "0xaccdca94f9390733a83aa1798c4f952544f516c9a314bd63b6cd56fe6a49f7b8"
+            }
+          }
+        },
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "RecyclerLoadedWithExternalAsset",
+            "value": {
+              "instance_id": 0,
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "value": 5,
+              "amount": "320000"
+            }
+          }
+        },
+        {
+          "type": "Balances",
+          "value": {
+            "type": "Deposit",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "amount": "14520801"
+            }
+          }
+        },
+        {
+          "type": "TransactionPayment",
+          "value": {
+            "type": "TransactionFeePaid",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "actual_fee": "0",
+              "tip": "0"
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "5181568000",
+                  "proof_size": "7635"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "No"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "setup-buy-token",
+      "txHash": "0xe445bff80da0eb20b7d1eb7916321da3d79b43da9654c0bed05b0f31d9a2889f",
+      "block": {
+        "index": 2,
+        "number": 7177424,
+        "hash": "0xcb6ef6d5e142350eb5d416ccca747d0c059f9629c1ad4b08fe8ac6b521bf42b5"
+      },
+      "extrinsic": "0x590384008eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a4801225b11fa17542c3e5f176da2538ce86359196e6fe44329fd62976c747cb8674182ab8c551272101a0f3270166e32f8dc300befb7d7d57b42a413162ea5109d810000000000000000000000f503180000004407c6add78d218ed52a015e5e0cd8434f92b3d72d4d9162528ccad5be645889f642631da571371059d9f5ad0b80da4744e9a5583a9fd0a04f32b0dfb13f583f2e27b419df14a531bc886ce7b596e74cfb7cdb98362609b10f2b3821f910cd70e418",
+      "events": [
+        {
+          "type": "Balances",
+          "value": {
+            "type": "Withdraw",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "amount": "13745449"
+            }
+          }
+        },
+        {
+          "type": "Balances",
+          "value": {
+            "type": "Transfer",
+            "value": {
+              "from": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "to": "5EYCAe5cKPAoFh2HnQQvpKqRYZGqBpaA87u4Zzw89qPE58is",
+              "amount": "201139778"
+            }
+          }
+        },
+        {
+          "type": "Members",
+          "value": {
+            "type": "MemberAdded",
+            "value": {
+              "key": "0xc6add78d218ed52a015e5e0cd8434f92b3d72d4d9162528ccad5be645889f642"
+            }
+          }
+        },
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "PaidUnloadTokenRegisteredWithNative",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "fee": "201139778"
+            }
+          }
+        },
+        {
+          "type": "Balances",
+          "value": {
+            "type": "Deposit",
+            "value": {
+              "who": "5EYCAe5cKPAoFh2HnQQvpKqRYZGqBpaA87u4Zzw89qPE58is",
+              "amount": "13745449"
+            }
+          }
+        },
+        {
+          "type": "TransactionPayment",
+          "value": {
+            "type": "TransactionFeePaid",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "actual_fee": "13745449",
+              "tip": "0"
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "4819374000",
+                  "proof_size": "3221"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "Yes"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "setup-unload",
+      "txHash": "0x0525079f3e6b2db8aab8e0becadf33ddf23337298e26a3fd0c87ccfd7320447e",
+      "block": {
+        "index": 2,
+        "number": 7177444,
+        "hash": "0x0bcc68a7c2dbf601be090e6470393b330efda75b9ee65f2895963614325519f7"
+      },
+      "extrinsic": "0x5d1a4500000000000000000103450c1de199af8b3572390bccf29607a8a36f66c6e72b3888c313bba676ad1f6d44842d8ffccd53c268b991beaed690b1135f6cdb113dff96abe0130229509b1fef313aa722b197d4e1475ee9d7f3bb1037afa4e002b164445cc8ee92edd08791d55e0d5b9fb36370b8a68c58915c3075a2000756840acebcd02415489f09805b170641fe9f223be94631c56ffc60a20989d03dac0ee274bc60d12d0d83b514c9ee0aa166453d1b537106696298ee4b7de5ce7d99e910f32a474b622bc028a1ca0efed3da32af9a1391f1f2b080cb4990647aa03157911f66ac340823fff362314fe6071b70f64c999e0e58387754e6dc863f16cb7d3ae8676eadc7d487280b3b9c6987d8a4571a9d0fd1b43b914b542e32124165d63776220682a0b7d59596b3a8b9e717d6a9350083d059e9c59eaf8f8001b94a4fbe04bbcc5da840edb674173520d395bebfad5f31f5cd4495b519c8f9842b4d90469d1f958b6615395b7ed24e4fadb908434bad2c31da47f150382e9ef5f6f2055731a777ebf407dca9e44e0645ea0f3fa2f3f8bb3bbce10a94c58c9fcb89e5bd37e379a5531dc5e3be92249f54ef915d9c91cb3202dfa5dc0c2837d202082e223db2b21f72972b7d5d5a0903622b300c000a113f7dc7c2635221510bbda79f141b07f664e345f5752da3099558fa1746d699edb61688b08096444db1e1fffa84b4ba988685310608869cca532e987fc5632aaa97d43d9e5005b912a75c46bab8ce914bd1bab9bf3b61fc777a4dc8ee2321b7862bfe7dfa12d452f9d96723d1359b710996daee43b6ca1f45f2548c4dfbcd778d6f4a8fe2ff32fac041b8364af73e9950482efeeef2e4444c1bbe42d4e24b805e1175af1b2cc53b7dc7b5a2588c115a01578bbf2a765ca710901fa8e3c9ea412ff5596f93b4b9e481f605827351db33f71bddc13cb283a54df1b9974da72f230eb789d7d063d02cd209f6e3031696f120776b00a8e779b1c1062b8c798d41ed3b05d346cede7cc0645cbb183b8071c7a15781dc488828b4473f759f9aeaf44c87abdf5795efccb802b0920183045807d12e8932546125e6b4925bb1967bc0c0dfe708fcf64e6ee2db520195fc1a0000000000000000000004450c24f6e4551325d4034d50daac8c8b346950e42b746b5555aa1a0f3c0403c820ea2b1715155dcf166ee42280f151009adb6a47fe91a6497af9007a9286d120c03210912ca341fa57a7a86bb32a4c9d61c8adcbc86b0c58160fb8c802de461cbbea8682d9e2bd2026825c27c0c68870a5706d4a4420d97d3410162863dfecc72e008700a4f4c37c515395f593aa5396ba45e8657ae066ee5f10248c754b21c3c714b02531ef3b6d54f8fd74fc6343cf374190b678b689861edab39f2d075cee88e992171ef55f8c72f14819d4a64e619fe0ae859f8cd4ff23d6d75ee4785051ef146c9e8fc1278294ca71105ee5578f1bc615d022fdea01cf49b8d71e458db067668ee733bddddd3c2b738b89969574b5db00c14ab8c67757d79f13aedd750505ba398630cefadbe95e93e2f6b108f41fb196b699e5de67fa4db34b313fe10aed912d042c118f4ce7b273591fe01eff7a77ed326f2f64f7fd1809ccaa251294603fee1c31a27218b6cb5aa967452a3edc100ee2ab6a2969acca236443e5f83a5d0630dc91c7f08441e93d3eed6fe8c150eba8cb6cf3f504dd52e5d7fd9c71099f5493fc0a6860774ba96511f1605b8b59696029577bff741e2047d289180364cf2aaabff6ae423bfb3c23c2c07104437d06c0f2407eff026e26384d7dccc58b900d81915420e08ff07f8cafb3890dadf8025525e8ae77cb63b3ab23222989e2bc106939051fe028923792f3686d0c5e60fb760f2c115a704d2eb04f9eb0b0a7150223802d804d26f03e3f2d1ee78090003a8a99e08bf2b0a6360a9f9c1084cf0366816874cb2280b7b7d537a842a28ed56bafdbc70852e41c0911f70be8b8a97769cd095210431c06a1433bc018b8e8d4b3d08c177bdee0ff4adf3ab2e24cc66816b77f26aa9b22d452554d42f9de93db2b96e6ae77415418f861beb3130850b6d42cb8d100b78aa2cffc67467e61975434af77371c61963ad1c812b0964f747c4085562da51226a4d2c89c2730d8889097c24119900242193deeb811df72df60b4ae793f96752b4290b7baea63a4cfee6d01b92bb140da7f78246077870f1d2044f26fe0480bc914378af4bdd3488fdb9869000000750100000000440400000000046e3ff94be573c5af37ba586ad78a76f5dc6e2122d1c515516daad68e37758608050100000080010000d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d",
+      "events": [
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "RecyclerAliasUnloaded",
+            "value": {
+              "instance_id": 0,
+              "value": 5,
+              "ring_index": 1,
+              "alias": "0x6e3ff94be573c5af37ba586ad78a76f5dc6e2122d1c515516daad68e37758608"
+            }
+          }
+        },
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "RecyclerUnloadedIntoCoin",
+            "value": {
+              "instance_id": 0,
+              "to": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+              "input_value": 5,
+              "output_value": 5,
+              "input_count": 1
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "34104414783",
+                  "proof_size": "7079"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "Yes"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "direct-Alice-to-Bob",
+      "txHash": "0x78f2705e1237b01ec212b703e9b63289133674c49f1843897f44b3772babd393",
+      "block": {
+        "index": 2,
+        "number": 7177458,
+        "hash": "0x6de94d0839f558791f567e41dfc1e1d18fcb9473c781b4600a191ee2f6a5f425"
+      },
+      "extrinsic": "0x5d028400d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d0140044d037dfe801960cb03a54c65c648398f2e581d83b4fa4f2ec5f1b06727433f56e1f3cf9b5984c74744d3cb633f32029051b0b11b9b8b9a2fefff27c23f8e00000000000000010000000055028c00000044018eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a48",
+      "events": [
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "CoinTransferred",
+            "value": {
+              "instance_id": 0,
+              "to": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "value": 5,
+              "new_age": 1
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "610769000",
+                  "proof_size": "2736"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "No"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "exact-match-recipient-claim",
+      "txHash": "0x64d4661bbbb126ae2c8dbd964489cd41cc7aca58d940f01d23320bbd976fdd2f",
+      "block": {
+        "index": 2,
+        "number": 7177474,
+        "hash": "0x20125eb2baf7cc36196623a2648eadef4e183b69180ed83250bebb773be6091e"
+      },
+      "extrinsic": "0x5d0284008eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a48014c00b426963d77127a86ef7709162c113b1bc0c39c035e9dbde97f9fd90e4926782e25103bbab793fe085b1f0f19b581e744a756c8e66e237d3bae0e69790c8500000000000000010000000045031c000000440190b5ab205c6974c9ea841be688864633dc9ca8a357843eeacf2314649965fe22",
+      "events": [
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "CoinTransferred",
+            "value": {
+              "instance_id": 0,
+              "to": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+              "value": 5,
+              "new_age": 2
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "610769000",
+                  "proof_size": "2703"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "No"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "prepare-split-Charlie",
+      "txHash": "0xbb1810efba0e5d740bf59f6aca94a3b574761f36c2927e7b656036306c0c4094",
+      "block": {
+        "index": 2,
+        "number": 7177489,
+        "hash": "0x132a7c9a1bc3fdb4ac73d4e28e74abdc30e722c4a8f427f9c0b72781be3b1df0"
+      },
+      "extrinsic": "0xe902840090b5ab205c6974c9ea841be688864633dc9ca8a357843eeacf2314649965fe220108fffb9e5db53ec799f1fcc91b0f51bb60baa41c01a79c83662202d219d0720592b9650cc6ba9ad787554fb39d06ff24edfb5b333baa6c63ff4eaa042911098d0000000000000001000000003500000000004400040408306721211d5404bd9da88e0204360a1a9ab8b87c66c1bc2fcdd37f3c2222cc20e659a7a1628cdd93febc04a4e0646ea20e9f5f0ce097d9a05290d4a9e054df4e",
+      "events": [
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "CoinSplit",
+            "value": {
+              "instance_id": 0,
+              "output_count": 2
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "741334816",
+                  "proof_size": "2535"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "No"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "prepared-recipient-claim",
+      "txHash": "0x1bf02bca07b644050416366a056d6f5964112348bcf5c0f04c01f0282cb0f5dc",
+      "block": {
+        "index": 2,
+        "number": 7177503,
+        "hash": "0xb7a492f5c168910c7c00d3928adf3803baf1717c7a86be6b4592ee4aa01940ad"
+      },
+      "extrinsic": "0x5d028400306721211d5404bd9da88e0204360a1a9ab8b87c66c1bc2fcdd37f3c2222cc20016eb5019136f613c49acccb77e91b7396bd994b99a1ba10a67de4d7d9f7e8555481e3db4b30157acc33f76d2ef8e42510d97094dd3cb17f871b4d84fd4889158b00000000000000010000000025010000000044011cbd2d43530a44705ad088af313e18f80b53ef16b36177cd4b77b846f2a5f07c",
+      "events": [
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "CoinTransferred",
+            "value": {
+              "instance_id": 0,
+              "to": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+              "value": 4,
+              "new_age": 4
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "610769000",
+                  "proof_size": "2459"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "No"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "explicit-recycle-Ferdie",
+      "txHash": "0x0194e9daa8908ef659b0f1d6637d3d8b5d14f9191be771149accd8ecd04afa87",
+      "block": {
+        "index": 2,
+        "number": 7177519,
+        "hash": "0x33c6900a4e46e2e0bf7c948c7f1c2bb765ee9943fe29460d4650f2be114e8961"
+      },
+      "extrinsic": "0x5d0384001cbd2d43530a44705ad088af313e18f80b53ef16b36177cd4b77b846f2a5f07c01d28ea407eeb19ad51f845e97c165ac1fc41fcdfe80543ecdb490c7a4025d9938d1e7c1f1797e5947b4861c10b2c297e2b9d0dd4f00cf522ab96a5962aa8aea8b00000000000000010000000015020000000044024e1fa7186f099e915fdd3f24f29a3917c42da5351542032a5c41d1137483ba42ddf60ebf7775e4d7ecce9a5d0a0a7fd8050afafe583de5cca4aebdd069bd3ab6cf792bd988e99f96f3a1602e16c1d2cb77a956c1624e704f04ab9663bf507919",
+      "events": [
+        {
+          "type": "Members",
+          "value": {
+            "type": "MemberAdded",
+            "value": {
+              "key": "0x4e1fa7186f099e915fdd3f24f29a3917c42da5351542032a5c41d1137483ba42"
+            }
+          }
+        },
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "RecyclerLoadedWithCoin",
+            "value": {
+              "instance_id": 0,
+              "value": 4
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "5166703000",
+                  "proof_size": "6686"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "No"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

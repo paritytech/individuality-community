@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "demo": "tsx demo.ts",
+    "reproduce": "tsx reproduce.ts",
     "check": "tsc --noEmit",
     "test": "tsx --test *.test.ts",
     "verify": "tsx verify.ts"
