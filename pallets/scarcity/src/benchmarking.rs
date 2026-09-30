@@ -87,7 +87,7 @@ mod benchmarks {
 	}
 
 	#[benchmark]
-	fn define_item(m: Linear<0, 100>) -> Result<(), BenchmarkError> {
+	fn define_item(m: Linear<0, { T::MaxItemMetadata::get() }>) -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
 		fund::<T>(&caller);
 		let collection = Pallet::<T>::do_create_collection(caller.clone())?;

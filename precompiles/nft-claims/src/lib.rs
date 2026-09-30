@@ -81,31 +81,28 @@ pub const KIND_CONTRACT: u8 = 2;
 pub const ERR_UNKNOWN_COLLECTION: &str = "unknown collection";
 /// Revert reason when the caller is not the collection owner.
 pub const ERR_NOT_COLLECTION_OWNER: &str = "caller is not the collection owner";
+/// Revert reason when no contract code exists at the minter address.
+pub const ERR_MINTER_NOT_A_CONTRACT: &str = "no contract code at the minter address";
 
-/// Map the `pallet-nft-claims` errors registration can trigger to catchable reverts.
+/// Map the errors `set_collection_minter` can return to catchable reverts.
 ///
-/// Every error variant reachable through `set_collection_minter` is listed, so a caller
-/// never sees a trapped frame for a condition it could have handled. Adding a variant to the
-/// pallet does not break this list at compile time; `mapped_nft_claims_errors_are_exhaustive`
-/// in the tests fails instead.
-///
-/// A rejected contract selection surfaces as the string error the runtime's
-/// `CollectionSelector::validate` reports, which is forwarded as the revert reason. Anything
-/// else propagates as a plain error, which traps the frame rather than reverting.
+/// The list must hold every reachable variant, but the compiler does not enforce this.
+/// The `mapped_nft_claims_errors_are_exhaustive` test checks exhaustiveness. An unlisted error,
+/// such as one from a runtime's `CollectionSelector::validate`, traps the frame.
 fn revert_nft_claims<T: indiv_pallet_nft_claims::Config>(e: DispatchError) -> Error {
-	let cases: [(NftClaimsError<T>, &str); 2] = [
+	let cases: [(NftClaimsError<T>, &str); 3] = [
 		(NftClaimsError::UnknownCollection, ERR_UNKNOWN_COLLECTION),
 		(NftClaimsError::NotCollectionOwner, ERR_NOT_COLLECTION_OWNER),
+		(NftClaimsError::MinterNotAContract, ERR_MINTER_NOT_A_CONTRACT),
 	];
+
 	for (error, reason) in cases {
 		if e == DispatchError::from(error) {
 			return revert(reason);
 		}
 	}
-	match e {
-		DispatchError::Other(reason) => revert(reason),
-		other => other.into(),
-	}
+
+	e.into()
 }
 
 /// Collection-minter registration for NFT claims at the fixed address index `INDEX`.
