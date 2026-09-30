@@ -70,6 +70,11 @@ These publicly known accounts are test identities, not private users.
 
 ## Reproduce payment stages on Devnet
 
+**Network correction:** the September 29 community nightly configuration selects
+Paseo Next V2 People, not public Paseo People. The script below and its measured
+results target public Paseo People and do not reproduce the nightly app end to end.
+See the [release and network investigation](evidence/README.md#nightly-network-correction-and-reproduction-limits).
+
 `reproduce.ts` measures a bounded sequence on public Paseo People, using the
 Devnet endpoint and a pinned genesis hash. It defaults to a read-only preflight.
 The [verified live run and timing results](evidence/README.md#devnet-payment-reproduction--30-september-2026)

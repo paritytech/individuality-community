@@ -1,0 +1,140 @@
+{
+  "retrievedAt": "2026-09-30T10:27:18.963231+00:00",
+  "sourceArtifact": "https://github.com/paritytech/host-rust-core/releases/tag/simulator-20260929-2054-ab64716",
+  "sourceCommit": "ab6471645b2500719e0d0f7af1cc514c5ec75582",
+  "request": {
+    "platform": "iOS",
+    "appVersion": "0.10.0",
+    "appBuild": "44",
+    "environment": "nightly"
+  },
+  "chain": {
+    "chainId": "nightly-people",
+    "genesisHash": "4a2b5b737de1da59e209b0000a876ec2fa20035dc34fd292a848da32d255ad48",
+    "parentId": "nightly-relay",
+    "name": "Paseo Next V2 People",
+    "addressPrefix": 42,
+    "nodeSelectionStrategy": null,
+    "nodes": [
+      {
+        "url": "wss://paseo-people-next-system-rpc.polkadot.io",
+        "name": "RPC"
+      }
+    ],
+    "additional": {
+      "defaultBlockTime": 2000,
+      "finalityGapIdeal": 15,
+      "finalityGapOutage": 30
+    },
+    "assets": [
+      {
+        "assetId": 0,
+        "symbol": "PAS",
+        "precision": 10,
+        "priceId": "polkadot",
+        "name": null,
+        "type": null,
+        "typeExtras": null
+      },
+      {
+        "assetId": 1,
+        "symbol": "pUSD",
+        "precision": 6,
+        "priceId": "tether",
+        "type": "statemine",
+        "name": "Digital Dollar",
+        "typeExtras": {
+          "assetId": "0x010300711704320576c8eb0b",
+          "palletName": "Assets",
+          "isSufficient": true
+        }
+      }
+    ],
+    "explorers": [],
+    "externalApi": null,
+    "options": [
+      "fullSyncByDefault"
+    ]
+  },
+  "coinageInstanceId": "0",
+  "paymentAssetConfig": {
+    "symbol": "CASH",
+    "iconSquareUrl": "https://raw.githubusercontent.com/paritytech/polkadot-ios-community/refs/heads/main/docs/assets/payment-asset/cash-square.svg",
+    "iconWideUrl": "https://raw.githubusercontent.com/paritytech/polkadot-ios-community/refs/heads/main/docs/assets/payment-asset/cash-wide.svg"
+  },
+  "androidConfirmation": {
+    "retrievedAt": "2026-09-30T10:29:17.188852+00:00",
+    "sourceArtifact": "https://github.com/paritytech/host-rust-core/releases/tag/android-20260929-2240-c515844",
+    "sourceCommit": "c5158448f3c4575f40350017d466053d6b19dacb",
+    "request": {
+      "platform": "Android",
+      "appVersion": "1.0.0",
+      "appBuild": "1021",
+      "environment": "nightly"
+    },
+    "chain": {
+      "chainId": "nightly-people",
+      "genesisHash": "4a2b5b737de1da59e209b0000a876ec2fa20035dc34fd292a848da32d255ad48",
+      "parentId": "nightly-relay",
+      "name": "Paseo Next V2 People",
+      "addressPrefix": 42,
+      "nodeSelectionStrategy": null,
+      "nodes": [
+        {
+          "url": "wss://paseo-people-next-system-rpc.polkadot.io",
+          "name": "RPC"
+        }
+      ],
+      "additional": {
+        "defaultBlockTime": 2000,
+        "finalityGapIdeal": 15,
+        "finalityGapOutage": 30
+      },
+      "assets": [
+        {
+          "assetId": 0,
+          "symbol": "PAS",
+          "precision": 10,
+          "priceId": "polkadot",
+          "name": null,
+          "type": null,
+          "typeExtras": null
+        },
+        {
+          "assetId": 1,
+          "symbol": "pUSD",
+          "precision": 6,
+          "priceId": "tether",
+          "type": "statemine",
+          "name": "Digital Dollar",
+          "typeExtras": {
+            "assetId": "0x010300711704320576c8eb0b",
+            "palletName": "Assets",
+            "isSufficient": true
+          }
+        }
+      ],
+      "explorers": [],
+      "externalApi": null,
+      "options": [
+        "fullSyncByDefault"
+      ]
+    },
+    "coinageInstanceId": "0"
+  },
+  "rpcVerification": {
+    "endpoint": "wss://paseo-people-next-system-rpc.polkadot.io",
+    "genesis": "0x4a2b5b737de1da59e209b0000a876ec2fa20035dc34fd292a848da32d255ad48",
+    "chainName": "Paseo People Next",
+    "specName": "next-people-paseo",
+    "specVersion": 3003000,
+    "transactionVersion": 5
+  },
+  "limits": [
+    "Remote configuration observed on 2026-09-30, not a historical snapshot of Alex\u2019s phone.",
+    "The iOS simulator artifact has version 0.10.0 build 1. Its embedded Firebase project was queried with the reported TestFlight version 0.10.0 build 44 and nightly environment. This does not establish the exact source commit of TestFlight build 44.",
+    "Android configuration was queried using the Firebase app ID and client configuration extracted from the released build 1021 APK.",
+    "No app was installed or run. This machine has no Xcode simulator or Android adb available.",
+    "The previous reproduction targeted public Paseo People, whose genesis differs."
+  ]
+}

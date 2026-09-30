@@ -96,3 +96,74 @@ Validation: TypeScript checking and all nine script tests passed. Repository
 `scripts/check.sh` passed formatting, clippy and all 2831 Rust tests.
 `check_validtx_priority.sh` passed; `check_todos.sh` still reports existing TODO
 URL formatting in unrelated Rust files. No Rust source was changed.
+
+## Nightly network correction and reproduction limits
+
+The September 29 changelog identifies builds from `paritytech/host-rust-core`.
+The iOS simulator release is pinned to `ab6471645b2500719e0d0f7af1cc514c5ec75582`;
+Android 1.0.0 build 1021 is pinned to `c5158448f3c4575f40350017d466053d6b19dacb`.
+Their [iOS chain selection](https://github.com/paritytech/host-rust-core/blob/ab6471645b2500719e0d0f7af1cc514c5ec75582/hosts/ios/polkadot-app/AppConfig/KnownChains.swift)
+and [Android chain selection](https://github.com/paritytech/host-rust-core/blob/c5158448f3c4575f40350017d466053d6b19dacb/hosts/android/chains/src/main/java/io/paritytech/polkadotapp/chains/multiNetwork/KnownChains.kt)
+select `nightly-people`; endpoints are supplied by Firebase Remote Config.
+
+The released artifacts' embedded client configuration was used to fetch remote
+configuration with `environment=nightly`: iOS version 0.10.0/build 44 and Android
+version 1.0.0/build 1021. Both returned instance 0 on **Paseo Next V2 People**,
+`wss://paseo-people-next-system-rpc.polkadot.io`, with genesis
+`0x4a2b5b737de1da59e209b0000a876ec2fa20035dc34fd292a848da32d255ad48`.
+The RPC independently returned that genesis and runtime `next-people-paseo`
+3003000, transaction version 5. Public Paseo People, used in the reproduction
+above, has genesis `0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec`.
+The documentation page and the nightly configuration therefore select different
+chains. The prior reproduction does not establish the nightly app's latency.
+
+[Sanitized network evidence](nightly-network-2026-09-30.json) records both platform
+queries and the matching RPC identity. This is the currently served configuration,
+not proof of Alex's installed build, cached configuration or historical connection.
+The iOS simulator itself reports build 1; it identifies the client project but
+does not prove the exact source commit of TestFlight build 44. No phone app was
+run: this machine does not have Xcode's simulator or Android adb available.
+
+The release-tagged code confirms the following:
+
+- [ExactMatchStrategy.swift](https://github.com/paritytech/host-rust-core/blob/ab6471645b2500719e0d0f7af1cc514c5ec75582/hosts/ios/Packages/Coinage/Sources/Transfer/Plan/Strategies/ExactMatchStrategy.swift)
+  hands over existing coin keys with no sender extrinsic.
+- [ClaimExtrinsicBuilder.swift](https://github.com/paritytech/host-rust-core/blob/ab6471645b2500719e0d0f7af1cc514c5ec75582/hosts/ios/Packages/Coinage/Sources/Transfer/Plan/Builders/ClaimExtrinsicBuilder.swift)
+  and [ClaimExtrinsicBuilder.kt](https://github.com/paritytech/host-rust-core/blob/c5158448f3c4575f40350017d466053d6b19dacb/hosts/android/feature/coinage/impl/src/main/java/io/paritytech/polkadotapp/feature_coinage_impl/domain/planner/strategies/builders/ClaimExtrinsicBuilder.kt)
+  claim using `Coinage.transfer` into the recipient's derived destination.
+  Automatic recycling is a separate operation and policy decision.
+- [RecyclingStrategyType.swift](https://github.com/paritytech/host-rust-core/blob/ab6471645b2500719e0d0f7af1cc514c5ec75582/hosts/ios/Packages/Coinage/Sources/Recycling/Strategy/RecyclingStrategyType.swift)
+  and [RecyclingStrategyType.kt](https://github.com/paritytech/host-rust-core/blob/c5158448f3c4575f40350017d466053d6b19dacb/hosts/android/feature/coinage/api/src/main/java/io/paritytech/polkadotapp/feature_coinage_api/domain/recycling/RecyclingStrategyType.kt)
+  give Fastest no optional wait after recycler inclusion. Maximal privacy requires
+  90% ring fill, or 32 members and ten minutes since confirmed inclusion.
+  The coin-age ceiling can still force recycling under Fastest.
+- [AwaitInputs.swift](https://github.com/paritytech/host-rust-core/blob/ab6471645b2500719e0d0f7af1cc514c5ec75582/hosts/ios/Packages/Coinage/Sources/CoinageTx/Submission/AwaitInputs.swift)
+  has a 300-second idle limit for observing required inputs. It returns early when
+  inputs arrive. This is not a five-minute anonymity timer or proof of Alex's cause.
+- [CoinageHoldingsUiMapper.kt](https://github.com/paritytech/host-rust-core/blob/c5158448f3c4575f40350017d466053d6b19dacb/hosts/android/feature/wallet/impl/src/main/java/io/paritytech/polkadotapp/feature_wallet_impl/presentation/pocket/mapper/CoinageHoldingsUiMapper.kt)
+  combines pending funds and gaining-privacy funds into the label Clearing.
+  The label alone does not establish which operation is delayed.
+
+A faithful reproduction needs two app wallets on this nightly network, separately
+testing exact-key handoff in Fastest, the same handoff in maximal privacy, and a
+payment requiring sender-side split/unload. Record message reception, input
+detection, claim submission/inclusion, recycle submission/membership and the UI's
+Clearing-to-ready transition. The prior script locally handed over a key, waited
+for finalized inputs, used a paid unload token, and manually recycled a coin; it
+did not exercise chat delivery, the claim recovery queue, automatic privacy policy
+or the mobile balance display. A protocol success cannot rule out those delays.
+
+The corrected-network scan covered **891 finalized blocks**, 1177356 through
+1178246, for **30 September 2026, 15:50–16:20 GMT+7**. It found **zero Coinage
+events** and zero `System.ExtrinsicFailed` events. The 36 extrinsics beyond
+inherents include PeopleLite activity and housekeeping; the Members ring
+onboarding/build/cleanup events identify the PeopleLite collection, not Coinage
+recyclers. [Window evidence and transaction links](nightly-window-2026-09-30.json).
+Thus the network correction still does not identify Alex's payment or support a
+new successful recycler load in that window. It does not exclude funds loaded
+before the window becoming usable later, a UI update, or an unsubmitted/rejected
+claim that leaves no finalized transaction.
+
+A read-only preflight of the same six development accounts on the corrected
+network found no existing coins and no backing-asset balance for Bob. No new
+transactions were submitted there during this investigation.
