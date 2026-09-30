@@ -17,7 +17,7 @@
 pub use super::*;
 
 use frame_support::{
-	derive_impl, parameter_types,
+	derive_impl, ensure, parameter_types,
 	traits::{fungible::HoldConsideration, ConstU32, ConstU64, ConstU8, LinearStoragePrice},
 };
 use frame_system::{
@@ -167,9 +167,10 @@ impl CollectionSelector<AccountId32> for MockSelector {
 	}
 
 	fn validate(_contract: H160) -> Result<(), DispatchError> {
-		if !MinterContractValid::get() {
-			return Err(DispatchError::Other("no contract code at the minter address"));
-		}
+		ensure!(
+			MinterContractValid::get(),
+			indiv_pallet_nft_claims::Error::<Test>::MinterNotAContract
+		);
 		Ok(())
 	}
 

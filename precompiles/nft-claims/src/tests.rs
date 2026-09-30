@@ -246,7 +246,7 @@ fn rejected_contract_selection_reverts() {
 				minter: H160([0xCC; 20]).0.into(),
 			}
 			.abi_encode(),
-			"no contract code at the minter address",
+			ERR_MINTER_NOT_A_CONTRACT,
 		);
 		assert_eq!(CollectionMinters::<Test>::get(collection), None);
 
