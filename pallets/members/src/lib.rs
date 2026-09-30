@@ -3002,6 +3002,10 @@ pub mod pallet {
 			ActiveMembers::<T>::get(identifier)
 		}
 
+		fn onboarding_queue_page_size() -> u32 {
+			T::OnboardingQueuePageSize::get()
+		}
+
 		fn add_members(identifier: &Identifier, members: Vec<MemberOf<T>>) -> DispatchResult {
 			let _collection_info =
 				Collections::<T>::get(identifier).ok_or(Error::<T>::CollectionNotFound)?;

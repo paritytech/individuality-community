@@ -623,6 +623,8 @@ pub trait AppendOnlyMembers: MembershipProver {
 	fn delete_collection(owner: Self::Location, identifier: &Identifier) -> DispatchResult;
 	/// Returns the number of active members in a set.
 	fn active_count(identifier: &Identifier) -> u32;
+	/// Returns the number of keys an onboarding queue page holds.
+	fn onboarding_queue_page_size() -> u32;
 	/// Add members in a particular collection.
 	fn add_members(
 		identifier: &Identifier,

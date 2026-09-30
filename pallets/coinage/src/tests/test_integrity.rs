@@ -123,3 +123,12 @@ fn integrity_checks_unloads_without_loaded_coins() {
 		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }
+
+#[test]
+#[should_panic(expected = "MaxSplitOutputs must not exceed the onboarding queue page size")]
+fn integrity_rejects_split_outputs_above_the_page_size() {
+	new_test_ext().execute_with(|| {
+		OnboardingQueuePageSize::set(&(MAX_SPLIT_OUTPUTS - 1));
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}

@@ -1990,6 +1990,14 @@ pub mod pallet {
 				"the unload benchmarks need MaxConsolidation and the recycler ring capacity to be \
 				at least 8",
 			);
+			// The mixed-output weights charge each denomination group for at most two onboarding
+			// pages. A group holds at most `MaxSplitOutputs` coins.
+			let page_size = T::MemberService::onboarding_queue_page_size();
+			assert!(
+				T::MaxSplitOutputs::get() <= page_size,
+				"MaxSplitOutputs must not exceed the onboarding queue page size {page_size}, so \
+				that a group of loaded coins spans at most two pages",
+			);
 
 			let unload_extension = T::WeightInfo::as_unload_token_people_tx_ext()
 				.max(T::WeightInfo::as_unload_token_lite_people_tx_ext())

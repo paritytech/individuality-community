@@ -346,6 +346,11 @@ impl AppendOnlyMembers for MockMemberService {
 		0
 	}
 
+	fn onboarding_queue_page_size() -> u32 {
+		// The mock queue has no pages.
+		u32::MAX
+	}
+
 	fn add_members(
 		identifier: &Identifier,
 		members: Vec<<Self::Crypto as verifiable::GenerateVerifiable>::Member>,

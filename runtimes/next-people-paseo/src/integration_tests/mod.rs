@@ -66,7 +66,6 @@ use std::{
 
 // TODO(paritytech/individuality#1127): bring back key_migration_flow - tests old migration API
 // removed in Members refactor mod key_migration_flow;
-mod coinage_config;
 mod coinage_fee_sanity;
 mod coinage_infallible_unpaid_load;
 mod coinage_non_anonymous_flow;

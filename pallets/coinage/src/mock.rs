@@ -187,6 +187,7 @@ impl
 
 parameter_types! {
 	pub const FlexibleRingExp: RingExponent = RingExponent::R2e9;
+	pub storage OnboardingQueuePageSize: u32 = 40;
 }
 
 impl indiv_pallet_members::Config for Test {
@@ -196,7 +197,7 @@ impl indiv_pallet_members::Config for Test {
 	type ChunksManager = ChunksManager;
 	type Clock = MockTime;
 	type MaxCollections = ConstU32<20>;
-	type OnboardingQueuePageSize = ConstU32<40>;
+	type OnboardingQueuePageSize = OnboardingQueuePageSize;
 	type MaxFlexibleRingExponent = FlexibleRingExp;
 	type RingBuildingMemberLimit = ConstU32<100>;
 	type OldRootRetentionDuration = ConstU64<600>;
