@@ -118,6 +118,49 @@ submission queues or their five-minute input-wait recovery logic. A successful r
 cannot rule out a phone-side delay. It uses a paid unload token instead of the
 apps' personhood allowance, so allowance acquisition is also outside its scope.
 
+## Timed recycler-loading experiment on documented Devnet
+
+`recycler-bot.ts` loads backing assets into new recycler vouchers and keeps them
+there. It targets public Paseo People, pinned by genesis, using instance 0 and
+`//Bob`. It defaults to a read-only preflight:
+
+```sh
+pnpm recycler-bot --output runs/bot-check
+pnpm recycler-bot --run --output runs/bot-live
+# Stop after any transaction already in flight settles:
+touch runs/bot-live/STOP
+```
+
+The default run lasts two hours, submits no more frequently than once every
+90 seconds and allows at most 80 denomination-1 loads. Each load is 20000 raw
+backing-asset units; the whole plan is capped at 1600000 raw units. With six asset
+decimals this is 0.02 per load and 1.60 total. The run requires the entire plan's
+asset balance up front. The native fee guard allows 10000000000 raw units (1 PAS),
+checks twice the estimated fee before each submission and records actual fees.
+Unexpected fees, dispatch failures and unresolved submissions stop the process.
+
+Use `--duration-seconds` (up to 10800), `--interval-seconds` (at least 30),
+`--denominations 1,5` and `--max-asset-raw` to change the plan. Denominations are
+visited in order; a plan whose maximum total exceeds its budget is rejected.
+A slow transaction reduces throughput rather than causing a catch-up burst.
+At the deadline the bot stops submitting; an in-flight transaction may still
+settle. SIGINT, SIGTERM and a `STOP` file request the same graceful shutdown.
+
+`status.json` records the PID, start/end times, successful load count and spending.
+`receipts.jsonl` records signed bytes, submission progress, finality, explorer
+links and confirmed recycler membership. Voucher secrets stay in `vouchers.json`
+inside the ignored run directory. Keep this file to retain control of the loaded
+funds. The script refuses to reuse an output directory, prevents a second instance
+of this bot from using Bob concurrently and never automatically resends an
+unresolved transaction. Do not run another Bob-funded script at the same time.
+
+This tests a specific recycler, not every cash denomination. Added entries in
+denomination 1 do not fill denomination 5 or 11. It is not a promise of faster
+payments: the observed onboarding threshold was already one member. A useful
+comparison has Alex test the same network and denomination, with the app's privacy
+mode held constant, while noting the exact send, receive and ready times.
+No phone-side behavior is inferred from successful bot transactions.
+
 ## What an outside observer sees
 
 The direct transfers in this example are public. A transaction hash is a lookup

@@ -255,3 +255,36 @@ This confirms that no successful Coinage transfer, split, load or unload is
 visible in the specified window on the documented Devnet. It does not identify
 Alex's installed network or explain a mobile UI transition without a new
 transaction.
+
+## Two-hour recycler-loading experiment
+
+Started on **30 September 2026 at 17:58:30 GMT+7**, scheduled to stop submitting
+at **19:58:30 GMT+7**. The user selected the documented Devnet, public Paseo
+People. The bot uses Bob's existing backing-asset balance, instance 0 and
+denomination 1. It loads new vouchers and holds them, with at least 90 seconds
+between submissions, at most 80 loads and at most 1600000 raw backing-asset
+units (1.60 at six decimals). Each load is 20000 raw units (0.02).
+
+The first load succeeded in finalized block 7178282, extrinsic 2:
+[0xae8e33c84777aa656e7821e1ccf5b1fe57827c51692083ca7051f7a47a3212c1](https://dev.papi.how/explorer/0x59db47f2c0498685fd3db52e3b1e47af828c14682d231e5b4c1b477071c66774#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2).
+At 17:59:03 the new voucher was confirmed in ring 0, revision 27, with 28
+included members. This establishes working recycler traffic, not a resolution
+of Alex's delay. The observed onboarding threshold for this recycler was one.
+
+- [Startup snapshot and membership checks](recycler-bot-startup.json)
+- [Independently verified initial transactions](recycler-bot-initial-transactions.json)
+- [Script and operating instructions](../README.md#timed-recycler-loading-experiment-on-documented-devnet)
+
+The process runs independently of this chat with an idle-sleep assertion. Its
+current status and all subsequent receipts remain under the ignored local
+`runs/recycler-bot-devnet-2026-09-30-2h/` directory. A `STOP` file there requests
+graceful shutdown. Voucher secrets remain local. These published files are
+initial evidence; they do not claim the full two-hour run has finished.
+
+Only denomination 1 receives entries. A useful app comparison must match the
+network and denominations and keep the privacy mode constant. Background activity
+is an experiment, not a guarantee that a 24.66 balance will clear sooner.
+
+Validation: TypeScript checking and all 12 script tests passed. `scripts/check.sh`
+passed all local stages and 2831 Rust tests; `check_validtx_priority.sh` passed.
+The pre-existing TODO URL lint failures remain. No Rust source was modified.

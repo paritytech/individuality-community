@@ -1,0 +1,84 @@
+{
+  "statusAtCapture": {
+    "state": "running",
+    "pid": 76412,
+    "endpoint": "wss://people-paseo.rotko.net",
+    "payer": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "instance": 0,
+    "denominations": [
+      1
+    ],
+    "startedAt": "2026-09-30T10:58:30.758Z",
+    "endsAt": "2026-09-30T12:58:30.758Z",
+    "loaded": 2,
+    "assetSpent": "40000",
+    "nativeFees": "0",
+    "maxLoads": 80,
+    "assetBudget": "1600000",
+    "feeBudget": "10000000000"
+  },
+  "initialFinalizedTransactions": [
+    {
+      "time": "2026-09-30T10:58:58.545Z",
+      "label": "load-0-denomination-1",
+      "txHash": "0xae8e33c84777aa656e7821e1ccf5b1fe57827c51692083ca7051f7a47a3212c1",
+      "block": {
+        "index": 2,
+        "number": 7178282,
+        "hash": "0x59db47f2c0498685fd3db52e3b1e47af828c14682d231e5b4c1b477071c66774"
+      },
+      "denomination": 1,
+      "amount": "20000",
+      "member": "0x57ce9245b305247de2e3df11f924ea5f55d8b1229d6e8616a8ee766f6ce16286",
+      "elapsedMs": 27558,
+      "explorer": "https://dev.papi.how/explorer/0x59db47f2c0498685fd3db52e3b1e47af828c14682d231e5b4c1b477071c66774#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "ok": true
+    },
+    {
+      "time": "2026-09-30T11:00:28.251Z",
+      "label": "load-1-denomination-1",
+      "txHash": "0x564827928a6f889c85db3555299eaf53857a56c968a0188bb317d40bdb55a046",
+      "block": {
+        "index": 2,
+        "number": 7178327,
+        "hash": "0x4b710360b5a23ef05935d2fd1e7af1d0ef8f6b38d8848a44032b57bcfbe82d83"
+      },
+      "denomination": 1,
+      "amount": "20000",
+      "member": "0x98129e789d39af09b44ca2023b68616e688e93e4e3dd79167e21fd60e7f1c8d7",
+      "elapsedMs": 27008,
+      "explorer": "https://dev.papi.how/explorer/0x4b710360b5a23ef05935d2fd1e7af1d0ef8f6b38d8848a44032b57bcfbe82d83#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "ok": true
+    }
+  ],
+  "initialMembershipChecks": [
+    {
+      "time": "2026-09-30T10:59:03.264Z",
+      "type": "membership-confirmed",
+      "member": "0x57ce9245b305247de2e3df11f924ea5f55d8b1229d6e8616a8ee766f6ce16286",
+      "denomination": 1,
+      "at": "0x5d8be36f2c420cc7804f793d9c123ba3db63147e4c5c49ca121bb6222658f432",
+      "index": 0,
+      "revision": 27,
+      "included": 28,
+      "elapsedMs": 4719
+    },
+    {
+      "time": "2026-09-30T11:00:37.948Z",
+      "type": "membership-confirmed",
+      "member": "0x98129e789d39af09b44ca2023b68616e688e93e4e3dd79167e21fd60e7f1c8d7",
+      "denomination": 1,
+      "at": "0x783e868fc38f7c8c147fe432a94d678e9181e019a9f0772fc6856b1606c4a644",
+      "index": 0,
+      "revision": 28,
+      "included": 29,
+      "elapsedMs": 9694
+    }
+  ],
+  "limits": [
+    "This is a startup snapshot, not a completed two-hour run.",
+    "Only denomination 1 is supplied; other denomination rings are unaffected.",
+    "No measurement of Alex\u2019s app has been taken."
+  ],
+  "localStatusFile": "runs/recycler-bot-devnet-2026-09-30-2h/status.json"
+}

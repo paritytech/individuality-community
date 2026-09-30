@@ -1,0 +1,181 @@
+{
+  "endpoint": "https://rpc.interweb-it.com/people-paseo",
+  "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+  "checkedAt": "2026-09-30T11:02:17.250Z",
+  "runtimeSpecVersion": 2005002,
+  "metadataSource": "Previously captured metadata for the same chain, with specVersion checked at every transaction block.",
+  "finalizedHead": {
+    "hash": "0x30104c3f293b1e2e0f95c5942989090417ed5e010b0d4bff6d7fc5c2b4d42be0",
+    "number": 7178347
+  },
+  "verified": [
+    {
+      "label": "load-0-denomination-1",
+      "txHash": "0xae8e33c84777aa656e7821e1ccf5b1fe57827c51692083ca7051f7a47a3212c1",
+      "block": {
+        "index": 2,
+        "number": 7178282,
+        "hash": "0x59db47f2c0498685fd3db52e3b1e47af828c14682d231e5b4c1b477071c66774"
+      },
+      "extrinsic": "0x710384008eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a4801e60700233aab2d8d39e760434f7818818c9fc983ec1b8481e3b991d8cbc5010474981066e1d7271a54e0c8c2cd83981ea46fd19a8c922c5ec1ae94ea4840af890000000000000000000000c5011c000000440300000000020157ce9245b305247de2e3df11f924ea5f55d8b1229d6e8616a8ee766f6ce16286bc95bba8aab5effc9be0ab45367b5b58c8dac2d8df5da43e98e3b2273d3377b789f841ab059329d4c52393e0b975c0f956a25ba8e9fd158d5c9ef7f76fb58510",
+      "events": [
+        {
+          "type": "Balances",
+          "value": {
+            "type": "Withdraw",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "amount": "14520801"
+            }
+          }
+        },
+        {
+          "type": "Members",
+          "value": {
+            "type": "MemberAdded",
+            "value": {
+              "key": "0x57ce9245b305247de2e3df11f924ea5f55d8b1229d6e8616a8ee766f6ce16286"
+            }
+          }
+        },
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "RecyclerLoadedWithExternalAsset",
+            "value": {
+              "instance_id": 0,
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "value": 1,
+              "amount": "20000"
+            }
+          }
+        },
+        {
+          "type": "Balances",
+          "value": {
+            "type": "Deposit",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "amount": "14520801"
+            }
+          }
+        },
+        {
+          "type": "TransactionPayment",
+          "value": {
+            "type": "TransactionFeePaid",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "actual_fee": "0",
+              "tip": "0"
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "5181568000",
+                  "proof_size": "6881"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "No"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "load-1-denomination-1",
+      "txHash": "0x564827928a6f889c85db3555299eaf53857a56c968a0188bb317d40bdb55a046",
+      "block": {
+        "index": 2,
+        "number": 7178327,
+        "hash": "0x4b710360b5a23ef05935d2fd1e7af1d0ef8f6b38d8848a44032b57bcfbe82d83"
+      },
+      "extrinsic": "0x710384008eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a4801863f4d1026d20b9221b5804fa36f49c3cb17c492672461e07173b112553b9e5cbb66d73291c53cb24b0ae61ab31ac9651d79694f538c229a53651de97e736d860000000000000000000000950020000000440300000000020198129e789d39af09b44ca2023b68616e688e93e4e3dd79167e21fd60e7f1c8d705bccec3cc342301d0625df1c218d5a75c29abfcc2b9b433bddb54e31938251e7e5bb0ddd23dcc1cd341e57a897278548d682572cf09bf5791ed72ccd2063909",
+      "events": [
+        {
+          "type": "Balances",
+          "value": {
+            "type": "Withdraw",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "amount": "14520801"
+            }
+          }
+        },
+        {
+          "type": "Members",
+          "value": {
+            "type": "MemberAdded",
+            "value": {
+              "key": "0x98129e789d39af09b44ca2023b68616e688e93e4e3dd79167e21fd60e7f1c8d7"
+            }
+          }
+        },
+        {
+          "type": "Coinage",
+          "value": {
+            "type": "RecyclerLoadedWithExternalAsset",
+            "value": {
+              "instance_id": 0,
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "value": 1,
+              "amount": "20000"
+            }
+          }
+        },
+        {
+          "type": "Balances",
+          "value": {
+            "type": "Deposit",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "amount": "14520801"
+            }
+          }
+        },
+        {
+          "type": "TransactionPayment",
+          "value": {
+            "type": "TransactionFeePaid",
+            "value": {
+              "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "actual_fee": "0",
+              "tip": "0"
+            }
+          }
+        },
+        {
+          "type": "System",
+          "value": {
+            "type": "ExtrinsicSuccess",
+            "value": {
+              "dispatch_info": {
+                "weight": {
+                  "ref_time": "5181568000",
+                  "proof_size": "7389"
+                },
+                "class": {
+                  "type": "Normal"
+                },
+                "pays_fee": {
+                  "type": "No"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
