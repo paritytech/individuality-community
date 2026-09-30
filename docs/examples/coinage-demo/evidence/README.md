@@ -199,3 +199,27 @@ switched to `release`; they are not a capture of Alex's unknown installed binary
 Endpoint values are remote configuration and can change without a code change.
 The earlier public-Paseo reproduction matches neither of these release paths.
 The Paseo Next scan applies to the iOS path; Summit has not been scanned.
+
+## Direct WebSocket checks and timeline recheck
+
+Checked both schemes on both configured People RPC hosts on 30 September 2026:
+
+| Endpoint | Result |
+|---|---|
+| `wss://paseo-people-next-system-rpc.polkadot.io` | Connected; returned the expected Paseo Next genesis and finalized head. |
+| `ws://paseo-people-next-system-rpc.polkadot.io` | WebSocket handshake failed. A separate HTTP request returned 301 to HTTPS. |
+| `wss://summit-people-rpc.polkadot.io` | Failed; hostname has no DNS address. |
+| `ws://summit-people-rpc.polkadot.io` | Failed; hostname has no DNS address. |
+
+Summit returned no A or AAAA records through the local resolver. Google and
+Cloudflare DNS-over-HTTPS independently returned no A records. This prevented a
+Summit history scan; it is not evidence of zero transactions there.
+
+The working Paseo Next **WSS connection** was used to re-fetch every canonical
+block hash and `System.Events` in the earlier timestamp-bounded scan: **891
+finalized blocks from 15:50 to 16:20 GMT+7**, including **90 blocks from 16:17
+to 16:20**. Both windows contained **zero Coinage events**. The full window also
+contained zero failed extrinsic events. This confirms the previous HTTP scan
+against the actual secure WebSocket endpoint; it does not identify Alex's payment.
+
+[Endpoint probes, DNS results and WSS verification summary](release-endpoint-checks-2026-09-30.json).

@@ -1,0 +1,144 @@
+{
+  "endpointProbes": [
+    {
+      "endpoint": "wss://paseo-people-next-system-rpc.polkadot.io",
+      "checkedAt": "2026-09-30T10:38:31.098Z",
+      "connected": true,
+      "chain": "Paseo People Next",
+      "finalizedHead": "0x76d7c0adbbb5d56e443a77a2aece8bd8136734af33c59dfab7d7a5036a18adae",
+      "genesis": "0x4a2b5b737de1da59e209b0000a876ec2fa20035dc34fd292a848da32d255ad48",
+      "elapsedMs": 1236,
+      "dns": {
+        "ipv4": [
+          "104.26.8.125",
+          "104.26.9.125",
+          "172.67.71.26"
+        ],
+        "ipv6": [
+          "2606:4700:20::ac43:471a",
+          "2606:4700:20::681a:97d",
+          "2606:4700:20::681a:87d"
+        ]
+      }
+    },
+    {
+      "endpoint": "ws://paseo-people-next-system-rpc.polkadot.io",
+      "checkedAt": "2026-09-30T10:38:32.295Z",
+      "elapsedMs": 146,
+      "error": "Received network error or non-101 status code.",
+      "dns": {
+        "ipv4": [
+          "104.26.8.125",
+          "104.26.9.125",
+          "172.67.71.26"
+        ],
+        "ipv6": [
+          "2606:4700:20::ac43:471a",
+          "2606:4700:20::681a:97d",
+          "2606:4700:20::681a:87d"
+        ]
+      }
+    },
+    {
+      "endpoint": "wss://summit-people-rpc.polkadot.io",
+      "checkedAt": "2026-09-30T10:38:32.576Z",
+      "elapsedMs": 4,
+      "error": "Received network error or non-101 status code.",
+      "dns": {
+        "ipv4Error": "ENODATA",
+        "ipv6Error": "ENODATA"
+      }
+    },
+    {
+      "endpoint": "ws://summit-people-rpc.polkadot.io",
+      "checkedAt": "2026-09-30T10:38:32.580Z",
+      "elapsedMs": 2,
+      "error": "Received network error or non-101 status code.",
+      "dns": {
+        "ipv4Error": "ENODATA",
+        "ipv6Error": "ENODATA"
+      }
+    }
+  ],
+  "dnsAndHttpChecks": [
+    {
+      "url": "https://dns.google/resolve?name=summit-people-rpc.polkadot.io&type=A",
+      "Status": 0,
+      "TC": false,
+      "RD": true,
+      "RA": true,
+      "AD": true,
+      "CD": false,
+      "Question": [
+        {
+          "name": "summit-people-rpc.polkadot.io.",
+          "type": 1
+        }
+      ],
+      "Authority": [
+        {
+          "name": "polkadot.io.",
+          "type": 6,
+          "TTL": 1800,
+          "data": "ara.ns.cloudflare.com. dns.cloudflare.com. 2416167508 10000 2400 604800 1800"
+        }
+      ],
+      "Comment": "Response from 173.245.58.67."
+    },
+    {
+      "url": "https://cloudflare-dns.com/dns-query?name=summit-people-rpc.polkadot.io&type=A",
+      "Status": 0,
+      "TC": false,
+      "RD": true,
+      "RA": true,
+      "AD": true,
+      "CD": false,
+      "Question": [
+        {
+          "name": "summit-people-rpc.polkadot.io",
+          "type": 1
+        }
+      ],
+      "Authority": [
+        {
+          "name": "polkadot.io",
+          "type": 6,
+          "TTL": 1800,
+          "data": "ara.ns.cloudflare.com. dns.cloudflare.com. 2416167508 10000 2400 604800 1800"
+        }
+      ]
+    },
+    {
+      "url": "http://paseo-people-next-system-rpc.polkadot.io/",
+      "status": 301,
+      "location": "https://paseo-people-next-system-rpc.polkadot.io/"
+    }
+  ],
+  "paseoNextWindow": {
+    "endpoint": "wss://paseo-people-next-system-rpc.polkadot.io",
+    "checkedAt": "2026-09-30T10:40:18.824Z",
+    "genesis": "0x4a2b5b737de1da59e209b0000a876ec2fa20035dc34fd292a848da32d255ad48",
+    "window": {
+      "start": "2026-09-30T08:50:00.000Z",
+      "end": "2026-09-30T09:20:00.000Z",
+      "first": 1177356,
+      "lastExclusive": 1178247
+    },
+    "localWindow": "2026-09-30 15:50:00 <= time < 16:20:00 GMT+7",
+    "verifiedBlocks": 891,
+    "coinageEventCount": 0,
+    "membersEventCount": 16,
+    "failedExtrinsicCount": 0,
+    "verification": "Re-fetched canonical block hashes and System.Events over WSS for every block in the prior timestamp-bounded HTTP scan.",
+    "focusWindow": {
+      "localWindow": "16:17:00 <= time < 16:20:00 GMT+7",
+      "blocks": 90,
+      "coinageEventCount": 0
+    }
+  },
+  "summitWindow": {
+    "status": "unavailable",
+    "reason": "Both ws and wss failed. Hostname returned no A/AAAA addresses locally; Google and Cloudflare DNS-over-HTTPS also returned no A records. No Summit transaction-history scan was possible.",
+    "localWindow": "2026-09-30 15:50\u201316:20 GMT+7"
+  }
+}
