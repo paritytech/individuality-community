@@ -910,19 +910,21 @@ mod benches {
 		Some((loaded, total.checked_sub(loaded)?))
 	}
 
-	/// Finds the largest diversity that funds `n` outputs and the external reserve.
+	/// Finds the largest denomination count that funds `output_count` outputs and the external
+	/// reserve.
 	/// Exponent offsets are relative to the minimum, including when it is negative.
 	fn max_mixed_output_denominations(
 		minimum: Denomination,
 		maximum: Denomination,
-		a: u32,
-		n: u32,
+		alias_count: u32,
+		output_count: u32,
 		min_external_units: u128,
 	) -> Option<u32> {
-		let span = u32::try_from(i16::from(maximum).checked_sub(i16::from(minimum))?).ok()?;
-		let limit = n.min(span.checked_add(1)?);
-		(1..=limit).rev().find(|g| {
-			mixed_output_units(span, a, *g, n)
+		let exponent_span =
+			u32::try_from(i16::from(maximum).checked_sub(i16::from(minimum))?).ok()?;
+		let limit = output_count.min(exponent_span.checked_add(1)?);
+		(1..=limit).rev().find(|denomination_count| {
+			mixed_output_units(exponent_span, alias_count, *denomination_count, output_count)
 				.is_some_and(|(_, external)| external >= min_external_units)
 		})
 	}
@@ -947,7 +949,7 @@ mod benches {
 	}
 
 	/// Benchmark metadata can request bounds before setup. Roll back the pool and instance.
-	fn mixed_output_group_bound<T: Config>(a: u32, mode: UnloadFeeBenchMode) -> u32 {
+	fn mixed_output_group_bound<T: Config>(alias_count: u32, mode: UnloadFeeBenchMode) -> u32 {
 		let reserve = frame_support::storage::with_transaction(|| {
 			T::BenchmarkHelper::setup_assets();
 			T::BenchmarkHelper::setup_fee_conversion();
@@ -962,48 +964,56 @@ mod benches {
 		max_mixed_output_denominations(
 			T::MinimumExponent::get(),
 			T::MaximumExponent::get(),
-			a,
+			alias_count,
 			T::MaxSplitOutputs::get(),
 			reserve,
 		)
 		.expect("alias bucket must fund the benchmark output rectangle")
 	}
 
-	/// Constructs `g` minimum-cost distinct denominations, then fills `n` outputs with
-	/// minimum-denomination repeats.
-	fn decompose_loaded_coin_units(g: u32, n: u32) -> Result<Vec<i8>, BenchmarkError> {
-		if g == 0 {
+	/// Constructs `denomination_count` minimum-cost distinct denominations, then fills
+	/// `output_count` outputs with minimum-denomination repeats.
+	fn decompose_loaded_coin_units(
+		denomination_count: u32,
+		output_count: u32,
+	) -> Result<Vec<i8>, BenchmarkError> {
+		if denomination_count == 0 {
 			return Err("mixed outputs need at least one denomination".into());
 		}
-		if n < g {
+		if output_count < denomination_count {
 			return Err("mixed outputs need an output per denomination".into());
 		}
-		let mut pieces = (0..g)
+		let mut pieces = (0..denomination_count)
 			.map(|exponent| {
 				i8::try_from(exponent)
 					.map_err(|_| BenchmarkError::from("denomination offset overflows"))
 			})
 			.collect::<Result<Vec<_>, _>>()?;
-		pieces.resize(n as usize, 0);
+		pieces.resize(output_count as usize, 0);
 		Ok(pieces)
 	}
 
 	/// Returns the external remainder in minimum-denomination units.
 	fn select_mixed_output_external_units<T: Config>(
-		a: u32,
-		g: u32,
-		n: u32,
+		alias_count: u32,
+		denomination_count: u32,
+		output_count: u32,
 		min_external_units: u128,
 	) -> Result<u128, BenchmarkError> {
-		let span = u32::try_from(
+		let exponent_span = u32::try_from(
 			i16::from(T::MaximumExponent::get()) - i16::from(T::MinimumExponent::get()),
 		)
 		.map_err(|_| "invalid exponent range")?;
-		if g == 0 || g > span + 1 || g > n || n > T::MaxSplitOutputs::get() {
+		if denomination_count == 0 ||
+			denomination_count > exponent_span + 1 ||
+			denomination_count > output_count ||
+			output_count > T::MaxSplitOutputs::get()
+		{
 			return Err("mixed output components exceed configured bounds".into());
 		}
 		let (_, external) =
-			mixed_output_units(span, a, g, n).ok_or("outputs exceed input value")?;
+			mixed_output_units(exponent_span, alias_count, denomination_count, output_count)
+				.ok_or("outputs exceed input value")?;
 		if external < min_external_units {
 			return Err("external output does not cover the fee reserve".into());
 		}
@@ -1012,9 +1022,9 @@ mod benches {
 
 	/// Builds output values without a recycler ring, for dispatch and extension benchmarks.
 	fn setup_mixed_output_validation<T: Config>(
-		a: u32,
-		g: u32,
-		n: u32,
+		alias_count: u32,
+		denomination_count: u32,
+		output_count: u32,
 		mode: UnloadFeeBenchMode,
 	) -> Result<
 		(
@@ -1025,8 +1035,13 @@ mod benches {
 		BenchmarkError,
 	> {
 		let reserve = mixed_output_external_reserve::<T>(mode)?;
-		let external_units = select_mixed_output_external_units::<T>(a, g, n, reserve)?;
-		let loaded_coins = decompose_loaded_coin_units(g, n)?
+		let external_units = select_mixed_output_external_units::<T>(
+			alias_count,
+			denomination_count,
+			output_count,
+			reserve,
+		)?;
+		let loaded_coins = decompose_loaded_coin_units(denomination_count, output_count)?
 			.into_iter()
 			.enumerate()
 			.map(|(i, offset)| {
@@ -4947,8 +4962,9 @@ mod benches {
 	mod mixed_output_setup_tests {
 		use super::*;
 		use crate::mock::{new_test_ext_bench, MockPaidUnloadTokenFeeOverride, Test};
-		use alloc::collections::BTreeMap;
+		use alloc::collections::{BTreeMap, BTreeSet};
 		use indiv_pallet_members::QueuePageIndices;
+		use indiv_support::traits::RingPosition;
 
 		#[test]
 		fn group_bound_is_the_largest_funded_diversity() {
@@ -4992,6 +5008,7 @@ mod benches {
 
 		#[test]
 		fn mixed_setup_preserves_diversity_value_and_fee_coverage() {
+			let max_outputs = <<Test as Config>::MaxSplitOutputs as Get<u32>>::get();
 			for mode in [UnloadFeeBenchMode::Prepaid, UnloadFeeBenchMode::FromOutput] {
 				new_test_ext_bench().execute_with(|| {
 					common_setup::<Test>();
@@ -5005,38 +5022,23 @@ mod benches {
 								UnloadFeeBenchMode::FromOutput => output_reserve,
 							}
 						);
-						let (input, external, coins) =
-							setup_mixed_output_validation::<Test>(1, 1, 32, mode).unwrap();
-						assert_eq!(input, 7);
-						assert_eq!(
-							coins.iter().map(|(value, _)| *value).collect::<Vec<_>>(),
-							vec![-2; 32]
-						);
-						assert_eq!(external + 32 * 250, 128_000);
-						assert!(u128::from(external) >= reserve * 250);
 						for a in [1, 2, 4, 8, 16] {
 							let bound = mixed_output_group_bound::<Test>(a, mode);
 							for g in 1..=bound {
-								for n in
-									bound..=<<Test as Config>::MaxSplitOutputs as Get<u32>>::get()
-								{
+								for n in bound..=max_outputs {
 									let (input, external, coins) =
 										setup_mixed_output_validation::<Test>(a, g, n, mode)
 											.unwrap();
 									assert_eq!(input, 7);
 									assert_eq!(coins.len(), n as usize);
-									assert_eq!(
-										coins
-											.iter()
-											.map(|(value, _)| *value)
-											.collect::<alloc::collections::BTreeSet<_>>()
-											.len(),
-										g as usize
-									);
-									assert!(u128::from(external) >= reserve * 250);
-									assert!(coins
+									let values = coins
 										.iter()
-										.all(|(value, _)| (-2..=7).contains(value)));
+										.map(|(value, _)| *value)
+										.collect::<BTreeSet<_>>();
+									assert_eq!(values.len(), g as usize);
+									assert!(values.iter().all(|value| (-2..=7).contains(value)));
+									// Each minimum-denomination unit is 250 asset units.
+									assert!(u128::from(external) >= reserve * 250);
 									let loaded_asset = coins
 										.iter()
 										.map(|(value, _)| 250 * 2u64.pow((*value + 2) as u32))
@@ -5054,13 +5056,13 @@ mod benches {
 		fn repeats_fill_the_tail_and_the_last_coin_of_a_group_opens_a_new_page() {
 			for mode in [UnloadFeeBenchMode::Prepaid, UnloadFeeBenchMode::FromOutput] {
 				new_test_ext_bench().execute_with(|| {
-					let scenario =
-						setup_unload_recycler_into_external_asset_and_loaded_coins::<Test>(
+					let (call, expectation) =
+						prepare_unload_recycler_into_external_asset_and_loaded_coins::<Test>(
 							8, 10, 20, mode,
 						)
 						.unwrap();
 					let mut groups = BTreeMap::<Denomination, Vec<MemberOf<Test>>>::new();
-					for (value, member) in &scenario.loaded_coins {
+					for (value, member) in &expectation.loaded_coins {
 						groups.entry(*value).or_default().push(*member);
 					}
 					// The minimum denomination holds every repeat.
@@ -5068,67 +5070,32 @@ mod benches {
 						groups.values().map(Vec::len).collect::<Vec<_>>(),
 						[vec![11], vec![1; 9]].concat()
 					);
+					let identifier =
+						|value| Pallet::<Test>::recycler_collection_identifier(INSTANCE_ID, value);
 					let old_tails = groups
 						.keys()
-						.map(|value| {
-							let identifier =
-								Pallet::<Test>::recycler_collection_identifier(INSTANCE_ID, *value);
-							QueuePageIndices::<Test>::get(identifier).1
-						})
+						.map(|value| QueuePageIndices::<Test>::get(identifier(*value)).1)
 						.collect::<Vec<_>>();
-					let fee = match mode {
-						UnloadFeeBenchMode::Prepaid => UnloadFee::Prepaid,
-						UnloadFeeBenchMode::FromOutput => UnloadFee::FromOutput {
-							fee_recycler_value: scenario.input_value,
-							fee_recycler_index: scenario.index,
-						},
-					};
-					let max_fee =
-						Pallet::<Test>::quote_paid_unload_token_fee_in_asset(INSTANCE_ID).unwrap();
-					Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins(
-						Origin::UnloadToken {
-							alias_proofs: scenario.alias_proofs,
-							proven_msg: [0; 32],
-							fee,
-						}
-						.into(),
-						INSTANCE_ID,
-						scenario.aliases,
-						scenario.input_value,
-						scenario.index,
-						scenario.revision,
-						scenario.dest,
-						scenario.external_asset_amount,
-						scenario.loaded_coins.clone(),
-						max_fee,
-					)
-					.unwrap();
+					call().unwrap();
+					expectation.assert_unloaded(mode);
 					for ((value, members), old_tail) in groups.iter().zip(old_tails) {
-						let identifier =
-							Pallet::<Test>::recycler_collection_identifier(INSTANCE_ID, *value);
-						let page = |member| match <Test as Config>::MemberService::member_status(
-							&identifier,
-							member,
-						)
-						.unwrap()
-						{
-							indiv_support::traits::RingPosition::Onboarding {
-								queue_page, ..
-							} => queue_page,
-							_ => panic!("new output must be queued"),
-						};
+						let identifier = identifier(*value);
+						let pages =
+							members
+								.iter()
+								.map(|member| match <Test as Config>::MemberService::member_status(
+									&identifier,
+									member,
+								) {
+									Some(RingPosition::Onboarding { queue_page, .. }) => queue_page,
+									_ => panic!("new output must be queued"),
+								})
+								.collect::<Vec<_>>();
 						// Every coin but the last fits the old tail.
-						let (last, rest) = members.split_last().unwrap();
-						for member in rest {
-							assert_eq!(page(member), old_tail);
-						}
-						assert_eq!(page(last), old_tail + 1);
-						for member in members {
-							assert_eq!(
-								RecyclersCoinToRecycler::<Test>::get(member),
-								Some((INSTANCE_ID, *value))
-							);
-						}
+						assert_eq!(
+							pages,
+							[vec![old_tail; members.len() - 1], vec![old_tail + 1]].concat()
+						);
 					}
 				});
 			}

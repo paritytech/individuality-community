@@ -22,7 +22,6 @@ use frame_support::{
 	traits::Hooks,
 	weights::Weight,
 };
-use indiv_support::weight_budget::OcwWeightBudget;
 use verifiable::GenerateVerifiable;
 
 /// Verify that the default mock configuration passes all integrity checks.
@@ -45,10 +44,6 @@ fn mixed_output_weight_can_use_the_normal_extrinsic_limit() {
 				(-2 + (i % DENOMINATION_COUNT) as i8, CryptoOf::<Test>::member_from_secret(&secret))
 			})
 			.collect::<Vec<_>>();
-		let loaded_value = loaded_coins
-			.iter()
-			.map(|(value, _)| 250 * 2u64.pow((*value + 2) as u32))
-			.sum::<u64>();
 		let call = Call::<Test>::unload_recycler_into_external_asset_and_loaded_coins {
 			instance_id: TEST_INSTANCE_ID,
 			aliases: (0..MAX_CONSOLIDATION)
@@ -60,7 +55,7 @@ fn mixed_output_weight_can_use_the_normal_extrinsic_limit() {
 			index: 0,
 			revision: 0,
 			to: BOB,
-			external_asset_amount: u64::from(MAX_CONSOLIDATION) * 128_000 - loaded_value,
+			external_asset_amount: 0,
 			loaded_coins: loaded_coins.try_into().unwrap(),
 			max_fee: 0,
 		};
@@ -81,13 +76,14 @@ fn mixed_output_weight_can_use_the_normal_extrinsic_limit() {
 	});
 }
 
+/// Only the prepaid path exceeds the limit, so checking the `FromOutput` paths alone passes.
 #[test]
 #[should_panic(expected = "exceeds the Normal extrinsic budget")]
 fn mixed_output_integrity_rejects_excess_execution_time() {
 	new_test_ext().execute_with(|| {
 		let limit = MockBlockWeights::get().get(DispatchClass::Normal).max_extrinsic.unwrap();
 		let base = Weight::from_parts(limit.ref_time(), 0);
-		MockMixedOutputWeightBases::set(&Some((base, base)));
+		MockMixedOutputWeightBases::set(&Some((base, Weight::zero())));
 		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }
@@ -103,12 +99,27 @@ fn mixed_output_integrity_rejects_excess_proof_size() {
 	});
 }
 
+/// Only the most diverse split exceeds the limit. One denomination costs a ninth of it.
 #[test]
-#[should_panic(expected = "exceeds the OCW budget")]
-fn ocw_cleanup_keeps_its_reserved_budget() {
+#[should_panic(expected = "exceeds the Normal extrinsic budget")]
+fn mixed_output_integrity_checks_every_denomination() {
 	new_test_ext().execute_with(|| {
 		let limit = MockBlockWeights::get().get(DispatchClass::Normal).max_extrinsic.unwrap();
-		OcwWeightBudget::from_normal_max::<Test>()
-			.assert_fits("cleanup", limit.saturating_div(4).saturating_mul(3));
+		MockMixedOutputWeightBases::set(&Some((Weight::zero(), Weight::zero())));
+		MockMixedOutputWeightSlopes::set(&(
+			Weight::from_parts(limit.ref_time() / u64::from(DENOMINATION_COUNT - 1), 0),
+			Weight::zero(),
+		));
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+#[test]
+#[should_panic(expected = "exceeds the Normal extrinsic budget")]
+fn integrity_checks_unloads_without_loaded_coins() {
+	new_test_ext().execute_with(|| {
+		let limit = MockBlockWeights::get().get(DispatchClass::Normal).max_extrinsic.unwrap();
+		MockNonAnonymousUnloadMaxWeight::set(&Some(limit));
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }

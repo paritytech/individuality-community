@@ -1996,23 +1996,23 @@ pub mod pallet {
 				.max(T::WeightInfo::as_unload_token_paid_tx_ext())
 				.max(T::WeightInfo::as_unload_token_from_output_tx_ext())
 				.saturating_add(T::WeightInfo::validate_unload_calls(1, T::MaxSplitOutputs::get()));
-			let unload_weight = Self::max_mixed_output_call_weight(
-				&UnloadWeightScope::AnyFeeMode,
+			let unload_weight = Self::max_unload_call_weight(
+				UnloadWeightScope::AnyFeeMode,
 				Self::max_aliases_per_unload() as usize,
 				T::MaxSplitOutputs::get(),
 			)
 			.saturating_add(unload_extension)
 			.saturating_add(T::WeightInfo::settle_load_deposits())
 			.saturating_add(T::WeightInfo::charge_load_deposit());
-			// Users submit mixed unloads through AsCoinage. The OCW submits cleanup calls.
+			// Users submit unloads as Normal extrinsics. The OCW submits cleanup calls.
 			let normal_max = T::BlockWeights::get()
 				.get(DispatchClass::Normal)
 				.max_extrinsic
 				.expect("Normal class must have max_extrinsic configured");
 			assert!(
 				unload_weight.all_lte(normal_max),
-				"mixed-output unload weight {unload_weight:?} exceeds the Normal extrinsic \
-				budget {normal_max:?}",
+				"unload weight {unload_weight:?} exceeds the Normal extrinsic budget \
+				{normal_max:?}",
 			);
 
 			let budget = OcwWeightBudget::from_normal_max::<T>();

@@ -313,6 +313,8 @@ impl sp_runtime::traits::Convert<frame_support::weights::Weight, u64> for MockWe
 parameter_types! {
 	/// Optional fee-mode intercepts for tests that isolate mixed-output dispatch weights.
 	pub storage MockMixedOutputWeightBases: Option<(Weight, Weight)> = None;
+	/// Optional override of the non-anonymous unload weight at the maximum alias count.
+	pub storage MockNonAnonymousUnloadMaxWeight: Option<Weight> = None;
 	/// Independent group and output slopes for mixed-output weight tests.
 	pub storage MockMixedOutputWeightSlopes: (Weight, Weight) =
 		(Weight::from_parts(10_000, 1_000), Weight::from_parts(100, 10));
@@ -398,7 +400,6 @@ impl WeightInfo for TestWeightInfo {
 		unload_recycler_into_external_asset_non_anonymous_8();
 		unload_recycler_into_external_asset_non_anonymous_16();
 		unload_recycler_into_external_asset_non_anonymous_32();
-		unload_recycler_into_external_asset_non_anonymous_max();
 		unload_recyclers_into_external_asset_non_anonymous_1();
 		unload_recyclers_into_external_asset_non_anonymous_2();
 		unload_recyclers_into_external_asset_non_anonymous_4();
@@ -448,6 +449,12 @@ impl WeightInfo for TestWeightInfo {
 		authorize_clean_paid_unload_token_dust();
 		authorize_delete_expired_paid_unload_token_collection();
 		on_poll_create_paid_token_collection();
+	}
+
+	fn unload_recycler_into_external_asset_non_anonymous_max() -> Weight {
+		MockNonAnonymousUnloadMaxWeight::get().unwrap_or_else(
+			<() as WeightInfo>::unload_recycler_into_external_asset_non_anonymous_max,
+		)
 	}
 
 	mixed_output_weights! {

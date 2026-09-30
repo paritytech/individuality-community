@@ -992,7 +992,8 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 			};
 			MockMixedOutputWeightBases::set(&Some(bases));
 			// One denomination-1 input provides eight minimum-denomination units. Three
-			// distinct outputs cost seven units, so three is the maximum diversity at d = 3.
+			// distinct outputs cost seven units, so three is the maximum diversity for three
+			// outputs.
 			let value = 1;
 			let (secrets, index, revision) = setup_recycler(value, 1, 0);
 			let proven_msg = [91u8; 32];

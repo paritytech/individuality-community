@@ -656,8 +656,8 @@ pub trait AppendOnlyMembers: MembershipProver {
 	/// Returns the unused slots in the current onboarding tail page for benchmark setup.
 	#[cfg(feature = "runtime-benchmarks")]
 	fn onboarding_queue_tail_free_slots(identifier: &Identifier) -> u32;
-	/// Appends benchmark keys to the current tail without validating them.
-	/// Keys must be fresh and fit the page.
+	/// Appends benchmark keys to the current onboarding tail page.
+	/// Fails if a key repeats, is already a member or does not fit the page.
 	#[cfg(feature = "runtime-benchmarks")]
 	fn fill_onboarding_queue_tail(
 		identifier: &Identifier,
