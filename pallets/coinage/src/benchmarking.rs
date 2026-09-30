@@ -948,19 +948,19 @@ mod benches {
 			.ok_or("external reserve overflows".into())
 	}
 
-	/// Benchmark metadata can request bounds before setup. Roll back the pool and instance.
-	fn mixed_output_group_bound<T: Config>(alias_count: u32, mode: UnloadFeeBenchMode) -> u32 {
+	/// Largest denomination count that `alias_count` inputs fund at `MaxSplitOutputs` outputs,
+	/// or `None` if the configuration funds none. Benchmark metadata can request bounds before
+	/// setup, so the pool and instance are rolled back.
+	fn fundable_group_bound<T: Config>(alias_count: u32, mode: UnloadFeeBenchMode) -> Option<u32> {
 		let reserve = frame_support::storage::with_transaction(|| {
 			T::BenchmarkHelper::setup_assets();
 			T::BenchmarkHelper::setup_fee_conversion();
 			frame_support::storage::TransactionOutcome::Rollback(
-				Ok::<_, sp_runtime::DispatchError>(
-					mixed_output_external_reserve::<T>(mode)
-						.expect("benchmark fee reserve must fit"),
-				),
+				Ok::<_, sp_runtime::DispatchError>(mixed_output_external_reserve::<T>(mode).ok()),
 			)
 		})
-		.expect("benchmark bound transaction must start");
+		.ok()
+		.flatten()?;
 		max_mixed_output_denominations(
 			T::MinimumExponent::get(),
 			T::MaximumExponent::get(),
@@ -968,7 +968,12 @@ mod benches {
 			T::MaxSplitOutputs::get(),
 			reserve,
 		)
-		.expect("alias bucket must fund the benchmark output rectangle")
+	}
+
+	/// Upper bound of `g` and lower bound of `n`. An unfundable configuration yields 1, and
+	/// [`prepare_unload_recycler_into_external_asset_and_loaded_coins`] skips the benchmark.
+	fn mixed_output_group_bound<T: Config>(alias_count: u32, mode: UnloadFeeBenchMode) -> u32 {
+		fundable_group_bound::<T>(alias_count, mode).unwrap_or(1)
 	}
 
 	/// Constructs `denomination_count` minimum-cost distinct denominations, then fills
@@ -2349,6 +2354,9 @@ mod benches {
 		(impl FnOnce() -> Result<(), BenchmarkError>, MixedOutputExpectation<T>),
 		BenchmarkError,
 	> {
+		if fundable_group_bound::<T>(a, mode).is_none() {
+			return Err(BenchmarkError::Skip);
+		}
 		let scenario =
 			setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(a, g, n, mode)?;
 		let expectation = MixedOutputExpectation {
@@ -4963,6 +4971,7 @@ mod benches {
 		use super::*;
 		use crate::mock::{new_test_ext_bench, MockPaidUnloadTokenFeeOverride, Test};
 		use alloc::collections::{BTreeMap, BTreeSet};
+		use frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
 		use indiv_pallet_members::QueuePageIndices;
 		use indiv_support::traits::RingPosition;
 
@@ -5109,6 +5118,23 @@ mod benches {
 					assert!(mixed_output_group_bound::<Test>(1, mode) > 1);
 				}
 				assert_eq!(sp_io::storage::root(sp_runtime::StateVersion::V1), before);
+			});
+		}
+
+		#[test]
+		fn unfundable_bound_skips_the_benchmark() {
+			new_test_ext_bench().execute_with(|| {
+				// A fee reserve of 4_001 minimum units exceeds the 512 units of one input.
+				MockPaidUnloadTokenFeeOverride::set(&Some(1_000_000));
+				assert_eq!(fundable_group_bound::<Test>(1, UnloadFeeBenchMode::FromOutput), None);
+				assert_eq!(mixed_output_group_bound::<Test>(1, UnloadFeeBenchMode::FromOutput), 1);
+				assert!(matches!(
+					<SelectedBenchmark as BenchmarkingSetup<Test>>::unit_test_instance(
+						&SelectedBenchmark::unload_recycler_into_external_asset_and_loaded_coins_from_output_1,
+						&[(BenchmarkParameter::g, 1), (BenchmarkParameter::n, 1)],
+					),
+					Err(BenchmarkError::Skip)
+				));
 			});
 		}
 	}
