@@ -1928,16 +1928,13 @@ pub mod pallet {
 			let ext_weight = T::WeightInfo::as_unload_token_from_output_tx_ext()
 				.saturating_add(T::WeightInfo::validate_unload_calls(1, T::MaxSplitOutputs::get()));
 
-			let (g, e) = Self::max_mixed_output_counts(T::MaxSplitOutputs::get());
-
 			// Maximum of the possible unload call weights in `FromOutput` mode: the worst-case
 			// `FromOutput` benchmarked path, matching what a `FromOutput` transaction pays after
 			// its `PostDispatchInfo` refund.
 			let call_weight = Self::max_unload_call_weight(
 				UnloadWeightScope::FromOutputOnly,
 				T::MaxConsolidation::get() as usize,
-				g,
-				e,
+				T::MaxSplitOutputs::get(),
 			)
 			// On a sponsored instance the unload additionally settles the load deposits, and
 			// the voucher variant charges deposits for its fresh keys.
@@ -1994,7 +1991,6 @@ pub mod pallet {
 				at least 8",
 			);
 
-			let (g, e) = Self::max_mixed_output_counts(T::MaxSplitOutputs::get());
 			let unload_extension = T::WeightInfo::as_unload_token_people_tx_ext()
 				.max(T::WeightInfo::as_unload_token_lite_people_tx_ext())
 				.max(T::WeightInfo::as_unload_token_paid_tx_ext())
@@ -2003,8 +1999,7 @@ pub mod pallet {
 			let unload_weight = Self::max_mixed_output_call_weight(
 				&UnloadWeightScope::AnyFeeMode,
 				Self::max_aliases_per_unload() as usize,
-				g,
-				e,
+				T::MaxSplitOutputs::get(),
 			)
 			.saturating_add(unload_extension)
 			.saturating_add(T::WeightInfo::settle_load_deposits())
@@ -2241,16 +2236,6 @@ pub mod pallet {
 			(g, (loaded_coins.len() as u32).saturating_sub(g))
 		}
 
-		/// Bound mixed-output diversity without depending on an asset or its fee quote.
-		/// Use every configured denomination when the requested output count permits it.
-		pub(crate) fn max_mixed_output_counts(output_count: u32) -> (u32, u32) {
-			let denomination_count =
-				(i32::from(T::MaximumExponent::get()) - i32::from(T::MinimumExponent::get()) + 1)
-					.max(0) as u32;
-			let g = output_count.min(denomination_count);
-			(g, output_count.saturating_sub(g))
-		}
-
 		/// Weight of the `Prepaid` fee path of
 		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
@@ -2448,12 +2433,12 @@ pub mod pallet {
 			)
 		}
 
-		/// Bound mixed-output weights at both diversity endpoints for a fixed output count.
+		/// Bound mixed-output weights at both diversity endpoints for `output_count` loaded coins.
+		/// The bound does not depend on an asset or its fee quote.
 		fn max_mixed_output_call_weight(
 			scope: &UnloadWeightScope,
 			alias_count: usize,
-			g: u32,
-			e: u32,
+			output_count: u32,
 		) -> Weight {
 			let weight = |groups, repeats| match scope {
 				UnloadWeightScope::FromOutputOnly =>
@@ -2469,10 +2454,17 @@ pub mod pallet {
 						repeats,
 					),
 			};
+			// Number of configured denominations. Each one is a possible [`Denomination`] key of
+			// the `grouped` map in [`RecyclerManager::load_batch_grouped`].
+			let denomination_count =
+				(i32::from(T::MaximumExponent::get()) - i32::from(T::MinimumExponent::get()) + 1)
+					.max(0) as u32;
+			let max_groups = output_count.min(denomination_count);
+			let min_groups = max_groups.min(1);
 			// A fitted repeat slope can exceed the group slope. A linear function reaches
 			// its maximum at one of the two diversity endpoints for a fixed output count.
-			let single_group = g.min(1);
-			weight(g, e).max(weight(single_group, g.saturating_add(e).saturating_sub(single_group)))
+			weight(max_groups, output_count.saturating_sub(max_groups))
+				.max(weight(min_groups, output_count.saturating_sub(min_groups)))
 		}
 
 		/// Component-wise maximum of the selected single-recycler unload paths.
@@ -2480,11 +2472,10 @@ pub mod pallet {
 		pub(crate) fn max_unload_call_weight(
 			scope: UnloadWeightScope,
 			alias_count: usize,
-			g: u32,
-			e: u32,
+			output_count: u32,
 		) -> Weight {
-			let mixed_output = Self::max_mixed_output_call_weight(&scope, alias_count, g, e);
-			let output_count = g.saturating_add(e);
+			let mixed_output =
+				Self::max_mixed_output_call_weight(&scope, alias_count, output_count);
 			let from_output = Self::unload_recycler_into_external_asset_from_output_weight(
 				alias_count,
 			)
@@ -5821,12 +5812,10 @@ pub mod pallet {
 
 			// === Phase 3: Unloading ===
 			// Unload recycler with average number of items.
-			let (g, e) = Self::max_mixed_output_counts(avg_split_outputs);
 			let unload_avg = Self::max_unload_call_weight(
 				UnloadWeightScope::AnyFeeMode,
 				avg_aliases_single_ring as usize,
-				g,
-				e,
+				avg_split_outputs,
 			)
 			// On a sponsored instance the unload also settles the load deposits.
 			.saturating_add(T::WeightInfo::settle_load_deposits());

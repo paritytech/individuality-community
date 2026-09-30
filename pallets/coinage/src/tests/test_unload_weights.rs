@@ -61,18 +61,12 @@ fn unload_scope_selects_the_requested_fee_modes_without_deposit_surcharges() {
 				Pallet::<Test>::max_unload_call_weight(
 					UnloadWeightScope::FromOutputOnly,
 					1,
-					groups,
-					extras
+					outputs
 				),
 				from_output
 			);
 			assert_eq!(
-				Pallet::<Test>::max_unload_call_weight(
-					UnloadWeightScope::AnyFeeMode,
-					1,
-					groups,
-					extras
-				),
+				Pallet::<Test>::max_unload_call_weight(UnloadWeightScope::AnyFeeMode, 1, outputs),
 				any_mode
 			);
 		}
@@ -368,8 +362,7 @@ fn worst_case_unload_covers_repeats_when_their_slope_is_larger() {
 				(UnloadWeightScope::AnyFeeMode, prepaid),
 			] {
 				let groups = outputs.min(10);
-				let bound =
-					Pallet::<Test>::max_unload_call_weight(scope, 1, groups, outputs - groups);
+				let bound = Pallet::<Test>::max_unload_call_weight(scope, 1, outputs);
 				assert_eq!(bound, base.saturating_add(expected_surcharge));
 				for distinct in u32::from(outputs > 0)..=groups {
 					let call = base
