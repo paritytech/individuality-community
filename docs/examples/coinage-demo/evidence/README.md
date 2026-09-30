@@ -167,3 +167,35 @@ claim that leaves no finalized transaction.
 A read-only preflight of the same six development accounts on the corrected
 network found no existing coins and no backing-asset balance for Bob. No new
 transactions were submitted there during this investigation.
+
+## Release builds: platform-specific network selection
+
+Alex subsequently said he uses a release build, so the nightly changelog does not
+establish his installed build. With the source revisions inspected above and the
+currently retrieved remote configuration, the release paths differ:
+
+| Platform | Remote-config key | People chain | Endpoint |
+|---|---|---|---|
+| iOS Release | `chains_v2`, environment `release` | Paseo Next V2 People | `wss://paseo-people-next-system-rpc.polkadot.io` |
+| Android Release / PRODUCTION | `chains`, environment `release` | Summit Net People | `wss://summit-people-rpc.polkadot.io` |
+
+The [iOS Firebase loader](https://github.com/paritytech/host-rust-core/blob/ab6471645b2500719e0d0f7af1cc514c5ec75582/hosts/ios/polkadot-app/Common/Firebase/FirebaseApplicationService.swift)
+uses `chains_v2` and sends the `release` environment signal when neither UNSTABLE
+nor NIGHTLY is set. Its `release-people` entry currently has the same Paseo Next
+genesis as the nightly entry. The [iOS build project](https://github.com/paritytech/host-rust-core/blob/ab6471645b2500719e0d0f7af1cc514c5ec75582/hosts/ios/polkadot-app.xcodeproj/project.pbxproj)
+uses the production Firebase plist for both Release and Nightly.
+
+The [Android release configuration](https://github.com/paritytech/host-rust-core/blob/c5158448f3c4575f40350017d466053d6b19dacb/hosts/android/common/build.gradle.kts)
+sets `TESTNET_ENVIRONMENT=PRODUCTION`. [ChainFetcher.kt](https://github.com/paritytech/host-rust-core/blob/c5158448f3c4575f40350017d466053d6b19dacb/hosts/android/chains/src/main/java/io/paritytech/polkadotapp/chains/multiNetwork/chain/remote/ChainFetcher.kt)
+then reads `chains`, whose `release-people` entry is Summit Net People with genesis
+`0xbe5238f82c3553bc57ac3be43bef110bd58c49ad0744110814985195ca7d8c4e`.
+The Summit RPC probe failed to connect from this machine, so that genesis is
+configuration evidence, not a fresh RPC confirmation.
+
+[Sanitized release-config responses](release-network-2026-09-30.json) preserve
+both keys and identify the one each platform selects. The queries used client
+configuration extracted from the released nightly artifacts with the environment
+switched to `release`; they are not a capture of Alex's unknown installed binary.
+Endpoint values are remote configuration and can change without a code change.
+The earlier public-Paseo reproduction matches neither of these release paths.
+The Paseo Next scan applies to the iOS path; Summit has not been scanned.

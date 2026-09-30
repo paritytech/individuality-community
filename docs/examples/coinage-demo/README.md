@@ -74,6 +74,8 @@ These publicly known accounts are test identities, not private users.
 Paseo Next V2 People, not public Paseo People. The script below and its measured
 results target public Paseo People and do not reproduce the nightly app end to end.
 See the [release and network investigation](evidence/README.md#nightly-network-correction-and-reproduction-limits).
+Release selection differs by platform: iOS currently resolves to Paseo Next V2,
+Android production to Summit. See the [release-specific evidence](evidence/README.md#release-builds-platform-specific-network-selection).
 
 `reproduce.ts` measures a bounded sequence on public Paseo People, using the
 Devnet endpoint and a pinned genesis hash. It defaults to a read-only preflight.

@@ -1,0 +1,294 @@
+[
+  {
+    "platform": "iOS",
+    "environment": "release",
+    "retrievedAt": "2026-09-30T10:34:02.658481+00:00",
+    "configuration": {
+      "chains": [
+        {
+          "chainId": "release-people",
+          "genesisHash": "be5238f82c3553bc57ac3be43bef110bd58c49ad0744110814985195ca7d8c4e",
+          "parentId": "release-relay",
+          "name": "Summit Net People",
+          "addressPrefix": 0,
+          "nodeSelectionStrategy": null,
+          "nodes": [
+            {
+              "url": "wss://summit-people-rpc.polkadot.io",
+              "name": "RPC"
+            }
+          ],
+          "additional": {
+            "defaultBlockTime": 2000
+          },
+          "assets": [
+            {
+              "assetId": 0,
+              "symbol": "PAS",
+              "precision": 10,
+              "type": "native"
+            },
+            {
+              "assetId": 1,
+              "symbol": "CASH",
+              "precision": 6,
+              "type": "statemine",
+              "name": "W3S CASH",
+              "typeExtras": {
+                "assetId": "0x010300711704320576c8eb0b",
+                "palletName": "Assets",
+                "isSufficient": true
+              }
+            }
+          ],
+          "explorers": [],
+          "externalApi": null,
+          "options": [
+            "fullSyncByDefault"
+          ]
+        }
+      ],
+      "chains_v2": [
+        {
+          "chainId": "release-people",
+          "genesisHash": "4a2b5b737de1da59e209b0000a876ec2fa20035dc34fd292a848da32d255ad48",
+          "parentId": "release-relay",
+          "name": "Paseo Next V2 People",
+          "addressPrefix": 42,
+          "nodeSelectionStrategy": null,
+          "nodes": [
+            {
+              "url": "wss://paseo-people-next-system-rpc.polkadot.io",
+              "name": "RPC"
+            }
+          ],
+          "additional": {
+            "defaultBlockTime": 2000
+          },
+          "assets": [
+            {
+              "assetId": 0,
+              "symbol": "PAS",
+              "precision": 10,
+              "priceId": "polkadot",
+              "name": null,
+              "type": null,
+              "typeExtras": null
+            },
+            {
+              "assetId": 1,
+              "symbol": "pUSD",
+              "precision": 6,
+              "priceId": "tether",
+              "type": "statemine",
+              "name": "Digital Dollar",
+              "typeExtras": {
+                "assetId": "0x010300711704320576c8eb0b",
+                "palletName": "Assets",
+                "isSufficient": true
+              }
+            }
+          ],
+          "explorers": [],
+          "externalApi": null,
+          "options": [
+            "fullSyncByDefault"
+          ]
+        }
+      ]
+    },
+    "coinageInstanceId": "0",
+    "limit": "Release signal queried using client configuration extracted from nightly artifacts; not a capture of Alex\u2019s release binary.",
+    "selectedConfigKey": "chains_v2",
+    "selectedPeopleChain": {
+      "chainId": "release-people",
+      "genesisHash": "4a2b5b737de1da59e209b0000a876ec2fa20035dc34fd292a848da32d255ad48",
+      "parentId": "release-relay",
+      "name": "Paseo Next V2 People",
+      "addressPrefix": 42,
+      "nodeSelectionStrategy": null,
+      "nodes": [
+        {
+          "url": "wss://paseo-people-next-system-rpc.polkadot.io",
+          "name": "RPC"
+        }
+      ],
+      "additional": {
+        "defaultBlockTime": 2000
+      },
+      "assets": [
+        {
+          "assetId": 0,
+          "symbol": "PAS",
+          "precision": 10,
+          "priceId": "polkadot",
+          "name": null,
+          "type": null,
+          "typeExtras": null
+        },
+        {
+          "assetId": 1,
+          "symbol": "pUSD",
+          "precision": 6,
+          "priceId": "tether",
+          "type": "statemine",
+          "name": "Digital Dollar",
+          "typeExtras": {
+            "assetId": "0x010300711704320576c8eb0b",
+            "palletName": "Assets",
+            "isSufficient": true
+          }
+        }
+      ],
+      "explorers": [],
+      "externalApi": null,
+      "options": [
+        "fullSyncByDefault"
+      ]
+    }
+  },
+  {
+    "platform": "Android",
+    "environment": "release",
+    "retrievedAt": "2026-09-30T10:34:03.338205+00:00",
+    "configuration": {
+      "chains": [
+        {
+          "chainId": "release-people",
+          "genesisHash": "be5238f82c3553bc57ac3be43bef110bd58c49ad0744110814985195ca7d8c4e",
+          "parentId": "release-relay",
+          "name": "Summit Net People",
+          "addressPrefix": 0,
+          "nodeSelectionStrategy": null,
+          "nodes": [
+            {
+              "url": "wss://summit-people-rpc.polkadot.io",
+              "name": "RPC"
+            }
+          ],
+          "additional": {
+            "defaultBlockTime": 2000
+          },
+          "assets": [
+            {
+              "assetId": 0,
+              "symbol": "PAS",
+              "precision": 10,
+              "type": "native"
+            },
+            {
+              "assetId": 1,
+              "symbol": "CASH",
+              "precision": 6,
+              "type": "statemine",
+              "name": "W3S CASH",
+              "typeExtras": {
+                "assetId": "0x010300711704320576c8eb0b",
+                "palletName": "Assets",
+                "isSufficient": true
+              }
+            }
+          ],
+          "explorers": [],
+          "externalApi": null,
+          "options": [
+            "fullSyncByDefault"
+          ]
+        }
+      ],
+      "chains_v2": [
+        {
+          "chainId": "release-people",
+          "genesisHash": "4a2b5b737de1da59e209b0000a876ec2fa20035dc34fd292a848da32d255ad48",
+          "parentId": "release-relay",
+          "name": "Paseo Next V2 People",
+          "addressPrefix": 42,
+          "nodeSelectionStrategy": null,
+          "nodes": [
+            {
+              "url": "wss://paseo-people-next-system-rpc.polkadot.io",
+              "name": "RPC"
+            }
+          ],
+          "additional": {
+            "defaultBlockTime": 2000
+          },
+          "assets": [
+            {
+              "assetId": 0,
+              "symbol": "PAS",
+              "precision": 10,
+              "priceId": "polkadot",
+              "name": null,
+              "type": null,
+              "typeExtras": null
+            },
+            {
+              "assetId": 1,
+              "symbol": "pUSD",
+              "precision": 6,
+              "priceId": "tether",
+              "type": "statemine",
+              "name": "Digital Dollar",
+              "typeExtras": {
+                "assetId": "0x010300711704320576c8eb0b",
+                "palletName": "Assets",
+                "isSufficient": true
+              }
+            }
+          ],
+          "explorers": [],
+          "externalApi": null,
+          "options": [
+            "fullSyncByDefault"
+          ]
+        }
+      ]
+    },
+    "coinageInstanceId": "0",
+    "limit": "Release signal queried using client configuration extracted from nightly artifacts; not a capture of Alex\u2019s release binary.",
+    "selectedConfigKey": "chains",
+    "selectedPeopleChain": {
+      "chainId": "release-people",
+      "genesisHash": "be5238f82c3553bc57ac3be43bef110bd58c49ad0744110814985195ca7d8c4e",
+      "parentId": "release-relay",
+      "name": "Summit Net People",
+      "addressPrefix": 0,
+      "nodeSelectionStrategy": null,
+      "nodes": [
+        {
+          "url": "wss://summit-people-rpc.polkadot.io",
+          "name": "RPC"
+        }
+      ],
+      "additional": {
+        "defaultBlockTime": 2000
+      },
+      "assets": [
+        {
+          "assetId": 0,
+          "symbol": "PAS",
+          "precision": 10,
+          "type": "native"
+        },
+        {
+          "assetId": 1,
+          "symbol": "CASH",
+          "precision": 6,
+          "type": "statemine",
+          "name": "W3S CASH",
+          "typeExtras": {
+            "assetId": "0x010300711704320576c8eb0b",
+            "palletName": "Assets",
+            "isSufficient": true
+          }
+        }
+      ],
+      "explorers": [],
+      "externalApi": null,
+      "options": [
+        "fullSyncByDefault"
+      ]
+    }
+  }
+]
