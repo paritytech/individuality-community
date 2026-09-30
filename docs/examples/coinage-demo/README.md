@@ -118,48 +118,98 @@ submission queues or their five-minute input-wait recovery logic. A successful r
 cannot rule out a phone-side delay. It uses a paid unload token instead of the
 apps' personhood allowance, so allowance acquisition is also outside its scope.
 
-## Timed recycler-loading experiment on documented Devnet
+## Recycler activity bot on documented Devnet
 
-`recycler-bot.ts` loads backing assets into new recycler vouchers and keeps them
-there. It targets public Paseo People, pinned by genesis, using instance 0 and
-`//Bob`. It defaults to a read-only preflight:
+`recycler-bot.ts` keeps recycler rings on public Paseo People (pinned by genesis,
+instance 0) busy using `//Bob`. It loads new vouchers and, once its capital is in
+use, withdraws its oldest vouchers back to Bob in the same `Utility.batch_all` as
+the next load. Withdrawal uses `unload_recyclers_into_external_asset_non_anonymous`,
+which pays the unload fee in native PAS. Every load adds a member to a ring, and
+withdrawal does not remove it. [Verified run and current status](evidence/README.md#recycler-activity-bot--96-hour-run).
+
+### Which rings the activity can affect
+
+The community apps count `RingKeysStatus.included` of the voucher's own ring. A
+Balanced voucher is ready at 20% ring fill (154 of 767 members), a Most private
+voucher at 90% (691). Either is also ready 10 minutes after the phone first sees
+it included, once that ring has at least 32 members. Fastest waits only for
+confirmed inclusion. Unloads do not reduce the count. See iOS
+[RecyclingStrategyType.swift#L16-L53](https://github.com/paritytech/polkadot-ios-community/blob/97f9b5849be097d805140d30e82d75da397a3a7f/Packages/Coinage/Sources/Recycling/Strategy/RecyclingStrategyType.swift#L16-L53),
+[ParametricRecyclingStrategy.swift#L56-L66](https://github.com/paritytech/polkadot-ios-community/blob/97f9b5849be097d805140d30e82d75da397a3a7f/Packages/Coinage/Sources/Recycling/Strategy/ParametricRecyclingStrategy.swift#L56-L66),
+[RecyclingParams.swift#L40-L50](https://github.com/paritytech/polkadot-ios-community/blob/97f9b5849be097d805140d30e82d75da397a3a7f/Packages/Coinage/Sources/Recycling/Strategy/RecyclingParams.swift#L40-L50),
+[VoucherLocationService.swift#L409](https://github.com/paritytech/polkadot-ios-community/blob/97f9b5849be097d805140d30e82d75da397a3a7f/Packages/Coinage/Sources/Services/VoucherLocation/VoucherLocationService.swift#L409)
+and Android
+[RecyclingStrategyType.kt#L59-L65](https://github.com/paritytech/polkadot-android-community/blob/d49c5e6db17bfca48bf4872014f676e9fdb884b3/feature/coinage/api/src/main/java/io/paritytech/polkadotapp/feature_coinage_api/domain/recycling/RecyclingStrategyType.kt#L59-L65),
+[ParametricRecyclingStrategy.kt#L56-L66](https://github.com/paritytech/polkadot-android-community/blob/d49c5e6db17bfca48bf4872014f676e9fdb884b3/feature/coinage/impl/src/main/java/io/paritytech/polkadotapp/feature_coinage_impl/domain/recycling/ParametricRecyclingStrategy.kt#L56-L66).
+
+So loads help only a ring below one of these thresholds, and only for a voucher in
+that same ring. They cannot shorten Fastest, and they cannot shorten the 10-minute
+wait once a ring has 32 members. The bot stops loading a denomination when its
+current ring reaches `--ring-ceiling` (700). This leaves room for real users and
+avoids opening a new, empty ring.
+
+### Run
 
 ```sh
+# Read-only preflight: balances, plan and current ring sizes.
 pnpm recycler-bot --output runs/bot-check
-pnpm recycler-bot --run --output runs/bot-live
-# Stop after any transaction already in flight settles:
-touch runs/bot-live/STOP
+# Create a run; --adopt imports vouchers from an earlier run after proving their state.
+node --import tsx recycler-bot.ts --init --output runs/bot-live --adopt runs/old-run
+# Supervise it with launchd, check it and stop it.
+./recycler-service.sh start runs/bot-live
+./recycler-service.sh status runs/bot-live
+./recycler-service.sh stop runs/bot-live
+# Change a stopped run's plan, then start it again.
+node --import tsx recycler-bot.ts --init --reconfigure --output runs/bot-live --duration-seconds 3600
+# Re-verify every finalized transaction through a second RPC provider.
+node --import tsx recycler-evidence.ts --run runs/bot-live --output evidence/name.json
 ```
 
-The default run lasts two hours, submits no more frequently than once every
-90 seconds and allows at most 80 denomination-1 loads. Each load is 20000 raw
-backing-asset units; the whole plan is capped at 1600000 raw units. With six asset
-decimals this is 0.02 per load and 1.60 total. The run requires the entire plan's
-asset balance up front. The native fee guard allows 10000000000 raw units (1 PAS),
-checks twice the estimated fee before each submission and records actual fees.
-Unexpected fees, dispatch failures and unresolved submissions stop the process.
+Defaults: 96 hours, one transaction per 90 seconds, denominations 0 and 1 in turn.
+At most 1.00 backing-asset units are held in vouchers (`--max-held-raw 1000000`)
+and Bob keeps at least 0.50 liquid (`--asset-floor-raw 500000`). A voucher is
+withdrawn at the earliest 3600 seconds after its load (`--min-hold-seconds`), at
+most four per transaction. Native spending is capped at 250 PAS
+(`--native-budget-raw`), each unload fee at 0.05 PAS (`--max-unload-fee-raw`), and
+Bob's free PAS never drops below 4500 (`--native-floor-raw`). Before each signature
+the bot checks the worst case against these bounds and stops rather than exceeding
+one. It also stops after six consecutive failed or dropped transactions.
 
-Use `--duration-seconds` (up to 10800), `--interval-seconds` (at least 30),
-`--denominations 1,5` and `--max-asset-raw` to change the plan. Denominations are
-visited in order; a plan whose maximum total exceeds its budget is rejected.
-A slow transaction reduces throughput rather than causing a catch-up burst.
-At the deadline the bot stops submitting; an in-flight transaction may still
-settle. SIGINT, SIGTERM and a `STOP` file request the same graceful shutdown.
+### Failure handling
 
-`status.json` records the PID, start/end times, successful load count and spending.
-`receipts.jsonl` records signed bytes, submission progress, finality, explorer
-links and confirmed recycler membership. Voucher secrets stay in `vouchers.json`
-inside the ignored run directory. Keep this file to retain control of the loaded
-funds. The script refuses to reuse an output directory, prevents a second instance
-of this bot from using Bob concurrently and never automatically resends an
-unresolved transaction. Do not run another Bob-funded script at the same time.
+- At most one transaction is unresolved. Its signed bytes, nonce and mortal era
+  (64 blocks from a stated finalized block) are saved before broadcasting.
+- Only canonical finalized blocks settle it. The bot searches each finalized block
+  of the era for the transaction hash and reads its events. Best-block inclusion,
+  watch events and timeouts are only logged.
+- A transaction absent from every canonical block of its fully finalized era is
+  dropped: it can never be included, so the load is retried with a new key.
+- Recycler membership of the new key must agree with that result, and withdrawn
+  aliases must be `Unloaded`. Any disagreement halts the run for inspection.
+- Rebroadcasting the same bytes is safe: the nonce can be consumed once. The bot
+  rebroadcasts only when no recent best block contains the transaction.
+- Chain calls time out after 60 seconds. The WebSocket client rotates between
+  the three documented endpoints.
+- launchd restarts the bot after a crash, at most once a minute. After 20
+  consecutive crashes, counting deaths such as `SIGKILL`, it halts. A halt, a
+  `STOP` file, SIGTERM or the deadline ends the process with exit code 0. Stopping
+  waits until any in-flight transaction settles.
+- `caffeinate -i -s` prevents idle and system sleep while on AC power. Closing the
+  lid can still suspend the Mac. After a pause longer than two minutes, the bot
+  records `clock-gap` and reconciles before signing again.
 
-This tests a specific recycler, not every cash denomination. Added entries in
-denomination 1 do not fill denomination 5 or 11. It is not a promise of faster
-payments: the observed onboarding threshold was already one member. A useful
-comparison has Alex test the same network and denomination, with the app's privacy
-mode held constant, while noting the exact send, receive and ready times.
-No phone-side behavior is inferred from successful bot transactions.
+Run files stay in the ignored run directory. `vouchers.json` holds the voucher
+secrets and is written before each key is signed. `state.json` is the checkpoint.
+`receipts.jsonl` records every submission, watch event, settlement and membership
+check. `status.json` is a heartbeat. `bot.log` is the process log. Only
+`recycler-evidence.ts` output, which contains public chain data, belongs in
+`evidence/`.
+
+The activity comes from well-known dev keys. It raises ring counts without adding
+independent users, so it does not create real privacy. It also lowers the app's
+fungibility estimate, which subtracts unloaded members. A useful comparison has
+Alex test on this network, in a denomination whose ring the bot affects, with the
+privacy mode held constant.
 
 ## What an outside observer sees
 

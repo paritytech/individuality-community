@@ -1,0 +1,624 @@
+{
+  "endpoint": "https://rpc.interweb-it.com/people-paseo",
+  "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+  "checkedAt": "2026-09-30T12:27:07.440Z",
+  "finalizedHead": {
+    "number": 7179319,
+    "hash": "0x8d19cf0273fcde4a127adb560cd3fc7be43f631f3ba561d201f444d938d54d71"
+  },
+  "runtime": {
+    "spec": "people-paseo",
+    "version": 2005002
+  },
+  "summary": {
+    "successful": 12,
+    "loads": 9,
+    "recycles": 3,
+    "dropped": 0,
+    "assetLoaded": "560000",
+    "assetWithdrawn": "60000",
+    "nativeFees": "798750954"
+  },
+  "ringsAtFinalizedHead": {
+    "0": [
+      {
+        "ring": 0,
+        "included": 11,
+        "total": 11
+      }
+    ],
+    "1": [
+      {
+        "ring": 0,
+        "included": 36,
+        "total": 36
+      }
+    ],
+    "2": [
+      {
+        "ring": 0,
+        "included": 767,
+        "total": 767
+      },
+      {
+        "ring": 1,
+        "included": 221,
+        "total": 221
+      }
+    ],
+    "3": [
+      {
+        "ring": 0,
+        "included": 347,
+        "total": 347
+      }
+    ],
+    "4": [
+      {
+        "ring": 0,
+        "included": 767,
+        "total": 767
+      },
+      {
+        "ring": 1,
+        "included": 233,
+        "total": 233
+      }
+    ]
+  },
+  "adoption": {
+    "source": "runs/recycler-bot-devnet-2026-09-30-2h",
+    "finalized": "0x7832c01a11cd0db8daff26989567e1e365462c206f4ceaf93aa60ae2d1050737",
+    "payerAssetLiquid": "1620000",
+    "vouchers": [
+      {
+        "label": "load-0-denomination-1",
+        "member": "0x57ce9245b305247de2e3df11f924ea5f55d8b1229d6e8616a8ee766f6ce16286",
+        "status": "held",
+        "block": {
+          "index": 2,
+          "number": 7178282,
+          "hash": "0x59db47f2c0498685fd3db52e3b1e47af828c14682d231e5b4c1b477071c66774"
+        },
+        "txHash": "0xae8e33c84777aa656e7821e1ccf5b1fe57827c51692083ca7051f7a47a3212c1",
+        "explorer": "https://dev.papi.how/explorer/0x59db47f2c0498685fd3db52e3b1e47af828c14682d231e5b4c1b477071c66774#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+      },
+      {
+        "label": "load-1-denomination-1",
+        "member": "0x98129e789d39af09b44ca2023b68616e688e93e4e3dd79167e21fd60e7f1c8d7",
+        "status": "held",
+        "block": {
+          "index": 2,
+          "number": 7178327,
+          "hash": "0x4b710360b5a23ef05935d2fd1e7af1d0ef8f6b38d8848a44032b57bcfbe82d83"
+        },
+        "txHash": "0x564827928a6f889c85db3555299eaf53857a56c968a0188bb317d40bdb55a046",
+        "explorer": "https://dev.papi.how/explorer/0x4b710360b5a23ef05935d2fd1e7af1d0ef8f6b38d8848a44032b57bcfbe82d83#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+      },
+      {
+        "label": "load-2-denomination-1",
+        "member": "0x99df9e08532df3636a30535bc83e6d24c6d91c4841987585e07bc6267d3fdeef",
+        "status": "held",
+        "block": {
+          "index": 2,
+          "number": 7178348,
+          "hash": "0x67f4287f886cc0fdbd027e5f615917ab3230e5d1113792b406c1873c6c22fb09"
+        },
+        "txHash": "0x8c6c95c9e24d149d055618d7f43cfdf5a2bdece17b1d9f940409fbc19189a173",
+        "explorer": "https://dev.papi.how/explorer/0x67f4287f886cc0fdbd027e5f615917ab3230e5d1113792b406c1873c6c22fb09#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+      },
+      {
+        "label": "load-3-denomination-1",
+        "member": "0xc8f755b09d97101799d5c2e3c57dbcbce64f4de80be8228464cda55b066ffc48",
+        "status": "dropped",
+        "txHash": "0x56e8b7f9ed9349fee715b85e3858e430d796a414f21e9e0759d066ce98ea2bc5",
+        "nonce": 10,
+        "eraBirth": 7178355,
+        "eraPeriod": 64,
+        "lastValid": 7178418,
+        "scannedCanonicalBlocks": [
+          7178355,
+          7178418
+        ],
+        "finalizedAtCheck": {
+          "number": 7178996,
+          "hash": "0x7832c01a11cd0db8daff26989567e1e365462c206f4ceaf93aa60ae2d1050737"
+        },
+        "payerNonceAtCheck": 10,
+        "memberLoaded": false,
+        "reorganisedBestBlocks": [
+          {
+            "block": {
+              "index": 2,
+              "number": 7178363,
+              "hash": "0xee1dd70523ce25aca0bdcd0abeb3670dc1f85851b562770d812c959fcb5da9ed"
+            },
+            "canonicalHashAtHeight": "0xa3e9880211c9d0266d23a125fa568b87ce71185e5887ae903e1f88993c28f82b"
+          }
+        ]
+      }
+    ]
+  },
+  "dropped": [],
+  "verified": [
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:04:09.345Z",
+        "firstBestBlockAt": "2026-09-30T12:04:11.994Z",
+        "finalizedAt": "2026-09-30T12:04:42.401Z",
+        "signedToFinalizedSeconds": 33.056,
+        "bestBlocksSeen": 1,
+        "abandonedBestBlocks": 0
+      },
+      "label": "op-0-recycle-d0",
+      "kind": "recycle",
+      "txHash": "0x40f430703421ccd1a5fd12cba3101e3a27124815564ffb74b81a62856634266c",
+      "block": {
+        "number": 7179041,
+        "hash": "0x68ee3a8f4b1dc65c45e104fbf1543cd007ea95235a34b6ee8cb04eca1408cada",
+        "index": 2
+      },
+      "explorer": "https://dev.papi.how/explorer/0x68ee3a8f4b1dc65c45e104fbf1543cd007ea95235a34b6ee8cb04eca1408cada#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "finalizedAt": "2026-09-30T12:04:42.401Z",
+      "load": {
+        "denomination": 0,
+        "amount": "10000",
+        "member": "0xaa044cb83c364e26326ce6c39d8968990337b934ca99de95519f3177ff5df988",
+        "ringIndex": 0,
+        "ringIncludedNow": 11
+      },
+      "unload": {
+        "inputs": 1,
+        "amount": "20000",
+        "members": [
+          "0x57ce9245b305247de2e3df11f924ea5f55d8b1229d6e8616a8ee766f6ce16286"
+        ],
+        "aliases": [
+          "0x1f4de8e1df48da73f937971805ea85a47666898b6512a94b1abe4d59ee0ce723"
+        ]
+      },
+      "fee": "266250318",
+      "events": [
+        "Balances.Withdraw",
+        "Balances.Transfer",
+        "Coinage.RecyclerAliasUnloaded",
+        "Coinage.RecyclersUnloadedIntoExternalAssetNonAnonymous",
+        "Utility.ItemCompleted",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Utility.ItemCompleted",
+        "Utility.BatchCompleted",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:05:13.349Z",
+        "firstBestBlockAt": "2026-09-30T12:05:15.838Z",
+        "finalizedAt": "2026-09-30T12:05:42.699Z",
+        "signedToFinalizedSeconds": 29.35,
+        "bestBlocksSeen": 1,
+        "abandonedBestBlocks": 0
+      },
+      "label": "op-1-recycle-d1",
+      "kind": "recycle",
+      "txHash": "0x84e254193f248647b7c593ad5d0b87e5967e6004ba8b6eac3b392572ad0fecf4",
+      "block": {
+        "number": 7179073,
+        "hash": "0xb1fdaaa3d2350cc04ae8c1fef9ba6a93b089634fb9dd1ffe477e33bc9b2afa74",
+        "index": 2
+      },
+      "explorer": "https://dev.papi.how/explorer/0xb1fdaaa3d2350cc04ae8c1fef9ba6a93b089634fb9dd1ffe477e33bc9b2afa74#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "finalizedAt": "2026-09-30T12:05:42.699Z",
+      "load": {
+        "denomination": 1,
+        "amount": "20000",
+        "member": "0x7c9fc289f387c39c9a0defadb5dd3b2a62aa107f87de45369eca1bb0732d954f",
+        "ringIndex": 0,
+        "ringIncludedNow": 36
+      },
+      "unload": {
+        "inputs": 1,
+        "amount": "20000",
+        "members": [
+          "0x98129e789d39af09b44ca2023b68616e688e93e4e3dd79167e21fd60e7f1c8d7"
+        ],
+        "aliases": [
+          "0x568281dc07adb58448fd17f4d4f31fd690feff9415908296e8883f1df23b2f13"
+        ]
+      },
+      "fee": "266250318",
+      "events": [
+        "Balances.Withdraw",
+        "Balances.Transfer",
+        "Coinage.RecyclerAliasUnloaded",
+        "Coinage.RecyclersUnloadedIntoExternalAssetNonAnonymous",
+        "Utility.ItemCompleted",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Utility.ItemCompleted",
+        "Utility.BatchCompleted",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:06:13.419Z",
+        "firstBestBlockAt": "2026-09-30T12:06:15.721Z",
+        "finalizedAt": "2026-09-30T12:06:44.034Z",
+        "signedToFinalizedSeconds": 30.615,
+        "bestBlocksSeen": 1,
+        "abandonedBestBlocks": 0
+      },
+      "label": "op-2-load-d0",
+      "kind": "load",
+      "txHash": "0xfcbf276598ac2fa0d0edc3901036c01d070a37629b29fe16580a4908f5880a3e",
+      "block": {
+        "number": 7179103,
+        "hash": "0x7343d1797f4a48872b121bc2558fdb24e73502f4383b64ccf519131594174f9b",
+        "index": 2
+      },
+      "explorer": "https://dev.papi.how/explorer/0x7343d1797f4a48872b121bc2558fdb24e73502f4383b64ccf519131594174f9b#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "finalizedAt": "2026-09-30T12:06:44.034Z",
+      "load": {
+        "denomination": 0,
+        "amount": "10000",
+        "member": "0xeb249b7f23d91521f4e8c3e4b875fe9944b58567bbe2463cf9b52164c8e388af",
+        "ringIndex": 0,
+        "ringIncludedNow": 11
+      },
+      "fee": "0",
+      "events": [
+        "Balances.Withdraw",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:07:17.785Z",
+        "firstBestBlockAt": "2026-09-30T12:07:19.723Z",
+        "finalizedAt": "2026-09-30T12:07:49.330Z",
+        "signedToFinalizedSeconds": 31.545,
+        "bestBlocksSeen": 1,
+        "abandonedBestBlocks": 0
+      },
+      "label": "op-3-recycle-d1",
+      "kind": "recycle",
+      "txHash": "0x81c45648c253cbe940d5f21b9eb9190df6ea9552f740fa0c14fd9ba5142e1623",
+      "block": {
+        "number": 7179135,
+        "hash": "0xc49a3c9cef004f473fedcc16fbef3aa6de39b200676537f2d6d7fefe2e1e0def",
+        "index": 2
+      },
+      "explorer": "https://dev.papi.how/explorer/0xc49a3c9cef004f473fedcc16fbef3aa6de39b200676537f2d6d7fefe2e1e0def#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "finalizedAt": "2026-09-30T12:07:49.330Z",
+      "load": {
+        "denomination": 1,
+        "amount": "20000",
+        "member": "0xb385799cba90da364173fb49eec5f30d58559c9d77d0c42312c3ca25834770c4",
+        "ringIndex": 0,
+        "ringIncludedNow": 36
+      },
+      "unload": {
+        "inputs": 1,
+        "amount": "20000",
+        "members": [
+          "0x99df9e08532df3636a30535bc83e6d24c6d91c4841987585e07bc6267d3fdeef"
+        ],
+        "aliases": [
+          "0x448e0ce1eeea6036852c7f2fb6aa6253d44827b115439ad3f3d794ae2358d34b"
+        ]
+      },
+      "fee": "266250318",
+      "events": [
+        "Balances.Withdraw",
+        "Balances.Transfer",
+        "Coinage.RecyclerAliasUnloaded",
+        "Coinage.RecyclersUnloadedIntoExternalAssetNonAnonymous",
+        "Utility.ItemCompleted",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Utility.ItemCompleted",
+        "Utility.BatchCompleted",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:08:48.103Z",
+        "finalizedAt": "2026-09-30T12:09:43.383Z",
+        "signedToFinalizedSeconds": 55.28,
+        "bestBlocksSeen": 0,
+        "abandonedBestBlocks": 0
+      },
+      "label": "op-4-load-d4",
+      "kind": "load",
+      "txHash": "0x0ec9edfff0020cc40861d89a1818a6dca11bb0b83ec5f55988cbedbe36ab7f6c",
+      "block": {
+        "number": 7179154,
+        "hash": "0xe956257eb173bbd83d0145cd9d3f794b6d74d70b66d58ec6cb56980b29cebb0c",
+        "index": 2
+      },
+      "explorer": "https://dev.papi.how/explorer/0xe956257eb173bbd83d0145cd9d3f794b6d74d70b66d58ec6cb56980b29cebb0c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "finalizedAt": "2026-09-30T12:09:43.383Z",
+      "load": {
+        "denomination": 4,
+        "amount": "160000",
+        "member": "0xe2cd09d20d24145c8b7373dd0b106e860bc7902f9e5047244b4e8b8502eae484",
+        "ringIndex": 1,
+        "ringIncludedNow": 233
+      },
+      "fee": "0",
+      "events": [
+        "Balances.Withdraw",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:10:18.233Z",
+        "firstBestBlockAt": "2026-09-30T12:10:25.656Z",
+        "finalizedAt": "2026-09-30T12:15:18.639Z",
+        "signedToFinalizedSeconds": 300.406,
+        "bestBlocksSeen": 6,
+        "abandonedBestBlocks": 5
+      },
+      "label": "op-5-load-d0",
+      "kind": "load",
+      "txHash": "0xfd7a0e4e25e39fb0180694f75a3739d092a454aba43f9e68efb86f9d7297caf4",
+      "block": {
+        "number": 7179192,
+        "hash": "0xd276d63f23abf5fc626c7fd9946f637bb18ad325fe882b08074a4d4b76765380",
+        "index": 2
+      },
+      "explorer": "https://dev.papi.how/explorer/0xd276d63f23abf5fc626c7fd9946f637bb18ad325fe882b08074a4d4b76765380#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "finalizedAt": "2026-09-30T12:15:18.639Z",
+      "load": {
+        "denomination": 0,
+        "amount": "10000",
+        "member": "0x545a6a9d83e669737b3195b61db0a42d0f19305cabe4b567726f71b071c7370b",
+        "ringIndex": 0,
+        "ringIncludedNow": 11
+      },
+      "fee": "0",
+      "events": [
+        "Balances.Withdraw",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:15:29.539Z",
+        "firstBestBlockAt": "2026-09-30T12:16:25.574Z",
+        "finalizedAt": "2026-09-30T12:16:30.840Z",
+        "signedToFinalizedSeconds": 61.301,
+        "bestBlocksSeen": 1,
+        "abandonedBestBlocks": 0
+      },
+      "label": "op-6-load-d1",
+      "kind": "load",
+      "txHash": "0x7aba76956eab75933fa1e2bbe39479db981a91f71d95d610b2997d7703393576",
+      "block": {
+        "number": 7179198,
+        "hash": "0x98a3951041153190df0a47f245ac267c4b3ff1555bac62fbf2a580520515c8a9",
+        "index": 2
+      },
+      "explorer": "https://dev.papi.how/explorer/0x98a3951041153190df0a47f245ac267c4b3ff1555bac62fbf2a580520515c8a9#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "finalizedAt": "2026-09-30T12:16:30.840Z",
+      "load": {
+        "denomination": 1,
+        "amount": "20000",
+        "member": "0x544f58f86fb33c5234d8d33de07e4027f94a64c643ff189c95bffe7533f96b45",
+        "ringIndex": 0,
+        "ringIncludedNow": 36
+      },
+      "fee": "0",
+      "events": [
+        "Balances.Withdraw",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:16:59.656Z",
+        "firstBestBlockAt": "2026-09-30T12:17:03.936Z",
+        "finalizedAt": "2026-09-30T12:19:18.884Z",
+        "signedToFinalizedSeconds": 139.228,
+        "bestBlocksSeen": 3,
+        "abandonedBestBlocks": 3
+      },
+      "label": "op-7-load-d2",
+      "kind": "load",
+      "txHash": "0x78b06ba1ea1fcbca0316c4953727c5bf40889f0be6e80037111c2571dff91f5c",
+      "block": {
+        "number": 7179218,
+        "hash": "0x901861fe515423285f6d61d7211daac5a401b7d50437e5354c6c108e3172b8af",
+        "index": 4
+      },
+      "explorer": "https://dev.papi.how/explorer/0x901861fe515423285f6d61d7211daac5a401b7d50437e5354c6c108e3172b8af#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+      "finalizedAt": "2026-09-30T12:19:18.884Z",
+      "load": {
+        "denomination": 2,
+        "amount": "40000",
+        "member": "0x260f142b724120b5ef4c96ab9dc202da8064b7b202be378df727764abaaa4f36",
+        "ringIndex": 1,
+        "ringIncludedNow": 221
+      },
+      "fee": "0",
+      "events": [
+        "Balances.Withdraw",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:19:21.963Z",
+        "firstBestBlockAt": "2026-09-30T12:19:24.528Z",
+        "finalizedAt": "2026-09-30T12:21:42.617Z",
+        "signedToFinalizedSeconds": 140.654,
+        "bestBlocksSeen": 2,
+        "abandonedBestBlocks": 2
+      },
+      "label": "op-8-load-d3",
+      "kind": "load",
+      "txHash": "0x1383dc90a41fea222dca43d9c062ea17aacad9915d05fdf8d7587f52943ae132",
+      "block": {
+        "number": 7179230,
+        "hash": "0x4b02d8f489039690401e56827505d3bd5fb954a12f7dc11d50433bcac63147cf",
+        "index": 3
+      },
+      "explorer": "https://dev.papi.how/explorer/0x4b02d8f489039690401e56827505d3bd5fb954a12f7dc11d50433bcac63147cf#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+      "finalizedAt": "2026-09-30T12:21:42.617Z",
+      "load": {
+        "denomination": 3,
+        "amount": "80000",
+        "member": "0x2a1561a157c18c73f21bcd3482ef80a86e2a7faf5694c4ba68fdedf3809c3855",
+        "ringIndex": 0,
+        "ringIncludedNow": 347
+      },
+      "fee": "0",
+      "events": [
+        "Balances.Withdraw",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:21:45.690Z",
+        "firstBestBlockAt": "2026-09-30T12:21:47.803Z",
+        "finalizedAt": "2026-09-30T12:24:30.263Z",
+        "signedToFinalizedSeconds": 164.573,
+        "bestBlocksSeen": 3,
+        "abandonedBestBlocks": 2
+      },
+      "label": "op-9-load-d4",
+      "kind": "load",
+      "txHash": "0xd9f1155a70c6bf872a741bed7331ae20d2704d3bff8859874d5d56874dcfd3b2",
+      "block": {
+        "number": 7179256,
+        "hash": "0xd4ed702b08889b88f17d42fe759ab9c578a918d90feb18fb17c946bcf0508a10",
+        "index": 4
+      },
+      "explorer": "https://dev.papi.how/explorer/0xd4ed702b08889b88f17d42fe759ab9c578a918d90feb18fb17c946bcf0508a10#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+      "finalizedAt": "2026-09-30T12:24:30.263Z",
+      "load": {
+        "denomination": 4,
+        "amount": "160000",
+        "member": "0x3ff0ed025b84c26bc075e195e90d12cd57a533a578a6244f2d8a3da592211d92",
+        "ringIndex": 1,
+        "ringIncludedNow": 233
+      },
+      "fee": "0",
+      "events": [
+        "Balances.Withdraw",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:24:33.310Z",
+        "firstBestBlockAt": "2026-09-30T12:24:35.696Z",
+        "finalizedAt": "2026-09-30T12:25:06.102Z",
+        "signedToFinalizedSeconds": 32.792,
+        "bestBlocksSeen": 1,
+        "abandonedBestBlocks": 0
+      },
+      "label": "op-10-load-d0",
+      "kind": "load",
+      "txHash": "0x7ab216d2ea09368b14cdd2f9c005e4f5d215c54c71862a2579e1f94e4b89ea4b",
+      "block": {
+        "number": 7179272,
+        "hash": "0xe87e25f40b2ccc1a0c348729f9f9d15ef217730e62d9950beb3451d1f53a0078",
+        "index": 2
+      },
+      "explorer": "https://dev.papi.how/explorer/0xe87e25f40b2ccc1a0c348729f9f9d15ef217730e62d9950beb3451d1f53a0078#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "finalizedAt": "2026-09-30T12:25:06.102Z",
+      "load": {
+        "denomination": 0,
+        "amount": "10000",
+        "member": "0x6e505df96a84777181197f5fba4e29e750aea4b61c721a8c30cf50ccbb21c2c6",
+        "ringIndex": 0,
+        "ringIncludedNow": 11
+      },
+      "fee": "0",
+      "events": [
+        "Balances.Withdraw",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    },
+    {
+      "timing": {
+        "signedAt": "2026-09-30T12:26:03.380Z",
+        "firstBestBlockAt": "2026-09-30T12:26:05.672Z",
+        "finalizedAt": "2026-09-30T12:26:34.607Z",
+        "signedToFinalizedSeconds": 31.227,
+        "bestBlocksSeen": 1,
+        "abandonedBestBlocks": 0
+      },
+      "label": "op-11-load-d1",
+      "kind": "load",
+      "txHash": "0xaf3d5f73b08129d333a522892b180c1196d8c2f657717babacb9e447f183de35",
+      "block": {
+        "number": 7179314,
+        "hash": "0xf16cc439bb414aab8ebb9b27a3c32372b26068fb1075c5fe6f12c4f7ba726900",
+        "index": 2
+      },
+      "explorer": "https://dev.papi.how/explorer/0xf16cc439bb414aab8ebb9b27a3c32372b26068fb1075c5fe6f12c4f7ba726900#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+      "finalizedAt": "2026-09-30T12:26:34.607Z",
+      "load": {
+        "denomination": 1,
+        "amount": "20000",
+        "member": "0x4151b7c0b951d52e794e6bb22924b74d9df781647c33fe128abd9be60ba0e6b7",
+        "ringIndex": 0,
+        "ringIncludedNow": 36
+      },
+      "fee": "0",
+      "events": [
+        "Balances.Withdraw",
+        "Members.MemberAdded",
+        "Coinage.RecyclerLoadedWithExternalAsset",
+        "Balances.Deposit",
+        "TransactionPayment.TransactionFeePaid",
+        "System.ExtrinsicSuccess"
+      ]
+    }
+  ]
+}

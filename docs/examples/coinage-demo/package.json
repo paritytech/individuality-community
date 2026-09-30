@@ -8,7 +8,8 @@
     "check": "tsc --noEmit",
     "test": "tsx --test *.test.ts",
     "verify": "tsx verify.ts",
-    "recycler-bot": "tsx recycler-bot.ts"
+    "recycler-bot": "tsx recycler-bot.ts",
+    "recycler-evidence": "tsx recycler-evidence.ts"
   },
   "dependencies": {
     "@polkadot-api/metadata-builders": "0.14.3",

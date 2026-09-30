@@ -258,6 +258,12 @@ transaction.
 
 ## Two-hour recycler-loading experiment
 
+**Correction:** this run stopped at 18:06 GMT+7 after three finalized loads. Its
+fourth load was seen in best block 7178363, which was later reorganised away, and
+the bot's 180-second watch timeout ended the process. The transaction was never
+finalized. See the [reconciliation](#reconciliation-of-the-stopped-two-hour-run)
+and its [96-hour replacement](#recycler-activity-bot--96-hour-run).
+
 Started on **30 September 2026 at 17:58:30 GMT+7**, scheduled to stop submitting
 at **19:58:30 GMT+7**. The user selected the documented Devnet, public Paseo
 People. The bot uses Bob's existing backing-asset balance, instance 0 and
@@ -273,7 +279,7 @@ of Alex's delay. The observed onboarding threshold for this recycler was one.
 
 - [Startup snapshot and membership checks](recycler-bot-startup.json)
 - [Independently verified initial transactions](recycler-bot-initial-transactions.json)
-- [Script and operating instructions](../README.md#timed-recycler-loading-experiment-on-documented-devnet)
+- [Script and operating instructions](../README.md#recycler-activity-bot-on-documented-devnet)
 
 The process runs independently of this chat with an idle-sleep assertion. Its
 current status and all subsequent receipts remain under the ignored local
@@ -288,3 +294,152 @@ is an experiment, not a guarantee that a 24.66 balance will clear sooner.
 Validation: TypeScript checking and all 12 script tests passed. `scripts/check.sh`
 passed all local stages and 2831 Rust tests; `check_validtx_priority.sh` passed.
 The pre-existing TODO URL lint failures remain. No Rust source was modified.
+
+## Recycler activity bot — 96-hour run
+
+Replaces the stopped two-hour run on the same network: public Paseo People
+(documented Devnet), genesis
+`0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec`, runtime
+`people-paseo` 2005002, Coinage instance 0, payer `//Bob`. Endpoints, in order:
+`wss://people-paseo.rotko.net`, `wss://people-paseo.gatotech.network`,
+`wss://rpc.interweb-it.com/people-paseo`.
+
+| Setting | Value |
+|---|---|
+| Supervisor | launchd agent `io.parity.coinage-demo.recycler-bot`, `caffeinate -i -s` |
+| Started / planned end | 2026-09-30 19:02:08 GMT+7 / **2026-10-04 19:02:08 GMT+7** |
+| Rate | one transaction at most every 90 seconds (at most 3840) |
+| Denominations | 0, 1, 2, 3, 4 in turn: 0.01, 0.02, 0.04, 0.08, 0.16 |
+| Capital | at most 1.20 held in vouchers; Bob keeps at least 0.40 liquid |
+| Reuse | vouchers older than 30 minutes are withdrawn to Bob with the next load, at most 4 per transaction |
+| Native budget | 250 PAS total, 0.05 PAS per unload fee; Bob's free PAS stays above 4500 |
+| Ring ceiling | no loads into a denomination whose current ring has 700 members |
+
+The first 25 minutes used a verification plan: 60-second interval, 0.06 held cap
+and no minimum hold, so the first transactions exercised withdrawal. The run was
+then reconfigured to the plan above, keeping its checkpoint.
+
+### Verified transactions
+
+All 12 transactions are successful, in canonical finalized blocks up to #7179319.
+`recycler-evidence.ts` re-checked each one through a second provider
+(`https://rpc.interweb-it.com/people-paseo`). It fetched the canonical block at
+that height, rehashed the extrinsic, required `System.ExtrinsicSuccess` and
+confirmed the new member's ring membership at the finalized head. The three
+withdrawals each emitted `RecyclerAliasUnloaded` and returned 0.02 to Bob. Time is
+from signing to the bot's finalized receipt. "Abandoned" counts best blocks that
+contained the transaction but were then reorganised away.
+
+| Operation | Denomination | Withdrawal | Block-index | Block hash | Transaction | Seconds | Abandoned |
+|---|---:|---|---|---|---|---:|---:|
+| op-0-recycle-d0 | 0 | 0.02 withdrawn | [7179041-2](https://dev.papi.how/explorer/0x68ee3a8f4b1dc65c45e104fbf1543cd007ea95235a34b6ee8cb04eca1408cada#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | `0x68ee3a8f4b1dc65c45e104fbf1543cd007ea95235a34b6ee8cb04eca1408cada` | [0x40f430703421ccd1…](https://dev.papi.how/explorer/0x68ee3a8f4b1dc65c45e104fbf1543cd007ea95235a34b6ee8cb04eca1408cada#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 33 | 0 |
+| op-1-recycle-d1 | 1 | 0.02 withdrawn | [7179073-2](https://dev.papi.how/explorer/0xb1fdaaa3d2350cc04ae8c1fef9ba6a93b089634fb9dd1ffe477e33bc9b2afa74#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | `0xb1fdaaa3d2350cc04ae8c1fef9ba6a93b089634fb9dd1ffe477e33bc9b2afa74` | [0x84e254193f248647…](https://dev.papi.how/explorer/0xb1fdaaa3d2350cc04ae8c1fef9ba6a93b089634fb9dd1ffe477e33bc9b2afa74#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 29 | 0 |
+| op-2-load-d0 | 0 | — | [7179103-2](https://dev.papi.how/explorer/0x7343d1797f4a48872b121bc2558fdb24e73502f4383b64ccf519131594174f9b#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | `0x7343d1797f4a48872b121bc2558fdb24e73502f4383b64ccf519131594174f9b` | [0xfcbf276598ac2fa0…](https://dev.papi.how/explorer/0x7343d1797f4a48872b121bc2558fdb24e73502f4383b64ccf519131594174f9b#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 31 | 0 |
+| op-3-recycle-d1 | 1 | 0.02 withdrawn | [7179135-2](https://dev.papi.how/explorer/0xc49a3c9cef004f473fedcc16fbef3aa6de39b200676537f2d6d7fefe2e1e0def#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | `0xc49a3c9cef004f473fedcc16fbef3aa6de39b200676537f2d6d7fefe2e1e0def` | [0x81c45648c253cbe9…](https://dev.papi.how/explorer/0xc49a3c9cef004f473fedcc16fbef3aa6de39b200676537f2d6d7fefe2e1e0def#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 32 | 0 |
+| op-4-load-d4 | 4 | — | [7179154-2](https://dev.papi.how/explorer/0xe956257eb173bbd83d0145cd9d3f794b6d74d70b66d58ec6cb56980b29cebb0c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | `0xe956257eb173bbd83d0145cd9d3f794b6d74d70b66d58ec6cb56980b29cebb0c` | [0x0ec9edfff0020cc4…](https://dev.papi.how/explorer/0xe956257eb173bbd83d0145cd9d3f794b6d74d70b66d58ec6cb56980b29cebb0c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 55 | 0 |
+| op-5-load-d0 | 0 | — | [7179192-2](https://dev.papi.how/explorer/0xd276d63f23abf5fc626c7fd9946f637bb18ad325fe882b08074a4d4b76765380#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | `0xd276d63f23abf5fc626c7fd9946f637bb18ad325fe882b08074a4d4b76765380` | [0xfd7a0e4e25e39fb0…](https://dev.papi.how/explorer/0xd276d63f23abf5fc626c7fd9946f637bb18ad325fe882b08074a4d4b76765380#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 300 | 5 |
+| op-6-load-d1 | 1 | — | [7179198-2](https://dev.papi.how/explorer/0x98a3951041153190df0a47f245ac267c4b3ff1555bac62fbf2a580520515c8a9#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | `0x98a3951041153190df0a47f245ac267c4b3ff1555bac62fbf2a580520515c8a9` | [0x7aba76956eab7593…](https://dev.papi.how/explorer/0x98a3951041153190df0a47f245ac267c4b3ff1555bac62fbf2a580520515c8a9#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 61 | 0 |
+| op-7-load-d2 | 2 | — | [7179218-4](https://dev.papi.how/explorer/0x901861fe515423285f6d61d7211daac5a401b7d50437e5354c6c108e3172b8af#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4) | `0x901861fe515423285f6d61d7211daac5a401b7d50437e5354c6c108e3172b8af` | [0x78b06ba1ea1fcbca…](https://dev.papi.how/explorer/0x901861fe515423285f6d61d7211daac5a401b7d50437e5354c6c108e3172b8af#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4) | 139 | 3 |
+| op-8-load-d3 | 3 | — | [7179230-3](https://dev.papi.how/explorer/0x4b02d8f489039690401e56827505d3bd5fb954a12f7dc11d50433bcac63147cf#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3) | `0x4b02d8f489039690401e56827505d3bd5fb954a12f7dc11d50433bcac63147cf` | [0x1383dc90a41fea22…](https://dev.papi.how/explorer/0x4b02d8f489039690401e56827505d3bd5fb954a12f7dc11d50433bcac63147cf#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3) | 141 | 2 |
+| op-9-load-d4 | 4 | — | [7179256-4](https://dev.papi.how/explorer/0xd4ed702b08889b88f17d42fe759ab9c578a918d90feb18fb17c946bcf0508a10#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4) | `0xd4ed702b08889b88f17d42fe759ab9c578a918d90feb18fb17c946bcf0508a10` | [0xd9f1155a70c6bf87…](https://dev.papi.how/explorer/0xd4ed702b08889b88f17d42fe759ab9c578a918d90feb18fb17c946bcf0508a10#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4) | 165 | 2 |
+| op-10-load-d0 | 0 | — | [7179272-2](https://dev.papi.how/explorer/0xe87e25f40b2ccc1a0c348729f9f9d15ef217730e62d9950beb3451d1f53a0078#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | `0xe87e25f40b2ccc1a0c348729f9f9d15ef217730e62d9950beb3451d1f53a0078` | [0x7ab216d2ea09368b…](https://dev.papi.how/explorer/0xe87e25f40b2ccc1a0c348729f9f9d15ef217730e62d9950beb3451d1f53a0078#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 33 | 0 |
+| op-11-load-d1 | 1 | — | [7179314-2](https://dev.papi.how/explorer/0xf16cc439bb414aab8ebb9b27a3c32372b26068fb1075c5fe6f12c4f7ba726900#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | `0xf16cc439bb414aab8ebb9b27a3c32372b26068fb1075c5fe6f12c4f7ba726900` | [0xaf3d5f73b08129d3…](https://dev.papi.how/explorer/0xf16cc439bb414aab8ebb9b27a3c32372b26068fb1075c5fe6f12c4f7ba726900#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 31 | 0 |
+
+[Raw verified transactions, events, timing and ring sizes](recycler-bot-96h-transactions.json).
+Totals: 9 new-voucher loads plus 3 withdrawals, 0.56 loaded, 0.06 withdrawn,
+0.0799 PAS in fees (loads are fee-free; each withdrawal costs a 0.0201 PAS unload
+fee plus about 0.0065 PAS weight fee). Finalized ring sizes after these
+transactions: d0 11 (was 7), d1 36 (was 32), d2 ring 1 221, d3 347, d4 ring 1 233.
+
+### Failure-path checks on the live run
+
+- **Crash during flight.** `kill -9` hit the bot 0.1 s after op 4 was broadcast.
+  launchd restarted it; it resumed with op 4 pending and settled it from the
+  canonical chain at #7179154-2. There was one submission and one settlement.
+- **Reorganisations and slow finality.** Op 5 appeared in best blocks 7179171,
+  7179181, 7179187, 7179195 and 7179197, each later abandoned, and finalized 300 s
+  after signing in #7179192. Ops 7–9 each saw two or three abandoned best blocks.
+  The bot counted each once.
+- **Duplicate prevention.** A restarted instance found another live bot holding
+  the Bob lock and halted rather than submitting.
+- **Graceful stop.** A `STOP` file made the bot wait for op 5 to finalize before
+  exiting.
+
+This network currently shows multi-minute finality stalls with repeated
+reorganisations. Fastest waits for confirmed inclusion, so such stalls would
+delay it too. That is an observation from this bot, not a proven cause of Alex's
+delay.
+
+### Reconciliation of the stopped two-hour run
+
+Checked at finalized #7178996 (hash
+`0x7832c01a11cd0db8daff26989567e1e365462c206f4ceaf93aa60ae2d1050737`) and recorded in
+the `adoption` field of the evidence file:
+
+- The fourth transaction `0x56e8b7f9ed9349fee715b85e3858e430d796a414f21e9e0759d066ce98ea2bc5`
+  used nonce 10 and a 64-block era valid through #7178418. No canonical block
+  #7178355–#7178418 contains it. The canonical block at #7178363 is
+  `0xa3e9880211c9d0266d23a125fa568b87ce71185e5887ae903e1f88993c28f82b`, not the
+  reported `0xee1dd705…`. Bob's finalized nonce was still 10, and the voucher key
+  was not a recycler member. It can never be included and moved no funds.
+- The three finalized loads ([7178282-2](https://dev.papi.how/explorer/0x59db47f2c0498685fd3db52e3b1e47af828c14682d231e5b4c1b477071c66774#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2),
+  [7178327-2](https://dev.papi.how/explorer/0x4b710360b5a23ef05935d2fd1e7af1d0ef8f6b38d8848a44032b57bcfbe82d83#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2),
+  [7178348-2](https://dev.papi.how/explorer/0x67f4287f886cc0fdbd027e5f615917ab3230e5d1113792b406c1873c6c22fb09#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2))
+  were canonical and held. The new run adopted them and withdrew all three in
+  ops 0, 1 and 3.
+- Bob's backing asset reconciles: 1.62 liquid plus 0.06 in vouchers equals the
+  1.68 held before the two-hour run.
+
+### What the activity can and cannot affect
+
+The apps count included members in a voucher's own ring. Readiness needs 20% fill
+(154) for Balanced or 90% (691) for Most private. Alternatively, it needs 32
+members plus 10 minutes from the phone's first observation. See the
+[source links](../README.md#which-rings-the-activity-can-affect). At the start:
+
+| Denomination | Value | Current ring members | Effect of more loads |
+|---:|---:|---:|---|
+| 0 | 0.01 | 7 | Below 32: Balanced and Most private vouchers could never become ready. Needs 25 loads to reach 32 (11 after this evidence). |
+| 1 | 0.02 | 32 | Balanced becomes immediate at 154 instead of after 10 minutes. |
+| 2–4 | 0.04–0.16 | 220–346 | Balanced already immediate; Most private immediate at 691. |
+| 10 | 10.24 | 16 | Below 32. Not affordable. |
+| 11 | 20.48 | 4 | Below 32. Not affordable. |
+| 12 | 40.96 | 5 | Below 32. Not affordable. |
+| 13, 14 | 81.92, 163.84 | no ring yet | Not affordable. |
+
+The apps split a balance greedily into powers of two. A 120.00 balance breaks down
+into denominations 13, 11, 10, 9, 7, 6 and 5. Three of those (81.92, 20.48 and
+10.24) sit in rings below 32 members, which in Balanced or Most private would never
+become ready. That fits Alex's report of about 90 of 120 clearing. It is a
+hypothesis only: his network and build are unconfirmed.
+
+### Funding shortfall
+
+Bob holds 1.68 backing-asset units; with the 0.40 floor, 1.28 is working capital.
+The other five dev accounts hold no liquid backing asset. Eve holds one
+denomination-4 coin and the reproduction run left one denomination-4 voucher; both
+are recoverable but not used here.
+
+- One denomination-10 coin, reused, could add the 16 members that ring needs:
+  short **8.96**.
+- One coin each of denominations 10–14, reused, to lift all five rings: 317.44,
+  short **316.16**. Reaching 32 members needs 16, 28, 27, 32 and 32 loads.
+- The original plan to load and hold denominations 1, 2, 3, 4 and 8 for 96 hours
+  needs 2196.48, short **2194.80**. Reuse avoids this.
+
+The only on-chain source found is the People chain's PAS/backing-asset
+`AssetConversion` pool (account `5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq`,
+1000 PAS and 1000.00 asset at #7178839). Buying 10.24 would cost about 10.38 PAS
+and move the price about 2%. Buying 317.44 would cost about 466 PAS and roughly
+double the price. That pool also serves fee conversion for other Devnet users,
+so no swap was made. Minting requires the asset's issuer
+`5Fk8FBTqBpAyBReZPse2wn8Lf4ADzdNVAsrGoNMSTxKedN8f`, which is not a dev key.
+
+### App source commits
+
+Readiness rules come from iOS `97f9b5849be097d805140d30e82d75da397a3a7f` and
+Android `d49c5e6db17bfca48bf4872014f676e9fdb884b3`. The release-related commits
+`ab6471645b2500719e0d0f7af1cc514c5ec75582` (iOS) and
+`c5158448f3c4575f40350017d466053d6b19dacb` (Android) are not present in the local
+clones, so they were not re-read. The constants are identical in the Android copy
+under `host-rust-core` `6fc92e721d8bdabe0401d3219d1030cc5d41cdf3`.
