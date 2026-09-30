@@ -891,23 +891,23 @@ mod benches {
 		Ok((aliases, bounded_proofs, input_value, index, revision, split_into, max_fee))
 	}
 
-	/// Finds the largest diversity that funds `d` outputs and the external reserve.
+	/// Finds the largest diversity that funds `n` outputs and the external reserve.
 	/// Exponent offsets are relative to the minimum, including when it is negative.
 	fn max_mixed_output_denominations(
 		minimum: Denomination,
 		maximum: Denomination,
 		a: u32,
-		d: u32,
+		n: u32,
 		min_external_units: u128,
 	) -> Option<u32> {
 		let span = u32::try_from(i16::from(maximum).checked_sub(i16::from(minimum))?).ok()?;
 		let total = 1u128.checked_shl(span)?.checked_mul(u128::from(a))?;
-		let limit = d.min(span.checked_add(1)?);
+		let limit = n.min(span.checked_add(1)?);
 		(1..=limit).rev().find(|g| {
 			1u128
 				.checked_shl(*g)
 				.and_then(|units| units.checked_sub(1))
-				.and_then(|units| units.checked_add(u128::from(d - g)))
+				.and_then(|units| units.checked_add(u128::from(n - g)))
 				.and_then(|units| units.checked_add(min_external_units))
 				.is_some_and(|required| required <= total)
 		})
@@ -955,34 +955,36 @@ mod benches {
 		.expect("alias bucket must fund the benchmark output rectangle")
 	}
 
-	/// Constructs minimum-cost distinct denominations followed by minimum-denomination repeats.
-	fn decompose_loaded_coin_units(g: u32, e: u32) -> Result<Vec<i8>, BenchmarkError> {
+	/// Constructs `g` minimum-cost distinct denominations, then fills `n` outputs with
+	/// minimum-denomination repeats.
+	fn decompose_loaded_coin_units(g: u32, n: u32) -> Result<Vec<i8>, BenchmarkError> {
 		if g == 0 {
 			return Err("mixed outputs need at least one denomination".into());
 		}
-		let count = g.checked_add(e).ok_or("output count overflows")?;
+		if n < g {
+			return Err("mixed outputs need an output per denomination".into());
+		}
 		let mut pieces = (0..g)
 			.map(|exponent| {
 				i8::try_from(exponent)
 					.map_err(|_| BenchmarkError::from("denomination offset overflows"))
 			})
 			.collect::<Result<Vec<_>, _>>()?;
-		pieces.resize(count as usize, 0);
+		pieces.resize(n as usize, 0);
 		Ok(pieces)
 	}
 
 	fn select_mixed_output_units<T: Config>(
 		a: u32,
 		g: u32,
-		e: u32,
+		n: u32,
 		min_external_units: u128,
 	) -> Result<(Denomination, u128, u128), BenchmarkError> {
 		let span = u32::try_from(
 			i16::from(T::MaximumExponent::get()) - i16::from(T::MinimumExponent::get()),
 		)
 		.map_err(|_| "invalid exponent range")?;
-		if g == 0 || g > span + 1 || g.checked_add(e).is_none_or(|d| d > T::MaxSplitOutputs::get())
-		{
+		if g == 0 || g > span + 1 || g > n || n > T::MaxSplitOutputs::get() {
 			return Err("mixed output components exceed configured bounds".into());
 		}
 		let total = 1u128
@@ -992,7 +994,7 @@ mod benches {
 		let loaded = 1u128
 			.checked_shl(g)
 			.and_then(|units| units.checked_sub(1))
-			.and_then(|units| units.checked_add(u128::from(e)))
+			.and_then(|units| units.checked_add(u128::from(n - g)))
 			.ok_or("output units overflow")?;
 		let external = total.checked_sub(loaded).ok_or("outputs exceed input value")?;
 		if external < min_external_units {
@@ -1005,7 +1007,7 @@ mod benches {
 	fn setup_mixed_output_validation<T: Config>(
 		a: u32,
 		g: u32,
-		e: u32,
+		n: u32,
 		mode: UnloadFeeBenchMode,
 	) -> Result<
 		(
@@ -1017,8 +1019,8 @@ mod benches {
 	> {
 		let reserve = mixed_output_external_reserve::<T>(mode)?;
 		let (input_value, loaded_units, external_units) =
-			select_mixed_output_units::<T>(a, g, e, reserve)?;
-		let loaded_coins = decompose_loaded_coin_units(g, e)?
+			select_mixed_output_units::<T>(a, g, n, reserve)?;
+		let loaded_coins = decompose_loaded_coin_units(g, n)?
 			.into_iter()
 			.enumerate()
 			.map(|(i, offset)| {
@@ -1029,7 +1031,7 @@ mod benches {
 				(denomination, member)
 			})
 			.collect::<Vec<_>>();
-		assert_eq!(loaded_coins.len(), (g + e) as usize);
+		assert_eq!(loaded_coins.len(), n as usize);
 		assert_eq!(
 			loaded_coins
 				.iter()
@@ -1074,13 +1076,13 @@ mod benches {
 	fn setup_unload_recycler_into_external_asset_and_loaded_coins<T: Config>(
 		a: u32,
 		g: u32,
-		e: u32,
+		n: u32,
 		mode: UnloadFeeBenchMode,
 	) -> Result<MixedOutputScenario<T>, BenchmarkError> {
 		common_setup::<T>();
 
 		let (input_value, external_asset_amount, loaded_coins) =
-			setup_mixed_output_validation::<T>(a, g, e, mode)?;
+			setup_mixed_output_validation::<T>(a, g, n, mode)?;
 
 		let (index, revision, members) = setup_built_unload_recycler::<T>(input_value, 60_000);
 		// Fill each tail after sealing the source ring so the cached proof inputs stay fixed.
@@ -2342,20 +2344,20 @@ mod benches {
 		}
 	}
 
-	/// Sets up an unload of `a` aliases into `g` groups and `e` additional loaded coins. In
+	/// Sets up an unload of `a` aliases into `n` loaded coins of `g` denominations. In
 	/// `FromOutput` mode the fee comes out of the external-asset portion and the remainder is
 	/// burnt.
 	fn prepare_unload_recycler_into_external_asset_and_loaded_coins<T: Config>(
 		a: u32,
 		g: u32,
-		e: u32,
+		n: u32,
 		mode: UnloadFeeBenchMode,
 	) -> Result<
 		(impl FnOnce() -> Result<(), BenchmarkError>, MixedOutputExpectation<T>),
 		BenchmarkError,
 	> {
 		let scenario =
-			setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(a, g, e, mode)?;
+			setup_unload_recycler_into_external_asset_and_loaded_coins::<T>(a, g, n, mode)?;
 		let expectation = MixedOutputExpectation {
 			aliases: scenario.aliases.clone(),
 			loaded_coins: scenario.loaded_coins.clone(),
@@ -2398,22 +2400,20 @@ mod benches {
 		Ok((call, expectation))
 	}
 
-	/// `g` counts distinct denominations and `e` counts additional coins in existing groups.
+	/// `g` counts distinct denominations and `n` counts all loaded coins. The range of `n` starts
+	/// at the largest `g`, so every sample has an output per denomination.
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
 		g: Linear<1, { mixed_output_group_bound::<T>(1, UnloadFeeBenchMode::Prepaid) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(1, UnloadFeeBenchMode::Prepaid)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(1, UnloadFeeBenchMode::Prepaid) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			1,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
 
@@ -2429,18 +2429,15 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(
 		g: Linear<1, { mixed_output_group_bound::<T>(2, UnloadFeeBenchMode::Prepaid) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(2, UnloadFeeBenchMode::Prepaid)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(2, UnloadFeeBenchMode::Prepaid) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			2,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
 
@@ -2456,18 +2453,15 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(
 		g: Linear<1, { mixed_output_group_bound::<T>(4, UnloadFeeBenchMode::Prepaid) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(4, UnloadFeeBenchMode::Prepaid)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(4, UnloadFeeBenchMode::Prepaid) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			4,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
 
@@ -2483,18 +2477,15 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(
 		g: Linear<1, { mixed_output_group_bound::<T>(8, UnloadFeeBenchMode::Prepaid) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(8, UnloadFeeBenchMode::Prepaid)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(8, UnloadFeeBenchMode::Prepaid) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			8,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
 
@@ -2510,12 +2501,9 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(
 		g: Linear<1, { mixed_output_group_bound::<T>(16, UnloadFeeBenchMode::Prepaid) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(16, UnloadFeeBenchMode::Prepaid)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(16, UnloadFeeBenchMode::Prepaid) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		if 16 > Pallet::<T>::max_aliases_per_unload() {
@@ -2524,7 +2512,7 @@ mod benches {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			16,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
 		#[block]
@@ -2538,12 +2526,9 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(
 		g: Linear<1, { mixed_output_group_bound::<T>(32, UnloadFeeBenchMode::Prepaid) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(32, UnloadFeeBenchMode::Prepaid)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(32, UnloadFeeBenchMode::Prepaid) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		if 32 > Pallet::<T>::max_aliases_per_unload() {
@@ -2552,7 +2537,7 @@ mod benches {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			32,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
 		#[block]
@@ -2574,21 +2559,20 @@ mod benches {
 				)
 			},
 		>,
-		e: Linear<
-			0,
+		n: Linear<
 			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(
-						Pallet::<T>::max_aliases_per_unload(),
-						UnloadFeeBenchMode::Prepaid,
-					)
+				mixed_output_group_bound::<T>(
+					Pallet::<T>::max_aliases_per_unload(),
+					UnloadFeeBenchMode::Prepaid,
+				)
 			},
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			Pallet::<T>::max_aliases_per_unload(),
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::Prepaid,
 		)?;
 
@@ -2604,18 +2588,15 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
 		g: Linear<1, { mixed_output_group_bound::<T>(1, UnloadFeeBenchMode::FromOutput) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(1, UnloadFeeBenchMode::FromOutput)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(1, UnloadFeeBenchMode::FromOutput) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			1,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
 
@@ -2631,18 +2612,15 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_2(
 		g: Linear<1, { mixed_output_group_bound::<T>(2, UnloadFeeBenchMode::FromOutput) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(2, UnloadFeeBenchMode::FromOutput)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(2, UnloadFeeBenchMode::FromOutput) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			2,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
 
@@ -2658,18 +2636,15 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_4(
 		g: Linear<1, { mixed_output_group_bound::<T>(4, UnloadFeeBenchMode::FromOutput) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(4, UnloadFeeBenchMode::FromOutput)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(4, UnloadFeeBenchMode::FromOutput) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			4,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
 
@@ -2685,18 +2660,15 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
 		g: Linear<1, { mixed_output_group_bound::<T>(8, UnloadFeeBenchMode::FromOutput) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(8, UnloadFeeBenchMode::FromOutput)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(8, UnloadFeeBenchMode::FromOutput) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			8,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
 
@@ -2712,12 +2684,9 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_16(
 		g: Linear<1, { mixed_output_group_bound::<T>(16, UnloadFeeBenchMode::FromOutput) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(16, UnloadFeeBenchMode::FromOutput)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(16, UnloadFeeBenchMode::FromOutput) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		if 16 > Pallet::<T>::max_aliases_per_unload() {
@@ -2726,7 +2695,7 @@ mod benches {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			16,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
 		#[block]
@@ -2740,12 +2709,9 @@ mod benches {
 	#[benchmark]
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_32(
 		g: Linear<1, { mixed_output_group_bound::<T>(32, UnloadFeeBenchMode::FromOutput) }>,
-		e: Linear<
-			0,
-			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(32, UnloadFeeBenchMode::FromOutput)
-			},
+		n: Linear<
+			{ mixed_output_group_bound::<T>(32, UnloadFeeBenchMode::FromOutput) },
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		if 32 > Pallet::<T>::max_aliases_per_unload() {
@@ -2754,7 +2720,7 @@ mod benches {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			32,
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
 		#[block]
@@ -2776,21 +2742,20 @@ mod benches {
 				)
 			},
 		>,
-		e: Linear<
-			0,
+		n: Linear<
 			{
-				T::MaxSplitOutputs::get() -
-					mixed_output_group_bound::<T>(
-						Pallet::<T>::max_aliases_per_unload(),
-						UnloadFeeBenchMode::FromOutput,
-					)
+				mixed_output_group_bound::<T>(
+					Pallet::<T>::max_aliases_per_unload(),
+					UnloadFeeBenchMode::FromOutput,
+				)
 			},
+			{ T::MaxSplitOutputs::get() },
 		>,
 	) -> Result<(), BenchmarkError> {
 		let (call, expectation) = prepare_unload_recycler_into_external_asset_and_loaded_coins::<T>(
 			Pallet::<T>::max_aliases_per_unload(),
 			g,
-			e,
+			n,
 			UnloadFeeBenchMode::FromOutput,
 		)?;
 
@@ -4658,7 +4623,7 @@ mod benches {
 
 		let mixed_output_validation = if d > 0 {
 			let (input_value, external_asset_amount, loaded_coins) =
-				setup_mixed_output_validation::<T>(1, 1, d - 1, UnloadFeeBenchMode::Prepaid)?;
+				setup_mixed_output_validation::<T>(1, 1, d, UnloadFeeBenchMode::Prepaid)?;
 			Some((input_value, external_asset_amount, loaded_coins))
 		} else {
 			None
@@ -4957,12 +4922,12 @@ mod benches {
 				(
 					SelectedBenchmark::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16,
 					SelectedBenchmark::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32,
-					&[(BenchmarkParameter::g, 1), (BenchmarkParameter::e, 0)],
+					&[(BenchmarkParameter::g, 1), (BenchmarkParameter::n, 1)],
 				),
 				(
 					SelectedBenchmark::unload_recycler_into_external_asset_and_loaded_coins_from_output_16,
 					SelectedBenchmark::unload_recycler_into_external_asset_and_loaded_coins_from_output_32,
-					&[(BenchmarkParameter::g, 1), (BenchmarkParameter::e, 0)],
+					&[(BenchmarkParameter::g, 1), (BenchmarkParameter::n, 1)],
 				),
 				(
 					SelectedBenchmark::unload_recycler_into_coins_prepaid_16,
@@ -5011,16 +4976,16 @@ mod benches {
 		fn feasibility_bounds_cover_rectangles_and_extrapolated_points() {
 			for (minimum, maximum) in [(0, 14), (-2, 7)] {
 				for a in [1, 2, 4, 8, 16, 32, 64] {
-					for d in [1, 14, 15, 16, 32] {
+					for n in [1, 14, 15, 16, 32] {
 						for reserve in [0, 2] {
 							let bound =
-								max_mixed_output_denominations(minimum, maximum, a, d, reserve)
+								max_mixed_output_denominations(minimum, maximum, a, n, reserve)
 									.unwrap();
 							let total = u128::from(a) * 2u128.pow((maximum - minimum) as u32);
 							for g in 1..=bound {
-								for e in 0..=d - bound {
-									let pieces = decompose_loaded_coin_units(g, e).unwrap();
-									assert_eq!(pieces.len(), (g + e) as usize);
+								for outputs in bound..=n {
+									let pieces = decompose_loaded_coin_units(g, outputs).unwrap();
+									assert_eq!(pieces.len(), outputs as usize);
 									assert_eq!(
 										pieces
 											.iter()
@@ -5032,15 +4997,15 @@ mod benches {
 										.into_iter()
 										.map(|offset| 2u128.pow(offset as u32))
 										.sum::<u128>();
-									assert_eq!(loaded, 2u128.pow(g) - 1 + u128::from(e));
+									assert_eq!(loaded, 2u128.pow(g) - 1 + u128::from(outputs - g));
 									assert!(loaded + reserve <= total);
 								}
 							}
-							let all_repeats = decompose_loaded_coin_units(1, d - 1).unwrap();
-							assert_eq!(all_repeats, vec![0; d as usize]);
-							if bound < d.min((maximum - minimum + 1) as u32) {
+							let all_repeats = decompose_loaded_coin_units(1, n).unwrap();
+							assert_eq!(all_repeats, vec![0; n as usize]);
+							if bound < n.min((maximum - minimum + 1) as u32) {
 								assert!(
-									2u128.pow(bound + 1) - 1 + u128::from(d - bound - 1) + reserve >
+									2u128.pow(bound + 1) - 1 + u128::from(n - bound - 1) + reserve >
 										total
 								);
 							}
@@ -5061,8 +5026,8 @@ mod benches {
 				}
 			}
 			for (a, g) in [(1, 14), (2, 15)] {
-				for e in [0, 1] {
-					let pieces = decompose_loaded_coin_units(g, e).unwrap();
+				for n in [g, g + 1] {
+					let pieces = decompose_loaded_coin_units(g, n).unwrap();
 					assert!(
 						pieces.iter().map(|offset| 2u128.pow(*offset as u32)).sum::<u128>() <=
 							a * 16_384
@@ -5073,6 +5038,7 @@ mod benches {
 			assert_eq!(max_mixed_output_denominations(7, -2, 1, 1, 0), None);
 			assert_eq!(max_mixed_output_denominations(-128, 127, 1, 1, 0), None);
 			assert!(decompose_loaded_coin_units(0, 1).is_err());
+			assert!(decompose_loaded_coin_units(2, 1).is_err());
 		}
 
 		#[test]
@@ -5091,7 +5057,7 @@ mod benches {
 							}
 						);
 						let (input, external, coins) =
-							setup_mixed_output_validation::<Test>(1, 1, 31, mode).unwrap();
+							setup_mixed_output_validation::<Test>(1, 1, 32, mode).unwrap();
 						assert_eq!(input, 7);
 						assert_eq!(
 							coins.iter().map(|(value, _)| *value).collect::<Vec<_>>(),
@@ -5102,14 +5068,14 @@ mod benches {
 						for a in [1, 2, 4, 8, 16] {
 							let bound = mixed_output_group_bound::<Test>(a, mode);
 							for g in 1..=bound {
-								for e in 0..=
-									<<Test as Config>::MaxSplitOutputs as Get<u32>>::get() - bound
+								for n in
+									bound..=<<Test as Config>::MaxSplitOutputs as Get<u32>>::get()
 								{
 									let (input, external, coins) =
-										setup_mixed_output_validation::<Test>(a, g, e, mode)
+										setup_mixed_output_validation::<Test>(a, g, n, mode)
 											.unwrap();
 									assert_eq!(input, 7);
-									assert_eq!(coins.len(), (g + e) as usize);
+									assert_eq!(coins.len(), n as usize);
 									assert_eq!(
 										coins
 											.iter()
@@ -5141,7 +5107,7 @@ mod benches {
 				new_test_ext_bench().execute_with(|| {
 					let scenario =
 						setup_unload_recycler_into_external_asset_and_loaded_coins::<Test>(
-							8, 10, 10, mode,
+							8, 10, 20, mode,
 						)
 						.unwrap();
 					let mut groups = BTreeMap::<Denomination, Vec<MemberOf<Test>>>::new();

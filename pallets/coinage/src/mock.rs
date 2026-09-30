@@ -330,15 +330,15 @@ impl sp_runtime::traits::Convert<frame_support::weights::Weight, u64> for MockWe
 parameter_types! {
 	/// Optional fee-mode intercepts for tests that isolate mixed-output dispatch weights.
 	pub storage MockMixedOutputWeightBases: Option<(Weight, Weight)> = None;
-	/// Independent group and repeat slopes for mixed-output weight tests.
+	/// Independent group and output slopes for mixed-output weight tests.
 	pub storage MockMixedOutputWeightSlopes: (Weight, Weight) =
 		(Weight::from_parts(10_000, 1_000), Weight::from_parts(100, 10));
 }
 
-fn mixed_output_test_weight(base: Weight, g: u32, e: u32) -> Weight {
-	let (group, repeat) = MockMixedOutputWeightSlopes::get();
+fn mixed_output_test_weight(base: Weight, g: u32, n: u32) -> Weight {
+	let (group, output) = MockMixedOutputWeightSlopes::get();
 	base.saturating_add(group.saturating_mul(g.into()))
-		.saturating_add(repeat.saturating_mul(e.into()))
+		.saturating_add(output.saturating_mul(n.into()))
 }
 
 macro_rules! forward_coinage_weights {
@@ -454,155 +454,155 @@ impl WeightInfo for TestWeightInfo {
 		on_poll_create_paid_token_collection();
 	}
 
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(g: u32, e: u32) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(g: u32, n: u32) -> Weight {
 		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(g, e)
+			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(g, n)
 		}
 	}
 
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(g: u32, e: u32) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(g: u32, n: u32) -> Weight {
 		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(g, e)
+			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(g, n)
 		}
 	}
 
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(g: u32, e: u32) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(g: u32, n: u32) -> Weight {
 		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(g, e)
+			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(g, n)
 		}
 	}
 
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(g: u32, e: u32) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(g: u32, n: u32) -> Weight {
 		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(g, e)
+			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(g, n)
 		}
 	}
 
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(g: u32, e: u32) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(g: u32, n: u32) -> Weight {
 		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(
-				g, e,
+				g, n,
 			)
 		}
 	}
 
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(g: u32, e: u32) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(g: u32, n: u32) -> Weight {
 		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(
-				g, e,
+				g, n,
 			)
 		}
 	}
 
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(g: u32, e: u32) -> Weight {
+	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(g: u32, n: u32) -> Weight {
 		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(
-				g, e,
+				g, n,
 			)
 		}
 	}
 
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
 		g: u32,
-		e: u32,
+		n: u32,
 	) -> Weight {
 		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
-				g, e,
+				g, n,
 			)
 		}
 	}
 
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_2(
 		g: u32,
-		e: u32,
+		n: u32,
 	) -> Weight {
 		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(
-				g, e,
+				g, n,
 			)
 		}
 	}
 
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_4(
 		g: u32,
-		e: u32,
+		n: u32,
 	) -> Weight {
 		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(
-				g, e,
+				g, n,
 			)
 		}
 	}
 
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
 		g: u32,
-		e: u32,
+		n: u32,
 	) -> Weight {
 		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
-				g, e,
+				g, n,
 			)
 		}
 	}
 
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_16(
 		g: u32,
-		e: u32,
+		n: u32,
 	) -> Weight {
 		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(
-				g, e,
+				g, n,
 			)
 		}
 	}
 
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_32(
 		g: u32,
-		e: u32,
+		n: u32,
 	) -> Weight {
 		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(
-				g, e,
+				g, n,
 			)
 		}
 	}
 
 	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_max(
 		g: u32,
-		e: u32,
+		n: u32,
 	) -> Weight {
 		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, e)
+			mixed_output_test_weight(base, g, n)
 		} else {
 			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(
-				g, e,
+				g, n,
 			)
 		}
 	}

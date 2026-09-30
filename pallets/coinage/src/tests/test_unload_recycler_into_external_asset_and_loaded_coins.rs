@@ -145,13 +145,13 @@ fn mixed_output_prepaid_success() {
 			post.actual_weight,
 			Some(
 				Coinage::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
-					1, 1, 0
+					1, 1, 1
 				)
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2))
 			),
 		);
 		assert!(post.actual_weight.unwrap().all_lte(
-			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(1, 1, 0)
+			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(1, 1, 1)
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2))
 		));
 
@@ -299,13 +299,13 @@ fn mixed_output_from_output_success() {
 			post.actual_weight,
 			Some(
 				Coinage::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-					1, 1, 0
+					1, 1, 1
 				)
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2))
 			),
 		);
 		assert!(post.actual_weight.unwrap().all_lte(
-			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(1, 1, 0)
+			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(1, 1, 1)
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2))
 		));
 
@@ -978,8 +978,8 @@ fn mixed_output_multi_value_loaded_coins_work_via_unload_token_extension() {
 }
 
 fn check_mixed_output_diversity_weight(fee: UnloadFee) {
-	for (exponents, expected_groups, expected_extras, external_asset_amount) in
-		[([-2, -1, 0], 3, 0, 250), ([-2, -1, -2], 2, 1, 1_000)]
+	for (exponents, expected_groups, external_asset_amount) in
+		[([-2, -1, 0], 3, 250), ([-2, -1, -2], 2, 1_000)]
 	{
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
@@ -1075,7 +1075,7 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 			.expect("diverse mixed-output unload should succeed");
 			let expected = cheap
 				.saturating_add(Weight::from_parts(10_000, 1_000).saturating_mul(expected_groups))
-				.saturating_add(Weight::from_parts(100, 10).saturating_mul(expected_extras))
+				.saturating_add(Weight::from_parts(100, 10).saturating_mul(3))
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2));
 			assert_eq!(post.actual_weight, Some(expected));
 			assert!(expected.all_lt(declared));
@@ -1115,16 +1115,16 @@ fn mixed_output_from_output_refund_counts_distinct_denominations_and_repeats() {
 }
 
 #[test]
-fn mixed_output_counts_use_denominations_independently_of_order_and_member() {
+fn loaded_coin_denominations_are_counted_independently_of_order_and_member() {
 	let member = CryptoOf::<Test>::member_from_secret(&CryptoOf::<Test>::new_secret([240; 32]));
-	assert_eq!(Coinage::mixed_output_counts(&[]), (0, 0));
+	assert_eq!(Coinage::loaded_coin_denomination_count(&[]), 0);
 	for (denominations, expected) in [
-		(vec![-2], (1, 0)),
-		(vec![-2, -2, -2], (1, 2)),
-		(vec![-2, 0, -2, 7, 0], (3, 2)),
-		(vec![i8::MIN, i8::MAX, i8::MIN, 0], (3, 1)),
+		(vec![-2], 1),
+		(vec![-2, -2, -2], 1),
+		(vec![-2, 0, -2, 7, 0], 3),
+		(vec![i8::MIN, i8::MAX, i8::MIN, 0], 3),
 	] {
 		let loaded = denominations.into_iter().map(|d| (d, member)).collect::<Vec<_>>();
-		assert_eq!(Coinage::mixed_output_counts(&loaded), expected);
+		assert_eq!(Coinage::loaded_coin_denomination_count(&loaded), expected);
 	}
 }

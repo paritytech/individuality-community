@@ -33,25 +33,16 @@ fn unload_scope_selects_the_requested_fee_modes_without_deposit_surcharges() {
 	new_test_ext().execute_with(|| {
 		for outputs in [1, D, MAX_SPLIT_OUTPUTS] {
 			let groups = outputs.min(10);
-			let extras = outputs - groups;
 			let from_output = W::unload_recycler_into_external_asset_from_output_1()
 				.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
-					groups, extras,
-				))
-				.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
-					1,
-					outputs - 1,
+					groups, outputs,
 				))
 				.max(W::unload_recycler_into_coins_from_output_1(outputs));
 			let any_mode = from_output
 				.max(W::unload_recycler_into_coin_1())
 				.max(W::unload_recycler_into_external_asset_prepaid_1())
 				.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
-					groups, extras,
-				))
-				.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
-					1,
-					outputs - 1,
+					groups, outputs,
 				))
 				.max(W::unload_recycler_into_coins_prepaid_1(outputs))
 				.max(W::unload_recycler_into_external_asset_non_anonymous_1());
@@ -80,9 +71,8 @@ fn output_fee_weight_adds_extension_and_both_deposit_surcharges_once() {
 		let outputs = MAX_SPLIT_OUTPUTS;
 		let call = Pallet::<Test>::unload_recycler_into_external_asset_from_output_weight(aliases)
 			.max(Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-				aliases, 10, outputs - 10,
+				aliases, 10, outputs,
 			))
-			.max(Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(aliases, 1, outputs - 1))
 			.max(Pallet::<Test>::unload_recycler_into_coins_from_output_weight(aliases, outputs));
 		assert!(W::settle_load_deposits().all_gt(Weight::zero()));
 		assert!(W::charge_load_deposit().all_gt(Weight::zero()));
@@ -176,73 +166,50 @@ fn unloads_with_outputs_charge_their_sample() {
 		assert_samples(
 			|a| {
 				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
-					a as usize,
-					2,
-					D - 2,
+					a as usize, 2, D,
 				)
 			},
 			[
-				(1, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(2, D - 2)),
-				(2, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(2, D - 2)),
-				(4, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(2, D - 2)),
-				(8, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(2, D - 2)),
+				(1, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(2, D)),
+				(2, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(2, D)),
+				(4, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(2, D)),
+				(8, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(2, D)),
 				(
 					16.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(2, D - 2),
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(2, D),
 				),
 				(
 					32.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(2, D - 2),
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(2, D),
 				),
 				(
 					MAX_ALIASES,
-					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(2, D - 2),
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(2, D),
 				),
 			],
 		);
 		assert_samples(
 			|a| {
 				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-					a as usize, 2, D - 2,
+					a as usize, 2, D,
 				)
 			},
 			[
-				(
-					1,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(2, D - 2),
-				),
-				(
-					2,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(2, D - 2),
-				),
-				(
-					4,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(2, D - 2),
-				),
-				(
-					8,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(2, D - 2),
-				),
+				(1, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(2, D)),
+				(2, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(2, D)),
+				(4, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(2, D)),
+				(8, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(2, D)),
 				(
 					16.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(
-						2,
-						D - 2,
-					),
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(2, D),
 				),
 				(
 					32.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(
-						2,
-						D - 2,
-					),
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(2, D),
 				),
 				(
 					MAX_ALIASES,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(
-						2,
-						D - 2,
-					),
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(2, D),
 				),
 			],
 		);
@@ -342,35 +309,29 @@ fn counts_between_samples_are_interpolated_not_clamped() {
 }
 
 #[test]
-fn worst_case_unload_covers_repeats_when_their_slope_is_larger() {
+fn worst_case_unload_charges_the_most_distinct_denominations() {
 	new_test_ext().execute_with(|| {
 		// These intercepts keep unrelated unload paths below either mixed-output mode.
 		let prepaid = Weight::from_parts(2_000_000_000_000_000, 2_000_000_000);
 		let from_output = Weight::from_parts(1_000_000_000_000_000, 1_000_000_000);
 		MockMixedOutputWeightBases::set(&Some((prepaid, from_output)));
-		MockMixedOutputWeightSlopes::set(&(
-			Weight::from_parts(100, 1),
-			Weight::from_parts(10_000, 100),
-		));
+		let (group, output) = (Weight::from_parts(100, 1), Weight::from_parts(10_000, 100));
+		MockMixedOutputWeightSlopes::set(&(group, output));
 		for (outputs, expected_surcharge) in [
 			(0, Weight::zero()),
-			(1, Weight::from_parts(100, 1)),
-			(32, Weight::from_parts(310_100, 3_101)),
+			(1, Weight::from_parts(10_100, 101)),
+			(32, Weight::from_parts(321_000, 3_210)),
 		] {
 			for (scope, base) in [
 				(UnloadWeightScope::FromOutputOnly, from_output),
 				(UnloadWeightScope::AnyFeeMode, prepaid),
 			] {
-				let groups = outputs.min(10);
 				let bound = Pallet::<Test>::max_unload_call_weight(scope, 1, outputs);
 				assert_eq!(bound, base.saturating_add(expected_surcharge));
-				for distinct in u32::from(outputs > 0)..=groups {
+				for distinct in u32::from(outputs > 0)..=outputs.min(10) {
 					let call = base
-						.saturating_add(Weight::from_parts(100, 1).saturating_mul(distinct.into()))
-						.saturating_add(
-							Weight::from_parts(10_000, 100)
-								.saturating_mul((outputs - distinct).into()),
-						);
+						.saturating_add(group.saturating_mul(distinct.into()))
+						.saturating_add(output.saturating_mul(outputs.into()));
 					assert!(bound.all_gte(call));
 				}
 			}

@@ -2222,18 +2222,17 @@ pub mod pallet {
 			)
 		}
 
-		/// Count distinct denominations and additional coins in a mixed unload.
+		/// Count distinct denominations in a mixed unload.
 		/// All denomination values are counted before validation, including invalid exponents.
-		pub(crate) fn mixed_output_counts(
+		pub(crate) fn loaded_coin_denomination_count(
 			loaded_coins: &[(Denomination, MemberOf<T>)],
-		) -> (u32, u32) {
+		) -> u32 {
 			let mut denominations = [0u64; 4];
 			for (denomination, _) in loaded_coins {
 				let index = *denomination as u8 as usize;
 				denominations[index / 64] |= 1u64 << (index % 64);
 			}
-			let g = denominations.iter().map(|bits| bits.count_ones()).sum::<u32>();
-			(g, (loaded_coins.len() as u32).saturating_sub(g))
+			denominations.iter().map(|bits| bits.count_ones()).sum::<u32>()
 		}
 
 		/// Weight of the `Prepaid` fee path of
@@ -2241,32 +2240,32 @@ pub mod pallet {
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
 			alias_count: usize,
 			g: u32,
-			e: u32,
+			n: u32,
 		) -> Weight {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_unload(),
 				[
 					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
-						g, e,
+						g, n,
 					),
 					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(
-						g, e,
+						g, n,
 					),
 					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(
-						g, e,
+						g, n,
 					),
 					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(
-						g, e,
+						g, n,
 					),
 					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(
-						g, e,
+						g, n,
 					),
 					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(
-						g, e,
+						g, n,
 					),
 					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(
-						g, e,
+						g, n,
 					),
 				],
 			)
@@ -2296,19 +2295,19 @@ pub mod pallet {
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
 			alias_count: usize,
 			g: u32,
-			e: u32,
+			n: u32,
 		) -> Weight {
 			interpolate_unload_weight(
 				alias_count as u32,
 				Self::max_aliases_per_unload(),
 				[
-					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(g, e),
-					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(g, e),
-					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(g, e),
-					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(g, e),
-					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(g, e),
-					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(g, e),
-					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(g, e),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(g, n),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(g, n),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(g, n),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(g, n),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(g, n),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(g, n),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(g, n),
 				],
 			)
 		}
@@ -2324,17 +2323,17 @@ pub mod pallet {
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_max_weight(
 			alias_count: usize,
 			g: u32,
-			e: u32,
+			n: u32,
 		) -> Weight {
 			Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
 				alias_count,
 				g,
-				e,
+				n,
 			)
 			.max(Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
 				alias_count,
 				g,
-				e,
+				n,
 			))
 		}
 
@@ -2433,38 +2432,34 @@ pub mod pallet {
 			)
 		}
 
-		/// Bound mixed-output weights at both diversity endpoints for `output_count` loaded coins.
-		/// The bound does not depend on an asset or its fee quote.
+		/// Bound mixed-output weights for `output_count` loaded coins at the most distinct
+		/// denominations. Benchmarked weights do not decrease in `g`, so this split is the worst
+		/// case. The bound does not depend on an asset or its fee quote.
 		fn max_mixed_output_call_weight(
 			scope: &UnloadWeightScope,
 			alias_count: usize,
 			output_count: u32,
 		) -> Weight {
-			let weight = |groups, repeats| match scope {
-				UnloadWeightScope::FromOutputOnly =>
-					Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-						alias_count,
-						groups,
-						repeats,
-					),
-				UnloadWeightScope::AnyFeeMode =>
-					Self::unload_recycler_into_external_asset_and_loaded_coins_max_weight(
-						alias_count,
-						groups,
-						repeats,
-					),
-			};
 			// Number of configured denominations. Each one is a possible [`Denomination`] key of
 			// the `grouped` map in [`RecyclerManager::load_batch_grouped`].
 			let denomination_count =
 				(i32::from(T::MaximumExponent::get()) - i32::from(T::MinimumExponent::get()) + 1)
 					.max(0) as u32;
-			let max_groups = output_count.min(denomination_count);
-			let min_groups = max_groups.min(1);
-			// A fitted repeat slope can exceed the group slope. A linear function reaches
-			// its maximum at one of the two diversity endpoints for a fixed output count.
-			weight(max_groups, output_count.saturating_sub(max_groups))
-				.max(weight(min_groups, output_count.saturating_sub(min_groups)))
+			let groups = output_count.min(denomination_count);
+			match scope {
+				UnloadWeightScope::FromOutputOnly =>
+					Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
+						alias_count,
+						groups,
+						output_count,
+					),
+				UnloadWeightScope::AnyFeeMode =>
+					Self::unload_recycler_into_external_asset_and_loaded_coins_max_weight(
+						alias_count,
+						groups,
+						output_count,
+					),
+			}
 		}
 
 		/// Component-wise maximum of the selected single-recycler unload paths.
@@ -3300,12 +3295,11 @@ pub mod pallet {
 		///   `loaded_coins` keys, without crediting the deposits this unload releases.
 		#[pallet::call_index(9)]
 		#[pallet::weight(
-			{
-				let (g, e) = Pallet::<T>::mixed_output_counts(loaded_coins);
-				Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins_max_weight(
-					aliases.len(), g, e
-				)
-			}
+			Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins_max_weight(
+				aliases.len(),
+				Pallet::<T>::loaded_coin_denomination_count(loaded_coins),
+				loaded_coins.len() as u32
+			)
 			.saturating_add(Pallet::<T>::settle_load_deposit_weight(*instance_id))
 			.saturating_add(Pallet::<T>::charge_load_deposit_weight(*instance_id))
 		)]
@@ -3325,20 +3319,21 @@ pub mod pallet {
 				return Err(DispatchError::BadOrigin.into());
 			};
 			let alias_count = aliases.len();
-			let (g, e) = Self::mixed_output_counts(&loaded_coins);
+			let g = Self::loaded_coin_denomination_count(&loaded_coins);
+			let n = loaded_coins.len() as u32;
 
 			let actual_weight = match fee {
 				UnloadFee::Prepaid =>
 					Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
 						alias_count,
 						g,
-						e,
+						n,
 					),
 				UnloadFee::FromOutput { .. } =>
 					Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
 						alias_count,
 						g,
-						e,
+						n,
 					),
 			}
 			.saturating_add(Self::settle_load_deposit_weight(instance_id))
@@ -3373,7 +3368,7 @@ pub mod pallet {
 				Self::settle_load_deposits(instance_id, alias_count as u32);
 				RecyclerManager::<T>::load_batch_grouped(instance_id, &loaded_coins)
 					.map_err(|e| e.into_pallet_error::<T>())?;
-				Self::charge_load_deposit(instance_id, loaded_coins.len() as u32)?;
+				Self::charge_load_deposit(instance_id, n)?;
 
 				let transfer_amount = match fee {
 					UnloadFee::Prepaid => external_asset_amount,
@@ -3394,7 +3389,7 @@ pub mod pallet {
 					value,
 					input_count: inputs[0].aliases.len() as u32,
 					external_asset_amount: transfer_amount,
-					loaded_coin_count: loaded_coins.len() as u32,
+					loaded_coin_count: n,
 				});
 
 				Ok(())
