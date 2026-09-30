@@ -101,7 +101,7 @@ frame_support::construct_runtime!(
 
 parameter_types! {
 	/// Production-sized limits for the pallet's worst-case block-budget checks.
-	pub MockBlockWeights: BlockWeights = BlockWeights::with_sensible_defaults(
+	pub storage MockBlockWeights: BlockWeights = BlockWeights::with_sensible_defaults(
 		Weight::from_parts(2 * WEIGHT_REF_TIME_PER_SECOND, 10 * 1024 * 1024),
 		Perbill::from_percent(75),
 	);
@@ -311,166 +311,13 @@ impl sp_runtime::traits::Convert<frame_support::weights::Weight, u64> for MockWe
 	}
 }
 
-parameter_types! {
-	/// Optional fee-mode intercepts for tests that isolate mixed-output dispatch weights.
-	pub storage MockMixedOutputWeightBases: Option<(Weight, Weight)> = None;
-	/// Optional override of the non-anonymous unload weight at the maximum alias count.
-	pub storage MockNonAnonymousUnloadMaxWeight: Option<Weight> = None;
-	/// Independent group and output slopes for mixed-output weight tests.
-	pub storage MockMixedOutputWeightSlopes: (Weight, Weight) =
-		(Weight::from_parts(10_000, 1_000), Weight::from_parts(100, 10));
-}
-
-fn mixed_output_test_weight(base: Weight, g: u32, n: u32) -> Weight {
-	let (group, output) = MockMixedOutputWeightSlopes::get();
-	base.saturating_add(group.saturating_mul(g.into()))
-		.saturating_add(output.saturating_mul(n.into()))
-}
-
-macro_rules! forward_coinage_weights {
-	($($name:ident($($arg:ident: $ty:ty),*);)*) => {
-		$(fn $name($($arg: $ty),*) -> Weight {
-			<() as WeightInfo>::$name($($arg),*)
-		})*
-	};
-}
-
-/// Overrides mixed-output weights with [`mixed_output_test_weight`] when
-/// [`MockMixedOutputWeightBases`] is set. The tuple index selects the fee-mode intercept.
-macro_rules! mixed_output_weights {
-	($($base:tt => $($name:ident)*;)*) => {
-		$($(fn $name(g: u32, n: u32) -> Weight {
-			match MockMixedOutputWeightBases::get() {
-				Some(bases) => mixed_output_test_weight(bases.$base, g, n),
-				None => <() as WeightInfo>::$name(g, n),
-			}
-		})*)*
-	};
-}
-
-pub struct TestWeightInfo;
-impl WeightInfo for TestWeightInfo {
-	forward_coinage_weights! {
-		split(n: u32);
-		transfer();
-		load_recycler_with_coin();
-		pay_for_recycler_unload_fee_token_with_coin();
-		load_recycler_with_external_asset();
-		pay_for_recycler_unload_fee_token_with_native();
-		pay_for_recycler_unload_fee_token_with_external_asset();
-		create_sufficient_instance();
-		create_sponsored_instance();
-		fund_pot();
-		withdraw_pot_funds();
-		charge_load_deposit();
-		settle_load_deposits();
-		read_instance();
-		collapse_load_deposits();
-		make_instance_sufficient();
-		make_instance_sponsored();
-		clean_recycler(n: u32, m: u32);
-		clean_consumed_free_token(n: u32);
-		clean_paid_unload_token_ring(n: u32);
-		delete_expired_paid_unload_token_collection();
-		clean_recycler_dust(n: u32);
-		clean_paid_unload_token_dust(n: u32);
-		unload_recycler_into_coin_1();
-		unload_recycler_into_coin_2();
-		unload_recycler_into_coin_4();
-		unload_recycler_into_coin_8();
-		unload_recycler_into_coin_16();
-		unload_recycler_into_coin_32();
-		unload_recycler_into_coin_max();
-		unload_recycler_into_external_asset_prepaid_1();
-		unload_recycler_into_external_asset_prepaid_2();
-		unload_recycler_into_external_asset_prepaid_4();
-		unload_recycler_into_external_asset_prepaid_8();
-		unload_recycler_into_external_asset_prepaid_16();
-		unload_recycler_into_external_asset_prepaid_32();
-		unload_recycler_into_external_asset_prepaid_max();
-		unload_recycler_into_external_asset_from_output_1();
-		unload_recycler_into_external_asset_from_output_2();
-		unload_recycler_into_external_asset_from_output_4();
-		unload_recycler_into_external_asset_from_output_8();
-		unload_recycler_into_external_asset_from_output_16();
-		unload_recycler_into_external_asset_from_output_32();
-		unload_recycler_into_external_asset_from_output_max();
-		unload_recycler_into_external_asset_non_anonymous_1();
-		unload_recycler_into_external_asset_non_anonymous_2();
-		unload_recycler_into_external_asset_non_anonymous_4();
-		unload_recycler_into_external_asset_non_anonymous_8();
-		unload_recycler_into_external_asset_non_anonymous_16();
-		unload_recycler_into_external_asset_non_anonymous_32();
-		unload_recyclers_into_external_asset_non_anonymous_1();
-		unload_recyclers_into_external_asset_non_anonymous_2();
-		unload_recyclers_into_external_asset_non_anonymous_4();
-		unload_recyclers_into_external_asset_non_anonymous_8();
-		unload_recyclers_into_external_asset_non_anonymous_16();
-		unload_recyclers_into_external_asset_non_anonymous_32();
-		unload_recyclers_into_external_asset_non_anonymous_max();
-		unload_recyclers_into_external_asset_non_anonymous_fee_fail();
-		unload_archived_recycler_into_external_asset_fee_fail();
-		unload_archived_recycler_into_external_asset_fee_native();
-		unload_archived_recycler_into_external_asset_fee_external_asset();
-		unload_recycler_into_coins_from_output_1(d: u32);
-		unload_recycler_into_coins_from_output_2(d: u32);
-		unload_recycler_into_coins_from_output_4(d: u32);
-		unload_recycler_into_coins_from_output_8(d: u32);
-		unload_recycler_into_coins_from_output_16(d: u32);
-		unload_recycler_into_coins_from_output_32(d: u32);
-		unload_recycler_into_coins_from_output_max(d: u32);
-		unload_recycler_into_coins_prepaid_1(d: u32);
-		unload_recycler_into_coins_prepaid_2(d: u32);
-		unload_recycler_into_coins_prepaid_4(d: u32);
-		unload_recycler_into_coins_prepaid_8(d: u32);
-		unload_recycler_into_coins_prepaid_16(d: u32);
-		unload_recycler_into_coins_prepaid_32(d: u32);
-		unload_recycler_into_coins_prepaid_max(d: u32);
-		as_none_tx_ext_others();
-		as_none_tx_ext_unload_recycler_into_external_asset_non_anonymous();
-		as_none_tx_ext_unload_recyclers_into_external_asset_non_anonymous(n: u32);
-		as_none_tx_ext_unload_archived_recycler_into_external_asset();
-		as_coin_split(n: u32);
-		as_coin_transfer();
-		as_coin_load_recycler_with_coin();
-		as_coin_pay_for_recycler_unload_fee_token_with_coin();
-		as_unload_token_people_tx_ext();
-		as_unload_token_lite_people_tx_ext();
-		as_unload_token_paid_tx_ext();
-		as_unload_token_from_output_tx_ext();
-		load_recycler_with_external_asset_unpaid();
-		as_infallible_unpaid_tx_ext();
-		as_infallible_unpaid_tx_ext_batch(n: u32);
-		validate_unload_calls(r: u32, d: u32);
-		direct_offboard_coin_into_external_asset();
-		authorize_clean_recycler();
-		authorize_clean_consumed_free_token();
-		authorize_clean_paid_unload_token_ring();
-		authorize_clean_recycler_dust();
-		authorize_clean_paid_unload_token_dust();
-		authorize_delete_expired_paid_unload_token_collection();
-		on_poll_create_paid_token_collection();
-	}
-
-	fn unload_recycler_into_external_asset_non_anonymous_max() -> Weight {
-		MockNonAnonymousUnloadMaxWeight::get().unwrap_or_else(
-			<() as WeightInfo>::unload_recycler_into_external_asset_non_anonymous_max,
-		)
-	}
-
-	mixed_output_weights! {
-		0 => unload_recycler_into_external_asset_and_loaded_coins_prepaid_1 unload_recycler_into_external_asset_and_loaded_coins_prepaid_2 unload_recycler_into_external_asset_and_loaded_coins_prepaid_4 unload_recycler_into_external_asset_and_loaded_coins_prepaid_8 unload_recycler_into_external_asset_and_loaded_coins_prepaid_16 unload_recycler_into_external_asset_and_loaded_coins_prepaid_32 unload_recycler_into_external_asset_and_loaded_coins_prepaid_max;
-		1 => unload_recycler_into_external_asset_and_loaded_coins_from_output_1 unload_recycler_into_external_asset_and_loaded_coins_from_output_2 unload_recycler_into_external_asset_and_loaded_coins_from_output_4 unload_recycler_into_external_asset_and_loaded_coins_from_output_8 unload_recycler_into_external_asset_and_loaded_coins_from_output_16 unload_recycler_into_external_asset_and_loaded_coins_from_output_32 unload_recycler_into_external_asset_and_loaded_coins_from_output_max;
-	}
-}
-
 impl crate::Config for Test {
 	type MemberService = Members;
 	type RecyclerRingExponent = TestRecyclerRingExponent;
 	type PaidUnloadTokenRingExponent = TestPaidTokenRingExponent;
 	type UnixTime = MockTime;
 	type PalletId = CoinagePalletId;
-	type WeightInfo = TestWeightInfo;
+	type WeightInfo = ();
 	type MaximumAge = MaximumAge;
 	type Fungibles = NativeAndAssets;
 	type NativeFungible = Balances;

@@ -312,33 +312,33 @@ fn counts_between_samples_are_interpolated_not_clamped() {
 	});
 }
 
+/// At the maximum alias count the mixed-output path is the heaviest unload, so the bound equals
+/// its weight at the most distinct denominations.
 #[test]
 fn worst_case_unload_charges_the_most_distinct_denominations() {
 	new_test_ext().execute_with(|| {
-		// These intercepts keep unrelated unload paths below either mixed-output mode.
-		let prepaid = Weight::from_parts(2_000_000_000_000_000, 2_000_000_000);
-		let from_output = Weight::from_parts(1_000_000_000_000_000, 1_000_000_000);
-		MockMixedOutputWeightBases::set(&Some((prepaid, from_output)));
-		let (group, output) = (Weight::from_parts(100, 1), Weight::from_parts(10_000, 100));
-		MockMixedOutputWeightSlopes::set(&(group, output));
-		for (outputs, expected_surcharge) in [
-			(0, Weight::zero()),
-			(1, Weight::from_parts(10_100, 101)),
-			(32, Weight::from_parts(321_000, 3_210)),
+		let aliases = MAX_ALIASES as usize;
+		let outputs = MAX_SPLIT_OUTPUTS;
+		let from_output = |groups| {
+			Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
+				aliases, groups, outputs,
+			)
+		};
+		let any_fee_mode = |groups| {
+			Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_max_weight(
+				aliases, groups, outputs,
+			)
+		};
+		for (scope, mixed_output) in [
+			(UnloadWeightScope::FromOutputOnly, &from_output as &dyn Fn(u32) -> Weight),
+			(UnloadWeightScope::AnyFeeMode, &any_fee_mode),
 		] {
-			for (scope, base) in [
-				(UnloadWeightScope::FromOutputOnly, from_output),
-				(UnloadWeightScope::AnyFeeMode, prepaid),
-			] {
-				let bound = Pallet::<Test>::max_unload_call_weight(scope, 1, outputs);
-				assert_eq!(bound, base.saturating_add(expected_surcharge));
-				for distinct in u32::from(outputs > 0)..=outputs.min(DENOMINATION_COUNT) {
-					let call = base
-						.saturating_add(group.saturating_mul(distinct.into()))
-						.saturating_add(output.saturating_mul(outputs.into()));
-					assert!(bound.all_gte(call));
-				}
-			}
+			// Each distinct denomination adds weight, so a bound over fewer fails this test.
+			assert!(mixed_output(DENOMINATION_COUNT).all_gt(mixed_output(DENOMINATION_COUNT - 1)));
+			assert_eq!(
+				Pallet::<Test>::max_unload_call_weight(scope, aliases, outputs),
+				mixed_output(DENOMINATION_COUNT)
+			);
 		}
 	});
 }

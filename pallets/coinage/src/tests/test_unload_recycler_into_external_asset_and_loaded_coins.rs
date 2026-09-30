@@ -22,13 +22,15 @@ use crate::{
 use codec::Encode;
 use frame_support::{
 	assert_err_ignore_postinfo, assert_ok, dispatch::GetDispatchInfo,
-	traits::fungibles::InspectHold as _, weights::Weight, BoundedVec,
+	traits::fungibles::InspectHold as _, BoundedVec,
 };
 use frame_system::AuthorizeCall;
 use indiv_support::traits::Alias;
 use sp_crypto_hashing::blake2_256;
 use sp_runtime::{bounded_vec, testing::UintAuthorityId};
 use verifiable::GenerateVerifiable;
+
+type W = <Test as Config>::WeightInfo;
 
 fn build_unload_ext(
 	call: RuntimeCall,
@@ -984,13 +986,20 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			setup_balances();
-			let cheap = Weight::from_parts(1_000_000, 100_000);
-			let expensive = Weight::from_parts(2_000_000, 200_000);
-			let bases = match fee {
-				UnloadFee::Prepaid => (cheap, expensive),
-				UnloadFee::FromOutput { .. } => (expensive, cheap),
+			let prepaid = W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
+				expected_groups,
+				3,
+			);
+			let from_output = W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
+				expected_groups,
+				3,
+			);
+			// The fee modes must differ, so charging the wrong one fails this test.
+			assert_ne!(prepaid, from_output);
+			let charged = match fee {
+				UnloadFee::Prepaid => prepaid,
+				UnloadFee::FromOutput { .. } => from_output,
 			};
-			MockMixedOutputWeightBases::set(&Some(bases));
 			// One denomination-1 input provides eight minimum-denomination units. Three
 			// distinct outputs cost seven units, so three is the maximum diversity for three
 			// outputs.
@@ -1074,13 +1083,11 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 				max_fee,
 			)
 			.expect("diverse mixed-output unload should succeed");
-			let (group_slope, output_slope) = MockMixedOutputWeightSlopes::get();
-			let expected = cheap
-				.saturating_add(group_slope.saturating_mul(expected_groups))
-				.saturating_add(output_slope.saturating_mul(3))
-				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2));
+			let expected = charged.saturating_add(W::read_instance().saturating_mul(2));
 			assert_eq!(post.actual_weight, Some(expected));
-			assert!(expected.all_lt(declared));
+			// The declared weight takes each dimension from the heavier fee mode, so the charged
+			// mode can match it in one dimension.
+			assert!(expected.all_lte(declared) && expected.any_lt(declared));
 			assert_eq!(
 				AssetsWithHolder::total_balance(TEST_ASSET_ID, &CHARLIE) - recipient_before,
 				external_asset_amount - fee_amount
