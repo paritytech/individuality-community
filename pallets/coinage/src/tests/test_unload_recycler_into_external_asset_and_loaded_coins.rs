@@ -536,6 +536,81 @@ fn mixed_output_invalid_loaded_coin_value_rejected() {
 }
 
 #[test]
+fn mixed_output_invalid_loaded_coin_value_fails_in_extension() {
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		setup_asset();
+
+		let (secrets, index, revision) = setup_recycler(0, 1, 0);
+		let alias: Alias =
+			CryptoOf::<Test>::alias_in_context(&secrets[0], UNLOADING_RECYCLER_CONTEXT.as_ref())
+				.unwrap();
+		let loaded_coin_secret = CryptoOf::<Test>::new_secret([212u8; 32]);
+		let loaded_coin_member = CryptoOf::<Test>::member_from_secret(&loaded_coin_secret);
+		let people_alias = [78u8; 32];
+
+		let call = RuntimeCall::Coinage(
+			crate::Call::unload_recycler_into_external_asset_and_loaded_coins {
+				instance_id: TEST_INSTANCE_ID,
+				aliases: bounded_vec![alias],
+				value: 0,
+				index,
+				revision,
+				to: 42,
+				external_asset_amount: 0,
+				loaded_coins: bounded_vec![(
+					<Test as Config>::MaximumExponent::get() + 1,
+					loaded_coin_member
+				)],
+				max_fee: 0,
+			},
+		);
+
+		let ext = build_unload_ext(call, 0, 0, &secrets, 0, index, Some(people_alias));
+		assert_invalid(ext, CustomInvalidity::DenominationOutOfBound);
+		assert!(!Coinage::is_free_token_alias_consumed(0, people_alias));
+	});
+}
+
+#[test]
+fn mixed_output_from_output_invalid_loaded_coin_value_fails_in_extension() {
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		setup_balances();
+
+		let value: Denomination = 0;
+		let (secrets, index, revision) = setup_recycler(value, 1, 0);
+		let alias =
+			CryptoOf::<Test>::alias_in_context(&secrets[0], UNLOADING_RECYCLER_CONTEXT.as_ref())
+				.unwrap();
+		let loaded_coin_secret = CryptoOf::<Test>::new_secret([213u8; 32]);
+		let loaded_coin_member = CryptoOf::<Test>::member_from_secret(&loaded_coin_secret);
+
+		let call = crate::Call::unload_recycler_into_external_asset_and_loaded_coins {
+			instance_id: TEST_INSTANCE_ID,
+			aliases: bounded_vec![alias],
+			value,
+			index,
+			revision,
+			to: CHARLIE,
+			external_asset_amount: 0,
+			loaded_coins: bounded_vec![(
+				<Test as Config>::MaximumExponent::get() + 1,
+				loaded_coin_member
+			)],
+			max_fee: unload_token_fee_in_asset(),
+		};
+
+		let ext = build_unload_from_output_ext(call, value, index, revision, &secrets[0..1]);
+		assert_invalid(ext, CustomInvalidity::DenominationOutOfBound);
+		assert_ne!(
+			RecyclerAliasStates::<Test>::get((TEST_INSTANCE_ID, value, index, alias)),
+			Some(AliasState::Unloaded)
+		);
+	});
+}
+
+#[test]
 fn mixed_output_invalid_split_fails_in_extension_before_consuming_free_token() {
 	new_test_ext().execute_with(|| {
 		System::set_block_number(1);
