@@ -1073,9 +1073,10 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 				max_fee,
 			)
 			.expect("diverse mixed-output unload should succeed");
+			let (group_slope, output_slope) = MockMixedOutputWeightSlopes::get();
 			let expected = cheap
-				.saturating_add(Weight::from_parts(10_000, 1_000).saturating_mul(expected_groups))
-				.saturating_add(Weight::from_parts(100, 10).saturating_mul(3))
+				.saturating_add(group_slope.saturating_mul(expected_groups))
+				.saturating_add(output_slope.saturating_mul(3))
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2));
 			assert_eq!(post.actual_weight, Some(expected));
 			assert!(expected.all_lt(declared));

@@ -25,9 +25,7 @@ use core::{
 	time::Duration,
 };
 use frame_support::{
-	assert_ok, derive_impl,
-	dispatch::DispatchClass,
-	parameter_types,
+	assert_ok, derive_impl, parameter_types,
 	traits::{
 		fungible::{HoldConsideration, Mutate as _},
 		fungibles::{self, Inspect, InspectHold, MutateHold},
@@ -35,10 +33,7 @@ use frame_support::{
 		AsEnsureOriginWithArg, ConstU32, ConstU64, ConstantStoragePrice, Currency, OffchainWorker,
 		UnixTime,
 	},
-	weights::{
-		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, WEIGHT_REF_TIME_PER_SECOND},
-		Weight,
-	},
+	weights::{constants::WEIGHT_REF_TIME_PER_SECOND, Weight},
 	BoundedVec,
 };
 use frame_system::{
@@ -106,24 +101,10 @@ frame_support::construct_runtime!(
 
 parameter_types! {
 	/// Production-sized limits for the pallet's worst-case block-budget checks.
-	pub MockBlockWeights: BlockWeights = {
-		let maximum = Weight::from_parts(2 * WEIGHT_REF_TIME_PER_SECOND, 10 * 1024 * 1024);
-		let normal = Perbill::from_percent(75) * maximum;
-		BlockWeights::builder()
-			.base_block(BlockExecutionWeight::get())
-			.for_class(DispatchClass::all(), |weights| {
-				weights.base_extrinsic = ExtrinsicBaseWeight::get();
-			})
-			.for_class(DispatchClass::Normal, |weights| {
-				weights.max_total = Some(normal);
-			})
-			.for_class(DispatchClass::Operational, |weights| {
-				weights.max_total = Some(maximum);
-				weights.reserved = Some(maximum - normal);
-			})
-			.avg_block_initialization(Perbill::from_percent(5))
-			.build_or_panic()
-	};
+	pub MockBlockWeights: BlockWeights = BlockWeights::with_sensible_defaults(
+		Weight::from_parts(2 * WEIGHT_REF_TIME_PER_SECOND, 10 * 1024 * 1024),
+		Perbill::from_percent(75),
+	);
 }
 
 #[derive_impl(frame_system::config_preludes::TestDefaultConfig)]
@@ -259,6 +240,8 @@ pub const UNDERLYING_ASSET_UNIT: u64 = 1_000;
 // RingExponent::R2e10 currently yields a usable ring capacity of 767 members.
 pub const R2E10_RING_CAPACITY: u32 = 767;
 pub const MAX_SPLIT_OUTPUTS: u32 = 32;
+/// Number of denominations from [`MinimumExponent`] to [`MaximumExponent`] at their defaults.
+pub const DENOMINATION_COUNT: u32 = 10;
 pub const RECYCLER_EXPIRATION_TIME: u32 = 100;
 pub const PAID_UNLOAD_TOKEN_RING_EXPIRATION_TIME: u32 = 200;
 pub const UNLOAD_TOKEN_ALLOWANCE_PER_TIME_PERIOD_FOR_PEOPLE: u64 = 10;
@@ -346,6 +329,19 @@ macro_rules! forward_coinage_weights {
 		$(fn $name($($arg: $ty),*) -> Weight {
 			<() as WeightInfo>::$name($($arg),*)
 		})*
+	};
+}
+
+/// Overrides mixed-output weights with [`mixed_output_test_weight`] when
+/// [`MockMixedOutputWeightBases`] is set. The tuple index selects the fee-mode intercept.
+macro_rules! mixed_output_weights {
+	($($base:tt => $($name:ident)*;)*) => {
+		$($(fn $name(g: u32, n: u32) -> Weight {
+			match MockMixedOutputWeightBases::get() {
+				Some(bases) => mixed_output_test_weight(bases.$base, g, n),
+				None => <() as WeightInfo>::$name(g, n),
+			}
+		})*)*
 	};
 }
 
@@ -454,157 +450,9 @@ impl WeightInfo for TestWeightInfo {
 		on_poll_create_paid_token_collection();
 	}
 
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(g: u32, n: u32) -> Weight {
-		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(g, n)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(g: u32, n: u32) -> Weight {
-		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(g, n)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(g: u32, n: u32) -> Weight {
-		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(g, n)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(g: u32, n: u32) -> Weight {
-		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(g, n)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(g: u32, n: u32) -> Weight {
-		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(
-				g, n,
-			)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(g: u32, n: u32) -> Weight {
-		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(
-				g, n,
-			)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(g: u32, n: u32) -> Weight {
-		if let Some((base, _)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(
-				g, n,
-			)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
-		g: u32,
-		n: u32,
-	) -> Weight {
-		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
-				g, n,
-			)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_2(
-		g: u32,
-		n: u32,
-	) -> Weight {
-		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(
-				g, n,
-			)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_4(
-		g: u32,
-		n: u32,
-	) -> Weight {
-		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(
-				g, n,
-			)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
-		g: u32,
-		n: u32,
-	) -> Weight {
-		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
-				g, n,
-			)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_16(
-		g: u32,
-		n: u32,
-	) -> Weight {
-		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(
-				g, n,
-			)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_32(
-		g: u32,
-		n: u32,
-	) -> Weight {
-		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(
-				g, n,
-			)
-		}
-	}
-
-	fn unload_recycler_into_external_asset_and_loaded_coins_from_output_max(
-		g: u32,
-		n: u32,
-	) -> Weight {
-		if let Some((_, base)) = MockMixedOutputWeightBases::get() {
-			mixed_output_test_weight(base, g, n)
-		} else {
-			<() as WeightInfo>::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(
-				g, n,
-			)
-		}
+	mixed_output_weights! {
+		0 => unload_recycler_into_external_asset_and_loaded_coins_prepaid_1 unload_recycler_into_external_asset_and_loaded_coins_prepaid_2 unload_recycler_into_external_asset_and_loaded_coins_prepaid_4 unload_recycler_into_external_asset_and_loaded_coins_prepaid_8 unload_recycler_into_external_asset_and_loaded_coins_prepaid_16 unload_recycler_into_external_asset_and_loaded_coins_prepaid_32 unload_recycler_into_external_asset_and_loaded_coins_prepaid_max;
+		1 => unload_recycler_into_external_asset_and_loaded_coins_from_output_1 unload_recycler_into_external_asset_and_loaded_coins_from_output_2 unload_recycler_into_external_asset_and_loaded_coins_from_output_4 unload_recycler_into_external_asset_and_loaded_coins_from_output_8 unload_recycler_into_external_asset_and_loaded_coins_from_output_16 unload_recycler_into_external_asset_and_loaded_coins_from_output_32 unload_recycler_into_external_asset_and_loaded_coins_from_output_max;
 	}
 }
 

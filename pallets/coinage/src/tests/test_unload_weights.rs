@@ -32,7 +32,7 @@ const D: u32 = 3;
 fn unload_scope_selects_the_requested_fee_modes_without_deposit_surcharges() {
 	new_test_ext().execute_with(|| {
 		for outputs in [1, D, MAX_SPLIT_OUTPUTS] {
-			let groups = outputs.min(10);
+			let groups = outputs.min(DENOMINATION_COUNT);
 			let from_output = W::unload_recycler_into_external_asset_from_output_1()
 				.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
 					groups, outputs,
@@ -71,7 +71,7 @@ fn output_fee_weight_adds_extension_and_both_deposit_surcharges_once() {
 		let outputs = MAX_SPLIT_OUTPUTS;
 		let call = Pallet::<Test>::unload_recycler_into_external_asset_from_output_weight(aliases)
 			.max(Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-				aliases, 10, outputs,
+				aliases, DENOMINATION_COUNT, outputs,
 			))
 			.max(Pallet::<Test>::unload_recycler_into_coins_from_output_weight(aliases, outputs));
 		assert!(W::settle_load_deposits().all_gt(Weight::zero()));
@@ -90,6 +90,10 @@ fn sample_bounds_follow_the_mock_config() {
 	new_test_ext().execute_with(|| {
 		assert_eq!(Pallet::<Test>::max_aliases_per_unload(), MAX_ALIASES);
 		assert_eq!(Pallet::<Test>::max_aliases_per_coin_unload(), MAX_ALIASES);
+		assert_eq!(
+			i32::from(MaximumExponent::get()) - i32::from(MinimumExponent::get()) + 1,
+			DENOMINATION_COUNT as i32
+		);
 	});
 }
 
@@ -328,7 +332,7 @@ fn worst_case_unload_charges_the_most_distinct_denominations() {
 			] {
 				let bound = Pallet::<Test>::max_unload_call_weight(scope, 1, outputs);
 				assert_eq!(bound, base.saturating_add(expected_surcharge));
-				for distinct in u32::from(outputs > 0)..=outputs.min(10) {
+				for distinct in u32::from(outputs > 0)..=outputs.min(DENOMINATION_COUNT) {
 					let call = base
 						.saturating_add(group.saturating_mul(distinct.into()))
 						.saturating_add(output.saturating_mul(outputs.into()));

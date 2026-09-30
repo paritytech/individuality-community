@@ -42,7 +42,7 @@ fn mixed_output_weight_can_use_the_normal_extrinsic_limit() {
 		let loaded_coins = (0..MAX_SPLIT_OUTPUTS)
 			.map(|i| {
 				let secret = CryptoOf::<Test>::new_secret([i as u8; 32]);
-				(-2 + (i % 10) as i8, CryptoOf::<Test>::member_from_secret(&secret))
+				(-2 + (i % DENOMINATION_COUNT) as i8, CryptoOf::<Test>::member_from_secret(&secret))
 			})
 			.collect::<Vec<_>>();
 		let loaded_value = loaded_coins

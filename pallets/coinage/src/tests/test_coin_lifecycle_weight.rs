@@ -131,8 +131,7 @@ fn average_lifecycle_includes_each_phase_and_deposit_surcharge_once() {
 		// Eight aliases is an exact sample, independent of the interpolation implementation.
 		assert_eq!(MAX_CONSOLIDATION / 2, 8);
 		let outputs = MAX_SPLIT_OUTPUTS / 2;
-		// The mock exposes ten denominations (-2 through 7).
-		let groups = 10;
+		let groups = DENOMINATION_COUNT;
 		let unload = W::unload_recycler_into_coin_8()
 			.max(W::unload_recycler_into_external_asset_prepaid_8())
 			.max(W::unload_recycler_into_external_asset_from_output_8())

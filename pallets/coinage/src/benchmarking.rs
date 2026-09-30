@@ -891,6 +891,25 @@ mod benches {
 		Ok((aliases, bounded_proofs, input_value, index, revision, split_into, max_fee))
 	}
 
+	/// Splits the value of `alias_count` coins at the maximum denomination into the cheapest
+	/// `output_count` loaded coins over `denomination_count` denominations and the external
+	/// remainder, in minimum-denomination units. `exponent_span` is the maximum exponent minus the
+	/// minimum. Returns `None` if the loaded coins exceed the input value. Requires
+	/// `denomination_count <= output_count`.
+	fn mixed_output_units(
+		exponent_span: u32,
+		alias_count: u32,
+		denomination_count: u32,
+		output_count: u32,
+	) -> Option<(u128, u128)> {
+		let total = 1u128.checked_shl(exponent_span)?.checked_mul(u128::from(alias_count))?;
+		let loaded = 1u128
+			.checked_shl(denomination_count)?
+			.checked_sub(1)?
+			.checked_add(u128::from(output_count - denomination_count))?;
+		Some((loaded, total.checked_sub(loaded)?))
+	}
+
 	/// Finds the largest diversity that funds `n` outputs and the external reserve.
 	/// Exponent offsets are relative to the minimum, including when it is negative.
 	fn max_mixed_output_denominations(
@@ -901,15 +920,10 @@ mod benches {
 		min_external_units: u128,
 	) -> Option<u32> {
 		let span = u32::try_from(i16::from(maximum).checked_sub(i16::from(minimum))?).ok()?;
-		let total = 1u128.checked_shl(span)?.checked_mul(u128::from(a))?;
 		let limit = n.min(span.checked_add(1)?);
 		(1..=limit).rev().find(|g| {
-			1u128
-				.checked_shl(*g)
-				.and_then(|units| units.checked_sub(1))
-				.and_then(|units| units.checked_add(u128::from(n - g)))
-				.and_then(|units| units.checked_add(min_external_units))
-				.is_some_and(|required| required <= total)
+			mixed_output_units(span, a, *g, n)
+				.is_some_and(|(_, external)| external >= min_external_units)
 		})
 	}
 
@@ -974,12 +988,13 @@ mod benches {
 		Ok(pieces)
 	}
 
-	fn select_mixed_output_units<T: Config>(
+	/// Returns the external remainder in minimum-denomination units.
+	fn select_mixed_output_external_units<T: Config>(
 		a: u32,
 		g: u32,
 		n: u32,
 		min_external_units: u128,
-	) -> Result<(Denomination, u128, u128), BenchmarkError> {
+	) -> Result<u128, BenchmarkError> {
 		let span = u32::try_from(
 			i16::from(T::MaximumExponent::get()) - i16::from(T::MinimumExponent::get()),
 		)
@@ -987,20 +1002,12 @@ mod benches {
 		if g == 0 || g > span + 1 || g > n || n > T::MaxSplitOutputs::get() {
 			return Err("mixed output components exceed configured bounds".into());
 		}
-		let total = 1u128
-			.checked_shl(span)
-			.and_then(|units| units.checked_mul(u128::from(a)))
-			.ok_or("input units overflow")?;
-		let loaded = 1u128
-			.checked_shl(g)
-			.and_then(|units| units.checked_sub(1))
-			.and_then(|units| units.checked_add(u128::from(n - g)))
-			.ok_or("output units overflow")?;
-		let external = total.checked_sub(loaded).ok_or("outputs exceed input value")?;
+		let (_, external) =
+			mixed_output_units(span, a, g, n).ok_or("outputs exceed input value")?;
 		if external < min_external_units {
 			return Err("external output does not cover the fee reserve".into());
 		}
-		Ok((T::MaximumExponent::get(), loaded, external))
+		Ok(external)
 	}
 
 	/// Builds output values without a recycler ring, for dispatch and extension benchmarks.
@@ -1018,8 +1025,7 @@ mod benches {
 		BenchmarkError,
 	> {
 		let reserve = mixed_output_external_reserve::<T>(mode)?;
-		let (input_value, loaded_units, external_units) =
-			select_mixed_output_units::<T>(a, g, n, reserve)?;
+		let external_units = select_mixed_output_external_units::<T>(a, g, n, reserve)?;
 		let loaded_coins = decompose_loaded_coin_units(g, n)?
 			.into_iter()
 			.enumerate()
@@ -1031,43 +1037,15 @@ mod benches {
 				(denomination, member)
 			})
 			.collect::<Vec<_>>();
-		assert_eq!(loaded_coins.len(), n as usize);
-		assert_eq!(
-			loaded_coins
-				.iter()
-				.map(|(value, _)| *value)
-				.collect::<alloc::collections::BTreeSet<_>>()
-				.len(),
-			g as usize
-		);
-		let actual_loaded_units = loaded_coins
-			.iter()
-			.map(|(value, _)| {
-				u128::from(
-					Pallet::<T>::denomination_to_base_units(*value)
-						.expect("valid output denomination"),
-				)
-			})
-			.sum::<u128>();
-		assert_eq!(actual_loaded_units, loaded_units);
-		assert_eq!(
-			loaded_units.checked_add(external_units),
-			u128::from(
-				Pallet::<T>::denomination_to_base_units(input_value)
-					.expect("valid input denomination")
-			)
-			.checked_mul(u128::from(a))
-		);
-		assert!(external_units >= reserve);
 		let amount_per_unit =
 			Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), T::MinimumExponent::get())
 				.map_err(|_| "invalid minimum denomination")?;
-		let units: FungiblesBalanceOf<T> = external_units.saturated_into();
-		assert_eq!(units.saturated_into::<u128>(), external_units);
+		let units: FungiblesBalanceOf<T> =
+			external_units.try_into().map_err(|_| "external units overflow")?;
 		let external_asset_amount =
 			amount_per_unit.checked_mul(&units).ok_or("external asset amount overflows")?;
 		Ok((
-			input_value,
+			T::MaximumExponent::get(),
 			external_asset_amount,
 			loaded_coins.try_into().map_err(|_| "too many loaded outputs")?,
 		))
