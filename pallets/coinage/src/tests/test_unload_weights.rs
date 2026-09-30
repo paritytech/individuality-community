@@ -316,25 +316,25 @@ fn worst_case_unload_charges_the_most_distinct_denominations() {
 	new_test_ext().execute_with(|| {
 		let aliases = MAX_ALIASES as usize;
 		let outputs = MAX_SPLIT_OUTPUTS;
-		let from_output = |groups| {
-			Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-				aliases, groups, outputs,
-			)
+		let mixed_output = |scope, groups| {
+			match scope {
+			UnloadWeightScope::FromOutputOnly =>
+				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
+					aliases, groups, outputs,
+				),
+			UnloadWeightScope::AnyFeeMode =>
+				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_max_weight(
+					aliases, groups, outputs,
+				),
+		}
 		};
-		let any_fee_mode = |groups| {
-			Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_max_weight(
-				aliases, groups, outputs,
-			)
-		};
-		for (scope, mixed_output) in [
-			(UnloadWeightScope::FromOutputOnly, &from_output as &dyn Fn(u32) -> Weight),
-			(UnloadWeightScope::AnyFeeMode, &any_fee_mode),
-		] {
+		for scope in [UnloadWeightScope::FromOutputOnly, UnloadWeightScope::AnyFeeMode] {
+			let most_distinct = mixed_output(scope, DENOMINATION_COUNT);
 			// Each distinct denomination adds weight, so a bound over fewer fails this test.
-			assert!(mixed_output(DENOMINATION_COUNT).all_gt(mixed_output(DENOMINATION_COUNT - 1)));
+			assert!(most_distinct.all_gt(mixed_output(scope, DENOMINATION_COUNT - 1)));
 			assert_eq!(
 				Pallet::<Test>::max_unload_call_weight(scope, aliases, outputs),
-				mixed_output(DENOMINATION_COUNT)
+				most_distinct
 			);
 		}
 	});

@@ -1007,18 +1007,10 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 			let (secrets, index, revision) = setup_recycler(value, 1, 0);
 			let proven_msg = [91u8; 32];
 			let (alias, proof) = create_alias_and_proof(&secrets[0], value, index, &proven_msg);
-			let fee = match fee {
-				UnloadFee::Prepaid => UnloadFee::Prepaid,
-				UnloadFee::FromOutput { .. } => {
-					RecyclerManager::<Test>::mark_alias_unloaded(
-						TEST_INSTANCE_ID,
-						value,
-						index,
-						alias,
-					);
-					UnloadFee::FromOutput { fee_recycler_value: value, fee_recycler_index: index }
-				},
-			};
+			if let UnloadFee::FromOutput { fee_recycler_value, fee_recycler_index } = fee {
+				assert_eq!((fee_recycler_value, fee_recycler_index), (value, index));
+				RecyclerManager::<Test>::mark_alias_unloaded(TEST_INSTANCE_ID, value, index, alias);
+			}
 			let loaded_coins: BoundedVec<_, <Test as Config>::MaxSplitOutputs> = exponents
 				.into_iter()
 				.enumerate()
@@ -1031,22 +1023,7 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 				.unwrap();
 			let aliases: BoundedVec<_, <Test as Config>::MaxConsolidation> = bounded_vec![alias];
 			let max_fee = unload_token_fee_in_asset();
-			let call = Call::<Test>::unload_recycler_into_external_asset_and_loaded_coins {
-				instance_id: TEST_INSTANCE_ID,
-				aliases: aliases.clone(),
-				value,
-				index,
-				revision,
-				to: CHARLIE,
-				external_asset_amount,
-				loaded_coins: loaded_coins.clone(),
-				max_fee,
-			};
-			let mut repeated = loaded_coins.clone();
-			for (denomination, _) in &mut repeated {
-				*denomination = -2;
-			}
-			let repeated_call =
+			let declared_weight = |loaded_coins| {
 				Call::<Test>::unload_recycler_into_external_asset_and_loaded_coins {
 					instance_id: TEST_INSTANCE_ID,
 					aliases: aliases.clone(),
@@ -1054,12 +1031,19 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 					index,
 					revision,
 					to: CHARLIE,
-					external_asset_amount: 1_250,
-					loaded_coins: repeated,
+					external_asset_amount,
+					loaded_coins,
 					max_fee,
-				};
-			let declared = call.get_dispatch_info().call_weight;
-			assert!(declared.all_gt(repeated_call.get_dispatch_info().call_weight));
+				}
+				.get_dispatch_info()
+				.call_weight
+			};
+			let mut repeated = loaded_coins.clone();
+			for (denomination, _) in &mut repeated {
+				*denomination = -2;
+			}
+			let declared = declared_weight(loaded_coins.clone());
+			assert!(declared.all_gt(declared_weight(repeated)));
 			let recipient_before = AssetsWithHolder::total_balance(TEST_ASSET_ID, &CHARLIE);
 			let market_before = AssetsWithHolder::total_balance(TEST_ASSET_ID, &MOCK_MARKET);
 			let fee_amount = match fee {

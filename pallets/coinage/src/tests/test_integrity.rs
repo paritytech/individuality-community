@@ -41,22 +41,10 @@ fn set_normal_max_extrinsic(limit: Weight) {
 	MockBlockWeights::set(&block_weights);
 }
 
-/// Weight that `integrity_test` adds to every unload: the heaviest unload-token extension,
-/// call validation and both deposit charges.
-fn unload_surcharge() -> Weight {
-	W::as_unload_token_people_tx_ext()
-		.max(W::as_unload_token_lite_people_tx_ext())
-		.max(W::as_unload_token_paid_tx_ext())
-		.max(W::as_unload_token_from_output_tx_ext())
-		.saturating_add(W::validate_unload_calls(1, MAX_SPLIT_OUTPUTS))
-		.saturating_add(W::settle_load_deposits())
-		.saturating_add(W::charge_load_deposit())
-}
-
 /// Worst-case unload weight over `scope`, as `integrity_test` checks it.
 fn max_unload_weight(scope: UnloadWeightScope) -> Weight {
 	Pallet::<Test>::max_unload_call_weight(scope, MAX_CONSOLIDATION as usize, MAX_SPLIT_OUTPUTS)
-		.saturating_add(unload_surcharge())
+		.saturating_add(Pallet::<Test>::unload_surcharge_weight(scope))
 }
 
 /// Worst-case `clean_recycler` weight, as `integrity_test` checks it against the OCW budget.
@@ -144,7 +132,7 @@ fn mixed_output_integrity_checks_every_denomination() {
 				DENOMINATION_COUNT - 1,
 				MAX_SPLIT_OUTPUTS,
 			)
-			.saturating_add(unload_surcharge()),
+			.saturating_add(Pallet::<Test>::unload_surcharge_weight(UnloadWeightScope::AnyFeeMode)),
 		);
 		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});

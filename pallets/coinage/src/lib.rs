@@ -57,7 +57,7 @@ pub use weights::WeightInfo;
 use alloc::{collections::BTreeSet, vec::Vec};
 use codec::Encode;
 use frame_support::{
-	dispatch::{DispatchClass, DispatchErrorWithPostInfo, PostDispatchInfo},
+	dispatch::{DispatchErrorWithPostInfo, PostDispatchInfo},
 	pallet_prelude::*,
 	storage::types::{Key as NMapKey, StorageNMap},
 	traits::{
@@ -78,7 +78,7 @@ use indiv_support::{
 		MembershipProver, RevisionIndex, RingExponent, RingIndex, RingRootsProvider,
 	},
 	tx_priority,
-	weight_budget::OcwWeightBudget,
+	weight_budget::{normal_max_extrinsic, OcwWeightBudget},
 };
 use pallet_asset_conversion::{QuotePrice, Swap};
 use sp_core::H256;
@@ -389,6 +389,7 @@ pub mod pallet {
 	}
 
 	/// Selects the single-recycler unload paths included in a weight maximum.
+	#[derive(Clone, Copy)]
 	pub(crate) enum UnloadWeightScope {
 		/// All single-recycler unload paths, including both fee modes.
 		AnyFeeMode,
@@ -1924,24 +1925,14 @@ pub mod pallet {
 		/// `AsUnloadTokenFromOutput`, useful for runtime configuration to find a good value for
 		/// `MinimumExponentForOutputUnloadFee`.
 		pub fn weight_for_unload_recycler_paying_using_output() -> Weight {
-			// Transaction extension weight (includes validate_unload_calls for r=1)
-			let ext_weight = T::WeightInfo::as_unload_token_from_output_tx_ext()
-				.saturating_add(T::WeightInfo::validate_unload_calls(1, T::MaxSplitOutputs::get()));
-
-			// Maximum of the possible unload call weights in `FromOutput` mode: the worst-case
-			// `FromOutput` benchmarked path, matching what a `FromOutput` transaction pays after
-			// its `PostDispatchInfo` refund.
-			let call_weight = Self::max_unload_call_weight(
+			// The worst-case `FromOutput` benchmarked path matches what a `FromOutput`
+			// transaction pays after its `PostDispatchInfo` refund.
+			Self::max_unload_call_weight(
 				UnloadWeightScope::FromOutputOnly,
 				T::MaxConsolidation::get() as usize,
 				T::MaxSplitOutputs::get(),
 			)
-			// On a sponsored instance the unload additionally settles the load deposits, and
-			// the voucher variant charges deposits for its fresh keys.
-			.saturating_add(T::WeightInfo::settle_load_deposits())
-			.saturating_add(T::WeightInfo::charge_load_deposit());
-
-			ext_weight.saturating_add(call_weight)
+			.saturating_add(Self::unload_surcharge_weight(UnloadWeightScope::FromOutputOnly))
 		}
 	}
 
@@ -1999,25 +1990,15 @@ pub mod pallet {
 				that a group of loaded coins spans at most two pages",
 			);
 
-			let unload_extension = T::WeightInfo::as_unload_token_people_tx_ext()
-				.max(T::WeightInfo::as_unload_token_lite_people_tx_ext())
-				.max(T::WeightInfo::as_unload_token_paid_tx_ext())
-				.max(T::WeightInfo::as_unload_token_from_output_tx_ext())
-				.saturating_add(T::WeightInfo::validate_unload_calls(1, T::MaxSplitOutputs::get()));
 			let unload_weight = Self::max_unload_call_weight(
 				UnloadWeightScope::AnyFeeMode,
 				Self::max_aliases_per_unload() as usize,
 				T::MaxSplitOutputs::get(),
 			)
-			.saturating_add(unload_extension)
-			.saturating_add(T::WeightInfo::settle_load_deposits())
-			.saturating_add(T::WeightInfo::charge_load_deposit());
+			.saturating_add(Self::unload_surcharge_weight(UnloadWeightScope::AnyFeeMode));
 			// Users submit unloads as Normal extrinsics, so the limit is the full Normal
 			// `max_extrinsic`. `OcwWeightBudget` applies only to calls the OCW submits.
-			let normal_max = T::BlockWeights::get()
-				.get(DispatchClass::Normal)
-				.max_extrinsic
-				.expect("Normal class must have max_extrinsic configured");
+			let normal_max = normal_max_extrinsic::<T>();
 			assert!(
 				unload_weight.all_lte(normal_max),
 				"unload weight {unload_weight:?} exceeds the Normal extrinsic budget \
@@ -2466,55 +2447,59 @@ pub mod pallet {
 				as u32
 		}
 
-		/// Bound mixed-output weights for `output_count` loaded coins at the most distinct
-		/// denominations. Benchmarked weights do not decrease in the denomination count, so this
-		/// split is the worst case. The bound does not depend on an asset or its fee quote.
-		fn max_mixed_output_call_weight(
-			scope: &UnloadWeightScope,
-			alias_count: usize,
-			output_count: u32,
-		) -> Weight {
-			let groups = output_count.min(Self::denomination_count());
-			match scope {
+		/// Weight that an unload over `scope` adds to its call weight: the heaviest unload-token
+		/// extension, call validation for one call and both deposit charges.
+		/// A sponsored instance settles the load deposits, and the voucher variant charges
+		/// deposits for its fresh keys.
+		pub(crate) fn unload_surcharge_weight(scope: UnloadWeightScope) -> Weight {
+			let extension = match scope {
 				UnloadWeightScope::FromOutputOnly =>
-					Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-						alias_count,
-						groups,
-						output_count,
-					),
-				UnloadWeightScope::AnyFeeMode =>
-					Self::unload_recycler_into_external_asset_and_loaded_coins_max_weight(
-						alias_count,
-						groups,
-						output_count,
-					),
-			}
+					T::WeightInfo::as_unload_token_from_output_tx_ext(),
+				UnloadWeightScope::AnyFeeMode => T::WeightInfo::as_unload_token_people_tx_ext()
+					.max(T::WeightInfo::as_unload_token_lite_people_tx_ext())
+					.max(T::WeightInfo::as_unload_token_paid_tx_ext())
+					.max(T::WeightInfo::as_unload_token_from_output_tx_ext()),
+			};
+			extension
+				.saturating_add(T::WeightInfo::validate_unload_calls(1, T::MaxSplitOutputs::get()))
+				.saturating_add(T::WeightInfo::settle_load_deposits())
+				.saturating_add(T::WeightInfo::charge_load_deposit())
 		}
 
 		/// Component-wise maximum of the selected single-recycler unload paths.
+		/// The mixed-output paths are charged at the most distinct denominations, because their
+		/// benchmarked weights do not decrease in the denomination count.
 		/// Deposit charges and settlement are excluded; callers add the applicable surcharges.
 		pub(crate) fn max_unload_call_weight(
 			scope: UnloadWeightScope,
 			alias_count: usize,
 			output_count: u32,
 		) -> Weight {
-			let mixed_output =
-				Self::max_mixed_output_call_weight(&scope, alias_count, output_count);
+			let groups = output_count.min(Self::denomination_count());
 			let from_output = Self::unload_recycler_into_external_asset_from_output_weight(
 				alias_count,
 			)
+			.max(Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
+				alias_count,
+				groups,
+				output_count,
+			))
 			.max(Self::unload_recycler_into_coins_from_output_weight(alias_count, output_count));
-			let other_outputs = match scope {
+			match scope {
 				UnloadWeightScope::FromOutputOnly => from_output,
 				UnloadWeightScope::AnyFeeMode => from_output
 					.max(Self::unload_recycler_into_coin_weight(alias_count))
 					.max(Self::unload_recycler_into_external_asset_prepaid_weight(alias_count))
+					.max(Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
+						alias_count,
+						groups,
+						output_count,
+					))
 					.max(Self::unload_recycler_into_coins_prepaid_weight(alias_count, output_count))
 					.max(Self::unload_recycler_into_external_asset_non_anonymous_weight(
 						alias_count,
 					)),
-			};
-			mixed_output.max(other_outputs)
+			}
 		}
 
 		/// Shared dispatch body for [`Call::load_recycler_with_external_asset_unpaid`] and

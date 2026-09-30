@@ -422,14 +422,6 @@ impl AppendOnlyMembers for MockMemberService {
 	}
 
 	#[cfg(feature = "runtime-benchmarks")]
-	fn fill_onboarding_queue_tail(
-		identifier: &Identifier,
-		members: Vec<<Self::Crypto as verifiable::GenerateVerifiable>::Member>,
-	) -> frame_support::dispatch::DispatchResult {
-		Self::add_members(identifier, members)
-	}
-
-	#[cfg(feature = "runtime-benchmarks")]
 	fn onboard_all_and_build_ring(
 		_identifier: &Identifier,
 		_ring_index: RingIndex,
