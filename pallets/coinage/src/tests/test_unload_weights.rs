@@ -90,10 +90,7 @@ fn sample_bounds_follow_the_mock_config() {
 	new_test_ext().execute_with(|| {
 		assert_eq!(Pallet::<Test>::max_aliases_per_unload(), MAX_ALIASES);
 		assert_eq!(Pallet::<Test>::max_aliases_per_coin_unload(), MAX_ALIASES);
-		assert_eq!(
-			i32::from(MaximumExponent::get()) - i32::from(MinimumExponent::get()) + 1,
-			DENOMINATION_COUNT as i32
-		);
+		assert_eq!(Pallet::<Test>::denomination_count(), DENOMINATION_COUNT);
 	});
 }
 

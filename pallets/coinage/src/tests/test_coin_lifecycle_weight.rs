@@ -30,9 +30,7 @@ fn worst_case_lifecycle_weight<T: Config>() -> Weight {
 	let max_aliases_single_ring = max_aliases.min(max_ring_capacity);
 
 	let max_split_outputs = T::MaxSplitOutputs::get();
-	let groups = max_split_outputs.min(
-		(i16::from(T::MaximumExponent::get()) - i16::from(T::MinimumExponent::get()) + 1) as u32,
-	);
+	let groups = max_split_outputs.min(Pallet::<T>::denomination_count());
 	let max_age = u32::from(T::MaximumAge::get());
 
 	// Per-key background cost from MemberService

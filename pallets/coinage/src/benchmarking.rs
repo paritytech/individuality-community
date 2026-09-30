@@ -1015,12 +1015,11 @@ mod benches {
 		output_count: u32,
 		min_external_units: u128,
 	) -> Result<u128, BenchmarkError> {
-		let exponent_span = u32::try_from(
-			i16::from(T::MaximumExponent::get()) - i16::from(T::MinimumExponent::get()),
-		)
-		.map_err(|_| "invalid exponent range")?;
+		let exponent_span = Pallet::<T>::denomination_count()
+			.checked_sub(1)
+			.ok_or("invalid exponent range")?;
 		if denomination_count == 0 ||
-			denomination_count > exponent_span + 1 ||
+			denomination_count > Pallet::<T>::denomination_count() ||
 			denomination_count > output_count ||
 			output_count > T::MaxSplitOutputs::get()
 		{
