@@ -32,26 +32,17 @@ const D: u32 = 3;
 fn unload_scope_selects_the_requested_fee_modes_without_deposit_surcharges() {
 	new_test_ext().execute_with(|| {
 		for outputs in [1, D, MAX_SPLIT_OUTPUTS] {
-			let groups = outputs.min(10);
-			let extras = outputs - groups;
+			let groups = outputs.min(DENOMINATION_COUNT);
 			let from_output = W::unload_recycler_into_external_asset_from_output_1()
 				.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
-					groups, extras,
-				))
-				.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
-					1,
-					outputs - 1,
+					groups, outputs,
 				))
 				.max(W::unload_recycler_into_coins_from_output_1(outputs));
 			let any_mode = from_output
 				.max(W::unload_recycler_into_coin_1())
 				.max(W::unload_recycler_into_external_asset_prepaid_1())
 				.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
-					groups, extras,
-				))
-				.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
-					1,
-					outputs - 1,
+					groups, outputs,
 				))
 				.max(W::unload_recycler_into_coins_prepaid_1(outputs))
 				.max(W::unload_recycler_into_external_asset_non_anonymous_1());
@@ -61,18 +52,12 @@ fn unload_scope_selects_the_requested_fee_modes_without_deposit_surcharges() {
 				Pallet::<Test>::max_unload_call_weight(
 					UnloadWeightScope::FromOutputOnly,
 					1,
-					groups,
-					extras
+					outputs
 				),
 				from_output
 			);
 			assert_eq!(
-				Pallet::<Test>::max_unload_call_weight(
-					UnloadWeightScope::AnyFeeMode,
-					1,
-					groups,
-					extras
-				),
+				Pallet::<Test>::max_unload_call_weight(UnloadWeightScope::AnyFeeMode, 1, outputs),
 				any_mode
 			);
 		}
@@ -86,9 +71,8 @@ fn output_fee_weight_adds_extension_and_both_deposit_surcharges_once() {
 		let outputs = MAX_SPLIT_OUTPUTS;
 		let call = Pallet::<Test>::unload_recycler_into_external_asset_from_output_weight(aliases)
 			.max(Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-				aliases, 10, outputs - 10,
+				aliases, DENOMINATION_COUNT, outputs,
 			))
-			.max(Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(aliases, 1, outputs - 1))
 			.max(Pallet::<Test>::unload_recycler_into_coins_from_output_weight(aliases, outputs));
 		assert!(W::settle_load_deposits().all_gt(Weight::zero()));
 		assert!(W::charge_load_deposit().all_gt(Weight::zero()));
@@ -106,6 +90,7 @@ fn sample_bounds_follow_the_mock_config() {
 	new_test_ext().execute_with(|| {
 		assert_eq!(Pallet::<Test>::max_aliases_per_unload(), MAX_ALIASES);
 		assert_eq!(Pallet::<Test>::max_aliases_per_coin_unload(), MAX_ALIASES);
+		assert_eq!(Pallet::<Test>::denomination_count(), DENOMINATION_COUNT);
 	});
 }
 
@@ -182,73 +167,50 @@ fn unloads_with_outputs_charge_their_sample() {
 		assert_samples(
 			|a| {
 				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
-					a as usize,
-					2,
-					D - 2,
+					a as usize, 2, D,
 				)
 			},
 			[
-				(1, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(2, D - 2)),
-				(2, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(2, D - 2)),
-				(4, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(2, D - 2)),
-				(8, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(2, D - 2)),
+				(1, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(2, D)),
+				(2, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(2, D)),
+				(4, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(2, D)),
+				(8, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(2, D)),
 				(
 					16.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(2, D - 2),
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(2, D),
 				),
 				(
 					32.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(2, D - 2),
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(2, D),
 				),
 				(
 					MAX_ALIASES,
-					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(2, D - 2),
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(2, D),
 				),
 			],
 		);
 		assert_samples(
 			|a| {
 				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-					a as usize, 2, D - 2,
+					a as usize, 2, D,
 				)
 			},
 			[
-				(
-					1,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(2, D - 2),
-				),
-				(
-					2,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(2, D - 2),
-				),
-				(
-					4,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(2, D - 2),
-				),
-				(
-					8,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(2, D - 2),
-				),
+				(1, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(2, D)),
+				(2, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(2, D)),
+				(4, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(2, D)),
+				(8, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(2, D)),
 				(
 					16.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(
-						2,
-						D - 2,
-					),
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(2, D),
 				),
 				(
 					32.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(
-						2,
-						D - 2,
-					),
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(2, D),
 				),
 				(
 					MAX_ALIASES,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(
-						2,
-						D - 2,
-					),
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(2, D),
 				),
 			],
 		);
@@ -347,40 +309,33 @@ fn counts_between_samples_are_interpolated_not_clamped() {
 	});
 }
 
+/// At the maximum alias count the mixed-output path is the heaviest unload, so the bound equals
+/// its weight at the most distinct denominations.
 #[test]
-fn worst_case_unload_covers_repeats_when_their_slope_is_larger() {
+fn worst_case_unload_charges_the_most_distinct_denominations() {
 	new_test_ext().execute_with(|| {
-		// These intercepts keep unrelated unload paths below either mixed-output mode.
-		let prepaid = Weight::from_parts(2_000_000_000_000_000, 2_000_000_000);
-		let from_output = Weight::from_parts(1_000_000_000_000_000, 1_000_000_000);
-		MockMixedOutputWeightBases::set(&Some((prepaid, from_output)));
-		MockMixedOutputWeightSlopes::set(&(
-			Weight::from_parts(100, 1),
-			Weight::from_parts(10_000, 100),
-		));
-		for (outputs, expected_surcharge) in [
-			(0, Weight::zero()),
-			(1, Weight::from_parts(100, 1)),
-			(32, Weight::from_parts(310_100, 3_101)),
-		] {
-			for (scope, base) in [
-				(UnloadWeightScope::FromOutputOnly, from_output),
-				(UnloadWeightScope::AnyFeeMode, prepaid),
-			] {
-				let groups = outputs.min(10);
-				let bound =
-					Pallet::<Test>::max_unload_call_weight(scope, 1, groups, outputs - groups);
-				assert_eq!(bound, base.saturating_add(expected_surcharge));
-				for distinct in u32::from(outputs > 0)..=groups {
-					let call = base
-						.saturating_add(Weight::from_parts(100, 1).saturating_mul(distinct.into()))
-						.saturating_add(
-							Weight::from_parts(10_000, 100)
-								.saturating_mul((outputs - distinct).into()),
-						);
-					assert!(bound.all_gte(call));
-				}
-			}
+		let aliases = MAX_ALIASES as usize;
+		let outputs = MAX_SPLIT_OUTPUTS;
+		let mixed_output = |scope, groups| {
+			match scope {
+			UnloadWeightScope::FromOutputOnly =>
+				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
+					aliases, groups, outputs,
+				),
+			UnloadWeightScope::AnyFeeMode =>
+				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_max_weight(
+					aliases, groups, outputs,
+				),
+		}
+		};
+		for scope in [UnloadWeightScope::FromOutputOnly, UnloadWeightScope::AnyFeeMode] {
+			let most_distinct = mixed_output(scope, DENOMINATION_COUNT);
+			// Each distinct denomination adds weight, so a bound over fewer fails this test.
+			assert!(most_distinct.all_gt(mixed_output(scope, DENOMINATION_COUNT - 1)));
+			assert_eq!(
+				Pallet::<Test>::max_unload_call_weight(scope, aliases, outputs),
+				most_distinct
+			);
 		}
 	});
 }
