@@ -2227,6 +2227,16 @@ pub mod pallet {
 		pub(crate) fn loaded_coin_denomination_count(
 			loaded_coins: &[(Denomination, MemberOf<T>)],
 		) -> u32 {
+			// Equivalent to the following, without an allocation:
+			//
+			// loaded_coins
+			//     .iter()
+			//     .map(|(denomination, _)| denomination)
+			//     .collect::<BTreeSet<_>>()
+			//     .len()
+			//
+			// Each of the 256 `i8` values maps to one bit of a 256-bit set, stored as four
+			// `u64` words.
 			let mut denominations = [0u64; 4];
 			for (denomination, _) in loaded_coins {
 				let index = *denomination as u8 as usize;
