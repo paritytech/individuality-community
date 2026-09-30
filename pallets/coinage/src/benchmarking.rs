@@ -458,9 +458,7 @@ fn setup_multi_recyclers<T: Config>(
 	FungiblesBalanceOf<T>,
 ) {
 	let min_exp = T::MinimumExponent::get();
-	let max_exp = T::MaximumExponent::get();
-	let denomination_count = u32::try_from(i16::from(max_exp) - i16::from(min_exp) + 1)
-		.expect("the configured denomination range must be positive");
+	let denomination_count = Pallet::<T>::denomination_count();
 	let onboarding_size = pallet::RECYCLER_ONBOARDING_SIZE;
 
 	let mut inputs = Vec::new();
@@ -4028,7 +4026,7 @@ mod benches {
 	/// Benchmark for AsCoin extension with split call.
 	#[benchmark]
 	fn as_coin_split(
-		n: Linear<1, { (T::MaximumExponent::get() - T::MinimumExponent::get() + 1) as u32 }>,
+		n: Linear<1, { Pallet::<T>::denomination_count() }>,
 	) -> Result<(), BenchmarkError> {
 		common_setup::<T>();
 
