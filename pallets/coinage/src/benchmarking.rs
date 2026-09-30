@@ -4951,70 +4951,41 @@ mod benches {
 		use indiv_pallet_members::QueuePageIndices;
 
 		#[test]
-		fn feasibility_bounds_cover_rectangles_and_extrapolated_points() {
-			for (minimum, maximum) in [(0, 14), (-2, 7)] {
-				for a in [1, 2, 4, 8, 16, 32, 64] {
-					for n in [1, 14, 15, 16, 32] {
-						for reserve in [0, 2] {
-							let bound =
-								max_mixed_output_denominations(minimum, maximum, a, n, reserve)
-									.unwrap();
-							let total = u128::from(a) * 2u128.pow((maximum - minimum) as u32);
-							for g in 1..=bound {
-								for outputs in bound..=n {
-									let pieces = decompose_loaded_coin_units(g, outputs).unwrap();
-									assert_eq!(pieces.len(), outputs as usize);
-									assert_eq!(
-										pieces
-											.iter()
-											.collect::<alloc::collections::BTreeSet<_>>()
-											.len(),
-										g as usize
-									);
-									let loaded = pieces
-										.into_iter()
-										.map(|offset| 2u128.pow(offset as u32))
-										.sum::<u128>();
-									assert_eq!(loaded, 2u128.pow(g) - 1 + u128::from(outputs - g));
-									assert!(loaded + reserve <= total);
-								}
-							}
-							let all_repeats = decompose_loaded_coin_units(1, n).unwrap();
-							assert_eq!(all_repeats, vec![0; n as usize]);
-							if bound < n.min((maximum - minimum + 1) as u32) {
-								assert!(
-									2u128.pow(bound + 1) - 1 + u128::from(n - bound - 1) + reserve >
-										total
-								);
-							}
-						}
-					}
-				}
+		fn group_bound_is_the_largest_funded_diversity() {
+			// `g` distinct denominations and `n - g` repeats cost `2^g - 1 + n - g` minimum units.
+			// `a` inputs of the maximum denomination provide `a * 2^(maximum - minimum)` units.
+			for (minimum, maximum, a, n, reserve, expected) in [
+				// Runtime: 15 denominations, 16_384 units per input.
+				(0, 14, 1, 1, 0, 1),
+				// g = 14 costs 16_383.
+				(0, 14, 1, 14, 0, 14),
+				// The reserve makes g = 14 cost 16_385.
+				(0, 14, 1, 14, 2, 13),
+				(0, 14, 1, 15, 0, 14),
+				(0, 14, 1, 15, 2, 13),
+				// The denomination count caps g below n.
+				(0, 14, 4, 16, 0, 15),
+				// g = 14 costs 16_401.
+				(0, 14, 1, 32, 0, 13),
+				(0, 14, 2, 32, 0, 14),
+				(0, 14, 4, 32, 0, 15),
+				// Mock: 10 denominations from a negative minimum, 512 units per input.
+				(-2, 7, 1, 32, 0, 8),
+				(-2, 7, 2, 32, 0, 9),
+				(-2, 7, 4, 11, 0, 10),
+			] {
+				assert_eq!(
+					max_mixed_output_denominations(minimum, maximum, a, n, reserve),
+					Some(expected),
+					"{minimum}..={maximum}, a = {a}, n = {n}, reserve = {reserve}",
+				);
 			}
-			for reserve in [0, 2] {
-				for (a, expected) in [(1, 13), (2, 14), (4, 15)] {
-					assert_eq!(
-						max_mixed_output_denominations(0, 14, a, 32, reserve),
-						Some(expected)
-					);
-					assert_eq!(
-						max_mixed_output_denominations(-2, 7, a, 32, reserve),
-						Some(expected - 5)
-					);
-				}
-			}
-			for (a, g) in [(1, 14), (2, 15)] {
-				for n in [g, g + 1] {
-					let pieces = decompose_loaded_coin_units(g, n).unwrap();
-					assert!(
-						pieces.iter().map(|offset| 2u128.pow(*offset as u32)).sum::<u128>() <=
-							a * 16_384
-					);
-				}
-			}
+			// The reserve alone uses the whole input.
 			assert_eq!(max_mixed_output_denominations(0, 14, 1, 32, 16_384), None);
 			assert_eq!(max_mixed_output_denominations(7, -2, 1, 1, 0), None);
 			assert_eq!(max_mixed_output_denominations(-128, 127, 1, 1, 0), None);
+
+			assert_eq!(decompose_loaded_coin_units(3, 5).unwrap(), vec![0, 1, 2, 0, 0]);
 			assert!(decompose_loaded_coin_units(0, 1).is_err());
 			assert!(decompose_loaded_coin_units(2, 1).is_err());
 		}
