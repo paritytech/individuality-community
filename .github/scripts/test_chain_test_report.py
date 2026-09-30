@@ -59,8 +59,8 @@ class ReportTests(unittest.TestCase):
     def execute(self):
         report(self.run, "owner/repo", self.directory, self.request)
 
-    def xml(self, name, content):
-        path = self.directory / "release-gate-test-results-previewnet-target" / name
+    def xml(self, name, content, network="previewnet"):
+        path = self.directory / f"release-gate-test-results-{network}-target" / name
         path.parent.mkdir(exist_ok=True)
         path.write_text(content)
 
@@ -80,6 +80,27 @@ class ReportTests(unittest.TestCase):
         self.execute()
         self.assertEqual(len(self.writes), 1)
         self.assertEqual(self.writes[0][:2], ("PATCH", "repos/owner/repo/issues/comments/8"))
+
+    def test_all_network_failures_share_one_comment_across_reruns(self):
+        self.jobs[2]["conclusion"] = "failure"
+        self.xml("tests.xml", '<testsuite name="identity"><testcase name="register"><failure/></testcase></testsuite>')
+        self.xml("tests.xml", '<testsuite name="allowances"><testcase name="claim"><failure/></testcase></testsuite>', network="paseo-next-v2")
+        self.execute()
+        self.assertEqual(len(self.writes), 1)
+        self.assertEqual(self.writes[0][0], "POST")
+        body = self.writes[0][2]
+        self.assertIn("previewnet-target: identity / register", body)
+        self.assertIn("paseo-next-v2-target: allowances / claim", body)
+        self.assertIn("chain-tests / gate (previewnet", body)
+        self.assertIn("chain-tests / gate (paseo-next-v2", body)
+
+        self.existing(number=10)
+        self.comments[0]["body"] = body
+        self.run["run_attempt"] = 2
+        self.latest["run_attempt"] = 2
+        self.execute()
+        self.assertEqual([write[0] for write in self.writes], ["POST", "PATCH"])
+        self.assertEqual(self.writes[1][1], "repos/owner/repo/issues/comments/8")
 
     def test_initial_success_stays_silent(self):
         self.jobs[1]["conclusion"] = "success"
@@ -187,12 +208,32 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("@team", body)
         self.assertIn("&lt;img&gt; &#64;team", body)
 
-    def test_long_reports_are_bounded(self):
+    def test_comment_includes_more_than_thirty_failures(self):
         cases = ''.join(f'<testcase name="failure-{i}"><failure/></testcase>' for i in range(40))
         self.xml("many.xml", f'<testsuite name="suite">{cases}</testsuite>')
         self.execute()
-        self.assertIn("10 more", self.writes[0][2])
-        self.assertLess(len(self.writes[0][2]), 20000)
+        body = self.writes[0][2]
+        for i in range(40):
+            self.assertIn(f"suite / failure-{i}</code>", body)
+        self.assertNotIn("more failures", body)
+        self.assertEqual(len(self.writes), 1)
+
+    def test_failures_from_all_report_files_are_included(self):
+        for i in range(101):
+            self.xml(f"{i:03}.xml", f'<testsuite name="suite-{i}" failures="1"/>')
+        self.execute()
+        self.assertIn("suite-100</code>", self.writes[0][2])
+        self.assertEqual(self.writes[0][2].count("previewnet-target:"), 101)
+
+    def test_oversized_report_links_to_artifacts_without_extra_comments(self):
+        cases = ''.join(f'<testcase name="{i}-' + 'x' * 200 + '"><failure/></testcase>' for i in range(400))
+        self.xml("many.xml", f'<testsuite name="suite">{cases}</testsuite>')
+        self.execute()
+        body = self.writes[0][2]
+        self.assertEqual(len(self.writes), 1)
+        self.assertIn("more failures exceed this comment's size budget", body)
+        self.assertIn(f"[full test artifacts]({RUN['html_url']})", body)
+        self.assertLess(len(body.encode("utf-8")), 60_000)
 
     def test_artifact_markdown_cannot_create_links(self):
         self.xml("markdown.xml", '<testsuite name="[click](https://example.com) `code` *bold*" failures="1"/>')

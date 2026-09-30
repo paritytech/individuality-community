@@ -12,6 +12,8 @@ import xml.etree.ElementTree as ET
 MARKER = "<!-- individuality-chain-tests -->"
 ORDER = re.compile(r"<!-- chain-tests-run:(\d+):(\d+) -->")
 FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
+# Leave room for the run link and an overflow notice in a single GitHub comment.
+FAILURE_LIST_BYTES = 50_000
 
 
 def api(endpoint, *, body=None, method="GET", paginate=False):
@@ -37,7 +39,7 @@ def code(value):
 
 def test_failures(directory):
     failures = set()
-    for path in sorted(directory.rglob("*.xml"))[:100]:
+    for path in sorted(directory.rglob("*.xml")):
         # Treat downloaded reports as data. Do not follow symlinks or parse DTDs.
         if path.is_symlink() or path.stat().st_size > 2_000_000:
             continue
@@ -82,9 +84,14 @@ def compose(run, jobs, directory):
         failures = test_failures(directory)
         if failures:
             lines += ["", "**Failed tests or suites:**", ""]
-            lines += [f"- {code(name)}" for name in failures[:30]]
-            if len(failures) > 30:
-                lines.append(f"- {len(failures) - 30} more; see the run artifacts.")
+            remaining = FAILURE_LIST_BYTES
+            for index, name in enumerate(failures):
+                line = f"- {code(name)}"
+                remaining -= len((line + "\n").encode("utf-8"))
+                if remaining < 0:
+                    lines.append(f"- {len(failures) - index} more failures exceed this comment's size budget; see the [full test artifacts]({run['html_url']}).")
+                    break
+                lines.append(line)
         else:
             lines += ["", "No readable failing test report is available. The gate may have failed during setup or runtime upgrade; see the failed steps above."]
         lines += ["", "Check compatibility with downstream dependencies before release."]
