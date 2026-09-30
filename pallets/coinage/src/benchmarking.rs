@@ -17,7 +17,6 @@
 //! Coinage pallet benchmarks.
 
 mod proof_cache;
-mod queue_members;
 
 use super::*;
 use crate::extension::{AsCoinage, AsCoinageInfo};
@@ -211,6 +210,17 @@ fn new_member_from<T: Config>(i: u32, seed: u32) -> (SecretOf<T>, MemberOf<T>) {
 	let secret = CryptoOf::<T>::new_secret(Decode::decode(&mut entropy).unwrap());
 	let public = CryptoOf::<T>::member_from_secret(&secret);
 	(secret, public)
+}
+
+/// Derive a filler member for an onboarding queue page from its page index and denomination
+/// group.
+///
+/// The bytes are not a valid public key. The measured call only decodes and stores queue
+/// members, so a filler has the encoded size of a valid member but is never onboarded.
+fn filler_member<T: Config>(i: u32, group: u32) -> MemberOf<T> {
+	let bytes = sp_crypto_hashing::blake2_256(&(i, group).encode());
+	codec::DecodeAll::decode_all(&mut bytes.as_slice())
+		.expect("benchmark member encoding is 32 bytes")
 }
 
 /// Create a coin at a fresh address.
@@ -1097,9 +1107,8 @@ mod benches {
 			let remaining = group_size - 1;
 			let fill =
 				free.checked_sub(remaining).ok_or("onboarding tail cannot hold the group")?;
-			let pending = (0..fill)
-				.map(|i| queue_members::member::<T>(i, group as u32))
-				.collect::<Vec<_>>();
+			let pending =
+				(0..fill).map(|i| filler_member::<T>(i, group as u32)).collect::<Vec<_>>();
 			if !pending.is_empty() {
 				for member in &pending {
 					assert!(!RecyclersCoinToRecycler::<T>::contains_key(member));
