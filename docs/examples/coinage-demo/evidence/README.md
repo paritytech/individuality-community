@@ -223,3 +223,35 @@ contained zero failed extrinsic events. This confirms the previous HTTP scan
 against the actual secure WebSocket endpoint; it does not identify Alex's payment.
 
 [Endpoint probes, DNS results and WSS verification summary](release-endpoint-checks-2026-09-30.json).
+
+## Documented Devnet: all three People RPCs rechecked
+
+The [network reference](https://docs.polkadotcommunity.foundation/reference/networks/#node-rpc-endpoints)
+explicitly identifies public Paseo People (1004) and distinguishes it from People
+Next (1502). On 30 September 2026 all three listed secure WebSocket endpoints
+were checked directly, one provider at a time:
+
+| Endpoint | Connection | 15:50–16:20 GMT+7 |
+|---|---|---|
+| `wss://people-paseo.rotko.net` | Working | 340 blocks, zero Coinage events |
+| `wss://people-paseo.gatotech.network` | Working after IPv4 retry | Same 340 blocks, zero Coinage events |
+| `wss://rpc.interweb-it.com/people-paseo` | Working | Same 340 blocks, zero Coinage events |
+
+All returned genesis `0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec`.
+Each provider independently re-fetched the canonical hash and `System.Events`
+for every block. The narrower 16:17–16:20 window contains 13 blocks, also with
+zero Coinage events. All three plain `ws://` variants failed their handshakes;
+the documentation lists only `wss://`.
+
+Gatotech's first Node connection attempt failed, but both an independent curl
+WebSocket upgrade and an IPv4-only Node connection succeeded. Its full WSS
+history check then succeeded. Interweb's first historical metadata request timed
+out; the completed scan used the previously captured metadata for this same
+chain, as did Gatotech. Those transient client/RPC failures do not establish a
+wallet delay.
+
+[Complete endpoint probes and all three timeline checks](documented-devnet-recheck-2026-09-30.json).
+This confirms that no successful Coinage transfer, split, load or unload is
+visible in the specified window on the documented Devnet. It does not identify
+Alex's installed network or explain a mobile UI transition without a new
+transaction.

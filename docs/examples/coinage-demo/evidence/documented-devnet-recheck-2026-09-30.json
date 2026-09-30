@@ -1,0 +1,195 @@
+{
+  "documentation": "https://docs.polkadotcommunity.foundation/reference/networks/#node-rpc-endpoints",
+  "documentedChain": "Public Paseo People (1004)",
+  "initialEndpointProbes": [
+    {
+      "endpoint": "wss://people-paseo.rotko.net",
+      "checkedAt": "2026-09-30T10:43:00.473Z",
+      "connected": true,
+      "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+      "chain": "Paseo People",
+      "finalizedHead": "0x7f3a50b9728788790acbb8d54d987ba6d186d5b1c86fea0d91b109c7d938230f",
+      "elapsedMs": 1890,
+      "dns": {
+        "ipv4": [
+          "160.22.180.81"
+        ],
+        "ipv6Error": "ENODATA"
+      }
+    },
+    {
+      "endpoint": "ws://people-paseo.rotko.net",
+      "checkedAt": "2026-09-30T10:43:02.309Z",
+      "elapsedMs": 255,
+      "error": "Received network error or non-101 status code.",
+      "dns": {
+        "ipv4": [
+          "160.22.180.81"
+        ],
+        "ipv6Error": "ENODATA"
+      }
+    },
+    {
+      "endpoint": "wss://people-paseo.gatotech.network",
+      "checkedAt": "2026-09-30T10:43:04.540Z",
+      "elapsedMs": 263,
+      "error": "Received network error or non-101 status code.",
+      "dns": {
+        "ipv4": [
+          "194.45.181.229"
+        ],
+        "ipv6": [
+          "2a05:2b00:1:1::1229"
+        ]
+      }
+    },
+    {
+      "endpoint": "ws://people-paseo.gatotech.network",
+      "checkedAt": "2026-09-30T10:43:04.803Z",
+      "elapsedMs": 258,
+      "error": "Received network error or non-101 status code.",
+      "dns": {
+        "ipv4": [
+          "194.45.181.229"
+        ],
+        "ipv6": [
+          "2a05:2b00:1:1::1229"
+        ]
+      }
+    },
+    {
+      "endpoint": "wss://rpc.interweb-it.com/people-paseo",
+      "checkedAt": "2026-09-30T10:43:05.204Z",
+      "connected": true,
+      "chain": "Paseo People",
+      "finalizedHead": "0x7f3a50b9728788790acbb8d54d987ba6d186d5b1c86fea0d91b109c7d938230f",
+      "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+      "elapsedMs": 1042,
+      "dns": {
+        "ipv4": [
+          "195.144.22.130"
+        ],
+        "ipv6Error": "ENODATA"
+      }
+    },
+    {
+      "endpoint": "ws://rpc.interweb-it.com/people-paseo",
+      "checkedAt": "2026-09-30T10:43:06.246Z",
+      "elapsedMs": 485,
+      "error": "Received network error or non-101 status code.",
+      "dns": {
+        "ipv4": [
+          "195.144.22.130"
+        ],
+        "ipv6Error": "ENODATA"
+      }
+    }
+  ],
+  "gatotechIpv4Retry": [
+    {
+      "endpoint": "wss://people-paseo.gatotech.network",
+      "checkedAt": "2026-09-30T10:44:44.970Z",
+      "connected": true,
+      "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+      "chain": "Paseo People",
+      "finalizedHead": "0x5f33e83f766d8693b54c283f15c61bec4d949de9e54dc502d3b856448a76453f",
+      "elapsedMs": 1724,
+      "dns": {
+        "ipv4": [
+          "194.45.181.229"
+        ],
+        "ipv6": [
+          "2a05:2b00:1:1::1229"
+        ]
+      }
+    },
+    {
+      "endpoint": "ws://people-paseo.gatotech.network",
+      "checkedAt": "2026-09-30T10:44:46.641Z",
+      "elapsedMs": 597,
+      "error": "Received network error or non-101 status code.",
+      "dns": {
+        "ipv4": [
+          "194.45.181.229"
+        ],
+        "ipv6": [
+          "2a05:2b00:1:1::1229"
+        ]
+      }
+    }
+  ],
+  "notes": [
+    "The page lists secure WebSocket URLs only; plain ws variants were tested additionally and failed.",
+    "Gatotech succeeded after disabling Node address-family auto-selection and preferring IPv4. The initial connection failure is not evidence that the endpoint is offline.",
+    "Interweb\u2019s initial historical metadata request timed out. Its completed event scan used the previously saved metadata for this same chain. Gatotech used that same metadata.",
+    "Every provider independently returned matching canonical hashes and events for all 340 blocks. These are three checks of the same blocks, not 1020 distinct blocks."
+  ],
+  "windowChecks": [
+    {
+      "endpoint": "wss://people-paseo.rotko.net",
+      "checkedAt": "2026-09-30T10:43:19.755Z",
+      "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+      "window": {
+        "start": "2026-09-30T08:50:00.000Z",
+        "end": "2026-09-30T09:20:00.000Z",
+        "first": 7176565,
+        "lastExclusive": 7176905
+      },
+      "localWindow": "2026-09-30 15:50:00 <= time < 16:20:00 GMT+7",
+      "verifiedBlocks": 340,
+      "coinageEventCount": 0,
+      "membersEventCount": 10,
+      "failedExtrinsicCount": 0,
+      "verification": "Re-fetched canonical block hashes and System.Events over WSS for every block in the prior timestamp-bounded HTTP scan.",
+      "focusWindow": {
+        "localWindow": "16:17:00 <= time < 16:20:00 GMT+7",
+        "blocks": 13,
+        "coinageEventCount": 0
+      }
+    },
+    {
+      "endpoint": "wss://rpc.interweb-it.com/people-paseo",
+      "checkedAt": "2026-09-30T10:45:00.271Z",
+      "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+      "window": {
+        "start": "2026-09-30T08:50:00.000Z",
+        "end": "2026-09-30T09:20:00.000Z",
+        "first": 7176565,
+        "lastExclusive": 7176905
+      },
+      "localWindow": "2026-09-30 15:50:00 <= time < 16:20:00 GMT+7",
+      "verifiedBlocks": 340,
+      "coinageEventCount": 0,
+      "membersEventCount": 10,
+      "failedExtrinsicCount": 0,
+      "verification": "Re-fetched canonical block hashes and System.Events over WSS for every block in the prior timestamp-bounded HTTP scan.",
+      "focusWindow": {
+        "localWindow": "16:17:00 <= time < 16:20:00 GMT+7",
+        "blocks": 13,
+        "coinageEventCount": 0
+      }
+    },
+    {
+      "endpoint": "wss://people-paseo.gatotech.network",
+      "checkedAt": "2026-09-30T10:45:29.105Z",
+      "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+      "window": {
+        "start": "2026-09-30T08:50:00.000Z",
+        "end": "2026-09-30T09:20:00.000Z",
+        "first": 7176565,
+        "lastExclusive": 7176905
+      },
+      "localWindow": "2026-09-30 15:50:00 <= time < 16:20:00 GMT+7",
+      "verifiedBlocks": 340,
+      "coinageEventCount": 0,
+      "membersEventCount": 10,
+      "failedExtrinsicCount": 0,
+      "verification": "Re-fetched canonical block hashes and System.Events over WSS for every block in the prior timestamp-bounded HTTP scan.",
+      "focusWindow": {
+        "localWindow": "16:17:00 <= time < 16:20:00 GMT+7",
+        "blocks": 13,
+        "coinageEventCount": 0
+      }
+    }
+  ]
+}
