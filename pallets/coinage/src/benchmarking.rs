@@ -1084,19 +1084,19 @@ mod benches {
 
 		let (index, revision, members) = setup_built_unload_recycler::<T>(input_value, 60_000);
 		// Fill each tail after sealing the source ring so the cached proof inputs stay fixed.
-		for (group, value) in loaded_coins
-			.iter()
-			.map(|(value, _)| *value)
-			.collect::<alloc::collections::BTreeSet<_>>()
-			.into_iter()
-			.enumerate()
-		{
+		let mut group_sizes = alloc::collections::BTreeMap::<Denomination, u32>::new();
+		for (value, _) in &loaded_coins {
+			*group_sizes.entry(*value).or_default() += 1;
+		}
+		for (group, (value, group_size)) in group_sizes.into_iter().enumerate() {
 			let identifier = Pallet::<T>::recycler_collection_identifier(INSTANCE_ID, value);
 			let free = T::MemberService::onboarding_queue_tail_free_slots(&identifier);
-			// A group has at most MaxSplitOutputs coins and touches at most two pages.
-			// A full tail reaches both pages for every group regardless of repeats.
-			let remaining = 0;
-			let fill = free;
+			// Each coin of a group decodes and re-encodes the tail page. With one slot fewer than
+			// the group size free, every push handles a nearly full page and the last push opens
+			// a new page.
+			let remaining = group_size - 1;
+			let fill =
+				free.checked_sub(remaining).ok_or("onboarding tail cannot hold the group")?;
 			let pending = (0..fill)
 				.map(|i| queue_members::member::<T>(i, group as u32))
 				.collect::<Vec<_>>();
@@ -5004,6 +5004,7 @@ mod benches {
 	mod mixed_output_setup_tests {
 		use super::*;
 		use crate::mock::{new_test_ext_bench, MockPaidUnloadTokenFeeOverride, Test};
+		use alloc::collections::BTreeMap;
 		use indiv_pallet_members::QueuePageIndices;
 
 		#[test]
@@ -5135,26 +5136,26 @@ mod benches {
 		}
 
 		#[test]
-		fn spread_repeats_unload_across_every_collection_page_boundary() {
+		fn repeats_fill_the_tail_and_the_last_coin_of_a_group_opens_a_new_page() {
 			for mode in [UnloadFeeBenchMode::Prepaid, UnloadFeeBenchMode::FromOutput] {
 				new_test_ext_bench().execute_with(|| {
-					let mut scenario =
+					let scenario =
 						setup_unload_recycler_into_external_asset_and_loaded_coins::<Test>(
 							8, 10, 10, mode,
 						)
 						.unwrap();
-					for (i, (value, _)) in scenario.loaded_coins.iter_mut().enumerate() {
-						*value = -2 + (i % 10) as i8;
+					let mut groups = BTreeMap::<Denomination, Vec<MemberOf<Test>>>::new();
+					for (value, member) in &scenario.loaded_coins {
+						groups.entry(*value).or_default().push(*member);
 					}
-					let loaded_asset = scenario
-						.loaded_coins
-						.iter()
-						.map(|(value, _)| 250 * 2u64.pow((*value + 2) as u32))
-						.sum::<u64>();
-					scenario.external_asset_amount = 8 * 128_000 - loaded_asset;
-					let old_tails = scenario.loaded_coins[..10]
-						.iter()
-						.map(|(value, _)| {
+					// The minimum denomination holds every repeat.
+					assert_eq!(
+						groups.values().map(Vec::len).collect::<Vec<_>>(),
+						[vec![11], vec![1; 9]].concat()
+					);
+					let old_tails = groups
+						.keys()
+						.map(|value| {
 							let identifier =
 								Pallet::<Test>::recycler_collection_identifier(INSTANCE_ID, *value);
 							QueuePageIndices::<Test>::get(identifier).1
@@ -5187,9 +5188,7 @@ mod benches {
 						max_fee,
 					)
 					.unwrap();
-					for (group, old_tail) in old_tails.into_iter().enumerate() {
-						let (value, first) = &scenario.loaded_coins[group];
-						let (_, second) = &scenario.loaded_coins[group + 10];
+					for ((value, members), old_tail) in groups.iter().zip(old_tails) {
 						let identifier =
 							Pallet::<Test>::recycler_collection_identifier(INSTANCE_ID, *value);
 						let page = |member| match <Test as Config>::MemberService::member_status(
@@ -5203,16 +5202,18 @@ mod benches {
 							} => queue_page,
 							_ => panic!("new output must be queued"),
 						};
-						assert_eq!(page(first), old_tail + 1);
-						assert_eq!(page(second), page(first));
-						assert_eq!(
-							RecyclersCoinToRecycler::<Test>::get(first),
-							Some((INSTANCE_ID, *value))
-						);
-						assert_eq!(
-							RecyclersCoinToRecycler::<Test>::get(second),
-							Some((INSTANCE_ID, *value))
-						);
+						// Every coin but the last fits the old tail.
+						let (last, rest) = members.split_last().unwrap();
+						for member in rest {
+							assert_eq!(page(member), old_tail);
+						}
+						assert_eq!(page(last), old_tail + 1);
+						for member in members {
+							assert_eq!(
+								RecyclersCoinToRecycler::<Test>::get(member),
+								Some((INSTANCE_ID, *value))
+							);
+						}
 					}
 				});
 			}
