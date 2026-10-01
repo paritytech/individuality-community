@@ -17,8 +17,8 @@
 
 //! # Scarcity Pallet
 //!
-//! `pallet-scarcity` defines NFT collections and item definitions, then mints instances using a
-//! coinage-style ownership model: each purse key can hold at most one NFT. The pallet knows
+//! `indiv-pallet-scarcity` defines NFT collections and item definitions, then mints instances using
+//! a coinage-style ownership model: each purse key can hold at most one NFT. The pallet knows
 //! ownership, supply, metadata, and deposits; it knows nothing about what an item means. Item
 //! semantics and access-control policy can live in a higher-level runtime pallet or collection
 //! contract. At this storage layer the collection owner has full control over its definitions,
@@ -69,11 +69,14 @@
 //! nonce invalidates an authorization whenever that instance moves, including collection-owner
 //! force-transfers away from and back to the same purse. Following Coinage's purse model,
 //! [`AsScarcity`](extension::AsScarcity) replaces the signed origin before ordinary account checks,
-//! so an NFT-only purse does not need a System account. Failed dispatch restores the NFT and
-//! temporarily locks the purse key; after the lock expires, the same signed transaction may be
-//! submitted again if its NFT state is still current. Callers must sign mortal transactions with
-//! an era shorter than [`Config::LockPeriod`] so that retrying is always a fresh signing
-//! decision; see the [replay and mortality rules](extension#replay-and-mortality).
+//! so an NFT-only purse does not need a System account. Failed dispatch restores the NFT at the
+//! next state nonce and locks the purse key, which retires the transaction that failed; see the
+//! [replay rules](extension#replay).
+//!
+//! Each instance carries [`Config::MaximumMoves`] feeless moves, spends one per transfer, and any
+//! paid move refills them. The budget bounds the block space one mint buys, as Coinage's
+//! `MaximumAge` does for coins. The holder refills it with
+//! [`transfer_by_holder`](Pallet::transfer_by_holder), which the purse key signs and pays for.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -100,13 +103,16 @@ pub trait MintWithoutDeposit<AccountId> {
 		metadata: alloc::vec::Vec<(Self::MetadataKey, Self::MetadataValue)>,
 	) -> Result<InstanceId, sp_runtime::DispatchError>;
 
-	/// Weight the implementation spends on runtime hooks its caller cannot see. A caller adds
-	/// this to its own benchmarked weight, and undercharges by whatever the runtime wired
-	/// behind the mint if it does not.
+	/// Weight the implementation spends on runtime hooks its caller cannot see, for a mint
+	/// carrying `pairs` metadata entries. A caller adds this to its own benchmarked weight, and
+	/// undercharges by whatever the runtime wired behind the mint if it does not.
+	///
+	/// `pairs` is needed because the metadata policy runs once per entry, so a caller that mints
+	/// with metadata pays for validation a caller minting without it does not.
 	///
 	/// A caller whose own benchmark mints against a runtime with those hooks wired measures
 	/// them too, so regenerating its weights double-counts this.
-	fn mint_hook_weight() -> frame_support::weights::Weight;
+	fn mint_hook_weight(pairs: u32) -> frame_support::weights::Weight;
 }
 
 /// Read-only view of a collection for runtime pallets that gate work on collection state
@@ -116,16 +122,16 @@ pub trait InspectCollection<AccountId> {
 	/// collection does not exist.
 	fn collection_owner(collection: CollectionId) -> Option<AccountId>;
 
-	/// The next item index the collection would allocate, or `None` if the collection does not
-	/// exist. Every allocated item index is below it, though deleted ones no longer resolve.
-	fn next_item_index(collection: CollectionId) -> Option<ItemIndex>;
+	/// The next item index the collection would allocate and its current number of item
+	/// definitions, from one backend read, or `None` if the collection does not exist.
+	/// Every allocated item index is below the next index, though deleted ones no longer
+	/// resolve; deletions decrement the count but never the next index.
+	fn item_draw_bounds(collection: CollectionId) -> Option<(ItemIndex, u32)>;
 
 	/// Whether an item definition currently exists in the collection.
-	/// The default assumes allocated indexes remain present, so backends with deletions must
-	/// override it.
-	fn item_exists(collection: CollectionId, item: ItemIndex) -> bool {
-		Self::next_item_index(collection).is_some_and(|next_item| item < next_item)
-	}
+	/// Deleted indexes stay below the next item index forever, so backends must answer
+	/// from their live item set, not from the allocation counter.
+	fn item_exists(collection: CollectionId, item: ItemIndex) -> bool;
 }
 
 /// Notified when a collection is deleted, so runtime pallets can drop cross-pallet state keyed
@@ -155,35 +161,64 @@ impl OnCollectionDeleted for () {
 	}
 }
 
+/// Notified when a collection changes owner, so other pallets can drop state the previous owner
+/// authorized without this pallet depending on theirs.
+///
+/// The handler runs inside `claim_collection_ownership` and must not fail. That call charges
+/// [`Self::on_owner_change_weight`], so an under-report undercharges the handover.
+pub trait OnCollectionOwnerChanged {
+	/// Runs after the collection record holds the new owner.
+	fn on_collection_owner_changed(collection: CollectionId);
+
+	/// Worst-case weight of one [`Self::on_collection_owner_changed`], added to
+	/// `claim_collection_ownership`.
+	///
+	/// A benchmark that runs a real handler measures it inside
+	/// `WeightInfo::claim_collection_ownership`, which the annotation adds again. Regenerate
+	/// weights with `OnCollectionOwnerChanged = ()` to avoid the double count.
+	fn on_owner_change_weight() -> frame_support::weights::Weight;
+}
+
+impl OnCollectionOwnerChanged for () {
+	fn on_collection_owner_changed(_collection: CollectionId) {}
+
+	fn on_owner_change_weight() -> frame_support::weights::Weight {
+		frame_support::weights::Weight::zero()
+	}
+}
+
 /// Notified when a mint gives a purse key its first instance, so a runtime can make that key
 /// addressable to its contract environment without this pallet depending on that environment.
 ///
 /// A purse key needs no `system::Account` entry, so a runtime that registers addresses on
-/// account creation never sees one. The handler runs inside the mint and must not fail; its
-/// weight is added to the call through [`Self::on_mint_weight`], so an under-report undercharges
-/// the mint.
+/// account creation never sees one. The handler runs inside the call that occupies the key and
+/// must not fail; its weight is added through [`Self::on_purse_occupied_weight`], so an
+/// under-report undercharges that call.
 ///
-/// Only mints notify. The fee-less transfer would let a token walk through unbounded fresh keys
-/// at nobody's expense, and `force_transfer` is excluded with it so that the rule stays "mints
-/// notify, moves do not" rather than splitting by which move it was.
+/// Every path that gives a key an instance notifies: mints and both moves. A holder that reached
+/// its key by transfer is otherwise unregistered, and an address derived from an unregistered key
+/// does not resolve back to it, so a caller reading a holder address gets one that names a
+/// different account.
 pub trait OnPurseOccupied<AccountId> {
 	/// Runs after the instance is recorded against `purse`.
 	fn on_purse_occupied(purse: &AccountId);
 
-	/// Worst-case weight of one [`Self::on_purse_occupied`]. Every entry that reaches a mint
-	/// adds it: the extrinsic through its annotation, and callers of
-	/// [`MintWithoutDeposit`](crate::MintWithoutDeposit) through `mint_hook_weight`.
+	/// Worst-case weight of one [`Self::on_purse_occupied`]. Every entry that occupies a key
+	/// adds it: the extrinsic through its annotation, callers of
+	/// [`MintWithoutDeposit`] through `mint_hook_weight`, and a
+	/// precompile calling a pallet entry directly, where no annotation applies.
 	///
 	/// Benchmarks run against a runtime that wires a real handler measure the handler inside
-	/// `WeightInfo::mint`, which the annotation then adds again. Regenerating weights therefore
-	/// double-counts this unless the benchmark runs with `OnPurseOccupied = ()`.
-	fn on_mint_weight() -> frame_support::weights::Weight;
+	/// `WeightInfo::mint`, `WeightInfo::transfer` and `WeightInfo::force_transfer`, which each
+	/// annotation then adds again. Regenerating weights double-counts all three unless the
+	/// benchmark runs with `OnPurseOccupied = ()`.
+	fn on_purse_occupied_weight() -> frame_support::weights::Weight;
 }
 
 impl<AccountId> OnPurseOccupied<AccountId> for () {
 	fn on_purse_occupied(_purse: &AccountId) {}
 
-	fn on_mint_weight() -> frame_support::weights::Weight {
+	fn on_purse_occupied_weight() -> frame_support::weights::Weight {
 		frame_support::weights::Weight::zero()
 	}
 }
@@ -195,7 +230,7 @@ impl<AccountId> OnPurseOccupied<AccountId> for () {
 /// an ERC-721 view where `name` is a `string`, states that rule here rather than at the interface.
 /// Every write reaches one of the three per-scope setters, so this is the only place a rule holds
 /// for all of them at once, including entries carried by `define_item`, `mint` and
-/// [`MintWithoutDeposit`](crate::MintWithoutDeposit).
+/// [`MintWithoutDeposit`].
 pub trait ValidateMetadata<Key, Value> {
 	/// Runs before the pair is stored, on the value being written but not on a removal.
 	fn validate(key: &Key, value: &Value) -> Result<(), sp_runtime::DispatchError>;
@@ -232,9 +267,16 @@ pub mod migration;
 pub mod runtime_api;
 pub mod weights;
 
+const LOG_TARGET: &str = "runtime::pallet-scarcity";
+
+pub use weights::WeightInfo;
+
 #[frame_support::pallet]
 pub mod pallet {
-	use crate::{weights::WeightInfo, OnCollectionDeleted, OnPurseOccupied, ValidateMetadata};
+	use crate::{
+		weights::WeightInfo, OnCollectionDeleted, OnCollectionOwnerChanged, OnPurseOccupied,
+		ValidateMetadata,
+	};
 	#[cfg(any(test, feature = "try-runtime"))]
 	use alloc::collections::BTreeMap;
 	use alloc::vec::Vec;
@@ -244,6 +286,7 @@ pub mod pallet {
 		transactional,
 	};
 	use frame_system::pallet_prelude::*;
+	use indiv_support::weight_budget::OcwWeightBudget;
 	#[cfg(any(test, feature = "try-runtime"))]
 	use sp_runtime::TryRuntimeError;
 	use sp_runtime::{
@@ -376,11 +419,18 @@ pub mod pallet {
 		pub minted_at: u64,
 		/// Unix seconds; equal to `minted_at` until the first transfer.
 		pub last_moved: u64,
-		/// Monotonic ownership-state revision, incremented by every successful transfer.
+		/// Monotonic ownership-state revision, incremented by every dispatch made under it.
 		///
-		/// Purse-key authorizations bind to this value so moving an instance away and back cannot
-		/// revive an authorization created for its earlier ownership state.
+		/// An authorization names the nonce it was signed for, so each nonce authorizes one
+		/// dispatch. An instance moved away and back returns at a later nonce, so no old
+		/// authorization revives.
 		pub state_nonce: u64,
+		/// Feeless moves spent out of [`Config::MaximumMoves`].
+		///
+		/// [`Pallet::transfer`] adds one and a paid move resets it to zero. The
+		/// [`AsScarcity`](crate::extension::AsScarcity) extension authorizes no transfer once the
+		/// two are equal.
+		pub moves: u16,
 	}
 
 	/// Post-failure backoff lock for an NFT purse key.
@@ -600,6 +650,10 @@ pub mod pallet {
 		StateNonceOverflow,
 		/// The item definition binds its instances to the purse key they were minted into.
 		Soulbound,
+		/// The configured per-collection metadata entry limit was reached.
+		TooManyCollectionMetadata,
+		/// The configured per-item metadata entry limit was reached.
+		TooManyItemMetadata,
 	}
 
 	/// Hold reason available to runtimes which back [`Config::Consideration`] with fungible holds.
@@ -609,8 +663,8 @@ pub mod pallet {
 		StorageDeposit,
 	}
 
-	/// Version 1 added `transferability` to `ItemDefinition`.
-	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft`.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
 
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
@@ -618,6 +672,36 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		/// Check the configuration values a runtime picks.
+		///
+		/// [`Config::MaxInstanceMetadata`] sets the entries a mint carries and a burn removes, and
+		/// the weights of [`Config::MetadataPolicy`], [`Config::OnPurseOccupied`] and
+		/// [`Config::OnCollectionDeleted`] ride on the calls that run them. A runtime that
+		/// overshoots on any of them produces a call that no block can hold.
+		/// [`Config::LockPeriod`] must pace the retries of a failing purse key.
+		fn integrity_test() {
+			let budget = OcwWeightBudget::from_normal_max::<T>();
+			let pairs = T::MaxInstanceMetadata::get();
+
+			budget.assert_fits(
+				"mint",
+				T::WeightInfo::mint(pairs)
+					.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
+					.saturating_add(T::MetadataPolicy::validate_weight(pairs)),
+			);
+			budget.assert_fits("burn", T::WeightInfo::burn(pairs));
+			budget.assert_fits("force_burn", T::WeightInfo::force_burn(pairs));
+			budget.assert_fits(
+				"delete_collection",
+				T::WeightInfo::delete_collection()
+					.saturating_add(T::OnCollectionDeleted::on_delete_weight()),
+			);
+
+			// A zero lock period expires the lock in the block that creates it, so a purse key
+			// that fails dispatch retries in the next block at no cost.
+			assert!(T::LockPeriod::get() > 0, "`LockPeriod` must be greater than zero");
+		}
+
 		#[cfg(feature = "try-runtime")]
 		fn try_state(_n: BlockNumberFor<T>) -> Result<(), TryRuntimeError> {
 			Self::do_try_state()
@@ -693,6 +777,18 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxValueLen: Get<u32>;
 
+		/// Maximum number of metadata entries stored on one collection.
+		///
+		/// This bounds what one collection query in the metadata runtime API can read.
+		#[pallet::constant]
+		type MaxCollectionMetadata: Get<u32>;
+
+		/// Maximum number of metadata entries stored on one item definition.
+		///
+		/// This bounds what one item query in the metadata runtime API can read.
+		#[pallet::constant]
+		type MaxItemMetadata: Get<u32>;
+
 		/// Maximum number of metadata overrides stored on one live instance.
 		///
 		/// This bounds burn cleanup independently of how many mutation calls are submitted.
@@ -707,9 +803,20 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxTransferPriority: Get<TransactionPriority>;
 
+		/// Feeless moves one instance gets between paid moves.
+		///
+		/// This bounds the block space one mint buys, since nothing else charges for a feeless
+		/// move.
+		#[pallet::constant]
+		type MaximumMoves: Get<u16>;
+
 		/// Cross-pallet cleanup run when a collection is deleted. Defaults to `()` for runtimes
 		/// with nothing keyed by a collection.
 		type OnCollectionDeleted: crate::OnCollectionDeleted;
+
+		/// Cross-pallet cleanup run when a collection changes owner. Defaults to `()` for
+		/// runtimes with nothing bound to a collection's owner.
+		type OnCollectionOwnerChanged: crate::OnCollectionOwnerChanged;
 
 		/// Cross-pallet registration run when a mint occupies a purse key. Defaults to `()` for
 		/// runtimes where holding an instance implies nothing about the key.
@@ -760,7 +867,7 @@ pub mod pallet {
 		#[pallet::call_index(2)]
 		#[pallet::weight(
 			T::WeightInfo::mint(metadata.len() as u32)
-				.saturating_add(T::OnPurseOccupied::on_mint_weight())
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
 				.saturating_add(T::MetadataPolicy::validate_weight(metadata.len() as u32))
 		)]
 		pub fn mint(
@@ -778,10 +885,10 @@ pub mod pallet {
 		///
 		/// Fails for an instance of a [`Transferability::Soulbound`] definition.
 		#[pallet::call_index(3)]
-		#[pallet::weight(T::WeightInfo::transfer())]
-		#[pallet::feeless_if(|origin: &OriginFor<T>, _to: &T::AccountId| -> bool {
-			Pallet::<T>::is_nft_origin(origin)
-		})]
+		#[pallet::weight(
+			T::WeightInfo::transfer()
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
+		)]
 		pub fn transfer(origin: OriginFor<T>, to: T::AccountId) -> DispatchResultWithPostInfo {
 			let Ok(Origin::Nft { owner, nft }) = origin.into() else {
 				return Err(DispatchError::BadOrigin.into());
@@ -793,9 +900,14 @@ pub mod pallet {
 			let from = owner;
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
+			// The extension checked the budget against this state. Only another move of this
+			// instance could spend it since, and that changes the state nonce the authorization
+			// names.
+			let moves = nft.moves.saturating_add(1);
+			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves, ..nft };
 			NftsByOwner::<T>::insert(&to, nft.clone());
 			Instances::<T>::insert(nft.instance, &to);
+			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance: nft.instance,
 				collection: nft.collection,
@@ -812,9 +924,6 @@ pub mod pallet {
 		/// removed and its exact deposits are released.
 		#[pallet::call_index(4)]
 		#[pallet::weight(T::WeightInfo::burn(T::MaxInstanceMetadata::get()))]
-		#[pallet::feeless_if(|origin: &OriginFor<T>| -> bool {
-			Pallet::<T>::is_nft_origin(origin)
-		})]
 		#[transactional]
 		pub fn burn(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
 			let Ok(Origin::Nft { owner, nft }) = origin.into() else {
@@ -897,7 +1006,10 @@ pub mod pallet {
 		/// previous owner's ticket is dropped. The operation is atomic: failure to establish the
 		/// claimant's consideration leaves ownership and both tickets unchanged.
 		#[pallet::call_index(8)]
-		#[pallet::weight(T::WeightInfo::claim_collection_ownership())]
+		#[pallet::weight(
+			T::WeightInfo::claim_collection_ownership()
+				.saturating_add(T::OnCollectionOwnerChanged::on_owner_change_weight())
+		)]
 		#[transactional]
 		pub fn claim_collection_ownership(
 			origin: OriginFor<T>,
@@ -913,6 +1025,7 @@ pub mod pallet {
 			let old_owner = info.owner.clone();
 			let info = Self::change_collection_owner(info, new_owner.clone())?;
 			Collections::<T>::insert(collection, info);
+			T::OnCollectionOwnerChanged::on_collection_owner_changed(collection);
 			Self::deposit_event(Event::CollectionOwnerChanged { collection, old_owner, new_owner });
 			Ok(())
 		}
@@ -995,7 +1108,10 @@ pub mod pallet {
 		/// consent and game rules before calling it. The move increments the instance state nonce,
 		/// invalidating prior holder authorizations.
 		#[pallet::call_index(13)]
-		#[pallet::weight(T::WeightInfo::force_transfer())]
+		#[pallet::weight(
+			T::WeightInfo::force_transfer()
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
+		)]
 		#[transactional]
 		pub fn force_transfer(
 			origin: OriginFor<T>,
@@ -1005,14 +1121,29 @@ pub mod pallet {
 			let owner = ensure_signed(origin)?;
 			Self::do_force_transfer(&owner, instance, to)
 		}
+
+		/// Move the instance the signer holds, with the fee paid from the signer's account.
+		///
+		/// The move refills the feeless move budget of [`Config::MaximumMoves`].
+		///
+		/// Fails for an instance of a [`Transferability::Soulbound`] definition.
+		#[pallet::call_index(14)]
+		#[pallet::weight(
+			T::WeightInfo::transfer_by_holder()
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
+		)]
+		#[transactional]
+		pub fn transfer_by_holder(
+			origin: OriginFor<T>,
+			instance: InstanceId,
+			to: T::AccountId,
+		) -> DispatchResult {
+			let holder = ensure_signed(origin)?;
+			Self::do_transfer_by_holder(&holder, instance, to)
+		}
 	}
 
 	impl<T: Config> Pallet<T> {
-		fn is_nft_origin(origin: &OriginFor<T>) -> bool {
-			let converted: Result<Origin<T>, OriginFor<T>> = origin.clone().into();
-			matches!(converted, Ok(Origin::Nft { .. }))
-		}
-
 		fn increase_owner_deposit(
 			info: CollectionInfoOf<T>,
 			amount: BalanceOf<T>,
@@ -1236,6 +1367,12 @@ pub mod pallet {
 					let Some(nft) =
 						NftsByOwner::<T>::get(owner).filter(|nft| nft.instance == instance)
 					else {
+						// `Instances` and `NftsByOwner` are kept in bijection by every mutation
+						// path, so this arm is inconsistent state, not a missing target.
+						log::error!(
+							target: crate::LOG_TARGET,
+							"Instances entry {instance:?} has no matching NftsByOwner entry"
+						);
 						return MetadataLayers::default();
 					};
 					MetadataLayers {
@@ -1275,16 +1412,11 @@ pub mod pallet {
 		}
 
 		/// Returns stored metadata layers for a positionally aligned query batch.
-		/// Oversized batches fail explicitly so callers can split them without losing queries.
+		/// The bounded argument enforces the batch ceiling at decode, before any allocation.
 		pub fn metadata_batch(
-			queries: Vec<crate::runtime_api::MetadataQuery>,
-		) -> Result<Vec<crate::runtime_api::MetadataLayers>, crate::runtime_api::BatchError> {
-			if queries.len() > crate::runtime_api::MAX_METADATA_QUERIES as usize {
-				return Err(crate::runtime_api::BatchError::TooLarge {
-					max: crate::runtime_api::MAX_METADATA_QUERIES,
-				});
-			}
-			Ok(queries.into_iter().map(Self::metadata_layers).collect::<Vec<_>>())
+			queries: crate::runtime_api::MetadataQueries,
+		) -> Vec<crate::runtime_api::MetadataLayers> {
+			queries.into_iter().map(Self::metadata_layers).collect::<Vec<_>>()
 		}
 
 		fn metadata_footprint(key: &MetadataKeyOf<T>, value: &MetadataValueOf<T>) -> Footprint {
@@ -1324,6 +1456,10 @@ pub mod pallet {
 					Self::deposit_event(Event::CollectionMetadataSet { collection, key });
 				},
 				(None, Some(value)) => {
+					ensure!(
+						info.metadata_count < T::MaxCollectionMetadata::get(),
+						Error::<T>::TooManyCollectionMetadata
+					);
 					info.metadata_count =
 						info.metadata_count.checked_add(1).ok_or(ArithmeticError::Overflow)?;
 					let deposit =
@@ -1377,6 +1513,10 @@ pub mod pallet {
 					Self::deposit_event(Event::ItemMetadataSet { collection, item, key });
 				},
 				(None, Some(value)) => {
+					ensure!(
+						definition.metadata_count < T::MaxItemMetadata::get(),
+						Error::<T>::TooManyItemMetadata
+					);
 					definition.metadata_count = definition
 						.metadata_count
 						.checked_add(1)
@@ -1522,12 +1662,14 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
+			let nft =
+				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
 			NftsByOwner::<T>::remove(&from);
 			Locked::<T>::remove(&from);
 			NftsByOwner::<T>::insert(&to, nft);
 			Instances::<T>::insert(instance, &to);
+			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::ForceTransferred { instance, collection, from, to });
 			Ok(())
 		}
@@ -1554,10 +1696,11 @@ pub mod pallet {
 		///
 		/// [`Self::transfer`] is the fee-less holder path and needs an `Origin::Nft`, which only
 		/// the [`AsScarcity`](crate::extension::AsScarcity) extension can produce from a
-		/// purse-signed transaction. This entry serves paid callers that have established holder
-		/// consent by other means, such as a contract environment resolving an approval, and
-		/// therefore applies no consent check beyond `holder` currently holding `instance`. The
-		/// rest-time priority machinery guards the fee-less path only, so it does not apply here.
+		/// purse-signed transaction. This entry serves the paid paths: the signed
+		/// [`Self::transfer_by_holder`] call and contract environments that establish holder
+		/// consent by other means. It applies no consent check beyond `holder` currently holding
+		/// `instance`. The rest-time priority and the feeless move budget guard the fee-less path
+		/// only, so neither applies here.
 		///
 		/// Clearing the source lock keeps the `Locked` entry paired with an NFT, matching both
 		/// other move paths.
@@ -1574,12 +1717,14 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
+			let nft =
+				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
 			NftsByOwner::<T>::remove(holder);
 			Locked::<T>::remove(holder);
 			NftsByOwner::<T>::insert(&to, nft);
 			Instances::<T>::insert(instance, &to);
+			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance,
 				collection,
@@ -1673,8 +1818,15 @@ pub mod pallet {
 			let next_live_supply =
 				definition.live_supply.checked_add(1).ok_or(Error::<T>::SupplyOverflow)?;
 			let now = T::UnixTime::now().as_secs();
-			let nft =
-				Nft { instance, collection, item, minted_at: now, last_moved: now, state_nonce: 0 };
+			let nft = Nft {
+				instance,
+				collection,
+				item,
+				minted_at: now,
+				last_moved: now,
+				state_nonce: 0,
+				moves: 0,
+			};
 			let instance_deposit = if with_deposit {
 				// Four storage entries back one instance: `NftsByOwner`, the `Instances`
 				// reverse index, `InstanceDeposits`, and `InstanceMetadataCount`. This measures
@@ -1734,8 +1886,9 @@ pub mod pallet {
 			Self::do_mint_inner(collection, item, to, metadata, false)
 		}
 
-		fn mint_hook_weight() -> frame_support::weights::Weight {
-			T::OnPurseOccupied::on_mint_weight()
+		fn mint_hook_weight(pairs: u32) -> frame_support::weights::Weight {
+			T::OnPurseOccupied::on_purse_occupied_weight()
+				.saturating_add(T::MetadataPolicy::validate_weight(pairs))
 		}
 	}
 
@@ -1744,8 +1897,8 @@ pub mod pallet {
 			Collections::<T>::get(collection).map(|info| info.owner)
 		}
 
-		fn next_item_index(collection: CollectionId) -> Option<ItemIndex> {
-			Collections::<T>::get(collection).map(|info| info.next_item_index)
+		fn item_draw_bounds(collection: CollectionId) -> Option<(ItemIndex, u32)> {
+			Collections::<T>::get(collection).map(|info| (info.next_item_index, info.item_count))
 		}
 
 		fn item_exists(collection: CollectionId, item: ItemIndex) -> bool {
@@ -1968,6 +2121,11 @@ pub mod pallet {
 						"collection metadata count does not match stored entries",
 					));
 				}
+				if info.metadata_count > T::MaxCollectionMetadata::get() {
+					return Err(TryRuntimeError::Other(
+						"collection metadata count exceeds configured maximum",
+					));
+				}
 			}
 
 			let mut actual_item_metadata_counts = BTreeMap::<(CollectionId, ItemIndex), u32>::new();
@@ -2001,6 +2159,11 @@ pub mod pallet {
 				if definition.metadata_count != actual {
 					return Err(TryRuntimeError::Other(
 						"item metadata count does not match stored entries",
+					));
+				}
+				if definition.metadata_count > T::MaxItemMetadata::get() {
+					return Err(TryRuntimeError::Other(
+						"item metadata count exceeds configured maximum",
 					));
 				}
 			}

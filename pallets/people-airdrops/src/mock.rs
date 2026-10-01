@@ -31,7 +31,8 @@ use indiv_support::traits::{
 	Alias, Context, ContextualAlias, Identifier, MembershipProver, RevisionIndex, RingIndex,
 	RingMembershipProof,
 };
-use sp_core::{blake2_256, sr25519};
+use sp_core::sr25519;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{
 	offchain::{
 		testing::{PoolState, TestOffchainExt, TestTransactionPoolExt},

@@ -855,6 +855,48 @@ mod suspensions {
 			);
 		});
 	}
+
+	#[test]
+	fn suspending_person_releases_account_sufficients() {
+		TestExt::new().execute_with(|| {
+			assert_ok!(Members::create_collection(
+				0,
+				PEOPLE_MEMBER_IDENTIFIER,
+				1,
+				RingMode::Flexible,
+				RingExponent::R2e9,
+				None,
+			));
+
+			generate_people_with_index(0, 9);
+			Members::process_maintenance();
+
+			// A person associated with an account
+			let person_id = 0;
+			let account_id = 42;
+			let sufficients_before = frame_system::Account::<Test>::get(account_id).sufficients;
+
+			let id_origin = RuntimeOrigin::from(PeopleOrigin::PersonalIdentity(person_id));
+			assert_ok!(PeoplePallet::set_personal_id_account(id_origin, account_id, 0));
+			assert_eq!(
+				frame_system::Account::<Test>::get(account_id).sufficients,
+				sufficients_before + 1
+			);
+
+			// The person becomes suspended
+			assert_ok!(PeoplePallet::start_people_set_mutation_session());
+			assert_ok!(PeoplePallet::suspend_personhood(&[person_id]));
+			assert_ok!(PeoplePallet::end_people_set_mutation_session());
+
+			// The suspension releases the sufficient reference taken by
+			// `set_personal_id_account` together with the account mapping, so the account can
+			// be reaped.
+			assert_eq!(
+				frame_system::Account::<Test>::get(account_id).sufficients,
+				sufficients_before
+			);
+		});
+	}
 }
 
 #[test]

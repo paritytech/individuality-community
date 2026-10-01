@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Overrides onboarding size for the people and people-lite collections on People.
-# Must run after 08 (creates the people collection).
+# Must run after 08a-b (creates the people and people-lite collections).
 set -euo pipefail
 source ./load-config.sh
 

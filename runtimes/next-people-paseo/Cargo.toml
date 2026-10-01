@@ -53,6 +53,7 @@ sp-api = { workspace = true }
 sp-block-builder = { workspace = true }
 sp-consensus-aura = { workspace = true }
 sp-core = { workspace = true }
+sp-crypto-hashing = { workspace = true }
 sp-genesis-builder = { workspace = true }
 sp-inherents = { workspace = true }
 sp-io = { workspace = true }
@@ -113,6 +114,7 @@ cumulus-primitives-utility = { workspace = true }
 pallet-collator-selection = { workspace = true }
 parachain-info = { workspace = true }
 parachains-common = { workspace = true }
+system-parachains-common = { workspace = true }
 assets-common = { workspace = true }
 
 [dev-dependencies]
@@ -198,6 +200,7 @@ std = [
 	"sp-block-builder/std",
 	"sp-consensus-aura/std",
 	"sp-core/std",
+	"sp-crypto-hashing/std",
 	"sp-genesis-builder/std",
 	"sp-inherents/std",
 	"sp-io/std",
@@ -212,6 +215,7 @@ std = [
 	"sp-trie/std",
 	"sp-version/std",
 	"substrate-wasm-builder",
+	"system-parachains-common/std",
 	"verifiable/std",
 	"xcm-builder/std",
 	"xcm-executor/std",
@@ -278,6 +282,7 @@ runtime-benchmarks = [
 	"polkadot-parachain-primitives/runtime-benchmarks",
 	"polkadot-runtime-common/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
+	"system-parachains-common/runtime-benchmarks",
 	"xcm-builder/runtime-benchmarks",
 	"xcm-executor/runtime-benchmarks",
 	"xcm-runtime-apis/runtime-benchmarks",
@@ -287,6 +292,12 @@ runtime-benchmarks = [
 coinage-benchmark-proof-cache-regenerate = [
 	"indiv-pallet-coinage/benchmark-proof-cache-regenerate",
 ]
+
+# Build the ring VRF suite with the RFC-163 EC host functions instead of the default
+# in-runtime arkworks code. A runtime built with this only runs on validators that
+# expose those host functions (executor param `EccRfc163`). Weights in this repository
+# are measured against the default in-runtime backend.
+ec-crypto-hostcalls = ["indiv-support/ec-crypto-hostcalls"]
 
 try-runtime = [
 	"assets-common/try-runtime",
@@ -344,4 +355,5 @@ try-runtime = [
 	"parachains-common/try-runtime",
 	"polkadot-runtime-common/try-runtime",
 	"sp-runtime/try-runtime",
+	"system-parachains-common/try-runtime",
 ]

@@ -846,7 +846,7 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			let origin_member = match origin.into_caller().try_into() {
 				Ok(Origin::<T>::SelfInclude(m)) => m,
-				_ => return Err(frame_support::error::BadOrigin.into()),
+				_ => return Err(sp_runtime::traits::BadOrigin.into()),
 			};
 			ensure!(origin_member == member, Error::<T>::NotMember);
 
@@ -3093,6 +3093,34 @@ pub mod pallet {
 			while let Some(to_include) = Self::should_build_ring(identifier, ring_index, limit) {
 				Self::build_ring(identifier, ring_index, to_include)?;
 			}
+			Ok(())
+		}
+
+		#[cfg(feature = "runtime-benchmarks")]
+		fn seal_current_ring(identifier: &Identifier) -> DispatchResult {
+			let collection =
+				Collections::<T>::get(identifier).ok_or(Error::<T>::CollectionNotFound)?;
+			ensure!(collection.mode == RingMode::AppendOnly, Error::<T>::InvalidRing);
+			ensure!(!SuspendedCollections::<T>::contains_key(identifier), Error::<T>::InvalidRing);
+
+			let current_ring = CurrentRingIndex::<T>::get(identifier);
+			ensure!(Root::<T>::contains_key(identifier, current_ring), Error::<T>::InvalidRing);
+			RingKeysStatus::<T>::try_mutate(
+				identifier,
+				current_ring,
+				|status| -> DispatchResult {
+					ensure!(
+						status.total > 0 && status.total == status.included,
+						Error::<T>::InvalidRing
+					);
+					ensure!(status.immutable_since.is_none(), Error::<T>::InvalidRing);
+					status.immutable_since = Some(T::Clock::now().as_secs());
+					Ok(())
+				},
+			)?;
+
+			let next_ring = current_ring.checked_add(1).ok_or(ArithmeticError::Overflow)?;
+			CurrentRingIndex::<T>::insert(identifier, next_ring);
 			Ok(())
 		}
 

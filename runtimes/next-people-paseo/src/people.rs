@@ -675,6 +675,12 @@ pub struct NftCreditsBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
 impl indiv_pallet_nft_credits::benchmarking::BenchmarkHelper for NftCreditsBenchmarkHelper {
+	fn set_unix_time(secs: u64) {
+		// `pallet_timestamp` holds the clock in milliseconds, and its `set` is an inherent, so this
+		// writes the value straight to storage.
+		pallet_timestamp::Now::<Runtime>::put(secs.saturating_mul(1_000));
+	}
+
 	fn open_nft_claims_channel(max_message_size: u32) {
 		use cumulus_pallet_parachain_system::RelevantMessagingState;
 		use cumulus_primitives_core::relay_chain::AbridgedHrmpChannel;
@@ -705,63 +711,93 @@ impl indiv_pallet_nft_credits::benchmarking::BenchmarkHelper for NftCreditsBench
 
 impl indiv_pallet_nft_credits::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_nft_credits::WeightInfo<Runtime>;
-	// Sized above what one block can award, so no `report` awards a credit the block has no room
-	// for, which would be committed to no root and lost. A worst-case report awards
-	// `(MaxGroupSize - 1) * MaxRounds = 15` credits and is charged the awards entry's
-	// `MaxEncodedLen` of `2 + 65 * MaxCreditsPerBlock` bytes, so at 1200 about 65 reports fit the
-	// 7,864,320-byte `Normal` proof budget, awarding 975 credits together. The game pallet's
-	// `integrity_test` recomputes that floor from the block limits and the generated `report`
-	// weight, so a value below it fails `runtime_integrity_tests`.
-	//
-	// The remaining fifth is margin against a regeneration that makes a report cheaper, fitting
-	// more per block and lifting the floor. It is cheap, since the charge that buys it lowers the
-	// floor in turn: at 1080 the floor was 1050, thin enough that any regeneration would have
-	// moved it past.
-	type MaxCreditsPerBlock = ConstU32<1200>;
 	type XcmRouter = crate::xcm_config::XcmRouter;
 	type NftClaimsParaId = NextAssetHubParaId;
 	// Matches the `NftClaims` index in next-asset-hub-paseo's `construct_runtime!`.
 	type NftClaimsPalletIndex = ConstU8<96>;
 	type ChannelInfo = ParachainSystem;
 	// One tree per block at most, and the offchain worker ships them every block, so the queue
-	// only fills while delivery to Asset Hub is down. Matched to `MaxRetainedAwardBlocks`, which
-	// counts the same award blocks: the oldest tree still queued is then one whose awards are
-	// also still in state, so a delivery that outlasts the outage needs no proof rebuilt from
-	// events. Eight full messages drain it.
+	// only fills while delivery to Asset Hub is down. Far fewer blocks than `AwardRetentionTtl`
+	// retains, so the oldest queued tree is one whose awards are still in state and a delivery that
+	// outlasts an outage needs no proof rebuilt from events. Eight full messages drain it. A
+	// `replay_credit_trees` during the outage breaks that: its tree is claimable on Asset Hub while
+	// the delivery is still queued here, so the last claim there asks for a deletion this entry
+	// then cannot deliver.
 	//
-	// An entry is 12 bytes and the queue is read at the value's `MaxEncodedLen`, so
-	// `authorize_send_credit_trees` pays about 3 KB of the `Normal` proof budget for it. A tree
-	// past the bound is dropped from delivery, not lost: its root stays on chain for
-	// `replay_credit_trees`.
+	// An entry is 12 bytes, read at the value's `MaxEncodedLen`, so
+	// `authorize_send_credit_trees` pays about 3 KB of the `Normal` proof budget.
 	type MaxQueuedCreditTrees = ConstU32<256>;
 	type MaxCreditTreesPerMessage = ConstU32<32>;
 	type ReplayCooldownSeconds = ConstU64<60>;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
-	// Entries are the distinct blocks a claimant was awarded in, not a window of consecutive
-	// ones, so the bound counts games rather than time. One game awards a claimant at most
-	// `(MaxGroupSize - 1) * MaxRounds = 15` credits, one per co-player that reported `Person`
-	// on them, plus the attendance backfill, which awards the rest in a single call. Those
-	// land in 16 distinct blocks only if no two reports ever share one, out of the 300 blocks
-	// the 10-minute reporting phase spans; reports cluster, so a few per game is the norm.
+	// Entries are the distinct blocks whose trees commit a claimant's credits, not a window of
+	// consecutive ones, so the bound counts games rather than time. One game awards a claimant at
+	// most `(MaxGroupSize - 1) * MaxRounds = 15` credits, one per co-player that reported `Person`
+	// on them, plus the attendance backfill, which awards the rest in a single call. Those land in
+	// 16 distinct blocks only if no two reports ever share one, and reports cluster. At one game a
+	// week `AwardRetentionTtl` spans about 13 games, so 208 entries cover the window even at that
+	// worst case; this leaves margin over it, and about 85 games at the few blocks a game usually
+	// takes. The list costs 1 KB at this bound.
 	//
-	// A game cycle runs 17.5 minutes, so back to back games fill this in about two hours at
-	// the usual few entries each, and in two games if both hit the worst case. That is the
-	// intended horizon: the index is a lookup aid for trees recent enough to still be worth
-	// minting against, not a record for the chain's lifetime, and the oldest block drops out
-	// once it is full.
-	type MaxCreditBlocksPerClaimant = ConstU32<32>;
-	// The window in which a claim is provable from state alone, counted in award blocks. Reports
-	// cluster inside a game's 10-minute reporting phase, so a game contributes a few dozen award
-	// blocks and this covers several games, well past the two hours the per-claimant index spans.
-	//
-	// It is also the state the chain carries for them: at most this many entries of
-	// `MaxCreditsPerBlock` awards, an award being 65 bytes, so about 17 MB were every retained
-	// block saturated, and proportional to the mints actually outstanding otherwise. A block that
-	// drops out delays no mint, its root staying on chain, but its awards then have to come from
-	// the block's events.
-	type MaxRetainedAwardBlocks = ConstU32<256>;
+	// Being a count, the window shortens as games run more often. Governance sets the schedule and
+	// `new_game` only refuses a concurrent game, so back-to-back games would fill this in a day.
+	type MaxCreditBlocksPerClaimant = ConstU32<256>;
+	// The claims chain's own deadline, which is what the two have to agree on. What it costs this
+	// chain follows participation rather than a constant: a player earns at most
+	// `(MaxGroupSize - 1) * MaxRounds = 15` credits a game, so at one game a week 90 days is about
+	// 195 credits, or 13 KB at 65 bytes an award. Retaining personhood needs one game per
+	// `NonPlayingKickoutTime` and costs a fraction of that.
+	type AwardRetentionTtl = ClaimsChainTreeTtl;
+	type EnsureClaimsChainOrigin = EnsureClaimsChainSibling;
+	// At least the claims pallet's `MaxTreeDeletionsPerMessage`. A larger message fails to decode
+	// here, and the root TTL then removes the roots its deletions named.
+	type MaxTreeDeletionsPerMessage = ConstU32<64>;
+	type ClaimsChainTreeTtl = ClaimsChainTreeTtl;
+	// One block records at most one root, so a day holds 43200 at 2 seconds a block, which 64 per
+	// block clears in about 20 minutes. The root TTL is the longer of the two, so a sweep only
+	// removes roots the claims chain has given up on, with a month of slack for a backlog.
+	type MaxRootsPerSweep = ConstU32<64>;
+	// A tree block's awards are `CHUNKS_PER_TREE` keys, each charged at a full chunk, so one block
+	// costs about 290 KB of the proof budget and eight of them about half of it. The
+	// `integrity_test` is what holds this to the budget. A block records at most one tree block, so
+	// a call per block removes them eight times faster than they are made.
+	type MaxAwardBlocksPerSweep = ConstU32<8>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
+}
+
+parameter_types! {
+	/// The claims chain's `TreeTtl`, duplicated here. The root TTL this chain sweeps by is
+	/// `ROOT_TTL_GRACE` past it, so a root outlives the tree built from it.
+	///
+	/// Keep it in step with `CreditTreeTtl` in next-asset-hub-paseo. A value below the real one keeps
+	/// roots for less time than the claims chain gives a claimant, which strands credits inside their
+	/// deadline. A value above it keeps roots after the last credit has expired.
+	pub const ClaimsChainTreeTtl: u64 = 90 * 24 * 60 * 60;
+}
+
+/// Origin check for the parachain the credit trees are delivered to. Only that chain may name the
+/// roots this chain deletes.
+///
+/// Any origin that passes this check can strand a credit, so it accepts that one chain, not
+/// siblings in general.
+pub struct EnsureClaimsChainSibling;
+impl frame_support::traits::EnsureOrigin<RuntimeOrigin> for EnsureClaimsChainSibling {
+	type Success = ();
+
+	fn try_origin(o: RuntimeOrigin) -> Result<Self::Success, RuntimeOrigin> {
+		let claims_chain = <Runtime as indiv_pallet_nft_credits::Config>::NftClaimsParaId::get();
+		match o.clone().into() {
+			Ok(cumulus_pallet_xcm::Origin::SiblingParachain(id)) if id == claims_chain => Ok(()),
+			_ => Err(o),
+		}
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn try_successful_origin() -> Result<RuntimeOrigin, ()> {
+		let claims_chain = <Runtime as indiv_pallet_nft_credits::Config>::NftClaimsParaId::get();
+		Ok(cumulus_pallet_xcm::Origin::SiblingParachain(claims_chain).into())
+	}
 }
 
 parameter_types! {
@@ -803,8 +839,9 @@ impl indiv_pallet_honour::benchmarking::BenchmarkHelper<Runtime> for HonourBench
 		)
 		.expect("benchmark: people collection must be created");
 
-		let secret =
-			BandersnatchVrfVerifiable::new_secret(sp_core::twox_256(b"honour-bench-voter"));
+		let secret = BandersnatchVrfVerifiable::new_secret(sp_crypto_hashing::twox_256(
+			b"honour-bench-voter",
+		));
 		let member = BandersnatchVrfVerifiable::member_from_secret(&secret);
 
 		Members::add_members(indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER, vec![member])
@@ -1475,7 +1512,7 @@ impl indiv_pallet_coinage::BenchmarkHelper<Runtime> for CoinageBenchHelper {
 		let ring_exponent = <Runtime as indiv_pallet_people::Config>::RingExponent::get();
 		indiv_pallet_members::Pallet::<Runtime>::initialize_chunks(ring_exponent);
 
-		let entropy = sp_core::twox_256(b"people_for_coinage:42");
+		let entropy = sp_crypto_hashing::twox_256(b"people_for_coinage:42");
 		let secret = BandersnatchVrfVerifiable::new_secret(entropy);
 		let member = BandersnatchVrfVerifiable::member_from_secret(&secret);
 
@@ -1694,12 +1731,6 @@ impl indiv_pallet_members_notifier::Config for Runtime {
 
 parameter_types! {
 	pub ConstantWeight: Weight = Weight::from_parts(10_000, 0);
-}
-
-parameter_types! {
-	pub AssetHubSubscriptionWhitelist:
-		alloc::vec::Vec<indiv_pallet_members_notifier::GenesisWhitelistEntry> =
-			asset_hub_subscription_whitelist();
 }
 
 /// Pallet index of `MembersSubscriber` in next-asset-hub-paseo's `construct_runtime!`.

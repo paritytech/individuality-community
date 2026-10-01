@@ -60,6 +60,7 @@ impl cumulus_pallet_parachain_system::Config for Test {
 	type ConsensusHook = ExpectParentIncluded;
 	type WeightInfo = ();
 	type RelayParentOffset = ConstU32<2>;
+	type SchedulingSignatureVerifier = ();
 }
 
 impl crate::Config for Test {

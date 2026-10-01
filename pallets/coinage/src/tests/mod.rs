@@ -29,6 +29,7 @@ mod test_coinage_paid_full_story;
 mod test_create_sufficient_instance;
 mod test_direct_offboard_coin_into_external_asset;
 mod test_dusting;
+mod test_dynamic_parameters;
 mod test_extension;
 mod test_free_unload_token_lifecycle;
 mod test_infallible_unpaid_ext;
@@ -42,6 +43,7 @@ mod test_pay_for_recycler_unload_fee_token_with_coin;
 mod test_pay_for_recycler_unload_fee_token_with_external_asset;
 mod test_pay_for_recycler_unload_fee_token_with_native;
 mod test_recycler_lifecycle;
+mod test_recycler_unloaded_count;
 mod test_split;
 mod test_sponsored_instance;
 mod test_transfer;
@@ -52,6 +54,7 @@ mod test_unload_recycler_into_external_asset;
 mod test_unload_recycler_into_external_asset_and_loaded_coins;
 mod test_unload_recycler_into_external_asset_fee_from_output;
 mod test_unload_recycler_into_external_asset_non_anonymous_fee_from_signer;
+mod test_unload_weights;
 
 pub(super) fn get_recycler_alias_lock_until(
 	value: Denomination,

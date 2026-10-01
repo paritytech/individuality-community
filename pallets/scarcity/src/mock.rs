@@ -17,14 +17,14 @@
 
 //! Mock runtime for scarcity pallet tests.
 
-use crate as pallet_scarcity;
+use crate as indiv_pallet_scarcity;
 use frame_support::{
 	derive_impl, parameter_types,
 	traits::{
 		fungible::{self, HoldConsideration},
 		ConstU32, ConstU64, LinearStoragePrice, UnixTime,
 	},
-	weights::constants::RocksDbWeight,
+	weights::{constants::RocksDbWeight, Weight},
 };
 use sp_runtime::{
 	traits::{Identity, IdentityLookup},
@@ -37,7 +37,7 @@ frame_support::construct_runtime!(
 	pub enum Test {
 		System: frame_system = 0,
 		Balances: pallet_balances = 1,
-		Scarcity: pallet_scarcity = 2,
+		Scarcity: indiv_pallet_scarcity = 2,
 	}
 );
 
@@ -75,6 +75,17 @@ impl UnixTime for MockUnixTime {
 type TestStoragePrice = LinearStoragePrice<ConstU64<1>, ConstU64<1>, u64>;
 
 parameter_types! {
+	/// Feeless moves one instance gets. Tests that exhaust the budget lower it.
+	pub storage MaximumMoves: u16 = 16;
+	/// Metadata entries one instance may carry. The integrity tests raise it.
+	pub storage MaxInstanceMetadata: u32 = 3;
+	/// Weight the mock policy charges per metadata pair. The integrity tests raise it.
+	pub storage PolicyWeightPerPair: Weight = Weight::from_parts(11, 22);
+	/// Weight the mock deletion hook charges. The integrity tests raise it.
+	pub storage DeletionHookWeight: Weight = Weight::from_parts(123, 45);
+}
+
+parameter_types! {
 	pub const ScarcityHoldReason: RuntimeHoldReason =
 		RuntimeHoldReason::Scarcity(crate::HoldReason::StorageDeposit);
 }
@@ -93,10 +104,14 @@ impl crate::Config for Test {
 	type MetadataDeposit = TestStoragePrice;
 	type MaxKeyLen = ConstU32<32>;
 	type MaxValueLen = ConstU32<256>;
-	type MaxInstanceMetadata = ConstU32<3>;
+	type MaxCollectionMetadata = ConstU32<6>;
+	type MaxItemMetadata = ConstU32<6>;
+	type MaxInstanceMetadata = MaxInstanceMetadata;
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
+	type MaximumMoves = MaximumMoves;
 	type OnCollectionDeleted = RecordCollectionDeletion;
+	type OnCollectionOwnerChanged = RecordCollectionOwnerChange;
 	type OnPurseOccupied = RecordPurseOccupancy;
 	type MetadataPolicy = RejectReservedValue;
 }
@@ -114,8 +129,26 @@ impl crate::OnCollectionDeleted for RecordCollectionDeletion {
 		LastDeletedCollection::set(&Some(collection));
 	}
 
-	fn on_delete_weight() -> frame_support::weights::Weight {
-		frame_support::weights::Weight::from_parts(123, 45)
+	fn on_delete_weight() -> Weight {
+		DeletionHookWeight::get()
+	}
+}
+
+parameter_types! {
+	/// The last collection the owner-change hook was called for, so tests can assert it fired.
+	pub storage LastOwnerChangedCollection: Option<crate::CollectionId> = None;
+}
+
+/// Records the collection passed to the owner-change hook and charges a distinct weight, so
+/// tests can observe both the wiring and the weight added to `claim_collection_ownership`.
+pub struct RecordCollectionOwnerChange;
+impl crate::OnCollectionOwnerChanged for RecordCollectionOwnerChange {
+	fn on_collection_owner_changed(collection: crate::CollectionId) {
+		LastOwnerChangedCollection::set(&Some(collection));
+	}
+
+	fn on_owner_change_weight() -> frame_support::weights::Weight {
+		frame_support::weights::Weight::from_parts(321, 54)
 	}
 }
 
@@ -134,7 +167,7 @@ impl crate::OnPurseOccupied<u64> for RecordPurseOccupancy {
 		OccupiedPurses::set(&purses);
 	}
 
-	fn on_mint_weight() -> frame_support::weights::Weight {
+	fn on_purse_occupied_weight() -> frame_support::weights::Weight {
 		frame_support::weights::Weight::from_parts(678, 90)
 	}
 }
@@ -157,8 +190,8 @@ impl<Key: AsRef<[u8]>, Value: AsRef<[u8]>> crate::ValidateMetadata<Key, Value>
 		Ok(())
 	}
 
-	fn validate_weight(pairs: u32) -> frame_support::weights::Weight {
-		frame_support::weights::Weight::from_parts(11, 22).saturating_mul(pairs as u64)
+	fn validate_weight(pairs: u32) -> Weight {
+		PolicyWeightPerPair::get().saturating_mul(pairs as u64)
 	}
 }
 

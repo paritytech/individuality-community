@@ -18,7 +18,7 @@
 //!
 //! Holds the Merkle roots committing to the NFT claim credits the game pallet awards on the
 //! People chain. A claim is verified against them, by an inclusion proof of the credit's leaf
-//! under the root of the block it was awarded in.
+//! under the root of the block that committed it.
 //!
 //! The commitments and the minting live in one pallet on purpose: the roots have exactly one
 //! consumer, the claim, so there is nothing to be gained from splitting the two apart.
@@ -45,9 +45,9 @@
 //! to. The signer pays the transaction fee, in PGAS as any other call, so a failing claim always
 //! costs its submitter.
 //!
-//! The NFT itself is a `pallet-scarcity` instance, minted with no storage deposit: the credit is
-//! what bounds the state a claim creates, since the game chain awards a credit once and
-//! [`ClaimedCredits`] spends it once. Scarcity purse keys hold one NFT each and take no
+//! The NFT itself is an `indiv-pallet-scarcity` instance, minted with no storage deposit: the
+//! credit is what bounds the state a claim creates, since the game chain awards a credit once and
+//! [`ClaimedLeaves`] spends it once. Scarcity purse keys hold one NFT each and take no
 //! destination consent, so the call names the key to mint to rather than minting to the
 //! claimant's own account.
 //!
@@ -61,8 +61,9 @@
 //! claim mints:
 //!
 //! - [`ItemSelection::Contract`] asks the named contract, `mint(uint32 collection, bytes32
-//!   entropy)`, with the credit as the only entropy, and mints the item index it returns. The
-//!   current collection owner makes the bounded call and collateralizes its storage writes. Any
+//!   credit)`, with the claimed credit, and mints the item index it returns. The credit is public
+//!   and the submitter picks which one to spend, so a minter must not treat it as unpredictable.
+//!   The current collection owner makes the bounded call and collateralizes its storage writes. Any
 //!   failure fails the claim and leaves the credit unspent because the contract is how an owner
 //!   gates their collection.
 //! - [`ItemSelection::Random`] needs no contract: the item index is the credit modulo the
@@ -75,20 +76,54 @@
 //!
 //! ## Missing trees
 //!
-//! Award blocks are not contiguous, since a block that awarded no credit has no tree, so a
+//! Tree blocks are not contiguous, since a block that committed no credit has no tree, so a
 //! missing tree cannot be spotted from the block numbers. Each tree of the live stream instead
-//! carries a contiguous sequence number, and a batch whose first sequence is ahead of the one
-//! expected means the trees in between never arrived: [`Event::CreditTreesMissing`] names them.
-//! Recovering them is a `replay_credit_trees` call on the game pallet, naming the award blocks,
-//! which anyone can submit. A resent tree carries no sequence number and leaves the tracking of
-//! the live stream alone.
+//! carries a contiguous sequence number, and only an accepted tree advances the expected
+//! sequence. A tree that is lost on the way or rejected on arrival leaves its sequence
+//! unconsumed, and [`Event::CreditTreesMissing`] names each skipped run. Recovering them is a
+//! `replay_credit_trees` call on the game pallet, naming the tree blocks, which anyone can
+//! submit. A resent tree carries no sequence number and leaves the tracking of the live stream
+//! alone.
 //!
-//! The sequences a gap names are turned back into those award blocks on the game chain. Its
+//! The sequences a gap names are turned back into those tree blocks on the game chain. Its
 //! `CreditTreesSent` event lists the blocks one message delivered, in the order they go out, and
 //! its `send_credit_trees` call names the sequence the run starts at, so walking the run pairs
 //! each sequence with a block. The sequences left out of it are the ones the game pallet spent on
 //! a tree whose root it had already dropped, named one by one by `CreditTreeDeliverySkipped`. No
 //! replay recovers those: the root a proof would verify against no longer exists on either chain.
+//!
+//! ## Removing trees
+//!
+//! Two paths remove a tree. Both tell the game chain to drop its own copy, so the trees each chain
+//! holds will be able to process all open claims.
+//!
+//! - **Fully claimed.** The set bits of [`ClaimedLeaves`] reach the tree's `leaf_count`. Every
+//!   credit the tree commits to has been minted, so no proof can be built against it again, and the
+//!   claim that completes it removes it.
+//! - **Expiry.** [`Config::TreeTtl`] starts at the timestamp of the buffer's first award. Delivery
+//!   to this chain does not restart the TTL. [`Pallet::claim`] does not check expiry. Claims remain
+//!   possible until the expiry sweep removes the tree. The sweep emits
+//!   [`Event::CreditTreesExpired`], which counts the trees it removed with credits left unclaimed.
+//!
+//! [`Pallet::sweep_expired_trees`] performs the expiry, and this pallet's offchain worker submits
+//! it. [`TreeExpiries`] files each tree under the timestamp its deadline runs from and iterates in
+//! that order, so a sweep reads only the trees that are due. A delivery whose tree is already past
+//! its deadline is not stored at all: the game chain holds its root for longer, and anyone can call
+//! `replay_credit_trees` there to deliver an expired tree again.
+//!
+//! [`ClaimedLeaves`] outlives the tree it belongs to. A replay on the game chain can bring a
+//! removed tree back, because anyone can call it and the root outlives this chain's copy. The spent
+//! leaves stop that tree from minting its credits a second time.
+//!
+//! One bitmap covers a whole tree block, so the sweep drops it with a single removal. The expiry
+//! entry of a fully claimed tree therefore stays behind after the tree goes, and the sweep of that
+//! entry is what removes the bitmap. That is also the point where a replay stops mattering: a
+//! delivery past the deadline is refused, so nothing can spend those leaves again.
+//!
+//! The deletions owed to the game chain queue in [`PendingTreeDeletions`] and travel in a
+//! [`Pallet::send_tree_deletions`] message, which the offchain worker submits as well. A deletion
+//! is idempotent and carries no sequence number. The game chain's own TTL covers a deletion that is
+//! lost, or that the queue had no room for, so no repair call exists.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -96,6 +131,7 @@ extern crate alloc;
 
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
@@ -108,31 +144,61 @@ pub use pallet::*;
 pub use types::*;
 pub use weights::WeightInfo;
 
+use alloc::vec;
 use frame_support::{
-	dispatch::WithPostDispatchInfo,
-	traits::{EnsureOrigin, EnsureOriginWithArg, Get},
+	dispatch::{PostDispatchInfo, WithPostDispatchInfo},
+	traits::{EnsureOrigin, EnsureOriginWithArg, Get, UnixTime},
 	weights::Weight,
+};
+use frame_system::offchain::CreateAuthorizedTransaction;
+use indiv_pallet_scarcity::{
+	CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit,
 };
 use indiv_support::{
 	credit_trees::{
-		credit_leaf, AwardBlock, CreditProofNode, NftClaimCredit, NftClaimCreditLeaf,
-		NftClaimCreditTree, TreeSequence,
+		authorize_expiry_sweep, credit_leaf, drain_due_expiries, expiry_deadline, oldest_expiry,
+		CreditProofNode, CreditTreeBlock, ExpirySweepTx, ExpiryTimestamp, NftClaimCredit,
+		NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
 	},
 	identity::AccountOrPerson,
+	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
+	tx_priority,
 	weight_budget::OcwWeightBudget,
 };
-use pallet_scarcity::{CollectionId, InspectCollection, InstanceId, ItemIndex, MintWithoutDeposit};
 use sp_core::{H160, H256};
-use sp_runtime::{traits::BlakeTwo256, DispatchError};
+use sp_runtime::{traits::BlakeTwo256, DispatchError, SaturatedConversion};
+use xcm::{
+	latest::{
+		Instruction::{Transact, UnpaidExecution},
+		Location, OriginKind, SendError, SendXcm, WeightLimit, Xcm,
+	},
+	prelude::send_xcm,
+};
+
+/// The per-message room assumed for the channel to the game chain. The `integrity_test` holds a
+/// full deletion message to it.
+///
+/// The real figure comes from the relay chain's channel configuration, which is unknown at build
+/// time. Every HRMP channel between system parachains sits well above this, so a message that
+/// passes the check fits the channel.
+const MIN_CHANNEL_MESSAGE_SIZE: usize = 4096;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-claims";
+
+/// Number of metadata entries a claim mints with, which `mint_hook_weight` prices per entry.
+///
+/// The weight annotation runs before the dispatch builds that metadata, so this cannot read the
+/// vector's length. It is also the ceiling, because a dispatch may refund weight but never add
+/// any, so a mint passing more entries than this undercharges and reports nothing. Raise it in
+/// the same change that gives the mint metadata to pass.
+const CLAIM_METADATA_PAIRS: u32 = 0;
 
 /// Successful output of a collection's minter contract.
 pub struct Selection {
 	/// The item, within the collection the contract was asked about, the claim mints.
 	pub item: ItemIndex,
-	/// Weight the selection really consumed, refunded against
-	/// [`CollectionSelector::max_weight`]. Must not exceed it.
+	/// Weight the selection really consumed. The claim charges it, clamped to the
+	/// [`CollectionSelector::max_weight`] reservation.
 	pub weight_consumed: Weight,
 }
 
@@ -140,18 +206,30 @@ pub struct Selection {
 pub struct SelectionError {
 	/// What failed, which fails the claim.
 	pub error: DispatchError,
-	/// Weight the call really consumed before it failed, charged against
-	/// [`CollectionSelector::max_weight`]. Must not exceed it.
+	/// Weight the call really consumed before it failed. The claim charges it, clamped to the
+	/// [`CollectionSelector::max_weight`] reservation.
 	pub weight_consumed: Weight,
 }
 
 /// Runtime adapter calling a collection's minter contract as its current owner.
 ///
-/// The contract exposes `mint(uint32 collection, bytes32 entropy) returns (uint32 item)` and uses
-/// the claimed credit as its only entropy. The runtime limits execution and storage deposits.
+/// The contract exposes `mint(uint32 collection, bytes32 credit) returns (uint32 item)` and is
+/// called with the claimed credit. The credit is public and the submitter picks which one to
+/// spend, so a minter must not treat it as unpredictable. The runtime limits execution and
+/// storage deposits.
 pub trait CollectionSelector<AccountId> {
-	/// Worst-case weight of one selection, reserved before dispatch.
-	fn max_weight() -> Weight;
+	/// Worst-case weight one claim into `collection` reserves for its item selection.
+	///
+	/// Reads the registration: zero unless a minter contract is registered, then
+	/// [`Self::contract_max_weight`]. The claim's weight function makes the read, where it is
+	/// not charged.
+	fn max_weight(collection: CollectionId) -> Weight;
+
+	/// Worst-case weight of one minter contract call.
+	///
+	/// State-free, so the pallet's `integrity_test` can hold that worst case to the block
+	/// budget.
+	fn contract_max_weight() -> Weight;
 
 	/// Confirm `contract` can be registered as a minter, which is that code is deployed at the
 	/// address.
@@ -162,14 +240,16 @@ pub trait CollectionSelector<AccountId> {
 	/// validates every call's outcome.
 	fn validate(contract: H160) -> Result<(), DispatchError>;
 
-	/// Ask `contract` as `owner` which of `collection`'s items the claim of `entropy` mints.
+	/// Ask `contract` as `owner` which of `collection`'s items the claim of `credit` mints.
 	///
-	/// A failure reports the weight the call consumed before failing, so the claim charges it.
+	/// Claims and previews both run this. A failure reports the weight the call consumed
+	/// before failing: a claim charges it, while a preview rolls the call back and charges
+	/// nothing.
 	fn select(
 		owner: AccountId,
 		contract: H160,
 		collection: CollectionId,
-		entropy: NftClaimCredit,
+		credit: NftClaimCredit,
 	) -> Result<Selection, SelectionError>;
 }
 
@@ -183,6 +263,18 @@ pub trait BenchmarkHelper<AccountId> {
 
 	/// Deploy a contract that the collection registration benchmark can validate.
 	fn prepare_contract(owner: &AccountId) -> H160;
+
+	/// Moves [`Config::UnixTime`] to `secs` since the UNIX epoch.
+	///
+	/// A sweep's validity depends on the clock, so a benchmark of it sets the clock. Only the
+	/// runtime knows which pallet holds it.
+	fn set_unix_time(secs: u64);
+
+	/// Opens a channel to the game chain that carries `max_message_size` bytes per message.
+	///
+	/// A benchmarked send reaches [`Config::XcmRouter`], which refuses a destination it has no
+	/// channel to. Only the runtime knows how its channels are made.
+	fn open_game_chain_channel(max_message_size: u32);
 }
 
 #[frame_support::pallet]
@@ -192,17 +284,70 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
+	/// The current storage version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
-	pub trait Config: frame_system::Config {
+	pub trait Config: frame_system::Config + CreateAuthorizedTransaction<Call<Self>> {
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
 
 		/// Origin check for the XCM messages carrying credit trees, which authenticates the
 		/// chain the game pallet runs on.
 		type EnsureGameChainOrigin: EnsureOrigin<Self::RuntimeOrigin>;
+
+		/// Wall clock a tree's `timestamp` is measured against, which decides expiry.
+		///
+		/// The `timestamp` comes from the game chain's clock, so expiry compares two chains'
+		/// clocks. A [`Config::TreeTtl`] of weeks or months exceeds any real skew between them.
+		type UnixTime: UnixTime;
+
+		/// How long, in seconds after the `timestamp` its tree commits to, a credit stays
+		/// claimable.
+		///
+		/// [`Pallet::claim`] does not check this, so a claim succeeds until a sweep removes the
+		/// tree, which happens in the first block past the deadline that includes a sweep.
+		#[pallet::constant]
+		type TreeTtl: Get<u64>;
+
+		/// The maximum number of tree blocks that can wait for a deletion message in
+		/// [`PendingTreeDeletions`].
+		///
+		/// One message takes [`Config::MaxTreeDeletionsPerMessage`] blocks off the front, and the
+		/// offchain worker gets one message into the pool per block, so the queue holds what
+		/// claims and sweeps add above that rate. A deletion that does not fit is dropped,
+		/// because the game chain's TTL, not this queue, removes its copy. Set it at least as high
+		/// as [`Config::MaxTreeDeletionsPerMessage`], otherwise one sweep drops deletions of its
+		/// own.
+		#[pallet::constant]
+		type MaxQueuedTreeDeletions: Get<u32>;
+
+		/// The maximum number of tree blocks carried by one deletion message, which is also how
+		/// many trees one [`Pallet::sweep_expired_trees`] removes.
+		///
+		/// One bound serves both, so a sweep queues exactly one message's worth and those deletions
+		/// go out in the block after it. It also bounds the sweep's weight against the block, and
+		/// the offchain worker submits one sweep per block until nothing is due.
+		/// The game pallet's own bound must be at least this large, otherwise the message fails
+		/// to decode there and its deletions never arrive.
+		#[pallet::constant]
+		type MaxTreeDeletionsPerMessage: Get<u32>;
+
+		/// XCM sender used to tell [`Config::GameChainLocation`] which trees to delete.
+		type XcmRouter: SendXcm;
+
+		/// Where the game pallet runs, and where the deletions go.
+		/// [`Config::EnsureGameChainOrigin`] authenticates the same chain, so both must name it.
+		type GameChainLocation: Get<Location>;
+
+		/// Pallet index of indiv-pallet-nft-credits on [`Config::GameChainLocation`], used to
+		/// encode the `Transact` the deletions are delivered in.
+		#[pallet::constant]
+		type GameChainPalletIndex: Get<u8>;
 
 		/// Maximum number of credit trees accepted in one batch.
 		///
@@ -223,7 +368,7 @@ pub mod pallet {
 			Success = AccountOrPerson<Self::AccountId>,
 		>;
 
-		/// The NFTs a claim mints, which is `pallet-scarcity`.
+		/// The NFTs a claim mints, which is `indiv-pallet-scarcity`.
 		///
 		/// Minting is deposit-free: the credit is what bounds the state a claim creates, since a
 		/// credit is awarded once by the game chain and this pallet spends it once. The inspect
@@ -234,28 +379,46 @@ pub mod pallet {
 		/// Executes a registered [`ItemSelection::Contract`] minter as the current collection
 		/// owner.
 		///
-		/// Every claim reserves `max_weight` and refunds it down to what the selection really
-		/// consumed, whether the claim succeeds or fails. The runtime also limits the storage
-		/// deposit the owner can pay for one call.
+		/// A claim reserves the collection's `max_weight`, zero unless a contract is registered,
+		/// and refunds it down to what the selection consumed, on success and on failure. The
+		/// runtime also limits the storage deposit the owner pays for one call.
 		type CollectionSelector: CollectionSelector<Self::AccountId>;
 
 		/// Maximum number of sibling hashes an inclusion proof may carry.
 		///
-		/// A tree of `n` leaves needs `ceil(log2(n))` of them, so this must cover the game
-		/// chain's `MaxCreditsPerBlock`: a lower bound leaves the tail of a large tree unclaimable.
+		/// A tree of `n` leaves needs `ceil(log2(n))` of them, so this must cover the leaves the
+		/// game chain puts in one tree: a lower bound leaves the tail of a large tree unclaimable.
 		#[pallet::constant]
 		type MaxProofNodes: Get<u32>;
+
+		/// The most credits one tree commits to, which is the game chain's `AWARDS_PER_TREE`.
+		///
+		/// [`ClaimedLeaves`] holds one bit per leaf, so this sizes that bitmap. A tree committing
+		/// to more leaves is not stored, because the leaves past the bitmap could be claimed
+		/// twice. Set it to the game chain's own bound, which a lower value makes large trees
+		/// undeliverable.
+		#[pallet::constant]
+		type MaxCreditsPerTree: Get<u32>;
 
 		/// Setup the claim benchmark needs from the NFT backend.
 		#[cfg(feature = "runtime-benchmarks")]
 		type BenchmarkHelper: BenchmarkHelper<Self::AccountId>;
 	}
 
+	/// The calls of indiv-pallet-nft-credits that this pallet dispatches over XCM.
+	///
+	/// The variant's index and its field order must mirror the dispatchable on the game chain.
+	#[derive(Encode)]
+	pub(crate) enum NftCreditsCall<T: Config> {
+		#[codec(index = 20)]
+		ReceiveTreeDeletions { blocks: BoundedVec<CreditTreeBlock, T::MaxTreeDeletionsPerMessage> },
+	}
+
 	/// The Merkle commitment to the NFT claim credits awarded in one People-chain block, keyed
 	/// by that block.
 	#[pallet::storage]
 	pub type CreditTrees<T: Config> =
-		StorageMap<_, Twox64Concat, AwardBlock, NftClaimCreditTree, OptionQuery>;
+		StorageMap<_, Twox64Concat, CreditTreeBlock, NftClaimCreditTree, OptionQuery>;
 
 	/// The sequence number of the next tree expected from the game pallet's live stream.
 	///
@@ -263,24 +426,29 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type NextExpectedSequence<T: Config> = StorageValue<_, TreeSequence, ValueQuery>;
 
-	/// The leaves of an award block's tree that have been claimed.
-	/// A leaf commits to one claimant holding one credit, so it identifies the claim on its own.
-	/// Entries are kept for good: dropping one would let that credit mint a second NFT.
+	/// The byte length of one tree block's [`ClaimedLeaves`] bitmap, one bit per leaf.
+	pub struct ClaimedLeafBytes<T>(core::marker::PhantomData<T>);
+
+	impl<T: Config> Get<u32> for ClaimedLeafBytes<T> {
+		fn get() -> u32 {
+			T::MaxCreditsPerTree::get().div_ceil(8)
+		}
+	}
+
+	/// Which of a tree block's leaves have been claimed, bit `leaf_index` per leaf, least
+	/// significant bit first.
+	///
+	/// A proof binds a leaf to its index, so the index names the claim as the leaf itself does.
+	/// The bitmap outlives the tree, because a replay on the game chain can deliver the tree again
+	/// until its deadline; the sweep of the block's expiry entry is what removes it.
 	#[pallet::storage]
-	pub type ClaimedCredits<T: Config> = StorageDoubleMap<
+	pub type ClaimedLeaves<T: Config> = StorageMap<
 		_,
 		Twox64Concat,
-		AwardBlock,
-		Identity,
-		NftClaimCreditLeaf,
-		(),
-		OptionQuery,
+		CreditTreeBlock,
+		BoundedVec<u8, ClaimedLeafBytes<T>>,
+		ValueQuery,
 	>;
-
-	/// How many of an award block's leaves have been claimed.
-	/// Against the tree's `leaf_count`, this tells whether anything is left to claim.
-	#[pallet::storage]
-	pub type ClaimedCounts<T: Config> = StorageMap<_, Twox64Concat, AwardBlock, u32, ValueQuery>;
 
 	/// The collections whose owners accept claims, each bound to the registering owner and the
 	/// [`ItemSelection`] deciding the item. A collection with no entry cannot be claimed into.
@@ -288,13 +456,40 @@ pub mod pallet {
 	pub type CollectionMinters<T: Config> =
 		StorageMap<_, Twox64Concat, CollectionId, CollectionMinter<T::AccountId>, OptionQuery>;
 
+	/// Every tree block a sweep still has to reach, filed under the timestamp its tree commits to.
+	///
+	/// The key is hashed with `Identity` and encoded big-endian, so the map iterates from the
+	/// oldest deadline to the newest, which [`CreditTrees`] does not. A sweep takes the trees that
+	/// are due and stops at the first that is not. Only a sweep removes an entry. A fully claimed
+	/// tree leaves its entry behind, and the sweep of that entry removes its bitmap.
+	#[pallet::storage]
+	pub type TreeExpiries<T: Config> = StorageDoubleMap<
+		_,
+		Identity,
+		ExpiryTimestamp,
+		Twox64Concat,
+		CreditTreeBlock,
+		(),
+		OptionQuery,
+	>;
+
+	/// The tree blocks whose deletion the game chain has not been told about yet, in the order
+	/// this chain removed them.
+	///
+	/// Both removal paths add to it, and [`Pallet::send_tree_deletions`] drains it from the front.
+	/// A block that does not fit is dropped, because the deletion only saves the game chain from
+	/// waiting out its own TTL; that TTL is what removes its copy.
+	#[pallet::storage]
+	pub type PendingTreeDeletions<T: Config> =
+		StorageValue<_, BoundedVec<CreditTreeBlock, T::MaxQueuedTreeDeletions>, ValueQuery>;
+
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
 		/// Credit trees were received and stored.
 		CreditTreesReceived { count: u32, stored: u32 },
 		/// Trees of the live stream never arrived. The game pallet's `CreditTreesSent` events
-		/// resolve these sequences to the award blocks they were delivered under, and a
+		/// resolve these sequences to the tree blocks they were delivered under, and a
 		/// `replay_credit_trees` naming those blocks recovers the trees.
 		///
 		/// A sequence that resolves to no block is one the game pallet spent on a tree it had
@@ -302,30 +497,57 @@ pub mod pallet {
 		CreditTreesMissing { from_sequence: TreeSequence, to_sequence: TreeSequence },
 		/// A tree was received for a block that already holds a different root. The stored
 		/// root is kept, so the proofs built against it stay valid.
-		CreditTreeConflict { block: AwardBlock },
-		/// A credit awarded in `block` was claimed, minting `instance` of `collection`'s `item`
+		CreditTreeConflict { block: CreditTreeBlock },
+		/// A tree with a zero root or no leaves was received for `block` and not stored. Its
+		/// sequence stays unconsumed, so the gap check reports it and a replay can deliver the
+		/// genuine tree.
+		CreditTreeRejected { block: CreditTreeBlock },
+		/// A credit `block` committed was claimed, minting `instance` of `collection`'s `item`
 		/// to the purse key `owner`.
 		CreditClaimed {
-			block: AwardBlock,
+			block: CreditTreeBlock,
 			leaf: NftClaimCreditLeaf,
 			collection: CollectionId,
 			item: ItemIndex,
 			owner: T::AccountId,
 			instance: InstanceId,
 		},
-		/// Every credit committed to by `block`'s tree has now been claimed.
-		TreeFullyClaimed { block: AwardBlock },
+		/// Every credit committed to by `block`'s tree has been claimed. This chain removed the
+		/// tree and queued its deletion for the game chain.
+		TreeFullyClaimed { block: CreditTreeBlock },
 		/// `collection`'s owner registered it for claims with `selection`, or withdrew it with
 		/// `None`.
 		CollectionMinterSet { collection: CollectionId, selection: Option<ItemSelection> },
+		/// `count` trees outlived [`Config::TreeTtl`], and this chain removed them with credits
+		/// left unclaimed. Nothing can mint those credits again, on this chain or any other.
+		///
+		/// The blocks are not named here. The same trees travel in a deletion message, and the
+		/// [`Event::TreeDeletionsSent`] carrying them names every one.
+		CreditTreesExpired { count: u32 },
+		/// A tree arrived for `block` past its deadline, so this chain did not store it. Its
+		/// credits were already unmintable when the delivery arrived.
+		CreditTreeStale { block: CreditTreeBlock },
+		/// Tree blocks whose deletion was handed to the XCM router for the game chain.
+		TreeDeletionsSent { blocks: BoundedVec<CreditTreeBlock, T::MaxTreeDeletionsPerMessage> },
+		/// Delivery of the deletions to the game chain failed. The blocks stay queued, and the
+		/// next offchain worker cycle retries them.
+		TreeDeletionSendFailed,
+		/// [`PendingTreeDeletions`] is full, so this chain dropped the deletions of `blocks`.
+		/// Delivery has failed for [`Config::MaxQueuedTreeDeletions`] trees. The game chain
+		/// removes its own copies when its TTL runs out.
+		TreeDeletionsDropped { blocks: BoundedVec<CreditTreeBlock, T::MaxTreeDeletionsPerMessage> },
+		/// A tree arrived for `block` committing to more leaves than
+		/// [`Config::MaxCreditsPerTree`], so this chain did not store it. None of its
+		/// credits can be claimed here until that bound covers the game chain's own.
+		CreditTreeOversized { block: CreditTreeBlock },
 	}
 
 	#[pallet::error]
 	pub enum Error<T> {
-		/// No tree is held for the award block, so nothing can be proven against it. The tree may
+		/// No tree is held for the block, so nothing can be proven against it. The tree may
 		/// still be on its way, or have been lost, in which case a `replay_credit_trees` on the
 		/// game pallet delivers it.
-		UnknownAwardBlock,
+		UnknownCreditTree,
 		/// The leaf index is not one of the tree's leaves.
 		LeafIndexOutOfBounds,
 		/// The credit has already been claimed and mints one NFT only.
@@ -341,10 +563,40 @@ pub mod pallet {
 		/// it.
 		CollectionNotRegistered,
 		/// The collection has changed owners since registration, so its current owner must
-		/// register it again.
+		/// register it again. Only a runtime that leaves
+		/// [`indiv_pallet_scarcity::Config::OnCollectionOwnerChanged`] unwired reaches this.
 		CollectionOwnerChanged,
-		/// The collection has no item definitions for [`ItemSelection::Random`] to draw from.
+		/// The collection has no live item definitions for [`ItemSelection::Random`] to draw
+		/// from, either because none were defined or because all were deleted.
 		NoItems,
+		/// The registered minter contract reverted instead of selecting an item.
+		MinterContractReverted,
+		/// The registered minter contract returned data that is not one canonical `uint32`
+		/// item index.
+		MinterContractInvalidReturn,
+		/// The address given for a minter registration holds no contract code.
+		MinterNotAContract,
+		/// The selected item has no definition in the collection, so the mint would reject it.
+		/// An [`ItemSelection::Random`] draw reaches this by landing on a deleted index, which
+		/// stays inside the draw range, and a contract selection by naming such an index.
+		UnknownItem,
+	}
+
+	/// Why an offchain worker's submission was rejected, reported to the caller as
+	/// `InvalidTransaction::Custom`.
+	pub enum AuthorizeInvalidity {
+		/// Transaction source is not local or in block.
+		TransactionNotLocal = 210,
+		/// No tree is filed for expiry, so there is nothing to sweep.
+		NothingToSweep = 211,
+		/// No tree deletion is waiting to be sent to the game chain.
+		NoQueuedTreeDeletions = 212,
+	}
+
+	impl From<AuthorizeInvalidity> for TransactionValidityError {
+		fn from(e: AuthorizeInvalidity) -> Self {
+			InvalidTransaction::Custom(e as u8).into()
+		}
 	}
 
 	#[pallet::call(weight = <T as Config>::WeightInfo)]
@@ -353,6 +605,9 @@ pub mod pallet {
 		///
 		/// ## Origin
 		/// Requires the game chain's XCM origin (`EnsureGameChainOrigin`).
+		///
+		/// This does not store a tree past its deadline, nor one for a block whose tree it holds
+		/// already.
 		///
 		/// ## Parameters
 		/// - `batch`: The credit trees to store, in ascending block order.
@@ -366,6 +621,10 @@ pub mod pallet {
 
 			let count = batch.trees.len() as u32;
 			let mut stored = 0u32;
+			let now = T::UnixTime::now().as_secs();
+			// Sequences of the deliveries the loop accepts. A rejected delivery stays out, so
+			// its sequence is unconsumed and the gap check reports it.
+			let mut accepted = Vec::new();
 
 			for update in batch.trees.iter() {
 				if update.tree.leaf_count == 0 || update.tree.root.0 == [0u8; 32] {
@@ -379,13 +638,40 @@ pub mod pallet {
 						update.tree.root,
 						update.tree.leaf_count,
 					);
+					Self::deposit_event(Event::CreditTreeRejected { block: update.block });
 					continue;
 				}
+
+				if update.tree.leaf_count > T::MaxCreditsPerTree::get() {
+					// `ClaimedLeaves` holds one bit per leaf up to this bound, so the leaves past
+					// it could never be spent and would mint again and again. The bound is the
+					// game chain's own, so a tree over it means the two runtimes disagree.
+					log::error!(
+						target: LOG_TARGET,
+						"Oversized credit tree for block {}: {} leaves against a bound of {}",
+						update.block,
+						update.tree.leaf_count,
+						T::MaxCreditsPerTree::get(),
+					);
+					Self::deposit_event(Event::CreditTreeOversized { block: update.block });
+					continue;
+				}
+
+				// Drop a tree past its deadline instead of storing it for a later sweep. The game
+				// chain holds its root for longer than this chain holds the tree, and anyone
+				// can call `replay_credit_trees` there, so storing it makes its credits
+				// mintable again until the sweep reaches them.
+				if Self::tree_has_expired(update.tree.timestamp, now) {
+					Self::deposit_event(Event::CreditTreeStale { block: update.block });
+					continue;
+				}
+
 				if let Some(existing) = CreditTrees::<T>::get(update.block) {
 					if existing != update.tree {
 						// A block's credits are committed once and the root never changes
 						// afterwards, so two roots for one block mean the chains disagree about
-						// what that block awarded.
+						// what that block awarded. The delivery is not accepted, so its
+						// sequence goes to the gap check.
 						log::error!(
 							target: LOG_TARGET,
 							"Conflicting credit tree for block {}: kept {:?}, ignored {:?}",
@@ -394,21 +680,26 @@ pub mod pallet {
 							update.tree.root,
 						);
 						Self::deposit_event(Event::CreditTreeConflict { block: update.block });
+						continue;
 					}
 				} else {
 					CreditTrees::<T>::insert(update.block, update.tree);
+					Self::note_tree_expiry(update.block, update.tree.timestamp);
 					stored = stored.saturating_add(1);
+				}
+				if let Some(sequence) = update.sequence {
+					accepted.push(sequence);
 				}
 			}
 
-			Self::note_sequences(&batch);
+			Self::note_sequences(accepted);
 
 			Self::deposit_event(Event::CreditTreesReceived { count, stored });
 
 			Ok(())
 		}
 
-		/// Mints the NFT of one NFT claim credit the game chain awarded in `block`.
+		/// Mints the NFT of one NFT claim credit the game chain committed in `block`'s tree.
 		///
 		/// The credit is spent by the claim: its leaf is recorded, and a second claim of the same
 		/// credit fails, whoever submits it.
@@ -420,8 +711,8 @@ pub mod pallet {
 		/// - `claimant`: Which of the signer's identities the credit was awarded to. A person
 		///   claims as [`ClaimantKind::Person`], which resolves to the alias their account is bound
 		///   to.
-		/// - `block`: The People-chain block the credit was awarded in, which names the tree the
-		///   proof is verified against.
+		/// - `block`: The People-chain block whose tree committed the credit, which is the tree the
+		///   proof is verified against. It is at or after the block the credit was earned in.
 		/// - `credit`: The credit being claimed. Hashed together with the origin's identity into
 		///   the leaf, so a credit of somebody else's rehashes to a leaf that is in no tree.
 		/// - `leaf_index`: The position of that leaf in the block's leaves, in award order.
@@ -433,39 +724,53 @@ pub mod pallet {
 		/// - `mint_to`: The Scarcity purse key the NFT is minted to. A purse key holds one NFT, so
 		///   this has to be an empty one, and holders are meant to use a fresh key they control
 		///   rather than an account that already holds something.
+		///
+		/// The claim that spends the tree's last credit also removes the tree and queues its
+		/// deletion for the game chain, and the call is charged for that. The claims that came
+		/// before decide which claim that is, not the call's arguments, so a claim that leaves
+		/// credits behind is refunded down to a plain claim of the kind the call names. A
+		/// contract-registered collection also reserves [`CollectionSelector::max_weight`],
+		/// refunded down to what the selection consumed, including on the error path.
 		#[pallet::call_index(1)]
 		// Resolving a person claimant reads the signer's alias binding, which an account
-		// claimant does not, so the kind the call names picks the weight.
+		// claimant does not, so the kind the call names picks the weight. Only a
+		// contract-registered collection reserves the selector ceiling.
 		#[pallet::weight(
 			match claimant {
-				ClaimantKind::Account => T::WeightInfo::claim_account(proof.len() as u32),
-				ClaimantKind::Person => T::WeightInfo::claim_person(proof.len() as u32),
+				ClaimantKind::Account => T::WeightInfo::claim_last_account(proof.len() as u32),
+				ClaimantKind::Person => T::WeightInfo::claim_last_person(proof.len() as u32),
 			}
-			.saturating_add(T::CollectionSelector::max_weight())
-			.saturating_add(T::Nfts::mint_hook_weight())
+			.saturating_add(T::CollectionSelector::max_weight(*collection))
+			.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS))
 		)]
 		pub fn claim(
 			origin: OriginFor<T>,
 			claimant: ClaimantKind,
-			block: AwardBlock,
+			block: CreditTreeBlock,
 			credit: NftClaimCredit,
 			leaf_index: u32,
 			proof: BoundedVec<CreditProofNode, T::MaxProofNodes>,
 			collection: CollectionId,
 			mint_to: T::AccountId,
 		) -> DispatchResultWithPostInfo {
-			// Every failure carries `actual_weight` so the selector ceiling is refunded on the
-			// error path too: a failed claim charges the claim's own weight plus what a failed
-			// contract selection really consumed, not the whole reservation.
-			let base = match claimant {
-				ClaimantKind::Account => T::WeightInfo::claim_account(proof.len() as u32),
-				ClaimantKind::Person => T::WeightInfo::claim_person(proof.len() as u32),
+			// Every failure carries `actual_weight`, which refunds the selector ceiling and the
+			// tree removal on the error path. A failed claim charges a plain claim's weight plus
+			// what the failed contract selection consumed, not the whole reservation.
+			let (base, base_last) = match claimant {
+				ClaimantKind::Account => (
+					T::WeightInfo::claim_account(proof.len() as u32),
+					T::WeightInfo::claim_last_account(proof.len() as u32),
+				),
+				ClaimantKind::Person => (
+					T::WeightInfo::claim_person(proof.len() as u32),
+					T::WeightInfo::claim_last_person(proof.len() as u32),
+				),
 			};
 			let claimant = T::EnsureClaimant::ensure_origin(origin, &claimant)
 				.map_err(|e| e.with_weight(base))?;
 
 			let tree = CreditTrees::<T>::get(block)
-				.ok_or(Error::<T>::UnknownAwardBlock.with_weight(base))?;
+				.ok_or(Error::<T>::UnknownCreditTree.with_weight(base))?;
 			ensure!(
 				leaf_index < tree.leaf_count,
 				Error::<T>::LeafIndexOutOfBounds.with_weight(base)
@@ -473,7 +778,7 @@ pub mod pallet {
 
 			let leaf = credit_leaf(&claimant, &credit);
 			ensure!(
-				!ClaimedCredits::<T>::contains_key(block, leaf),
+				!Self::leaf_is_claimed(&ClaimedLeaves::<T>::get(block), leaf_index),
 				Error::<T>::AlreadyClaimed.with_weight(base)
 			);
 
@@ -493,25 +798,30 @@ pub mod pallet {
 
 			// Spent before the selection so that a minter contract reentering with the same
 			// credit fails `AlreadyClaimed`. A failure anywhere below unwinds the whole
-			// dispatch, the entry included.
-			ClaimedCredits::<T>::insert(block, leaf, ());
+			// dispatch, the bit included.
+			Self::spend_leaf(block, leaf_index, tree.leaf_count)
+				.map_err(|()| Error::<T>::LeafIndexOutOfBounds.with_weight(base))?;
 
+			// Every exit below clamps to this, so a selector that reports more than its ceiling
+			// cannot charge past what was reserved. Read before the selection runs, since a
+			// reentrant minter could change the registration underneath it.
+			let reservation = T::CollectionSelector::max_weight(collection);
 			let selection = Self::select_item(collection, credit).map_err(|error| {
 				let error = error.into_claim_error::<T>();
-				error.error.with_weight(base.saturating_add(error.weight_consumed))
+				error
+					.error
+					.with_weight(base.saturating_add(error.weight_consumed.min(reservation)))
 			})?;
-			let SelectedItem { item, weight_consumed: selection_weight, .. } = selection;
+			let SelectedItem { item, weight_consumed, .. } = selection;
+			let selection_weight = weight_consumed.min(reservation);
 			let instance =
 				T::Nfts::mint_without_deposit(collection, item, mint_to.clone(), Vec::new())
 					.map_err(|e| e.with_weight(base.saturating_add(selection_weight)))?;
 
 			// Counted after the selection: a contract may reenter with another credit of the
-			// same block, and counting around its execution from a stale snapshot would drop
-			// that claim's increment.
-			let claimed = ClaimedCounts::<T>::mutate(block, |claimed| {
-				*claimed = claimed.saturating_add(1);
-				*claimed
-			});
+			// same block, and counting from a snapshot taken before it would drop that claim's
+			// bit.
+			let claimed = Self::claimed_leaf_count(&ClaimedLeaves::<T>::get(block));
 
 			Self::deposit_event(Event::CreditClaimed {
 				block,
@@ -521,15 +831,28 @@ pub mod pallet {
 				owner: mint_to,
 				instance,
 			});
-			if claimed == tree.leaf_count {
-				Self::deposit_event(Event::TreeFullyClaimed { block });
+
+			// Both success paths run the mint and its runtime hooks, so both pay for them. Every
+			// failure above returns before the mint.
+			if claimed < tree.leaf_count {
+				return Ok(Some(
+					base.saturating_add(selection_weight)
+						.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS)),
+				)
+				.into());
 			}
 
-			// The mint ran, so its runtime hooks did too. Only this path pays for them: every
-			// failure above returns before the mint.
+			// No proof can be built against a fully claimed tree again, so remove it and tell the
+			// game chain to drop its root. The spent leaves stay, because a replay there can
+			// deliver the tree again before the deletion arrives, and only those leaves keep its
+			// credits spent.
+			Self::remove_tree(block);
+			Self::deposit_event(Event::TreeFullyClaimed { block });
+
 			Ok(Some(
-				base.saturating_add(selection_weight)
-					.saturating_add(T::Nfts::mint_hook_weight()),
+				base_last
+					.saturating_add(selection_weight)
+					.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS)),
 			)
 			.into())
 		}
@@ -539,11 +862,15 @@ pub mod pallet {
 		///
 		/// Registration is the owner's opt-in to deposit-free supply growth: without it no claim
 		/// can mint into the collection. Withdrawing stops further claims and spends nothing
-		/// already claimed. Deleting the collection clears its registration through
-		/// [`pallet_scarcity::OnCollectionDeleted`], so an unknown collection can be neither
-		/// registered nor withdrawn. A contract selection is validated through
-		/// [`CollectionSelector::validate`], so an address with no code fails here rather than on
-		/// the first claim.
+		/// already claimed. Deleting the collection or handing it to a new owner clears its
+		/// registration through [`indiv_pallet_scarcity::OnCollectionDeleted`] and
+		/// [`indiv_pallet_scarcity::OnCollectionOwnerChanged`], so a new owner has to register
+		/// again. A contract selection is validated through [`CollectionSelector::validate`], so
+		/// an address with no code fails here rather than on the first claim.
+		///
+		/// Registering a contract selection commits the owner's funds: the owner pays the
+		/// storage deposit of every minter call, up to the runtime's per-call limit. The
+		/// claimant pays for the contract's execution, on failure too.
 		///
 		/// ## Origin
 		/// The collection's Scarcity owner.
@@ -576,6 +903,60 @@ pub mod pallet {
 			Self::deposit_event(Event::CollectionMinterSet { collection, selection });
 			Ok(())
 		}
+
+		/// Removes the trees whose deadline has passed, oldest first, and queues their deletion
+		/// for the game chain.
+		///
+		/// This pallet's offchain worker submits this authorized call. It is accepted from a local
+		/// or in-block source only, so no external submission reaches it.
+		///
+		/// `oldest` must be the timestamp [`TreeExpiries`] holds its oldest entry under, which
+		/// makes a retry that raced a successful sweep stale instead of a second pass. One call
+		/// removes at most [`Config::MaxTreeDeletionsPerMessage`] trees, so clearing more trees
+		/// than that takes several blocks.
+		#[pallet::call_index(3)]
+		#[pallet::authorize(|source, oldest, _discriminator| {
+			Self::authorize_sweep_expired_trees(source, oldest)
+		})]
+		#[pallet::weight(T::WeightInfo::sweep_expired_trees(T::MaxTreeDeletionsPerMessage::get()))]
+		#[pallet::weight_of_authorize(T::WeightInfo::authorize_sweep_expired_trees())]
+		pub fn sweep_expired_trees(
+			origin: OriginFor<T>,
+			_oldest: u32,
+			// The submitting block, which gives each block's sweep a transaction hash of its own.
+			// See `Pallet::submit_expiry_sweep`.
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+
+			Ok(Self::do_sweep_expired_trees())
+		}
+
+		/// Tells the game chain about the queued tree deletions that fit one XCM message.
+		///
+		/// This pallet's offchain worker submits this authorized call. It is accepted from a local
+		/// or in-block source only, so no external submission reaches it.
+		///
+		/// `front` must be the block at the front of [`PendingTreeDeletions`], which a successful
+		/// send replaces. A retry that raced that send is stale instead of a second send. The next
+		/// batch's send names a new front, so it carries a transaction hash of its own.
+		#[pallet::call_index(4)]
+		#[pallet::authorize(|source, front, _discriminator| {
+			Self::authorize_send_tree_deletions(source, front)
+		})]
+		#[pallet::weight(T::WeightInfo::send_tree_deletions(T::MaxTreeDeletionsPerMessage::get()))]
+		#[pallet::weight_of_authorize(T::WeightInfo::authorize_send_tree_deletions())]
+		pub fn send_tree_deletions(
+			origin: OriginFor<T>,
+			_front: CreditTreeBlock,
+			// Per-window discriminator. A stalled retry of one front gets a fresh transaction
+			// hash once the window changes. See `indiv_support::offchain`.
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+
+			Ok(Self::do_send_tree_deletions())
+		}
 	}
 
 	#[pallet::hooks]
@@ -587,26 +968,84 @@ pub mod pallet {
 				"MaxTreesPerMessage must be greater than zero"
 			);
 
-			// A full batch arrives in an XCM `Transact` and is dispatched as one extrinsic, so a
-			// worst case above the block's per-extrinsic limit can never execute: the message
-			// fails and every tree in it is lost until it is replayed. The budget is the same
-			// half of `Normal.max_extrinsic` the game pallet holds its sending side to, which
-			// keeps the two ends of the delivery on one yardstick.
-			OcwWeightBudget::from_normal_max::<T>().assert_fits(
+			// `ClaimedLeaves` sizes its bitmap from this, and the benchmarked trees take its
+			// base-two logarithm.
+			let max_credits = T::MaxCreditsPerTree::get();
+			assert!(max_credits > 0, "MaxCreditsPerTree must be greater than zero");
+
+			// A tree of `max_credits` leaves needs this many sibling hashes. A lower bound leaves
+			// the tail of a full tree unclaimable, because its proof does not decode.
+			let max_proof_nodes = max_credits.next_power_of_two().ilog2();
+			assert!(
+				T::MaxProofNodes::get() >= max_proof_nodes,
+				"MaxProofNodes ({}) is below the {max_proof_nodes} sibling hashes a tree of \
+				 {max_credits} leaves needs",
+				T::MaxProofNodes::get(),
+			);
+
+			// An XCM `Transact` or the transaction pool dispatches every call below. A worst case
+			// above the block's per-extrinsic limit never executes: a batch fails and loses
+			// every tree in it until a replay, and the pool drops a sweep or a send. The budget
+			// is the half of `Normal.max_extrinsic` the game pallet holds its sending side to,
+			// so both ends of the delivery use one yardstick.
+			let budget = OcwWeightBudget::from_normal_max::<T>();
+			budget.assert_fits(
 				"receive_credit_trees",
 				T::WeightInfo::receive_credit_trees(T::MaxTreesPerMessage::get()),
 			);
 
-			// A claim reserves the selector's ceiling on top of its own worst case whether the
-			// collection uses a contract or not, so an unsubmittable worst case would make every
-			// claim unsubmittable, not just contract-selected ones.
-			OcwWeightBudget::from_normal_max::<T>().assert_fits(
+			// A claim into a contract-registered collection reserves the contract ceiling on top
+			// of its own worst case, so a ceiling over the budget makes every such claim
+			// unsubmittable.
+			budget.assert_fits(
 				"claim",
-				T::WeightInfo::claim_account(T::MaxProofNodes::get())
-					.max(T::WeightInfo::claim_person(T::MaxProofNodes::get()))
-					.saturating_add(T::CollectionSelector::max_weight())
-					.saturating_add(T::Nfts::mint_hook_weight()),
+				T::WeightInfo::claim_last_account(T::MaxProofNodes::get())
+					.max(T::WeightInfo::claim_last_person(T::MaxProofNodes::get()))
+					.saturating_add(T::CollectionSelector::contract_max_weight())
+					.saturating_add(T::Nfts::mint_hook_weight(CLAIM_METADATA_PAIRS)),
 			);
+
+			let max_deletions_per_message = T::MaxTreeDeletionsPerMessage::get();
+			budget.assert_fits(
+				"sweep_expired_trees",
+				T::WeightInfo::sweep_expired_trees(max_deletions_per_message)
+					.saturating_add(T::WeightInfo::authorize_sweep_expired_trees()),
+			);
+			budget.assert_fits(
+				"send_tree_deletions",
+				T::WeightInfo::send_tree_deletions(max_deletions_per_message)
+					.saturating_add(T::WeightInfo::authorize_send_tree_deletions()),
+			);
+
+			assert!(
+				max_deletions_per_message > 0,
+				"MaxTreeDeletionsPerMessage must be greater than zero"
+			);
+			// A sweep removes a message's worth of trees and queues one deletion for each. A
+			// narrower queue drops deletions of that sweep's own, and the game chain then waits
+			// out its own TTL for trees this chain has already removed.
+			assert!(
+				max_deletions_per_message <= T::MaxQueuedTreeDeletions::get(),
+				"MaxTreeDeletionsPerMessage ({max_deletions_per_message}) exceeds \
+				 MaxQueuedTreeDeletions ({queue}), so one sweep can drop its own deletions",
+				queue = T::MaxQueuedTreeDeletions::get(),
+			);
+
+			// The deletion message has to fit the channel to the game chain. That channel's real
+			// per-message room comes from the relay chain's configuration, which is unknown at
+			// build time, so the check uses a size no channel between system parachains sits
+			// below.
+			let message = Self::tree_deletion_message_size(max_deletions_per_message);
+			assert!(
+				message <= MIN_CHANNEL_MESSAGE_SIZE,
+				"a full deletion message is {message} bytes, more than the {MIN_CHANNEL_MESSAGE_SIZE} \
+				 bytes a channel is assumed to carry, so `MaxTreeDeletionsPerMessage` is too high",
+			);
+		}
+
+		fn offchain_worker(block_number: BlockNumberFor<T>) {
+			Self::submit_expiry_sweep(block_number);
+			Self::submit_tree_deletions(block_number);
 		}
 
 		#[cfg(feature = "try-runtime")]
@@ -617,47 +1056,60 @@ pub mod pallet {
 
 	#[cfg(any(test, feature = "try-runtime"))]
 	impl<T: Config> Pallet<T> {
-		/// Check that the pallet's records agree with each other and with Scarcity: every
-		/// claimed leaf belongs to a held tree, each block's claimed count matches its claimed
-		/// leaves and never exceeds its tree's leaf count, and no registration outlives the
+		/// Check that the pallet's records agree with each other and with Scarcity: a block whose
+		/// tree is still held has no more claimed leaves than the tree has leaves, every held tree
+		/// and every claimed-leaf bitmap is filed for expiry, and no registration outlives the
 		/// collection it names.
+		///
+		/// A bitmap outlives the tree it belongs to. A block with claimed leaves and no tree is
+		/// therefore the state a fully claimed tree leaves behind, not an inconsistency, and its
+		/// expiry entry is what gets the bitmap removed at the deadline.
 		pub(crate) fn do_try_state() -> Result<(), sp_runtime::TryRuntimeError> {
-			use alloc::collections::BTreeMap;
+			use alloc::collections::BTreeSet;
 			use sp_runtime::TryRuntimeError;
 
-			let mut counted = BTreeMap::<AwardBlock, u32>::new();
-			for (block, _leaf, ()) in ClaimedCredits::<T>::iter() {
-				if !CreditTrees::<T>::contains_key(block) {
-					return Err(TryRuntimeError::Other("claimed credit has no tree"));
+			let filed =
+				TreeExpiries::<T>::iter().map(|(_, block, ())| block).collect::<BTreeSet<_>>();
+			for (block, bitmap) in ClaimedLeaves::<T>::iter() {
+				if let Some(tree) = CreditTrees::<T>::get(block) {
+					if Self::claimed_leaf_count(&bitmap) > tree.leaf_count {
+						return Err(TryRuntimeError::Other(
+							"a block has more claimed leaves than its tree has leaves",
+						));
+					}
 				}
-				let count = counted.entry(block).or_default();
-				*count = count
-					.checked_add(1)
-					.ok_or(TryRuntimeError::Other("claimed leaf count overflowed"))?;
+				// Only a sweep of an expiry entry removes a bitmap, so a bitmap with no entry is
+				// never removed.
+				if !filed.contains(&block) {
+					return Err(TryRuntimeError::Other("claimed leaves have no expiry entry"));
+				}
 			}
 
-			let stored = ClaimedCounts::<T>::iter().collect::<BTreeMap<_, _>>();
-			if stored != counted {
-				return Err(TryRuntimeError::Other(
-					"claimed counts do not match the claimed leaves",
-				));
+			// A held tree is filed under the timestamp it commits to, which is where a sweep
+			// finds it. The other direction does not hold: a fully claimed tree leaves its entry
+			// behind for its bitmap.
+			for (timestamp, block, ()) in TreeExpiries::<T>::iter() {
+				if let Some(tree) = CreditTrees::<T>::get(block) {
+					if tree.timestamp != timestamp.0 {
+						return Err(TryRuntimeError::Other(
+							"tree is filed under the wrong timestamp",
+						));
+					}
+				}
 			}
-			for (block, count) in &stored {
-				let tree = CreditTrees::<T>::get(block)
-					.ok_or(TryRuntimeError::Other("claimed count has no tree"))?;
-				if *count > tree.leaf_count {
-					return Err(TryRuntimeError::Other(
-						"a block has more claims than its tree has leaves",
-					));
+			for (block, tree) in CreditTrees::<T>::iter() {
+				if !TreeExpiries::<T>::contains_key(ExpiryTimestamp::from(tree.timestamp), block) {
+					return Err(TryRuntimeError::Other("held tree has no expiry entry"));
 				}
 			}
 
 			// Registration requires a live collection and deletion clears it through
-			// `pallet_scarcity::OnCollectionDeleted`, so an entry naming a collection that no
+			// `indiv_pallet_scarcity::OnCollectionDeleted`, so an entry naming a collection that no
 			// longer exists means the runtime did not wire that hook to `ClearCollectionMinter`.
-			// The registered owner is deliberately not compared against the current one: an
-			// ownership handover leaves the registration stale on purpose, and claims reject it.
-			for (collection, _) in CollectionMinters::<T>::iter() {
+			// The registered owner is deliberately not compared against the current one: a
+			// runtime that leaves `OnCollectionOwnerChanged` unwired keeps a stale registration
+			// after a handover, which claims reject.
+			for collection in CollectionMinters::<T>::iter_keys() {
 				if T::Nfts::collection_owner(collection).is_none() {
 					return Err(TryRuntimeError::Other(
 						"a collection minter registration outlived its collection",
@@ -679,6 +1131,12 @@ pub mod pallet {
 		UnknownCollection,
 		CollectionOwnerChanged,
 		NoItems,
+		/// The selection named an index with no item definition. Carries the weight the
+		/// selection consumed, which a contract selection charges even though its item is gone.
+		UnknownItem {
+			item: ItemIndex,
+			weight_consumed: Weight,
+		},
 		Contract(SelectionError),
 	}
 
@@ -689,6 +1147,8 @@ pub mod pallet {
 				Self::UnknownCollection => Error::<T>::UnknownCollection.into(),
 				Self::CollectionOwnerChanged => Error::<T>::CollectionOwnerChanged.into(),
 				Self::NoItems => Error::<T>::NoItems.into(),
+				Self::UnknownItem { weight_consumed, .. } =>
+					return SelectionError { error: Error::<T>::UnknownItem.into(), weight_consumed },
 				Self::Contract(error) => return error,
 			};
 			SelectionError { error, weight_consumed: Weight::zero() }
@@ -702,6 +1162,7 @@ pub mod pallet {
 				Self::UnknownCollection => PreviewFailure::UnknownCollection,
 				Self::CollectionOwnerChanged => PreviewFailure::CollectionOwnerChanged,
 				Self::NoItems => PreviewFailure::NoItems,
+				Self::UnknownItem { item, .. } => PreviewFailure::UnknownItem { item },
 				Self::Contract(error) =>
 					PreviewFailure::ContractSelectionFailed { error: error.error },
 			}
@@ -710,45 +1171,46 @@ pub mod pallet {
 
 	impl<T: Config> Pallet<T> {
 		/// Previews the item the real claim selection path chooses for one credit and collection.
-		/// Contract execution can change the current storage overlay, so runtime API callers must
-		/// discard that overlay after the request.
+		/// The selection runs in its own storage layer that is always rolled back, so a contract
+		/// selector's writes never outlive the query, whoever the caller is.
 		pub fn preview_mint(
 			credit: NftClaimCredit,
 			collection: CollectionId,
 		) -> crate::runtime_api::PreviewOutcome {
 			use crate::runtime_api::{PreviewFailure, PreviewOutcome};
+			use frame_support::storage::{with_transaction, TransactionOutcome};
 
-			match Self::select_item(collection, credit) {
-				Ok(selection) => {
-					if !T::Nfts::item_exists(collection, selection.item) {
-						return PreviewOutcome::Fails {
-							reason: PreviewFailure::UnknownItem { item: selection.item },
-						};
-					}
-					PreviewOutcome::Mints { item: selection.item, via: selection.kind }
-				},
-				Err(error) => PreviewOutcome::Fails { reason: error.into_preview_failure() },
-			}
+			with_transaction(|| {
+				let outcome = match Self::select_item(collection, credit) {
+					Ok(selection) =>
+						PreviewOutcome::Mints { item: selection.item, via: selection.kind },
+					Err(error) => PreviewOutcome::Fails { reason: error.into_preview_failure() },
+				};
+				TransactionOutcome::Rollback(Ok::<_, DispatchError>(outcome))
+			})
+			// Unreachable short of a caller already at the transactional layer limit, where no
+			// selection ran at all.
+			.unwrap_or_else(|error| PreviewOutcome::Fails {
+				reason: PreviewFailure::ContractSelectionFailed { error },
+			})
 		}
 
 		/// Previews a positionally aligned batch through the real claim selection path.
-		/// Oversized batches fail explicitly before any selector runs.
+		/// The bounded argument enforces the batch ceiling at decode, before any allocation.
 		pub fn preview_mints(
-			queries: Vec<crate::runtime_api::PreviewQuery>,
-		) -> Result<Vec<crate::runtime_api::PreviewOutcome>, crate::runtime_api::BatchError> {
-			if queries.len() > crate::runtime_api::MAX_PREVIEW_QUERIES as usize {
-				return Err(crate::runtime_api::BatchError::TooLarge {
-					max: crate::runtime_api::MAX_PREVIEW_QUERIES,
-				});
-			}
-			Ok(queries
+			queries: crate::runtime_api::PreviewQueries,
+		) -> Vec<crate::runtime_api::PreviewOutcome> {
+			queries
 				.into_iter()
 				.map(|query| Self::preview_mint(query.credit, query.collection))
-				.collect::<Vec<_>>())
+				.collect::<Vec<_>>()
 		}
 
 		/// The item of `collection` that claiming `credit` mints, per the collection's
 		/// registered [`ItemSelection`], with the weight the selection consumed.
+		///
+		/// The returned item has a live definition. Both selections can name an allocated index
+		/// whose definition was deleted, which is reported as [`Error::UnknownItem`].
 		///
 		/// A contract selection's failure is returned as its error: the contract is how the
 		/// collection's owner gates minting, so no fallback overrides it. A failure carries the
@@ -761,12 +1223,17 @@ pub mod pallet {
 				.ok_or(ItemSelectionError::CollectionNotRegistered)?;
 			let owner = T::Nfts::collection_owner(collection)
 				.ok_or(ItemSelectionError::UnknownCollection)?;
+			// A registration binds an account and a contract address, not a code identity, so
+			// this check is what invalidates it after a handover the runtime's owner-change hook
+			// missed.
 			ensure!(owner == registration.owner, ItemSelectionError::CollectionOwnerChanged);
-			match registration.selection {
+			let selected = match registration.selection {
 				ItemSelection::Random => {
-					let next_item = T::Nfts::next_item_index(collection)
+					let (next_item, items) = T::Nfts::item_draw_bounds(collection)
 						.ok_or(ItemSelectionError::UnknownCollection)?;
-					ensure!(next_item > 0, ItemSelectionError::NoItems);
+					// The live count decides emptiness: a collection whose items were all
+					// deleted keeps its allocation counter, but has nothing to draw from.
+					ensure!(items > 0 && next_item > 0, ItemSelectionError::NoItems);
 					let draw = u32::from_le_bytes(
 						credit[..4].try_into().expect("a credit holds at least four bytes"),
 					);
@@ -784,60 +1251,382 @@ pub mod pallet {
 							weight_consumed: selection.weight_consumed,
 						})
 						.map_err(ItemSelectionError::Contract),
+			}?;
+			ensure!(
+				T::Nfts::item_exists(collection, selected.item),
+				ItemSelectionError::UnknownItem {
+					item: selected.item,
+					weight_consumed: selected.weight_consumed
+				}
+			);
+			Ok(selected)
+		}
+
+		/// Advances the expected sequence over the batch's `accepted` sequences and reports each
+		/// skipped run as [`Event::CreditTreesMissing`].
+		///
+		/// A sequence below the expectation is ignored, so a late delivery cannot rewind it. A
+		/// rejected sequence is not in `accepted`, so this gap check or a later one reports
+		/// it.
+		fn note_sequences(mut accepted: Vec<TreeSequence>) {
+			// Deliveries arrive in ascending order. Sorting keeps the walk correct if a batch
+			// ever carries them otherwise.
+			accepted.sort_unstable();
+			let start = NextExpectedSequence::<T>::get();
+			let mut expected = start;
+			for sequence in accepted {
+				if sequence < expected {
+					continue;
+				}
+				if sequence > expected {
+					Self::deposit_event(Event::CreditTreesMissing {
+						from_sequence: expected,
+						to_sequence: sequence.saturating_sub(1),
+					});
+				}
+				expected = sequence.saturating_add(1);
+			}
+			if expected != start {
+				NextExpectedSequence::<T>::put(expected);
 			}
 		}
 
-		/// Advances the expected sequence over the sequenced trees of `batch` and reports the
-		/// ones that were skipped.
+		/// Whether `now` has reached the deadline [`Config::TreeTtl`] puts on a tree committed to
+		/// at `tree_timestamp`. Both are seconds since the UNIX epoch.
+		pub(crate) fn tree_has_expired(tree_timestamp: u32, now: u64) -> bool {
+			now >= expiry_deadline(tree_timestamp, T::TreeTtl::get())
+		}
+
+		/// Files the tree of `block` under the timestamp it commits to, so a sweep finds it once
+		/// that timestamp is [`Config::TreeTtl`] old.
+		pub(crate) fn note_tree_expiry(block: CreditTreeBlock, timestamp: u32) {
+			TreeExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
+		}
+
+		/// Whether `leaf_index` is set in `bitmap`, which holds one bit per leaf of an award
+		/// block's tree.
+		pub fn leaf_is_claimed(bitmap: &[u8], leaf_index: u32) -> bool {
+			let byte = (leaf_index / 8) as usize;
+			bitmap.get(byte).is_some_and(|bits| bits & (1u8 << (leaf_index % 8)) != 0)
+		}
+
+		/// How many leaves `bitmap` records as claimed.
+		pub(crate) fn claimed_leaf_count(bitmap: &[u8]) -> u32 {
+			bitmap.iter().map(|bits| bits.count_ones()).sum()
+		}
+
+		/// Sets the bit of `leaf_index` in `block`'s bitmap, widening it to `leaf_count` bits.
 		///
-		/// Only the highest sequence in the batch matters: trees arrive in ascending order, so
-		/// anything below the expected sequence has already been accounted for, and one gap
-		/// event covers a whole run of lost trees.
-		fn note_sequences(batch: &CreditTreeBatch<T>) {
-			let Some(highest) = batch.trees.iter().filter_map(|update| update.sequence).max()
-			else {
-				// A batch of resent trees only, which says nothing about the live stream.
+		/// `leaf_index` must be below `leaf_count`, and `leaf_count` must be within
+		/// [`Config::MaxCreditsPerTree`], which [`Pallet::receive_credit_trees`] holds every
+		/// stored tree to. Both are checked here, so a bit outside the bitmap is an error rather
+		/// than a silent no-op.
+		fn spend_leaf(block: CreditTreeBlock, leaf_index: u32, leaf_count: u32) -> Result<(), ()> {
+			if leaf_index >= leaf_count || leaf_count > T::MaxCreditsPerTree::get() {
+				return Err(());
+			}
+
+			let bytes = leaf_count.div_ceil(8) as usize;
+			let byte = (leaf_index / 8) as usize;
+			ClaimedLeaves::<T>::mutate(block, |bitmap| {
+				if bitmap.len() < bytes {
+					// `bytes` covers `MaxCreditsPerTree` bits at most, which is the bound.
+					let mut bits = core::mem::take(bitmap).into_inner();
+					bits.resize(bytes, 0);
+					*bitmap = BoundedVec::truncate_from(bits);
+				}
+				if let Some(bits) = bitmap.as_mut().get_mut(byte) {
+					*bits |= 1u8 << (leaf_index % 8);
+				}
+			});
+
+			Ok(())
+		}
+
+		/// Removes the tree of `block` and queues its deletion for the game chain.
+		///
+		/// The expiry entry stays, and so does [`ClaimedLeaves`]. The game chain holds its root
+		/// for longer than this chain holds the tree, and anyone can replay the tree from there,
+		/// so only the spent leaves stop it from minting its credits twice. The sweep of that
+		/// entry removes the bitmap once the deadline has passed.
+		fn remove_tree(block: CreditTreeBlock) {
+			CreditTrees::<T>::remove(block);
+			Self::queue_tree_deletions(&[block]);
+		}
+
+		/// Queues `blocks` for the next deletion message and drops the ones the queue has no room
+		/// for. Pass at most [`Config::MaxTreeDeletionsPerMessage`] blocks, which is what the
+		/// dropped ones are reported in.
+		///
+		/// A dropped deletion leaves the game chain waiting for its own TTL. That TTL removes its
+		/// copy, so nothing on this chain needs repair.
+		pub(crate) fn queue_tree_deletions(blocks: &[CreditTreeBlock]) {
+			if blocks.is_empty() {
+				return;
+			}
+
+			let dropped = PendingTreeDeletions::<T>::mutate(|queued| {
+				blocks
+					.iter()
+					.filter(|block| queued.try_push(**block).is_err())
+					.copied()
+					.collect::<Vec<_>>()
+			});
+			if dropped.is_empty() {
+				return;
+			}
+
+			log::error!(
+				target: LOG_TARGET,
+				"Tree deletion queue is full, the game chain has to expire blocks {dropped:?} \
+				 itself",
+			);
+			Self::deposit_event(Event::TreeDeletionsDropped {
+				blocks: BoundedVec::truncate_from(dropped),
+			});
+		}
+
+		/// Retires up to [`Config::MaxTreeDeletionsPerMessage`] blocks whose deadline has passed,
+		/// as [`Pallet::sweep_expired_trees`] does once its origin is checked.
+		///
+		/// A retired block's deadline has passed, so no replay delivers its tree again and its
+		/// bitmap goes. A block whose tree was fully claimed holds none here and had its deletion
+		/// queued then, so only the trees still held are expired and named to the game chain.
+		pub(crate) fn do_sweep_expired_trees() -> PostDispatchInfo {
+			let retired = drain_due_expiries::<TreeExpiries<T>, CreditTreeBlock>(
+				T::TreeTtl::get(),
+				T::UnixTime::now().as_secs(),
+				T::MaxTreeDeletionsPerMessage::get(),
+			);
+
+			let mut expired = Vec::with_capacity(retired.len());
+			for block in &retired {
+				ClaimedLeaves::<T>::remove(block);
+				if CreditTrees::<T>::take(block).is_some() {
+					expired.push(*block);
+				}
+			}
+			Self::queue_tree_deletions(&expired);
+
+			let count = expired.len() as u32;
+			if count > 0 {
+				Self::deposit_event(Event::CreditTreesExpired { count });
+			}
+
+			Some(T::WeightInfo::sweep_expired_trees(retired.len() as u32)).into()
+		}
+
+		/// Validates a [`Pallet::sweep_expired_trees`] transaction, as
+		/// [`authorize_expiry_sweep`] does, the deadline being the one [`Config::TreeTtl`] names.
+		pub fn authorize_sweep_expired_trees(
+			source: TransactionSource,
+			oldest: &u32,
+		) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
+			authorize_expiry_sweep::<T, TreeExpiries<T>, CreditTreeBlock>(
+				ExpirySweepTx {
+					tag: "nft-claims:sweep-expired-trees",
+					not_local: AuthorizeInvalidity::TransactionNotLocal.into(),
+					nothing_to_sweep: AuthorizeInvalidity::NothingToSweep.into(),
+				},
+				source,
+				*oldest,
+				T::TreeTtl::get(),
+				T::UnixTime::now().as_secs(),
+			)
+		}
+
+		/// Sends the queued deletions that fit one message, as [`Pallet::send_tree_deletions`] does
+		/// once its origin is checked.
+		///
+		/// A message that fails to send leaves the queue unchanged and reports
+		/// [`Event::TreeDeletionSendFailed`]. The next offchain-worker cycle retries the same
+		/// front.
+		pub(crate) fn do_send_tree_deletions() -> PostDispatchInfo {
+			let queued = PendingTreeDeletions::<T>::get();
+			debug_assert!(!queued.is_empty(), "authorize should have rejected: nothing queued");
+
+			let taken = (T::MaxTreeDeletionsPerMessage::get() as usize).min(queued.len());
+			// `taken` is at most the bound this vector carries, so nothing truncates.
+			let blocks =
+				BoundedVec::<CreditTreeBlock, T::MaxTreeDeletionsPerMessage>::truncate_from(
+					queued[..taken].to_vec(),
+				);
+
+			if let Err(e) = Self::send_tree_deletion_message(blocks.clone()) {
+				log::warn!(
+					target: LOG_TARGET,
+					"Tree deletion XCM failed: {e:?}, retrying next offchain worker cycle",
+				);
+				Self::deposit_event(Event::TreeDeletionSendFailed);
+				return Some(T::WeightInfo::send_tree_deletions(taken as u32)).into();
+			}
+
+			PendingTreeDeletions::<T>::mutate(|queued| {
+				queued.drain(..taken);
+			});
+			Self::deposit_event(Event::TreeDeletionsSent { blocks });
+
+			Some(T::WeightInfo::send_tree_deletions(taken as u32)).into()
+		}
+
+		/// Validates a [`Pallet::send_tree_deletions`] transaction.
+		///
+		/// This accepts local and in-block sources only, as
+		/// [`Pallet::authorize_sweep_expired_trees`] does. `front` must equal the queue's first
+		/// block, which a successful send replaces, so a retry of a send that landed is `Stale`.
+		/// The queue holds the blocks in removal order, so a block that is still queued does not
+		/// compare as later than the front and no mismatch is `Future`.
+		pub fn authorize_send_tree_deletions(
+			source: TransactionSource,
+			front: &CreditTreeBlock,
+		) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
+			if !matches!(source, TransactionSource::InBlock | TransactionSource::Local) {
+				return Err(AuthorizeInvalidity::TransactionNotLocal.into());
+			}
+
+			let Some(queued_front) = PendingTreeDeletions::<T>::get().first().copied() else {
+				return Err(AuthorizeInvalidity::NoQueuedTreeDeletions.into());
+			};
+			if *front != queued_front {
+				return Err(InvalidTransaction::Stale.into());
+			}
+
+			// The tag is the front, so the sends of two fronts do not share one. Only the current
+			// front authorizes, so one block holds at most one send.
+			let validity = ValidTransaction::with_tag_prefix("nft-claims:send-tree-deletions")
+				.and_provides(queued_front)
+				// The block number rises with every retry window, so a retry outranks the attempt
+				// holding the same tag. The pool replaces that attempt only for a strictly higher
+				// priority.
+				.priority(tx_priority::BACKGROUND_PROGRESS.saturating_add(
+					frame_system::Pallet::<T>::block_number().saturated_into::<u64>(),
+				))
+				.longevity(TX_LONGEVITY)
+				.propagate(false)
+				.build()
+				.expect("tag prefix is not empty; qed");
+
+			Ok((validity, Weight::zero()))
+		}
+
+		/// Hands the game chain's deletion call to the router, reporting the router's own reason
+		/// for a refusal so a stalled channel can be told from an oversized message.
+		fn send_tree_deletion_message(
+			blocks: BoundedVec<CreditTreeBlock, T::MaxTreeDeletionsPerMessage>,
+		) -> Result<(), SendError> {
+			let call = (
+				T::GameChainPalletIndex::get(),
+				NftCreditsCall::<T>::ReceiveTreeDeletions { blocks },
+			)
+				.encode();
+
+			send_xcm::<T::XcmRouter>(T::GameChainLocation::get(), Self::tree_deletion_xcm(call))
+				.map(|_| ())
+		}
+
+		fn tree_deletion_xcm(encoded_call: Vec<u8>) -> Xcm<()> {
+			Xcm(vec![
+				UnpaidExecution { weight_limit: WeightLimit::Unlimited, check_origin: None },
+				Transact {
+					origin_kind: OriginKind::Native,
+					call: encoded_call.into(),
+					fallback_max_weight: None,
+				},
+			])
+		}
+
+		/// The encoded size of the message that deletes `blocks` trees, which a router compares
+		/// against the channel's `max_message_size`.
+		///
+		/// This encodes a full message instead of adding up its parts. Only the `integrity_test`
+		/// calls it, so the cost does not matter.
+		#[cfg(feature = "std")]
+		fn tree_deletion_message_size(blocks: u32) -> usize {
+			let blocks =
+				BoundedVec::<CreditTreeBlock, T::MaxTreeDeletionsPerMessage>::truncate_from(
+					vec![CreditTreeBlock::MAX; blocks as usize],
+				);
+			let call = (u8::MAX, NftCreditsCall::<T>::ReceiveTreeDeletions { blocks }).encode();
+
+			xcm::VersionedXcm::<()>::from(Self::tree_deletion_xcm(call)).encoded_size()
+		}
+
+		/// Submits a [`Pallet::sweep_expired_trees`] for the oldest filed timestamp, if its
+		/// deadline has passed.
+		///
+		/// This repeats the deadline check that `authorize` makes. Without it a chain with nothing
+		/// expired submits a transaction every block that the pool holds as `Future`.
+		pub(crate) fn submit_expiry_sweep(block_number: BlockNumberFor<T>) {
+			let Some(oldest) = oldest_expiry::<TreeExpiries<T>, CreditTreeBlock>() else {
+				return;
+			};
+			if T::UnixTime::now().as_secs() < expiry_deadline(oldest, T::TreeTtl::get()) {
+				return;
+			}
+
+			let call = Call::<T>::sweep_expired_trees {
+				oldest,
+				// The submitting block, not the retry window `indiv_support::offchain` paces other
+				// calls by. Trees at one timestamp can outnumber one sweep's limit, which keeps
+				// `oldest` the same, so a window would allow one sweep per window: the pool bans
+				// the hash of the sweep it included, and the next attempt of that window repeats
+				// it. The `provides` tag keeps one attempt in the pool.
+				discriminator: block_number,
+			};
+			submit_authorized::<T, _>(call, "sweep_expired_trees", LOG_TARGET);
+		}
+
+		/// Submits a [`Pallet::send_tree_deletions`] for the queued deletions, if any.
+		pub(crate) fn submit_tree_deletions(block_number: BlockNumberFor<T>) {
+			let Some(front) = PendingTreeDeletions::<T>::get().first().copied() else {
 				return;
 			};
 
-			let expected = NextExpectedSequence::<T>::get();
-			if highest < expected {
-				return;
-			}
-
-			let lowest =
-				batch.trees.iter().filter_map(|update| update.sequence).min().unwrap_or(highest);
-			if lowest > expected {
-				Self::deposit_event(Event::CreditTreesMissing {
-					from_sequence: expected,
-					to_sequence: lowest.saturating_sub(1),
-				});
-			}
-
-			NextExpectedSequence::<T>::put(highest.saturating_add(1));
+			let call = Call::<T>::send_tree_deletions {
+				// A send replaces the front, so the next batch's send carries a hash of its own
+				// and reaches the pool in the following block instead of the next window. The
+				// sweep refills the queue as fast as the send drains it, so the send keeps that
+				// pace.
+				front,
+				discriminator: block_number / RETRY_WINDOW.into(),
+			};
+			submit_authorized::<T, _>(call, "send_tree_deletions", LOG_TARGET);
 		}
 	}
 }
 
 impl<T: Config> Pallet<T> {
-	/// The commitment held for `block`, which a claim for a credit awarded in that block is
+	/// The commitment held for `block`, which a claim for a credit that block committed is
 	/// verified against.
-	pub fn credit_tree(block: AwardBlock) -> Option<NftClaimCreditTree> {
+	pub fn credit_tree(block: CreditTreeBlock) -> Option<NftClaimCreditTree> {
 		CreditTrees::<T>::get(block)
 	}
 }
 
-/// Clears a collection's minter registration when Scarcity deletes the collection, so no
-/// registration outlives the collection it names. The runtime wires this into
-/// [`pallet_scarcity::Config::OnCollectionDeleted`].
+/// Clears a collection's minter registration when Scarcity deletes the collection or hands it to
+/// a new owner, so no registration outlives the collection or the owner who made it. The runtime
+/// wires this into [`indiv_pallet_scarcity::Config::OnCollectionDeleted`] and
+/// [`indiv_pallet_scarcity::Config::OnCollectionOwnerChanged`].
 pub struct ClearCollectionMinter<T>(core::marker::PhantomData<T>);
 
-impl<T: Config> pallet_scarcity::OnCollectionDeleted for ClearCollectionMinter<T> {
+impl<T: Config> indiv_pallet_scarcity::OnCollectionDeleted for ClearCollectionMinter<T> {
 	fn on_collection_deleted(collection: CollectionId) {
 		CollectionMinters::<T>::remove(collection);
 	}
 
 	fn on_delete_weight() -> Weight {
+		T::DbWeight::get().writes(1)
+	}
+}
+
+impl<T: Config> indiv_pallet_scarcity::OnCollectionOwnerChanged for ClearCollectionMinter<T> {
+	fn on_collection_owner_changed(collection: CollectionId) {
+		// Without this removal an ownership round trip back to the registering owner would
+		// reactivate the old registration, contract selection included.
+		CollectionMinters::<T>::remove(collection);
+	}
+
+	fn on_owner_change_weight() -> Weight {
 		T::DbWeight::get().writes(1)
 	}
 }

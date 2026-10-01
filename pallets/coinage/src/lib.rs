@@ -19,8 +19,17 @@
 //! Allows assets to be represented as fungible coins that can be transferred between peers,
 //! split, and consolidated using recyclers. Each instance wraps one asset at one coin unit; the
 //! same asset can be wrapped by several instances, one per unit.
+//!
+//! Dual-mode unload calls pay with a prepaid unload token or from the unloaded assets.
+//! The `UnloadToken` origin selects the fee mode at dispatch. These calls declare the
+//! component-wise maximum of both fee-mode weights in `#[pallet::weight]` and refund down to
+//! the mode actually run through `PostDispatchInfo`. Applicable deposit surcharges are added
+//! separately.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+// The recursion depth of `impl_benchmark_test_suite!` grows with the number of benchmarks and
+// exceeds the default limit of 128.
+#![cfg_attr(test, recursion_limit = "256")]
 
 extern crate alloc;
 
@@ -32,6 +41,7 @@ pub mod pot;
 pub mod recycler_manager;
 #[cfg(any(test, feature = "runtime-benchmarks"))]
 mod testing_utils;
+mod weight_interpolation;
 pub mod weights;
 
 #[cfg(test)]
@@ -73,12 +83,14 @@ use indiv_support::{
 	weight_budget::OcwWeightBudget,
 };
 use pallet_asset_conversion::{QuotePrice, Swap};
-use sp_core::{blake2_256, H256};
+use sp_core::H256;
+use sp_crypto_hashing::blake2_256;
 use sp_runtime::{
 	traits::{AccountIdConversion, CheckedAdd, CheckedMul, Convert, Zero},
 	ArithmeticError, SaturatedConversion, Saturating,
 };
 use verifiable::GenerateVerifiable;
+use weight_interpolation::interpolate_unload_weight;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -376,6 +388,14 @@ pub mod pallet {
 		fn from(e: CustomInvalidity) -> Self {
 			InvalidTransaction::Custom(e as u8).into()
 		}
+	}
+
+	/// Selects the single-recycler unload paths included in a weight maximum.
+	pub(crate) enum UnloadWeightScope {
+		/// All single-recycler unload paths, including both fee modes.
+		AnyFeeMode,
+		/// Only paths that pay the fee from their output.
+		FromOutputOnly,
 	}
 
 	pub(crate) enum MixedOutputValidationError {
@@ -713,6 +733,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -738,6 +759,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -770,6 +792,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -795,6 +818,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -812,6 +836,34 @@ pub mod pallet {
 		AliasState,
 		OptionQuery,
 	>;
+
+	/// Number of aliases unloaded from each recycler ring.
+	///
+	/// Equals the number of [RecyclerAliasStates] entries of the ring in state
+	/// [`AliasState::Unloaded`], so `RingStatus::total` minus this value is the number of coins the
+	/// ring still holds. Absent for a ring that already had alias states when the count was
+	/// introduced, because recovering its number needs a scan; such a ring is never counted.
+	///
+	/// **WARNING**: Do not use this storage directly, use [`RecyclerManager`] type instead.
+	///
+	/// This storage item is managed by [`RecyclerManager`] and is part of a consistent set:
+	/// * [RecyclerCollectionCreated] - whether the collection exists for an instance and
+	///   denomination.
+	/// * [RecyclersLastRemovedRingIndex] - the last removed ring index for each instance and
+	///   denomination.
+	/// * [RecyclersCoinToRecycler] - the mapping from member key to the instance and denomination
+	///   it is in.
+	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
+	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
+	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
+	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
+	///   coins.
+	///
+	/// Ring members, pending members, and ring state are managed by [`Config::MemberService`].
+	#[pallet::storage]
+	pub type RecyclersUnloadedCount<T> =
+		StorageMap<_, Twox64Concat, (InstanceId, Denomination, RingIndex), u32, OptionQuery>;
 
 	/// Marks recycler rings that have deferred recycler dust pending removal.
 	///
@@ -831,6 +883,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -865,6 +918,7 @@ pub mod pallet {
 	///   it is in.
 	/// * [RecyclerAliasStates] - per-alias lock/unloaded state, indexed by instance, denomination
 	///   and ring index.
+	/// * [RecyclersUnloadedCount] - the number of unloaded aliases of each ring.
 	/// * [RecyclersDusting] - marks rings with deferred recycler dust pending removal.
 	/// * [RecyclersArchives] - archival commitments for cleaned rings that still hold recoverable
 	///   coins.
@@ -1157,6 +1211,8 @@ pub mod pallet {
 		/// The maximum age a coin can have before it must be recycled.
 		///
 		/// At maximum age, the coin can no longer be transferred or split.
+		///
+		/// This parameter can be changed at any time.
 		type MaximumAge: Get<u16>;
 
 		/// The time period duration for unload tokens, in seconds.
@@ -1171,7 +1227,8 @@ pub mod pallet {
 		///
 		/// Use pallet view to fetch the corresponding number of unload tokens given the current
 		/// price for unload tokens.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type UnloadTokenAllowancePerTimePeriodForPeople: Get<NativeBalanceOf<Self>>;
 
 		/// The allowance of unload tokens that a lite person can use per time period, expressed in
@@ -1179,14 +1236,16 @@ pub mod pallet {
 		///
 		/// Use pallet's get_free_unload_token_info() to fetch the corresponding number of unload
 		/// tokens given the current price for unload tokens.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type UnloadTokenAllowancePerTimePeriodForLitePeople: Get<NativeBalanceOf<Self>>;
 
 		/// Hard upper bound on the number of free unload tokens per time period.
 		///
 		/// The effective free token limit is:
 		/// `min(allowance / current_fee, MaxFreeUnloadTokensPerTimePeriod)`.
-		#[pallet::constant]
+		///
+		/// This parameter can be changed at any time.
 		type MaxFreeUnloadTokensPerTimePeriod: Get<u32>;
 
 		/// The expiration time for a recycler ring, in seconds, after it is full.
@@ -1685,6 +1744,27 @@ pub mod pallet {
 			)
 		}
 
+		/// Returns the current value of [`Config::MaximumAge`].
+		pub fn get_maximum_age() -> u16 {
+			T::MaximumAge::get()
+		}
+
+		/// Returns the current value of [`Config::UnloadTokenAllowancePerTimePeriodForPeople`].
+		pub fn get_unload_token_allowance_per_time_period_for_people() -> NativeBalanceOf<T> {
+			T::UnloadTokenAllowancePerTimePeriodForPeople::get()
+		}
+
+		/// Returns the current value of
+		/// [`Config::UnloadTokenAllowancePerTimePeriodForLitePeople`].
+		pub fn get_unload_token_allowance_per_time_period_for_lite_people() -> NativeBalanceOf<T> {
+			T::UnloadTokenAllowancePerTimePeriodForLitePeople::get()
+		}
+
+		/// Returns the current value of [`Config::MaxFreeUnloadTokensPerTimePeriod`].
+		pub fn get_max_free_unload_tokens_per_time_period() -> u32 {
+			T::MaxFreeUnloadTokensPerTimePeriod::get()
+		}
+
 		/// Get the ring status for a recycler at a given ring index.
 		pub fn get_recycler_ring_status(
 			instance_id: InstanceId,
@@ -1853,17 +1933,11 @@ pub mod pallet {
 			// Maximum of the possible unload call weights in `FromOutput` mode: the worst-case
 			// `FromOutput` benchmarked path, matching what a `FromOutput` transaction pays after
 			// its `PostDispatchInfo` refund.
-			let call_weight = Pallet::<T>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-				T::MaxConsolidation::get() as usize,
-				T::MaxSplitOutputs::get() as usize,
-			)
-			.max(Pallet::<T>::unload_recycler_into_external_asset_from_output_weight(
-				T::MaxConsolidation::get() as usize,
-			))
-			.max(Pallet::<T>::unload_recycler_into_coins_from_output_weight(
+			let call_weight = Self::max_unload_call_weight(
+				UnloadWeightScope::FromOutputOnly,
 				T::MaxConsolidation::get() as usize,
 				T::MaxSplitOutputs::get(),
-			))
+			)
 			// On a sponsored instance the unload additionally settles the load deposits, and
 			// the voucher variant charges deposits for its fresh keys.
 			.saturating_add(T::WeightInfo::settle_load_deposits())
@@ -1909,8 +1983,15 @@ pub mod pallet {
 				"MinimumExponentForOutputUnloadFee should be <= to MaximumExponent",
 			);
 
-			assert!(T::MaxConsolidation::get() > 0, "MaxConsolidation must be greater than zero",);
 			assert!(T::MaxSplitOutputs::get() >= 2, "MaxSplitOutputs must be at least 2",);
+
+			// The unload benchmarks sample 1, 2, 4, 8, 16, 32 and the maximum alias count. A
+			// maximum below 8 cannot provide the distinct initial sample coordinates.
+			assert!(
+				Self::max_aliases_per_unload() >= 8,
+				"the unload benchmarks need MaxConsolidation and the recycler ring capacity to be \
+				at least 8",
+			);
 
 			let budget = OcwWeightBudget::from_normal_max::<T>();
 
@@ -2068,109 +2149,142 @@ pub mod pallet {
 			}
 		}
 
-		pub(crate) fn unload_recycler_into_coin_weight(alias_count: usize) -> Weight {
-			let n = alias_count as u32;
-			if n <= 2 {
-				T::WeightInfo::unload_recycler_into_coin_1_2(n)
-			} else if n <= 8 {
-				// `unload_recycler_into_coin` is only valid and benchmarked for power of twos,
-				// so we round up to the closest one.
-				T::WeightInfo::unload_recycler_into_coin_4_8(n.next_power_of_two())
-			} else {
-				// `unload_recycler_into_coin` is only valid and benchmarked for power of twos,
-				// so we round up to the closest one.
-				T::WeightInfo::unload_recycler_into_coin_8_max(n.next_power_of_two())
-			}
+		/// The most aliases one call unloads from a single recycler ring.
+		pub(crate) fn max_aliases_per_unload() -> u32 {
+			T::MaxConsolidation::get().min(T::RecyclerRingExponent::get().ring_capacity())
 		}
 
+		/// The most aliases [`Call::unload_recycler_into_coin`] accepts: the largest power of two
+		/// within [`Self::max_aliases_per_unload`], since the call consolidates a power of two.
+		pub(crate) fn max_aliases_per_coin_unload() -> u32 {
+			Self::max_aliases_per_unload().checked_ilog2().map_or(1, |log| 1 << log)
+		}
+
+		/// Weight of [`Call::unload_recycler_into_coin`], see [`weight_interpolation`].
+		///
+		/// The call accepts only a power of two aliases, so its `Max` sample is
+		/// [`Self::max_aliases_per_coin_unload`] and every sample is a count the call serves. Any
+		/// other count is rejected by the call and gets the interpolated weight.
+		pub(crate) fn unload_recycler_into_coin_weight(alias_count: usize) -> Weight {
+			interpolate_unload_weight(
+				alias_count as u32,
+				Self::max_aliases_per_coin_unload(),
+				[
+					T::WeightInfo::unload_recycler_into_coin_1(),
+					T::WeightInfo::unload_recycler_into_coin_2(),
+					T::WeightInfo::unload_recycler_into_coin_4(),
+					T::WeightInfo::unload_recycler_into_coin_8(),
+					T::WeightInfo::unload_recycler_into_coin_16(),
+					T::WeightInfo::unload_recycler_into_coin_32(),
+					T::WeightInfo::unload_recycler_into_coin_max(),
+				],
+			)
+		}
+
+		/// Weight of the `Prepaid` fee path of [`Call::unload_recycler_into_external_asset`].
 		pub(crate) fn unload_recycler_into_external_asset_prepaid_weight(
 			alias_count: usize,
 		) -> Weight {
-			let n = alias_count as u32;
-			if n <= 2 {
-				T::WeightInfo::unload_recycler_into_external_asset_prepaid_1_2(n)
-			} else if n <= 8 {
-				T::WeightInfo::unload_recycler_into_external_asset_prepaid_3_8(n)
-			} else {
-				T::WeightInfo::unload_recycler_into_external_asset_prepaid_9_max(n)
-			}
+			interpolate_unload_weight(
+				alias_count as u32,
+				Self::max_aliases_per_unload(),
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_1(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_2(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_4(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_8(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_16(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_32(),
+					T::WeightInfo::unload_recycler_into_external_asset_prepaid_max(),
+				],
+			)
 		}
 
+		/// Weight of the `Prepaid` fee path of
+		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
 			alias_count: usize,
 			loaded_coin_count: usize,
 		) -> Weight {
-			let a = alias_count as u32;
 			let d = loaded_coin_count as u32;
-			if a <= 2 {
-				T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1_2(
-					a, d,
-				)
-			} else if a <= 8 {
-				T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_3_8(
-					a, d,
-				)
-			} else {
-				T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_9_max(
-					a, d,
-				)
-			}
+			interpolate_unload_weight(
+				alias_count as u32,
+				Self::max_aliases_per_unload(),
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(
+						d,
+					),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(
+						d,
+					),
+				],
+			)
 		}
 
 		/// Weight of the `FromOutput` fee path of [`Call::unload_recycler_into_external_asset`].
-		///
-		/// Dual-mode unload calls charge the component-wise maximum of their fee-mode paths in
-		/// `#[pallet::weight]` and refund down to the mode actually run via `PostDispatchInfo`.
 		pub(crate) fn unload_recycler_into_external_asset_from_output_weight(
 			alias_count: usize,
 		) -> Weight {
-			let n = alias_count as u32;
-			if n <= 2 {
-				T::WeightInfo::unload_recycler_into_external_asset_from_output_1_2(n)
-			} else if n <= 8 {
-				T::WeightInfo::unload_recycler_into_external_asset_from_output_3_8(n)
-			} else {
-				T::WeightInfo::unload_recycler_into_external_asset_from_output_9_max(n)
-			}
+			interpolate_unload_weight(
+				alias_count as u32,
+				Self::max_aliases_per_unload(),
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_1(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_2(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_4(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_8(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_16(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_32(),
+					T::WeightInfo::unload_recycler_into_external_asset_from_output_max(),
+				],
+			)
 		}
 
 		/// Weight of the `FromOutput` fee path of
 		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
-		///
-		/// Dual-mode unload calls charge the component-wise maximum of their fee-mode paths in
-		/// `#[pallet::weight]` and refund down to the mode actually run via `PostDispatchInfo`.
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
 			alias_count: usize,
 			loaded_coin_count: usize,
 		) -> Weight {
-			let a = alias_count as u32;
 			let d = loaded_coin_count as u32;
-			if a <= 2 {
-				T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_1_2(
-					a, d,
-				)
-			} else if a <= 8 {
-				T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_3_8(
-					a, d,
-				)
-			} else {
-				T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_9_max(a, d)
-			}
+			interpolate_unload_weight(
+				alias_count as u32,
+				Self::max_aliases_per_unload(),
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(d),
+					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(d),
+				],
+			)
 		}
 
-		/// Worst-case weight charged up front by the `#[pallet::weight]` annotation: the
-		/// component-wise maximum of the two fee-mode paths. The fee mode is only known at
-		/// dispatch (it lives in the `UnloadToken` origin), so the call refunds down to the
-		/// mode actually run via `PostDispatchInfo`, and a call is billed exactly the mode it
-		/// runs, never more.
+		/// Worst-case weight of [`Call::unload_recycler_into_external_asset`] over its fee modes.
 		pub(crate) fn unload_recycler_into_external_asset_max_weight(alias_count: usize) -> Weight {
 			Self::unload_recycler_into_external_asset_prepaid_weight(alias_count)
 				.max(Self::unload_recycler_into_external_asset_from_output_weight(alias_count))
 		}
 
-		/// Mode-independent base weight for
-		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
-		/// See [`Self::unload_recycler_into_external_asset_max_weight`].
+		/// Worst-case weight of [`Call::unload_recycler_into_external_asset_and_loaded_coins`] over
+		/// its fee modes.
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_max_weight(
 			alias_count: usize,
 			loaded_coin_count: usize,
@@ -2185,65 +2299,92 @@ pub mod pallet {
 			))
 		}
 
+		/// Weight of [`Call::unload_recycler_into_external_asset_non_anonymous`].
 		pub(crate) fn unload_recycler_into_external_asset_non_anonymous_weight(
 			alias_count: usize,
 		) -> Weight {
-			let n = alias_count as u32;
-			if n <= 2 {
-				T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_1_2(n)
-			} else if n <= 8 {
-				T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_3_8(n)
-			} else {
-				T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_9_max(n)
-			}
+			interpolate_unload_weight(
+				alias_count as u32,
+				Self::max_aliases_per_unload(),
+				[
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_1(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_2(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_4(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_8(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_16(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_32(),
+					T::WeightInfo::unload_recycler_into_external_asset_non_anonymous_max(),
+				],
+			)
 		}
 
+		/// Weight of [`Call::unload_recyclers_into_external_asset_non_anonymous`] for `alias_count`
+		/// aliases over any number of recyclers.
+		///
+		/// The samples unload one alias from each of 1, 2, 4, 8, 16, 32 and
+		/// `MaxConsolidation` recyclers. Aliases sharing a recycler share its ring verification,
+		/// so one alias per recycler is the worst case per alias.
 		pub(crate) fn unload_recyclers_into_external_asset_non_anonymous_weight(
 			alias_count: u32,
 		) -> Weight {
-			if alias_count <= 2 {
-				T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_1_2(alias_count)
-			} else if alias_count <= 8 {
-				T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_3_8(alias_count)
-			} else {
-				T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_9_max(alias_count)
-			}
+			interpolate_unload_weight(
+				alias_count,
+				T::MaxConsolidation::get(),
+				[
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_1(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_2(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_4(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_8(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_16(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_32(),
+					T::WeightInfo::unload_recyclers_into_external_asset_non_anonymous_max(),
+				],
+			)
 		}
 
+		/// Weight of the `FromOutput` fee path of [`Call::unload_recycler_into_coins`].
 		pub(crate) fn unload_recycler_into_coins_from_output_weight(
 			alias_count: usize,
 			destination_count: u32,
 		) -> Weight {
-			let a = alias_count as u32;
-			if a <= 2 {
-				T::WeightInfo::unload_recycler_into_coins_from_output_1_2(a, destination_count)
-			} else if a <= 8 {
-				T::WeightInfo::unload_recycler_into_coins_from_output_3_8(a, destination_count)
-			} else {
-				T::WeightInfo::unload_recycler_into_coins_from_output_9_max(a, destination_count)
-			}
+			let d = destination_count;
+			interpolate_unload_weight(
+				alias_count as u32,
+				Self::max_aliases_per_unload(),
+				[
+					T::WeightInfo::unload_recycler_into_coins_from_output_1(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_2(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_4(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_8(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_16(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_32(d),
+					T::WeightInfo::unload_recycler_into_coins_from_output_max(d),
+				],
+			)
 		}
 
 		/// Weight of the `Prepaid` fee path of [`Call::unload_recycler_into_coins`].
-		///
-		/// Dual-mode unload calls charge the component-wise maximum of their fee-mode paths in
-		/// `#[pallet::weight]` and refund down to the mode actually run via `PostDispatchInfo`.
 		pub(crate) fn unload_recycler_into_coins_prepaid_weight(
 			alias_count: usize,
 			destination_count: u32,
 		) -> Weight {
-			let a = alias_count as u32;
-			if a <= 2 {
-				T::WeightInfo::unload_recycler_into_coins_prepaid_1_2(a, destination_count)
-			} else if a <= 8 {
-				T::WeightInfo::unload_recycler_into_coins_prepaid_3_8(a, destination_count)
-			} else {
-				T::WeightInfo::unload_recycler_into_coins_prepaid_9_max(a, destination_count)
-			}
+			let d = destination_count;
+			interpolate_unload_weight(
+				alias_count as u32,
+				Self::max_aliases_per_unload(),
+				[
+					T::WeightInfo::unload_recycler_into_coins_prepaid_1(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_2(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_4(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_8(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_16(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_32(d),
+					T::WeightInfo::unload_recycler_into_coins_prepaid_max(d),
+				],
+			)
 		}
 
-		/// Worst-case weight for [`Call::unload_recycler_into_coins`]. See
-		/// [`Self::unload_recycler_into_external_asset_max_weight`].
+		/// Worst-case weight of [`Call::unload_recycler_into_coins`] over its fee modes.
 		pub(crate) fn unload_recycler_into_coins_max_weight(
 			alias_count: usize,
 			destination_count: u32,
@@ -2251,6 +2392,37 @@ pub mod pallet {
 			Self::unload_recycler_into_coins_prepaid_weight(alias_count, destination_count).max(
 				Self::unload_recycler_into_coins_from_output_weight(alias_count, destination_count),
 			)
+		}
+
+		/// Component-wise maximum of the selected single-recycler unload paths.
+		/// Deposit charges and settlement are excluded; callers add the applicable surcharges.
+		pub(crate) fn max_unload_call_weight(
+			scope: UnloadWeightScope,
+			alias_count: usize,
+			output_count: u32,
+		) -> Weight {
+			let from_output = Self::unload_recycler_into_external_asset_from_output_weight(
+				alias_count,
+			)
+			.max(Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
+				alias_count,
+				output_count as usize,
+			))
+			.max(Self::unload_recycler_into_coins_from_output_weight(alias_count, output_count));
+			match scope {
+				UnloadWeightScope::FromOutputOnly => from_output,
+				UnloadWeightScope::AnyFeeMode => from_output
+					.max(Self::unload_recycler_into_coin_weight(alias_count))
+					.max(Self::unload_recycler_into_external_asset_prepaid_weight(alias_count))
+					.max(Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
+						alias_count,
+						output_count as usize,
+					))
+					.max(Self::unload_recycler_into_coins_prepaid_weight(alias_count, output_count))
+					.max(Self::unload_recycler_into_external_asset_non_anonymous_weight(
+						alias_count,
+					)),
+			}
 		}
 
 		/// Shared dispatch body for [`Call::load_recycler_with_external_asset_unpaid`] and
@@ -3355,7 +3527,10 @@ pub mod pallet {
 		/// transaction validation, therefore resolving such conflicts without charging fees by
 		/// marking outdated proofs as invalid.
 		#[pallet::call_index(17)]
-		#[pallet::weight(T::WeightInfo::unload_archived_recycler_into_external_asset())]
+		#[pallet::weight(match fee_currency {
+			FeeCurrency::Native => T::WeightInfo::unload_archived_recycler_into_external_asset_fee_native(),
+			FeeCurrency::ExternalAsset => T::WeightInfo::unload_archived_recycler_into_external_asset_fee_external_asset(),
+		})]
 		pub fn unload_archived_recycler_into_external_asset(
 			origin: OriginFor<T>,
 			instance_id: InstanceId,
@@ -5564,34 +5739,11 @@ pub mod pallet {
 
 			// === Phase 3: Unloading ===
 			// Unload recycler with average number of items.
-			let unload_avg = Self::unload_recycler_into_coin_weight(
+			let unload_avg = Self::max_unload_call_weight(
+				UnloadWeightScope::AnyFeeMode,
 				avg_aliases_single_ring as usize,
+				avg_split_outputs,
 			)
-			.max(Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
-				avg_aliases_single_ring as usize,
-				avg_split_outputs as usize,
-			))
-			.max(Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-				avg_aliases_single_ring as usize,
-				avg_split_outputs as usize,
-			))
-			.max(Self::unload_recycler_into_external_asset_prepaid_weight(
-				avg_aliases_single_ring as usize,
-			))
-			.max(Self::unload_recycler_into_external_asset_from_output_weight(
-				avg_aliases_single_ring as usize,
-			))
-			.max(Self::unload_recycler_into_external_asset_non_anonymous_weight(
-				avg_aliases_single_ring as usize,
-			))
-			.max(Self::unload_recycler_into_coins_from_output_weight(
-				avg_aliases_single_ring as usize,
-				avg_split_outputs,
-			))
-			.max(Self::unload_recycler_into_coins_prepaid_weight(
-				avg_aliases_single_ring as usize,
-				avg_split_outputs,
-			))
 			// On a sponsored instance the unload also settles the load deposits.
 			.saturating_add(T::WeightInfo::settle_load_deposits());
 

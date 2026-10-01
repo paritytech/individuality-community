@@ -25,6 +25,7 @@ use crate::{
 	*,
 };
 use codec::Encode;
+use cumulus_primitives_core::relay_chain::BlockNumber as RelayBlockNumber;
 use frame_support::{
 	traits::{
 		fungible::{Inspect, InspectHold, Mutate},
@@ -55,7 +56,7 @@ use sp_runtime::{
 		testing::{PoolState, TestOffchainExt, TestTransactionPoolExt},
 		OffchainDbExt, OffchainWorkerExt, TransactionPoolExt,
 	},
-	traits::{TransactionExtension as _, Zero},
+	traits::{BlockNumberProvider as _, TransactionExtension as _, Zero},
 	AccountId32, BoundedVec, BuildStorage, MultiSignature,
 };
 use std::{
@@ -71,12 +72,18 @@ mod coinage_non_anonymous_flow;
 mod coinage_paid_flow;
 mod coinage_people_flow;
 mod coinage_token_allowance;
+// The benchmarking build widens `MaxGroupSize` and `MaxRounds` to fit the game's linear
+// regressions, which would size the index for a runtime that is never deployed.
+#[cfg(not(feature = "runtime-benchmarks"))]
+mod credit_index_window;
+mod credit_root_deletion;
 mod external_asset_teleport;
 mod lite_people_free_tx;
 mod lite_people_game_flow;
 mod members_notifier_whitelist;
 mod migrations;
 mod network_suffix;
+mod nft_credits_integrity;
 mod parameters;
 mod people_airdrops_flow;
 mod score_game_deposit_flow;
@@ -84,7 +91,10 @@ mod score_game_invitation_flow;
 mod score_game_person_flow;
 mod statement_allowance;
 mod transaction_era;
+mod trusted_query;
 mod tx_payment_external_asset;
+mod xcm_aliases;
+mod xcm_fee_api;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
 
@@ -331,6 +341,7 @@ fn new_test_ext() -> TestExternalities {
 
 	ext.execute_with(|| {
 		frame_system::Pallet::<Runtime>::set_block_number(1);
+		RelaychainDataProvider::<Runtime>::set_block_number(relay_block_for(1));
 		pallet_timestamp::Now::<Runtime>::put(1_000u64);
 		create_lite_people_collection();
 		setup_external_asset();
@@ -1365,6 +1376,16 @@ fn exec_as_coin(who_pair: &sr25519::Pair, call: RuntimeCall) {
 		.expect("dispatch succeeds");
 }
 
+/// The relay chain block number the parachain sees at parachain block `para_block`.
+///
+/// The parachain produces `BLOCK_PROCESSING_VELOCITY` blocks per relay chain block. Both chains
+/// start at zero here: [`indiv_pallet_relay_randomness::RandomnessEntry::moment`] is written below
+/// with the parachain block number, so an offset between the two clocks shifts the randomness
+/// timing the game flows depend on.
+fn relay_block_for(para_block: BlockNumber) -> RelayBlockNumber {
+	para_block / BLOCK_PROCESSING_VELOCITY
+}
+
 /// Advance the chain to `target_block`
 fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<Runtime>) {
 	loop {
@@ -1388,6 +1409,9 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 			&Default::default(),
 			&Default::default(),
 		);
+
+		// Simulate the parachain-system inherent moving the relay chain forward.
+		RelaychainDataProvider::<Runtime>::set_block_number(relay_block_for(next));
 
 		// Simulate the parachain-system inherent refreshing the relay randomness, with a
 		// value that varies per block like the relay per-block VRF does.
@@ -1445,6 +1469,12 @@ fn set_time(secs: u64) {
 /// The coinage instance created by [`setup_external_asset`].
 const COINAGE_INSTANCE_ID: indiv_pallet_coinage::InstanceId = 0;
 
+/// The native-per-external-asset rate [`setup_external_asset`] registers with `pallet-asset-rate`.
+///
+/// Native has 10 decimals, the external asset has 6, and the two are notionally worth the same, so
+/// the rate only reconciles the scales: 1 raw external asset ($10^-6) = 10^4 raw native ($10^-10).
+const EXTERNAL_ASSET_RATE: u32 = 10_000;
+
 /// Setup the external asset used by many pallets.
 fn setup_external_asset() {
 	Assets::force_create(
@@ -1457,12 +1487,10 @@ fn setup_external_asset() {
 	.expect("create asset should work");
 
 	// Set up the asset rate for native <-> external asset conversion.
-	// Native has 10 decimals, external asset has 6 decimals.
-	// 1 raw external asset ($10^-6) = 10^4 raw native ($10^-10), so rate = 10^4.
 	AssetRate::create(
 		RuntimeOrigin::root(),
 		alloc::boxed::Box::new(ExternalAssetLocation::get()),
-		sp_runtime::FixedU128::from_u32(10_000),
+		sp_runtime::FixedU128::from_u32(EXTERNAL_ASSET_RATE),
 	)
 	.expect("create asset rate should work");
 

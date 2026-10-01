@@ -30,7 +30,10 @@ if [ "$native_reserve" == "null" ] || [ "$native_reserve" -lt "$native_max" ]; t
   pgas_asset=$(dot asset-hub.query.Assets.Asset "$PGAS_ASSET_ID")
   pgas_admin=$(echo "$pgas_asset" | jq -r '.admin')
   pgas_min_balance=$(echo "$pgas_asset" | jq -r '.min_balance')
-  pgas_mint=$(( pgas_max + pgas_min_balance ))
+  # PGAS pays the AssetHub transaction fees, including this call's own, and the fee is taken
+  # from the balance being supplied as liquidity. Keep a buffer well above one tx fee.
+  pgas_fee_buffer=1000000000 # 1 PGAS
+  pgas_mint=$(( pgas_max + pgas_min_balance + pgas_fee_buffer ))
   echo "Minting $pgas_mint PGAS to $ACCOUNT_AH_SUDO via the PGAS admin"
   mint_call=$(dot --encode asset-hub.tx.Assets.mint "$PGAS_ASSET_ID" "$ACCOUNT_AH_SUDO" "$pgas_mint")
   dot asset-hub.tx.Sudo.sudo_as "$pgas_admin" "$mint_call" --from "$SIGNER_AH_SUDO"

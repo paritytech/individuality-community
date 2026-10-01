@@ -1,6 +1,6 @@
 # Audit Status
 
-`pallet-scarcity` has not undergone a formal security audit. It is experimental and
+`indiv-pallet-scarcity` has not undergone a formal security audit. It is experimental and
 intended for testing and evaluation only.
 
 Its inclusion in the development runtime is for integration testing and does not imply

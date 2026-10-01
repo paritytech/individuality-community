@@ -40,7 +40,7 @@ use assets_common::local_and_foreign_assets::{ForeignAssetReserveData, TargetFro
 use assets_common::migrations::foreign_assets_reserves::ForeignAssetsReservesMigration;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use cumulus_pallet_parachain_system::{RelayNumberMonotonicallyIncreases, RelaychainDataProvider};
-use cumulus_primitives_core::{AggregateMessageOrigin, ParaId};
+use cumulus_primitives_core::{AggregateMessageOrigin, ParaId, VerifySchedulingSignature};
 #[cfg(not(feature = "runtime-benchmarks"))]
 use frame_support::traits::NeverEnsureOrigin;
 use frame_support::{
@@ -53,7 +53,7 @@ use frame_support::{
 		AsEnsureOriginWithArg, ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, ContainsPair,
 		EitherOfDiverse, InstanceFilter, TransformOrigin,
 	},
-	weights::{ConstantMultiplier, Weight, WeightToFee as _},
+	weights::{ConstantMultiplier, Weight},
 	PalletId,
 };
 use frame_system::{
@@ -242,11 +242,9 @@ pub type UncheckedExtrinsic =
 pub type Migrations = (
 	pallet_collator_selection::migration::v2::MigrationToV2<Runtime>,
 	cumulus_pallet_xcmp_queue::migration::v6::MigrateV5ToV6<Runtime>,
+	cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
-	indiv_pallet_members_notifier::migration::SeedSubscriptionWhitelist<
-		Runtime,
-		people::AssetHubSubscriptionWhitelist,
-	>,
+	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)
@@ -278,7 +276,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 1_000_036,
+	spec_version: 3_003_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 5,
@@ -488,6 +486,7 @@ impl cumulus_pallet_parachain_system::Config for Runtime {
 	type ConsensusHook = ConsensusHook;
 	type WeightInfo = weights::cumulus_pallet_parachain_system::WeightInfo<Runtime>;
 	type RelayParentOffset = ConstU32<RELAY_PARENT_OFFSET>;
+	type SchedulingSignatureVerifier = ();
 }
 
 impl indiv_pallet_relay_randomness::Config for Runtime {
@@ -801,11 +800,11 @@ impl cumulus_pallet_weight_reclaim::Config for Runtime {
 
 // TODO(paritytech/individuality#1124): choose good value.
 const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_MAX: Balance = UNITS;
-const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = CENTS;
-const POI_CANDIDATE_RECOVERY: Balance = CENTS;
-const ACCOUNT_PARTICIPANT_RECOVERY: Balance = CENTS;
+const PEOPLE_IDENTITY_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = CENTS * 3;
+const POI_CANDIDATE_RECOVERY: Balance = CENTS * 3;
+const ACCOUNT_PARTICIPANT_RECOVERY: Balance = CENTS * 3;
 const LITE_PERSON_AND_ALIAS_ALLOWANCE_MAX: Balance = UNITS;
-const LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = MILLICENTS;
+const LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY: Balance = MILLICENTS * 3;
 
 #[derive(
 	Clone,
@@ -935,6 +934,7 @@ impl indiv_pallet_origin_restriction::BenchmarkHelper<OriginCaller, RuntimeCall>
 
 impl indiv_pallet_origin_restriction::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_origin_restriction::WeightInfo<Runtime>;
+	type BlockNumberProvider = RelaychainDataProvider<Runtime>;
 	type RestrictedEntity = RestrictedEntity;
 	type OperationAllowedOneTimeExcess = OperationAllowedOneTimeExcess;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -996,6 +996,7 @@ impl pallet_assets::Config for Runtime {
 	type Extra = ();
 	type WeightInfo = weights::pallet_assets_assets::WeightInfo<Runtime>;
 	type CallbackHandle = ();
+	type AssetIdAllocator = ();
 	type AssetAccountDeposit = AssetAccountDeposit;
 	type RemoveItemsLimit = frame_support::traits::ConstU32<1000>;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -1036,6 +1037,7 @@ impl pallet_assets::Config<PoolAssetsInstance> for Runtime {
 	type Holder = ();
 	type Extra = ();
 	type CallbackHandle = ();
+	type AssetIdAllocator = ();
 	type WeightInfo = weights::pallet_assets_pool::WeightInfo<Runtime>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();
@@ -1372,6 +1374,16 @@ impl_runtime_apis! {
 		fn relay_parent_offset() -> u32 {
 			RELAY_PARENT_OFFSET
 		}
+
+		fn max_claim_queue_offset() -> u8 {
+			cumulus_pallet_parachain_system::Pallet::<Runtime>::max_claim_queue_offset()
+		}
+	}
+
+	impl cumulus_primitives_core::SchedulingV3EnabledApi<Block> for Runtime {
+		fn scheduling_v3_enabled() -> bool {
+			<Runtime as cumulus_pallet_parachain_system::Config>::SchedulingSignatureVerifier::V3_SCHEDULING_ENABLED
+		}
 	}
 
 	impl cumulus_primitives_aura::AuraUnincludedSegmentApi<Block> for Runtime {
@@ -1518,25 +1530,16 @@ impl_runtime_apis! {
 
 	impl xcm_runtime_apis::fees::XcmPaymentApi<Block> for Runtime {
 		fn query_acceptable_payment_assets(xcm_version: xcm::Version) -> Result<Vec<VersionedAssetId>, XcmPaymentApiError> {
-			let acceptable_assets = alloc::vec![AssetId(xcm_config::AssetHubLocation::get())];
+			let acceptable_assets = alloc::vec![
+				AssetId(xcm_config::RelayLocation::get()),
+				AssetId(people::ExternalAssetLocation::get()),
+			];
 			PolkadotXcm::query_acceptable_payment_assets(xcm_version, acceptable_assets)
 		}
 
 		fn query_weight_to_asset_fee(weight: Weight, asset: VersionedAssetId) -> Result<u128, XcmPaymentApiError> {
-			match asset.try_as::<AssetId>() {
-				Ok(asset_id) if asset_id.0 == xcm_config::AssetHubLocation::get() => {
-					// for native token
-					Ok(WeightToFee::weight_to_fee(&weight))
-				},
-				Ok(asset_id) => {
-					log::trace!(target: "xcm::xcm_runtime_apis", "query_weight_to_asset_fee - unhandled asset_id: {asset_id:?}!");
-					Err(XcmPaymentApiError::AssetNotFound)
-				},
-				Err(_) => {
-					log::trace!(target: "xcm::xcm_runtime_apis", "query_weight_to_asset_fee - failed to convert asset: {asset:?}!");
-					Err(XcmPaymentApiError::VersionedConversionFailed)
-				}
-			}
+			type Trader = <XcmConfig as xcm_executor::Config>::Trader;
+			PolkadotXcm::query_weight_to_asset_fee::<Trader>(weight, asset)
 		}
 
 		fn query_xcm_weight(message: VersionedXcm<()>) -> Result<Weight, XcmPaymentApiError> {
@@ -1548,7 +1551,8 @@ impl_runtime_apis! {
 			message: VersionedXcm<()>,
 			asset_id: VersionedAssetId,
 		) -> Result<VersionedAssets, XcmPaymentApiError> {
-			PolkadotXcm::query_delivery_fees::<()>(destination, message, asset_id)
+			type AssetExchanger = <xcm_config::XcmConfig as xcm_executor::Config>::AssetExchanger;
+			PolkadotXcm::query_delivery_fees::<AssetExchanger>(destination, message, asset_id)
 		}
 	}
 
@@ -1571,6 +1575,31 @@ impl_runtime_apis! {
 				AccountId,
 				xcm_config::LocationToAccountId,
 			>::convert_location(location)
+		}
+	}
+
+	impl xcm_runtime_apis::authorized_aliases::AuthorizedAliasersApi<Block> for Runtime {
+		fn authorized_aliasers(target: VersionedLocation) -> Result<
+			Vec<xcm_runtime_apis::authorized_aliases::OriginAliaser>,
+			xcm_runtime_apis::authorized_aliases::Error
+		> {
+			PolkadotXcm::authorized_aliasers(target)
+		}
+
+		fn is_authorized_alias(origin: VersionedLocation, target: VersionedLocation) -> Result<
+			bool,
+			xcm_runtime_apis::authorized_aliases::Error
+		> {
+			PolkadotXcm::is_authorized_alias(origin, target)
+		}
+	}
+
+	impl xcm_runtime_apis::trusted_query::TrustedQueryApi<Block> for Runtime {
+		fn is_trusted_reserve(asset: VersionedAsset, location: VersionedLocation) -> xcm_runtime_apis::trusted_query::XcmTrustedQueryResult {
+			PolkadotXcm::is_trusted_reserve(asset, location)
+		}
+		fn is_trusted_teleporter(asset: VersionedAsset, location: VersionedLocation) -> xcm_runtime_apis::trusted_query::XcmTrustedQueryResult {
+			PolkadotXcm::is_trusted_teleporter(asset, location)
 		}
 	}
 
@@ -1602,18 +1631,18 @@ impl_runtime_apis! {
 		}
 
 		fn nft_claim_credit_proofs(
-			award_block: BlockNumber,
+			tree_block: BlockNumber,
 			claimant: indiv_support::identity::AccountOrPerson<AccountId>,
 		) -> Result<Vec<indiv_pallet_nft_credits::NftClaimCreditProof>, indiv_pallet_nft_credits::NftClaimCreditProofError> {
-			NftCredits::nft_claim_credit_proofs(award_block, &claimant)
+			NftCredits::nft_claim_credit_proofs(tree_block, &claimant)
 		}
 
 		fn nft_claim_credit_proof_from_awards(
-			award_block: BlockNumber,
+			tree_block: BlockNumber,
 			awards: Vec<indiv_pallet_nft_credits::NftClaimCreditAward<AccountId>>,
 			leaf_index: u32,
 		) -> Result<indiv_pallet_nft_credits::NftClaimCreditProof, indiv_pallet_nft_credits::NftClaimCreditProofError> {
-			NftCredits::nft_claim_credit_proof_from_awards(award_block, awards, leaf_index)
+			NftCredits::nft_claim_credit_proof_from_awards(tree_block, awards, leaf_index)
 		}
 	}
 
@@ -1875,7 +1904,7 @@ impl_runtime_apis! {
 				}
 
 				fn alias_origin() -> Result<(Location, Location), BenchmarkError> {
-					Err(BenchmarkError::Skip)
+					Ok(system_parachains_common::benchmarking::set_up_worst_case_authorized_alias::<Runtime>())
 				}
 			}
 

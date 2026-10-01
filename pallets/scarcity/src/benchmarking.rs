@@ -15,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Benchmarks for `pallet_scarcity`.
+//! Benchmarks for `indiv_pallet_scarcity`.
 
 extern crate alloc;
 
@@ -87,7 +87,7 @@ mod benchmarks {
 	}
 
 	#[benchmark]
-	fn define_item(m: Linear<0, 100>) -> Result<(), BenchmarkError> {
+	fn define_item(m: Linear<0, { T::MaxItemMetadata::get() }>) -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
 		fund::<T>(&caller);
 		let collection = Pallet::<T>::do_create_collection(caller.clone())?;
@@ -296,17 +296,12 @@ mod benchmarks {
 		Ok(())
 	}
 
-	/// `do_transfer_by_holder` has no extrinsic of its own: the fee-less `transfer` covers
-	/// purse-signed holders, and this entry exists for paid callers such as a contract
-	/// environment, which charge this weight themselves.
-	///
-	/// `weights.rs` carries no `transfer_by_holder` entry yet. It is generated from this
-	/// benchmark by the same rig that produced the rest of that file, and the first caller
-	/// that needs the weight brings the regenerated numbers with it.
+	/// Contract environments charge this weight for `do_transfer_by_holder` too. The extrinsic
+	/// adds only the signed-origin check.
 	#[benchmark]
 	fn transfer_by_holder() -> Result<(), BenchmarkError> {
-		let owner: T::AccountId = whitelisted_caller();
-		let from: T::AccountId = account("from", 0, 0);
+		let owner: T::AccountId = account("owner", 0, 0);
+		let from: T::AccountId = whitelisted_caller();
 		let to: T::AccountId = account("to", 0, 0);
 		NftsByOwner::<T>::remove(&to);
 		let (collection, item) = create_definition::<T>(&owner)?;
@@ -315,10 +310,8 @@ mod benchmarks {
 		// Worst case clears a lock on the source purse.
 		Locked::<T>::insert(&from, LockInfo { retries: u8::MAX, until: u64::MAX });
 
-		#[block]
-		{
-			Pallet::<T>::do_transfer_by_holder(&from, instance, to.clone())?;
-		}
+		#[extrinsic_call]
+		_(RawOrigin::Signed(from.clone()), instance, to.clone());
 
 		let nft = NftsByOwner::<T>::get(&to).expect("destination holds the transferred NFT");
 		assert_eq!(nft.instance, instance);

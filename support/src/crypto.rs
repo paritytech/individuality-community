@@ -18,19 +18,22 @@
 //!
 //! Defines the concrete ring VRF suite and verifiable type used across the workspace.
 //!
-//! In `no_std` builds (on-chain), the suite uses host-accelerated elliptic curve operations
-//! provided by `sp-crypto-ec-utils`. In `std` builds the original arkworks types are used
-//! directly, unless the `ec-crypto-hostcalls` feature is explicitly enabled.
+//! The suite has two interchangeable backends with identical outputs. By default the
+//! upstream arkworks suite computes everything in-runtime and runs on any validator.
+//! The `ec-crypto-hostcalls` feature switches both `std` and `no_std` builds to a
+//! backend that offloads elliptic curve operations to the RFC-163 host functions of
+//! `sp-crypto-ec-utils`; a runtime built with it only runs on validators that expose
+//! those host functions.
 
-#[cfg(any(not(feature = "std"), feature = "ec-crypto-hostcalls"))]
+#[cfg(feature = "ec-crypto-hostcalls")]
 mod host_hooks;
 
-#[cfg(all(feature = "std", not(feature = "ec-crypto-hostcalls")))]
+#[cfg(not(feature = "ec-crypto-hostcalls"))]
 mod bandersnatch {
 	pub use verifiable::ring::ark_vrf::suites::bandersnatch::BandersnatchSha512Ell2 as BandersnatchSuite;
 }
 
-#[cfg(any(not(feature = "std"), feature = "ec-crypto-hostcalls"))]
+#[cfg(feature = "ec-crypto-hostcalls")]
 mod bandersnatch {
 	use alloc::borrow::Cow;
 	use spin::Once;
