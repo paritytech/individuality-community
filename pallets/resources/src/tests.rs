@@ -3271,9 +3271,8 @@ mod dynamic_parameters {
 	fn identifier(collection: MembershipCollection) -> &'static Identifier {
 		match collection {
 			MembershipCollection::People => indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER,
-			MembershipCollection::LitePeople => {
-				indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER
-			},
+			MembershipCollection::LitePeople =>
+				indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER,
 		}
 	}
 
@@ -3729,9 +3728,9 @@ mod dynamic_parameters {
 			let period_key = BigEndianU32::from(period);
 			SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(1), ());
 			set_time_sec(
-				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64
-					+ LongTermStorageGraceWindow::get() as u64
-					+ 1,
+				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
+					LongTermStorageGraceWindow::get() as u64 +
+					1,
 			);
 			let limit = LongTermStorageCleanupLimit::get();
 			let clear = |limit: u32| {
@@ -3764,9 +3763,9 @@ mod dynamic_parameters {
 				SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(i as u64), ());
 			}
 			set_time_sec(
-				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64
-					+ LongTermStorageGraceWindow::get() as u64
-					+ 1,
+				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
+					LongTermStorageGraceWindow::get() as u64 +
+					1,
 			);
 
 			// A lowered limit removes fewer entries per offchain-worker run.

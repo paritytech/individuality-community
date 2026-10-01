@@ -169,9 +169,8 @@ impl<T: Config> MigrateV0ToV1<T> {
 	fn required_weight(cursor: &Cursor<T::AccountId>) -> Weight {
 		match cursor {
 			Cursor::Consumers(_) => T::WeightInfo::migrate_v1_translate_consumer(),
-			Cursor::UsernameOwnerOf | Cursor::UsernameReservationQueue => {
-				T::WeightInfo::migrate_v1_clear_username_entry()
-			},
+			Cursor::UsernameOwnerOf | Cursor::UsernameReservationQueue =>
+				T::WeightInfo::migrate_v1_clear_username_entry(),
 			Cursor::ReservationOf => T::WeightInfo::migrate_v1_clear_username_entry()
 				.saturating_add(<T as frame_system::Config>::DbWeight::get().writes(2)),
 		}
@@ -204,22 +203,19 @@ impl<T: Config> SteppedMigration for MigrateV0ToV1<T> {
 			let unit = Self::required_weight(&cursor);
 			let stage_done = match &mut cursor {
 				Cursor::Consumers(last) => Self::translate_stage(last, meter, unit),
-				Cursor::UsernameOwnerOf => {
-					Self::clear_stage::<_, v0::UsernameOwnerOf<T>>(meter, unit)
-				},
-				Cursor::UsernameReservationQueue => {
-					Self::clear_stage::<_, v0::UsernameReservationQueue<T>>(meter, unit)
-				},
+				Cursor::UsernameOwnerOf =>
+					Self::clear_stage::<_, v0::UsernameOwnerOf<T>>(meter, unit),
+				Cursor::UsernameReservationQueue =>
+					Self::clear_stage::<_, v0::UsernameReservationQueue<T>>(meter, unit),
 				Cursor::ReservationOf => Self::clear_stage::<_, v0::ReservationOf<T>>(meter, unit),
 			};
 			match stage_done {
 				// A step that did nothing cannot progress with this meter.
-				Err(required) if !progressed => {
-					return Err(SteppedMigrationError::InsufficientWeight { required })
-				},
+				Err(required) if !progressed =>
+					return Err(SteppedMigrationError::InsufficientWeight { required }),
 				Err(_) => return Ok(Some(cursor)),
 				Ok(false) => {},
-				Ok(true) => {
+				Ok(true) =>
 					cursor = match cursor {
 						Cursor::Consumers(_) => Cursor::UsernameOwnerOf,
 						Cursor::UsernameOwnerOf => Cursor::UsernameReservationQueue,
@@ -230,8 +226,7 @@ impl<T: Config> SteppedMigration for MigrateV0ToV1<T> {
 							log::info!(target: LOG_TARGET, "username storage removed");
 							return Ok(None);
 						},
-					}
-				},
+					},
 			}
 			progressed = true;
 		}
