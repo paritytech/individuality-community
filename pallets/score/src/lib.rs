@@ -1111,6 +1111,7 @@ pub mod pallet {
 					reached_personhood: false,
 					has_ever_reached_personhood: false,
 					last_attended_game: None,
+					attended_games_while_recognized: 0,
 				},
 			);
 
@@ -1137,6 +1138,7 @@ pub mod pallet {
 					reached_personhood: true,
 					has_ever_reached_personhood: true,
 					last_attended_game: None,
+					attended_games_while_recognized: 0,
 				},
 			);
 
@@ -1247,6 +1249,12 @@ pub mod pallet {
 			// Update last_attended_game.
 			if attended {
 				score.last_attended_game = Some(game_index);
+			}
+
+			// Counting games attended while recognized
+			if attended && matches!(score.recognition, Recognized(_) | ExternallyRecognized) {
+				score.attended_games_while_recognized =
+					score.attended_games_while_recognized.saturating_add(1);
 			}
 
 			// Update score and streak given the attendance.
