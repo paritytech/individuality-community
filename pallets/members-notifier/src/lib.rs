@@ -531,7 +531,7 @@ pub mod pallet {
 
 			let next = T::RingRootsProvider::next_ring_index(identifier);
 			ensure!(
-				ring_root_indices.windows(2).all(|w| w[0] < w[1]) &&
+				ring_root_indices.is_sorted_by(|a, b| a < b) &&
 					ring_root_indices.last().is_none_or(|&last| last < next),
 				Error::<T>::InvalidRingIndex
 			);
