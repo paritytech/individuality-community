@@ -305,7 +305,7 @@ mod benches {
 		let (account, _) = <T as Config>::BenchmarkHelper::sign_message(b"mock");
 		let queue_entry = ReservationQueueEntryOf::<T> {
 			account: account.clone(),
-			joined_at: T::Clock::now().as_secs(),
+			joined_at: <T as Config>::Clock::now().as_secs(),
 		};
 		let queue: BoundedVec<ReservationQueueEntryOf<T>, T::MaxReservationQueueLength> =
 			BoundedVec::try_from(alloc::vec![queue_entry]).unwrap();
@@ -358,7 +358,7 @@ mod benches {
 		#[extrinsic_call]
 		_(origin);
 
-		let now = T::Clock::now().as_secs();
+		let now = <T as Config>::Clock::now().as_secs();
 		assert!(matches!(
 			Consumers::<T>::get(&account).unwrap().credibility,
 			Credibility::Person { last_update, demoted: false, .. } if last_update == now
@@ -538,7 +538,8 @@ mod benches {
 		let period_duration = T::NotificationPeriodDuration::get().max(1) as u64;
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(period_duration + 1));
 
-		let period = Pallet::<T>::notification_period_from_timestamp(T::Clock::now().as_secs());
+		let period =
+			Pallet::<T>::notification_period_from_timestamp(<T as Config>::Clock::now().as_secs());
 		let reference = crate::types::NotificationReference { period, seq: 0 };
 		let alias: Alias = [1u8; 32];
 		let origin = <T as frame_system::Config>::RuntimeOrigin::from(
@@ -562,7 +563,8 @@ mod benches {
 		let period_duration = T::NotificationPeriodDuration::get().max(1) as u64;
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(period_duration + 1));
 
-		let period = Pallet::<T>::notification_period_from_timestamp(T::Clock::now().as_secs());
+		let period =
+			Pallet::<T>::notification_period_from_timestamp(<T as Config>::Clock::now().as_secs());
 		let reference = crate::types::NotificationReference { period, seq: 0 };
 		let alias: Alias = [2u8; 32];
 		let origin = <T as frame_system::Config>::RuntimeOrigin::from(
@@ -592,7 +594,8 @@ mod benches {
 		let period_duration = T::NotificationPeriodDuration::get().max(1) as u64;
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(period_duration + 1));
 
-		let period = Pallet::<T>::notification_period_from_timestamp(T::Clock::now().as_secs());
+		let period =
+			Pallet::<T>::notification_period_from_timestamp(<T as Config>::Clock::now().as_secs());
 		let reference = crate::types::NotificationReference { period, seq: 0 };
 		let alias: Alias = [3u8; 32];
 		let origin = <T as frame_system::Config>::RuntimeOrigin::from(
@@ -737,7 +740,8 @@ mod benches {
 			pallet::SECONDS_PER_DAY + 1000,
 		));
 
-		let period = Pallet::<T>::stmt_store_period_from_timestamp(T::Clock::now().as_secs());
+		let period =
+			Pallet::<T>::stmt_store_period_from_timestamp(<T as Config>::Clock::now().as_secs());
 		let seq = 0u32;
 		let alias: Alias = [10u8; 32];
 		let period_key = indiv_support::utils::BigEndianU32::from(period);
@@ -745,7 +749,7 @@ mod benches {
 		// Pre-populate an existing entry with the same alias and a different target.
 		let old_target: T::AccountId = account("old-target", 0, 0);
 		let old_seq = 1u32;
-		let initial_since = T::Clock::now().as_secs();
+		let initial_since = <T as Config>::Clock::now().as_secs();
 		increase_allowance_by(old_target.clone().into(), T::AccountsApiAllowance::get().into());
 		StatementStoreAllowances::<T>::insert(
 			period_key,
@@ -865,7 +869,8 @@ mod benches {
 		));
 
 		let (secret, member) = setup_lite_ring_with_one_member::<T>()?;
-		let period = Resources::<T>::stmt_store_period_from_timestamp(T::Clock::now().as_secs());
+		let period =
+			Resources::<T>::stmt_store_period_from_timestamp(<T as Config>::Clock::now().as_secs());
 		let seq = 0u32;
 		let call = Call::<T>::set_statement_store_account {
 			period,
@@ -896,7 +901,7 @@ mod benches {
 		// Pre-populate an existing entry under the same alias so the extension exercises
 		// the cooldown branch.
 		let period_key = indiv_support::utils::BigEndianU32::from(period);
-		let initial_since = T::Clock::now().as_secs();
+		let initial_since = <T as Config>::Clock::now().as_secs();
 		let existing_target: T::AccountId = account("existing-target", 0, 0);
 		StatementStoreAllowances::<T>::insert(
 			period_key,
@@ -937,8 +942,9 @@ mod benches {
 	fn claim_long_term_storage() -> Result<(), BenchmarkError> {
 		let period_duration = T::LongTermStoragePeriodDuration::get() as u64;
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(period_duration + 100));
-		let period =
-			Pallet::<T>::long_term_storage_period_from_timestamp(T::Clock::now().as_secs());
+		let period = Pallet::<T>::long_term_storage_period_from_timestamp(
+			<T as Config>::Clock::now().as_secs(),
+		);
 		let counter = 0u8;
 		let alias: Alias = [42u8; 32];
 		let account_id: T::AccountId = whitelisted_caller();
@@ -979,8 +985,9 @@ mod benches {
 
 		let (secret, member) = setup_lite_ring_with_one_member::<T>()?;
 
-		let period =
-			Resources::<T>::long_term_storage_period_from_timestamp(T::Clock::now().as_secs());
+		let period = Resources::<T>::long_term_storage_period_from_timestamp(
+			<T as Config>::Clock::now().as_secs(),
+		);
 		let counter = 0u8;
 		let call = Call::<T>::claim_long_term_storage {
 			period,
