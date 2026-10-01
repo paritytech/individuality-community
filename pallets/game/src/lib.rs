@@ -232,6 +232,7 @@ extern crate self as indiv_pallet_game;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 mod extension;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
@@ -322,7 +323,11 @@ pub mod pallet {
 	/// RFC-0022](https://github.com/paritytech/trinity-user-agents/blob/63a450d025462f113311a26408dc53627d1a268d/docs/rfcs/0022-account-derivations.md).
 	pub const PRODUCT_NAME: &[u8] = b"dim2";
 
+	/// The current storage version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -2050,6 +2055,7 @@ pub mod pallet {
 				rounds: schedule.rounds,
 				pending_attendance: 0,
 				airdrops_scheduled,
+				tenure_claim_opens: game_play_time.saturating_sub(schedule.tenure_claim_window),
 			});
 			GameHistory::<T>::insert(index, game_play_time);
 

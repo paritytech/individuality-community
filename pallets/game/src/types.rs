@@ -313,6 +313,9 @@ pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 	/// airdrop indices `0..airdrops_scheduled`. Scheduling stops at the first failure, so this
 	/// can be less than the schedule's airdrop count. Bounded by `MAX_GAME_AIRDROPS`.
 	pub airdrops_scheduled: u8,
+	/// The time from which a registered player can claim their tenure credits, in seconds since
+	/// Unix epoch. Claims close at `game_date`.
+	pub tenure_claim_opens: u32,
 }
 
 /// The state of a game.
@@ -514,6 +517,12 @@ pub struct GameSchedule<AssetId, Balance> {
 	/// The airdrop events to schedule for this game, each drawn at its own offset relative to
 	/// the game play time. Empty skips airdrop scheduling for this game.
 	pub airdrops: BoundedVec<GameAirdrop<AssetId, Balance>, ConstU32<{ MAX_GAME_AIRDROPS as u32 }>>,
+	/// The seconds before `game_play_time` from which a registered player can claim their tenure
+	/// credits. Zero gives the game no claim window.
+	///
+	/// A player must be signed up to claim, so claims open no earlier than the game's
+	/// registration.
+	pub tenure_claim_window: u32,
 }
 
 /// `GameSchedule` for the runtime.

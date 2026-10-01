@@ -24,9 +24,11 @@ use crate::{NftClaimCreditAward, NftClaimCreditProof, NftClaimCreditProofError};
 use alloc::vec::Vec;
 use codec::Codec;
 use indiv_support::{credit_trees::NftClaimCreditTree, identity::AccountOrPerson};
+use sp_runtime::DispatchError;
 
 sp_api::decl_runtime_apis! {
 	/// The API a wallet mints an NFT claim credit through.
+	#[api_version(2)]
 	pub trait NftCreditsApi<AccountId, BlockNumber>
 	where
 		AccountId: Codec,
@@ -77,5 +79,13 @@ sp_api::decl_runtime_apis! {
 			awards: Vec<NftClaimCreditAward<AccountId>>,
 			leaf_index: u32,
 		) -> Result<NftClaimCreditProof, NftClaimCreditProofError>;
+
+		/// Returns the number of tenure credits `account` can claim now with
+		/// `claim_tenure_credits`, or the error that call fails with.
+		///
+		/// A refused claim pays a fee, so a wallet checks this before it submits one. A claim
+		/// included later can still fail, because the state can change in between.
+		#[api_version(2)]
+		fn claimable_tenure_credits(account: AccountId) -> Result<u32, DispatchError>;
 	}
 }
