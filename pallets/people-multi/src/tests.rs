@@ -60,7 +60,7 @@ fn suspended_indices_list(
 ) -> BoundedVec<u32, indiv_pallet_members::RingCapacityFromExponent<Test>> {
 	let suspended_indices =
 		indiv_pallet_members::PendingSuspensions::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, ring_index);
-	assert!(&suspended_indices[..].windows(2).all(|pair| pair[0] < pair[1]));
+	assert!(suspended_indices.is_sorted_by(|a, b| a < b));
 	suspended_indices
 }
 

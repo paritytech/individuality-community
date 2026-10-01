@@ -292,6 +292,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			tenure_claim_window: 0,
 		};
 
 		<T as Config>::BenchmarkHelper::set_valid_time();
@@ -322,6 +323,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -359,6 +361,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+				tenure_claim_window: 0,
 			};
 			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
 
@@ -408,6 +411,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				pending_attendance: 0,
 				airdrops_scheduled: 0,
+				tenure_claim_opens: 0,
 			})
 		}
 		Ok(())
@@ -422,6 +426,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+				tenure_claim_window: 0,
 			});
 		}
 
@@ -448,6 +453,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		};
 
 		let mut meter = WeightMeter::new();
@@ -475,6 +481,7 @@ mod benches {
 			rounds,
 			max_group_size: 2,
 			airdrops: bench_airdrops::<T>(1),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -554,6 +561,7 @@ mod benches {
 			rounds,
 			max_group_size: 2,
 			airdrops: bench_airdrops::<T>(1),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -674,6 +682,7 @@ mod benches {
 			rounds,
 			max_group_size: group_size,
 			airdrops: bench_airdrops::<T>(1),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -844,6 +853,7 @@ mod benches {
 			rounds,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		};
 
 		let mut meter = WeightMeter::new();
@@ -898,6 +908,7 @@ mod benches {
 			rounds,
 			pending_attendance: player_count,
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		};
 
 		for i in 0..player_count {
@@ -1020,6 +1031,7 @@ mod benches {
 			rounds,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		});
 
 		let mut meter = WeightMeter::new();
@@ -1103,6 +1115,7 @@ mod benches {
 			// transition in `on_game_cancelled` (benchmarked separately). `airdrops_scheduled` is
 			// inert here; if refund logic ever moves into this path, set up a funded event.
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		};
 
 		// No players exists for the game so `process_cancelling_step_player` should do minimal
@@ -1170,6 +1183,7 @@ mod benches {
 			rounds,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -1257,6 +1271,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1292,6 +1307,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1327,6 +1343,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1396,6 +1413,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			tenure_claim_window: 0,
 		};
 		Pallet::<T>::new_game(&game_schedule)?;
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1465,6 +1483,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			tenure_claim_window: 0,
 		};
 		Pallet::<T>::new_game(&schedule)?;
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1541,6 +1560,7 @@ mod benches {
 			rounds: rounds as u8,
 			max_group_size,
 			airdrops: bench_airdrops::<T>(1),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(Pallet::<T>::new_game(&game_schedule));
 
@@ -1764,6 +1784,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		});
 
 		// Seed attendance history at max depth so the removal proof is worst case.
@@ -1955,6 +1976,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&game_schedule));
 
@@ -1969,6 +1991,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+				tenure_claim_window: 0,
 			};
 			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
 
@@ -2001,6 +2024,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+				tenure_claim_window: 0,
 			};
 			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
 
@@ -2048,6 +2072,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -2117,6 +2142,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		});
 
 		let mut meter = WeightMeter::new();
@@ -2174,6 +2200,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		assert!(matches!(
@@ -2213,6 +2240,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		assert!(matches!(
@@ -2246,6 +2274,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game = Game::<T>::get().expect("game exists after new_game");
@@ -2286,6 +2315,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game = Game::<T>::get().expect("game exists after new_game");

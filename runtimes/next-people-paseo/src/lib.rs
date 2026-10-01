@@ -247,6 +247,8 @@ pub type Migrations = (
 	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_people::migration::MigrateV0ToV1<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_game::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)
@@ -1625,6 +1627,7 @@ impl_runtime_apis! {
 		}
 	}
 
+	#[api_version(2)]
 	impl indiv_pallet_nft_credits::runtime_api::NftCreditsApi<Block, AccountId, BlockNumber> for Runtime {
 		fn nft_claim_credit_roots(
 			claimant: indiv_support::identity::AccountOrPerson<AccountId>,
@@ -1645,6 +1648,10 @@ impl_runtime_apis! {
 			leaf_index: u32,
 		) -> Result<indiv_pallet_nft_credits::NftClaimCreditProof, indiv_pallet_nft_credits::NftClaimCreditProofError> {
 			NftCredits::nft_claim_credit_proof_from_awards(tree_block, awards, leaf_index)
+		}
+
+		fn claimable_tenure_credits(account: AccountId) -> Result<u32, sp_runtime::DispatchError> {
+			NftCredits::claimable_tenure_credits(account)
 		}
 	}
 
