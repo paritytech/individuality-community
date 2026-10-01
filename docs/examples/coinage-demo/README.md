@@ -320,3 +320,31 @@ bytes and current `verifiablejs`. Runtime references are
 Denomination references are iOS [Packages/Coinage/Sources/Denomination/Denomination.swift](https://github.com/paritytech/polkadot-app-ios-v2/blob/88f790aa05bfcf532fa24d94a451611da33bed1b/Packages/Coinage/Sources/Denomination/Denomination.swift)
 and Android [RealCoinAmountBreakdownContext.kt](https://github.com/paritytech/polkadot-app-android-v2/blob/ba3e157498e6f89c5feb46272092ae952181f3c2/feature/coinage/impl/src/main/java/io/pcf/polkadotapp/feature_coinage_impl/domain/common/RealCoinAmountBreakdownContext.kt). Brevity's wallet UI delegates
 Coinage operations to its [core](https://github.com/paritytech/brevity-dozer/blob/0fb3fa214c8abeb7a33a7db0db60c257ea069c8e/core/crates/brevity-viewmodel/src/coinage.rs); it is not required by this standalone example.
+
+
+### Multiple public test accounts
+
+`recycler-bot.ts --account Alice|Bob|Charlie|Dave|Eve|Ferdie` selects a public
+Devnet signer when creating a run. Use a separate output directory for each account.
+Resume reads the saved account; a mismatched signer or payer is rejected. Old run
+files without an account name remain Bob runs. Each signer has one nonce lock and
+one launchd label (`io.parity.coinage-demo.recycler-bot` for Bob, with `.alice`,
+`.charlie`, `.dave`, `.eve` or `.ferdie` for the others).
+
+For example, after funding Alice with at least 3 CASH and sufficient PAS:
+
+```sh
+node --import tsx recycler-bot.ts --init --account Alice --output runs/alice-demo \
+  --duration-seconds 28800 --interval-seconds 90 --denominations 1,2,3,4 \
+  --max-held-raw 2000000 --asset-floor-raw 500000 --min-hold-seconds 1800 \
+  --native-floor-raw 100000000000 --native-budget-raw 250000000000
+./recycler-service.sh start runs/alice-demo
+./recycler-service.sh status runs/alice-demo
+```
+
+The four denomination IDs represent 0.02, 0.04, 0.08 and 0.16 CASH. Six bots at
+90-second intervals target 240 successful loads per hour and about 18 CASH/hour
+loaded, before finality, ring ceilings and funding constraints. Withdrawals reuse
+that capital; adding incoming and outgoing amounts measures gross turnover, not
+unique funds. These are targets, not measured throughput. Larger CASH balances
+alone do not change denomination coverage or fill other denomination rings.

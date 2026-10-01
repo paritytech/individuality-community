@@ -462,3 +462,36 @@ The following transactions were independently checked through Interweb HTTP RPC:
 [Full public verification data](recycler-bot-2026-10-01-restart.json). Only these four pools are targeted; this does not establish Alex’s app settings or eliminate its privacy waiting policy.
 
 Validation: TypeScript checking and 34 script tests passed. The repository check runner passed, including 2831 Rust tests, and the transaction-priority lint passed. Existing task-comment-format lint failures remain. A simulation from the resumed checkpoint reached the deadline without exhausting capital under assumed successful 30-second settlements. It is not evidence that the live eight-hour run has completed.
+
+
+## Six-account fleet on October 1
+
+The five additional bots started around 08:41 UTC; Bob continued running. Each uses
+a separate signer, nonce lock, checkpoint and launchd label. The end remains about
+15:53 UTC (22:53 GMT+7). Each new bot received 3 CASH. Alice paid for five exact-output
+swaps and transferred 100 PAS each to Eve and Ferdie for fees.
+
+[Funding transaction](https://dev.papi.how/explorer/0xc6859089d80edbf8f5f7aca6883b5af09bec5ddd148bae7bde2a8436a5c960f0#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) finalized successfully in #7200500-2.
+
+Independent HTTP RPC verification at finalized #7200574 checked canonical block hashes,
+extrinsic hashes, success events, load signers and Included membership. See
+[public evidence](recycler-fleet-2026-10-01.json). Balances use the stated finalized
+head; heartbeats, counters and held values are separately observed local status.
+
+| Account | Verified transaction |
+|---|---|
+| Alice | [#7200538-2](https://dev.papi.how/explorer/0x19735622f6131bd1f7705f25820a3913e0f8a5e1d5d66552ff31e4036060a89e#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) |
+| Bob | [#7200565-2](https://dev.papi.how/explorer/0xb9ec6c594c08366bcfa9e3a7f675f448186dfdb08af2cd434973e2109d6de481#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) |
+| Charlie | [#7200543-4](https://dev.papi.how/explorer/0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4) |
+| Dave | [#7200543-3](https://dev.papi.how/explorer/0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3) |
+| Eve | [#7200543-5](https://dev.papi.how/explorer/0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=5) |
+| Ferdie | [#7200543-6](https://dev.papi.how/explorer/0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=6) |
+
+The fleet has 18.56 CASH of working inventory including Bob's held vouchers.
+The shortfall to 500 CASH per account is 2,981.44 CASH: 497 for each new bot and
+496.44 for Bob. This is capital, not transaction volume. The current plan still
+loads denominations 1–4 (0.02–0.16 CASH); it does not transact 500 CASH per operation.
+
+Validation: TypeScript checking and account/service tests pass. The repository
+check runner passed all 2,831 Rust tests and the priority lint passed. The existing
+issue-link lint failures remain unchanged. No PR was created.

@@ -1,0 +1,1464 @@
+{
+  "checkedAt": "2026-10-01T08:43:00.315Z",
+  "endpoint": "https://rpc.interweb-it.com/people-paseo",
+  "finalized": {
+    "number": 7200574,
+    "hash": "0x756988c59432169ba1330e917b3be29a534b25a5c77127e6b6270fd1f632a1aa"
+  },
+  "funding": {
+    "block": {
+      "index": 2,
+      "number": 7200500,
+      "hash": "0xc6859089d80edbf8f5f7aca6883b5af09bec5ddd148bae7bde2a8436a5c960f0"
+    },
+    "txHash": "0xeb4245d2180e68a9374152c5da75530a277feb92e6bf3dd233b3cb83ffeeecf7",
+    "events": [
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "38237422"
+          }
+        }
+      },
+      {
+        "type": "System",
+        "value": {
+          "type": "NewAccount",
+          "value": {
+            "account": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Endowed",
+          "value": {
+            "account": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+            "free_balance": "1000000000000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Transfer",
+          "value": {
+            "from": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "to": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+            "amount": "1000000000000"
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "System",
+        "value": {
+          "type": "NewAccount",
+          "value": {
+            "account": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Endowed",
+          "value": {
+            "account": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+            "free_balance": "1000000000000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Transfer",
+          "value": {
+            "from": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "to": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+            "amount": "1000000000000"
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "30393834598"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "30393834598"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount_in": "30393834598",
+            "amount_out": "3000000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "30393834598"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "3000000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "30578223669"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "30578223669"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+            "amount_in": "30578223669",
+            "amount_out": "3000000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "30578223669"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "3000000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "30764294934"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "30764294934"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+            "amount_in": "30764294934",
+            "amount_out": "3000000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "30764294934"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "3000000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "30952068912"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "30952068912"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+            "amount_in": "30952068912",
+            "amount_out": "3000000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "30952068912"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "3000000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "31141566437"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "31141566437"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+            "amount": "3000000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+            "amount_in": "31141566437",
+            "amount_out": "3000000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "31141566437"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "3000000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "BatchCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EYCAe5cKPAoFh2HnQQvpKqRYZGqBpaA87u4Zzw89qPE58is",
+            "amount": "38237422"
+          }
+        }
+      },
+      {
+        "type": "TransactionPayment",
+        "value": {
+          "type": "TransactionFeePaid",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "actual_fee": "38237422",
+            "tip": "0"
+          }
+        }
+      },
+      {
+        "type": "System",
+        "value": {
+          "type": "ExtrinsicSuccess",
+          "value": {
+            "dispatch_info": {
+              "weight": {
+                "ref_time": "5477641307",
+                "proof_size": "6666"
+              },
+              "class": {
+                "type": "Normal"
+              },
+              "pays_fee": {
+                "type": "Yes"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "explorer": "https://dev.papi.how/explorer/0xc6859089d80edbf8f5f7aca6883b5af09bec5ddd148bae7bde2a8436a5c960f0#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+  },
+  "accounts": [
+    {
+      "name": "Alice",
+      "address": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      "nativeFree": "7847112041310",
+      "liquidCash": "2980000",
+      "botHeldCash": "20000",
+      "heartbeatAt": "2026-10-01T08:42:48.259Z",
+      "phase": "running",
+      "counters": {
+        "loads": 1,
+        "recycles": 0,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "20000",
+        "assetWithdrawn": "0",
+        "nativeFees": "0"
+      },
+      "proof": {
+        "block": {
+          "number": 7200538,
+          "hash": "0x19735622f6131bd1f7705f25820a3913e0f8a5e1d5d66552ff31e4036060a89e",
+          "index": 2
+        },
+        "txHash": "0x0e865910b3ff786ca7dcb044a552db956dfab9052b1e67214c7bd579dfa9ddcc",
+        "events": [
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Withdraw",
+              "value": {
+                "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "Members",
+            "value": {
+              "type": "MemberAdded",
+              "value": {
+                "key": "0x97ebc564e36ffd2c7074264581deb3a50bcb039813d3fff41a1c61132863dbcb"
+              }
+            }
+          },
+          {
+            "type": "Coinage",
+            "value": {
+              "type": "RecyclerLoadedWithExternalAsset",
+              "value": {
+                "instance_id": 0,
+                "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+                "value": 1,
+                "amount": "20000"
+              }
+            }
+          },
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Deposit",
+              "value": {
+                "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "TransactionPayment",
+            "value": {
+              "type": "TransactionFeePaid",
+              "value": {
+                "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+                "actual_fee": "0",
+                "tip": "0"
+              }
+            }
+          },
+          {
+            "type": "System",
+            "value": {
+              "type": "ExtrinsicSuccess",
+              "value": {
+                "dispatch_info": {
+                  "weight": {
+                    "ref_time": "5181568000",
+                    "proof_size": "7527"
+                  },
+                  "class": {
+                    "type": "Normal"
+                  },
+                  "pays_fee": {
+                    "type": "No"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "explorer": "https://dev.papi.how/explorer/0x19735622f6131bd1f7705f25820a3913e0f8a5e1d5d66552ff31e4036060a89e#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+      },
+      "member": {
+        "type": "Included",
+        "value": {
+          "ring_index": 0,
+          "ring_page": 0,
+          "ring_position": 245
+        }
+      }
+    },
+    {
+      "name": "Bob",
+      "address": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+      "nativeFree": "20322914154801",
+      "liquidCash": "1620000",
+      "botHeldCash": "1940000",
+      "heartbeatAt": "2026-10-01T08:42:51.395Z",
+      "phase": "running",
+      "counters": {
+        "loads": 84,
+        "recycles": 33,
+        "dropped": 1,
+        "failed": 0,
+        "assetLoaded": "7570000",
+        "assetWithdrawn": "5690000",
+        "nativeFees": "15496821639"
+      },
+      "proof": {
+        "block": {
+          "number": 7200565,
+          "hash": "0xb9ec6c594c08366bcfa9e3a7f675f448186dfdb08af2cd434973e2109d6de481",
+          "index": 2
+        },
+        "txHash": "0x7a02293ad163badfb3282274727e101810560ccf13371ba996daeacc03b82fba",
+        "events": [
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Withdraw",
+              "value": {
+                "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+                "amount": "14570801"
+              }
+            }
+          },
+          {
+            "type": "Members",
+            "value": {
+              "type": "MemberAdded",
+              "value": {
+                "key": "0xcb0892ae188978b0e0d1beeb4d78fcc71793323407ba8131c1236dc23b493bde"
+              }
+            }
+          },
+          {
+            "type": "Coinage",
+            "value": {
+              "type": "RecyclerLoadedWithExternalAsset",
+              "value": {
+                "instance_id": 0,
+                "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+                "value": 3,
+                "amount": "80000"
+              }
+            }
+          },
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Deposit",
+              "value": {
+                "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+                "amount": "14570801"
+              }
+            }
+          },
+          {
+            "type": "TransactionPayment",
+            "value": {
+              "type": "TransactionFeePaid",
+              "value": {
+                "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+                "actual_fee": "0",
+                "tip": "0"
+              }
+            }
+          },
+          {
+            "type": "System",
+            "value": {
+              "type": "ExtrinsicSuccess",
+              "value": {
+                "dispatch_info": {
+                  "weight": {
+                    "ref_time": "5181568000",
+                    "proof_size": "7596"
+                  },
+                  "class": {
+                    "type": "Normal"
+                  },
+                  "pays_fee": {
+                    "type": "No"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "explorer": "https://dev.papi.how/explorer/0xb9ec6c594c08366bcfa9e3a7f675f448186dfdb08af2cd434973e2109d6de481#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+      },
+      "member": {
+        "type": "Included",
+        "value": {
+          "ring_index": 0,
+          "ring_page": 1,
+          "ring_position": 131
+        }
+      }
+    },
+    {
+      "name": "Charlie",
+      "address": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+      "nativeFree": "10000000000000",
+      "liquidCash": "2980000",
+      "botHeldCash": "20000",
+      "heartbeatAt": "2026-10-01T08:42:55.233Z",
+      "phase": "running",
+      "counters": {
+        "loads": 1,
+        "recycles": 0,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "20000",
+        "assetWithdrawn": "0",
+        "nativeFees": "0"
+      },
+      "proof": {
+        "block": {
+          "number": 7200543,
+          "hash": "0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c",
+          "index": 4
+        },
+        "txHash": "0xc0685612c8e976fdd6c2798e36c887c8a2c219518984a854d5a29a8745aa9efb",
+        "events": [
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Withdraw",
+              "value": {
+                "who": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "Members",
+            "value": {
+              "type": "MemberAdded",
+              "value": {
+                "key": "0x424ae28e93b2bc5c60039442b3c60ddecfebe38603063c6e3bf9a272b3c47fa0"
+              }
+            }
+          },
+          {
+            "type": "Coinage",
+            "value": {
+              "type": "RecyclerLoadedWithExternalAsset",
+              "value": {
+                "instance_id": 0,
+                "who": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+                "value": 1,
+                "amount": "20000"
+              }
+            }
+          },
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Deposit",
+              "value": {
+                "who": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "TransactionPayment",
+            "value": {
+              "type": "TransactionFeePaid",
+              "value": {
+                "who": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y",
+                "actual_fee": "0",
+                "tip": "0"
+              }
+            }
+          },
+          {
+            "type": "System",
+            "value": {
+              "type": "ExtrinsicSuccess",
+              "value": {
+                "dispatch_info": {
+                  "weight": {
+                    "ref_time": "5181568000",
+                    "proof_size": "2455"
+                  },
+                  "class": {
+                    "type": "Normal"
+                  },
+                  "pays_fee": {
+                    "type": "No"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "explorer": "https://dev.papi.how/explorer/0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4"
+      },
+      "member": {
+        "type": "Included",
+        "value": {
+          "ring_index": 0,
+          "ring_page": 0,
+          "ring_position": 247
+        }
+      }
+    },
+    {
+      "name": "Dave",
+      "address": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+      "nativeFree": "10000000000000",
+      "liquidCash": "2980000",
+      "botHeldCash": "20000",
+      "heartbeatAt": "2026-10-01T08:42:56.082Z",
+      "phase": "running",
+      "counters": {
+        "loads": 1,
+        "recycles": 0,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "20000",
+        "assetWithdrawn": "0",
+        "nativeFees": "0"
+      },
+      "proof": {
+        "block": {
+          "number": 7200543,
+          "hash": "0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c",
+          "index": 3
+        },
+        "txHash": "0x76ee4748eafabc61354ccdc5636a3647eeb96fd3f7691e4ac041206669ae1ac7",
+        "events": [
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Withdraw",
+              "value": {
+                "who": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "Members",
+            "value": {
+              "type": "MemberAdded",
+              "value": {
+                "key": "0xcf8aebd3eca472d1575d849f8b4eac95f143f6cc4830ab23229b38b2f66992ad"
+              }
+            }
+          },
+          {
+            "type": "Coinage",
+            "value": {
+              "type": "RecyclerLoadedWithExternalAsset",
+              "value": {
+                "instance_id": 0,
+                "who": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+                "value": 1,
+                "amount": "20000"
+              }
+            }
+          },
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Deposit",
+              "value": {
+                "who": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "TransactionPayment",
+            "value": {
+              "type": "TransactionFeePaid",
+              "value": {
+                "who": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+                "actual_fee": "0",
+                "tip": "0"
+              }
+            }
+          },
+          {
+            "type": "System",
+            "value": {
+              "type": "ExtrinsicSuccess",
+              "value": {
+                "dispatch_info": {
+                  "weight": {
+                    "ref_time": "5181568000",
+                    "proof_size": "4972"
+                  },
+                  "class": {
+                    "type": "Normal"
+                  },
+                  "pays_fee": {
+                    "type": "No"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "explorer": "https://dev.papi.how/explorer/0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3"
+      },
+      "member": {
+        "type": "Included",
+        "value": {
+          "ring_index": 0,
+          "ring_page": 0,
+          "ring_position": 246
+        }
+      }
+    },
+    {
+      "name": "Eve",
+      "address": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+      "nativeFree": "1000000000000",
+      "liquidCash": "2980000",
+      "botHeldCash": "20000",
+      "heartbeatAt": "2026-10-01T08:42:58.494Z",
+      "phase": "running",
+      "counters": {
+        "loads": 1,
+        "recycles": 0,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "20000",
+        "assetWithdrawn": "0",
+        "nativeFees": "0"
+      },
+      "proof": {
+        "block": {
+          "number": 7200543,
+          "hash": "0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c",
+          "index": 5
+        },
+        "txHash": "0xb0192dd4e7f0dd4a5d91d8791e87f15f1923968ee333863e486d43e275faf915",
+        "events": [
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Withdraw",
+              "value": {
+                "who": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "Members",
+            "value": {
+              "type": "MemberAdded",
+              "value": {
+                "key": "0xdf0e84f05556d2b4c6eb5978215fb31810fbd5ad0cf7f3de815aee5a21c217b7"
+              }
+            }
+          },
+          {
+            "type": "Coinage",
+            "value": {
+              "type": "RecyclerLoadedWithExternalAsset",
+              "value": {
+                "instance_id": 0,
+                "who": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+                "value": 1,
+                "amount": "20000"
+              }
+            }
+          },
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Deposit",
+              "value": {
+                "who": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "TransactionPayment",
+            "value": {
+              "type": "TransactionFeePaid",
+              "value": {
+                "who": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+                "actual_fee": "0",
+                "tip": "0"
+              }
+            }
+          },
+          {
+            "type": "System",
+            "value": {
+              "type": "ExtrinsicSuccess",
+              "value": {
+                "dispatch_info": {
+                  "weight": {
+                    "ref_time": "5181568000",
+                    "proof_size": "2013"
+                  },
+                  "class": {
+                    "type": "Normal"
+                  },
+                  "pays_fee": {
+                    "type": "No"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "explorer": "https://dev.papi.how/explorer/0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=5"
+      },
+      "member": {
+        "type": "Included",
+        "value": {
+          "ring_index": 0,
+          "ring_page": 0,
+          "ring_position": 248
+        }
+      }
+    },
+    {
+      "name": "Ferdie",
+      "address": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+      "nativeFree": "1000000000000",
+      "liquidCash": "2980000",
+      "botHeldCash": "20000",
+      "heartbeatAt": "2026-10-01T08:42:59.104Z",
+      "phase": "running",
+      "counters": {
+        "loads": 1,
+        "recycles": 0,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "20000",
+        "assetWithdrawn": "0",
+        "nativeFees": "0"
+      },
+      "proof": {
+        "block": {
+          "number": 7200543,
+          "hash": "0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c",
+          "index": 6
+        },
+        "txHash": "0x81f8386bb8156edf081140cfc44af0a35edb72213dd35f0d178fe29dd5ef59eb",
+        "events": [
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Withdraw",
+              "value": {
+                "who": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "Members",
+            "value": {
+              "type": "MemberAdded",
+              "value": {
+                "key": "0x1667b51ce75b1cfd2ce9829f662312c8eaac22c0fe743a13c353d2b1aff55523"
+              }
+            }
+          },
+          {
+            "type": "Coinage",
+            "value": {
+              "type": "RecyclerLoadedWithExternalAsset",
+              "value": {
+                "instance_id": 0,
+                "who": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+                "value": 1,
+                "amount": "20000"
+              }
+            }
+          },
+          {
+            "type": "Balances",
+            "value": {
+              "type": "Deposit",
+              "value": {
+                "who": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+                "amount": "14520801"
+              }
+            }
+          },
+          {
+            "type": "TransactionPayment",
+            "value": {
+              "type": "TransactionFeePaid",
+              "value": {
+                "who": "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL",
+                "actual_fee": "0",
+                "tip": "0"
+              }
+            }
+          },
+          {
+            "type": "System",
+            "value": {
+              "type": "ExtrinsicSuccess",
+              "value": {
+                "dispatch_info": {
+                  "weight": {
+                    "ref_time": "5181568000",
+                    "proof_size": "1549"
+                  },
+                  "class": {
+                    "type": "Normal"
+                  },
+                  "pays_fee": {
+                    "type": "No"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "explorer": "https://dev.papi.how/explorer/0xb9824fd5f7fdb8c19f378cd4bab7934c3e6d21abc4a1dd8c89b4ebb84945b34c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=6"
+      },
+      "member": {
+        "type": "Included",
+        "value": {
+          "ring_index": 0,
+          "ring_page": 0,
+          "ring_position": 249
+        }
+      }
+    }
+  ]
+}

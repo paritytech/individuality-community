@@ -5,7 +5,6 @@
 set -eu
 
 label=io.parity.coinage-demo.recycler-bot
-plist="$HOME/Library/LaunchAgents/$label.plist"
 here=$(cd "$(dirname "$0")" && pwd)
 node=${NODE:-/opt/homebrew/bin/node}
 domain="gui/$(id -u)"
@@ -17,6 +16,15 @@ usage() {
 [ $# -eq 2 ] || usage
 command=$1
 run=$(cd "$here" && mkdir -p "$2" && cd "$2" && pwd)
+account=$("$node" -e '
+  const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const name = r.devAccount || "Bob";
+  if (!["Alice", "Bob", "Charlie", "Dave", "Eve", "Ferdie"].includes(name)) throw Error("Unknown dev account");
+  process.stdout.write(name.toLowerCase());
+' "$run/run.json")
+[ "$account" = bob ] || label="$label.$account"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+
 
 case $command in
 start)

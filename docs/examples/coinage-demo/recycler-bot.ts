@@ -26,13 +26,8 @@ import {
   getDynamicBuilder,
   getLookupFn,
 } from "@polkadot-api/metadata-builders";
-import { sr25519CreateDerive } from "@polkadot-labs/hdkd";
-import {
-  blake2b256,
-  DEV_PHRASE,
-  entropyToMiniSecret,
-  mnemonicToEntropy,
-} from "@polkadot-labs/hdkd-helpers";
+import { selectDevAccount } from "./recycler-account.js";
+import { blake2b256 } from "@polkadot-labs/hdkd-helpers";
 import {
   alias_in_context,
   member_from_entropy,
@@ -86,6 +81,7 @@ const { values } = parseArgs({
   options: {
     run: { type: "boolean", default: false },
     output: { type: "string" },
+    account: { type: "string" },
     adopt: { type: "string" },
     reconfigure: { type: "boolean", default: false },
     init: { type: "boolean", default: false },
@@ -102,9 +98,10 @@ if (values.help || !values.output) {
   [--duration-seconds ${planOptions["duration-seconds"]}] [--interval-seconds 90] [--denominations 0,1]
   [--max-held-raw 1000000] [--asset-floor-raw 500000] [--min-hold-seconds 3600] [--max-unloads-per-tx 4]
   [--native-budget-raw 2500000000000] [--native-floor-raw 45000000000000] [--max-unload-fee-raw 500000000]
+  [--account Bob|Alice|Charlie|Dave|Eve|Ferdie]
   [--ring-ceiling 700] [--max-failures 6] [--max-crashes 20]
-Without --run or --init, writes a read-only preflight. --run loads recycler vouchers from //Bob on
-public Paseo People and, once max-held-raw is reached, withdraws the oldest vouchers back to Bob in
+Without --run or --init, writes a read-only preflight. --run loads recycler vouchers from the selected public test account on
+public Paseo People and, once max-held-raw is reached, withdraws the oldest vouchers back to that account in
 the same transaction as each new load. An existing output directory resumes from its checkpoint;
 --init creates or reconfigures a run without submitting. A STOP file in the output directory,
 SIGINT or SIGTERM stops once any in-flight transaction settles.`);
@@ -132,6 +129,7 @@ const resuming = existsSync(runFile);
 if (resuming && values.adopt)
   throw Error("--adopt only applies when a run is created");
 const stored = resuming ? JSON.parse(readFileSync(runFile, "utf8")) : {};
+const { name: devAccount, address, pair } = selectDevAccount(values.account, resuming ? stored : undefined);
 const plan = {} as Record<PlanKey, string>;
 for (const key of Object.keys(planOptions) as PlanKey[]) {
   const given = values[key];
@@ -186,11 +184,7 @@ const client = createClient(
 );
 const api = demoApi(client);
 const unsafe = client.getUnsafeApi() as any;
-const pair = sr25519CreateDerive(
-  entropyToMiniSecret(mnemonicToEntropy(DEV_PHRASE)),
-)("//Bob");
-const address = AccountId().dec(pair.publicKey),
-  signer = getPolkadotSigner(pair.publicKey, "Sr25519", pair.sign);
+const signer = getPolkadotSigner(pair.publicKey, "Sr25519", pair.sign);
 const extensions = {
   VerifyMultiSignature: { value: { type: "Disabled", value: undefined } },
 };
@@ -873,8 +867,8 @@ async function main() {
     return;
   }
 
-  // One Bob-funded bot at a time; a lock left by a dead process is replaced.
-  const lock = fileURLToPath(new URL("runs/.recycler-bot-public-bob.lock", import.meta.url));
+  // One bot per signer; preserve Bob's original lock for existing processes.
+  const lock = fileURLToPath(new URL(`runs/.recycler-bot-public-${devAccount.toLowerCase()}.lock`, import.meta.url));
   if (existsSync(lock)) {
     const holder = JSON.parse(readFileSync(lock, "utf8"));
     let alive = true;
@@ -918,7 +912,7 @@ async function main() {
     // Written last: a directory without run.json never resumes a half-created run.
     writeFileSync(
       runFile,
-      json({ endpoints, genesis, instance: instanceId, payer: address, plan, createdAt: new Date().toISOString() }) + "\n",
+      json({ endpoints, genesis, instance: instanceId, payer: address, devAccount, plan, createdAt: new Date().toISOString() }) + "\n",
       { flag: "wx", mode: 0o600 },
     );
   }
