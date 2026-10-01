@@ -13,6 +13,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  chain-test-report-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test chain test reporting
+        run: python3 .github/scripts/test_chain_test_report.py
+
   test-all:
     runs-on: parity-large
     timeout-minutes: 60
@@ -104,6 +114,8 @@ jobs:
       contents: read
     uses: paritytech/polkadot-pop-e2e/.github/workflows/release-gate.yml@main
     with:
+      # The separate report workflow comments on failures after this run completes.
+      advisory: ${{ github.event_name == 'pull_request' }}
       environment: previewnet,paseo-next-v2
       runtime_asset_hub: artifact:e2e-runtime-wasm
       runtime_people: artifact:e2e-runtime-wasm
