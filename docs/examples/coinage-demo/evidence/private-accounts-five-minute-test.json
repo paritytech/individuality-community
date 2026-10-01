@@ -1,0 +1,2538 @@
+{
+  "checkedAt": "2026-10-01T11:34:40.221Z",
+  "endpoint": "https://rpc.interweb-it.com/people-paseo",
+  "finalized": {
+    "number": 7205631,
+    "hash": "0x2478e36cf131c84d2006cddc975690aebd20b783dd5ec49fdedcc35c56568e87"
+  },
+  "funding": {
+    "block": {
+      "index": 2,
+      "number": 7205445,
+      "hash": "0x1f1bef5273d80cf1be437ef73e6f15fbdcd75e807bb8153b0e7f96f9a512587c"
+    },
+    "txHash": "0x611ed411bfb2a7fe63096f5e0d155e1df7aaa2881417d11a0483995508099bd4",
+    "events": [
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "38661284"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "5208826585"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "5208826585"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+            "amount_in": "5208826585",
+            "amount_out": "500000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "5208826585"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "500000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "5214146996"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "5214146996"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+            "amount_in": "5214146996",
+            "amount_out": "500000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "5214146996"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "500000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "5219475559"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "5219475559"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+            "amount_in": "5219475559",
+            "amount_out": "500000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "5219475559"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "500000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "5224812290"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "5224812290"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+            "amount_in": "5224812290",
+            "amount_out": "500000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "5224812290"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "500000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "5230157207"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "5230157207"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+            "amount_in": "5230157207",
+            "amount_out": "500000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "5230157207"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "500000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Withdraw",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "amount": "5235510325"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Withdrawn",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EhshnzMBCqA3YFqprQziESXAi5NDbHzRcU1frTsMVKdfMcq",
+            "amount": "5235510325"
+          }
+        }
+      },
+      {
+        "type": "Assets",
+        "value": {
+          "type": "Deposited",
+          "value": {
+            "asset_id": {
+              "parents": 1,
+              "interior": {
+                "type": "X3",
+                "value": [
+                  {
+                    "type": "Parachain",
+                    "value": 1000
+                  },
+                  {
+                    "type": "PalletInstance",
+                    "value": 50
+                  },
+                  {
+                    "type": "GeneralIndex",
+                    "value": "50000413"
+                  }
+                ]
+              }
+            },
+            "who": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+            "amount": "500000"
+          }
+        }
+      },
+      {
+        "type": "AssetConversion",
+        "value": {
+          "type": "SwapExecuted",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "send_to": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+            "amount_in": "5235510325",
+            "amount_out": "500000",
+            "path": [
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "Here"
+                  }
+                },
+                "5235510325"
+              ],
+              [
+                {
+                  "parents": 1,
+                  "interior": {
+                    "type": "X3",
+                    "value": [
+                      {
+                        "type": "Parachain",
+                        "value": 1000
+                      },
+                      {
+                        "type": "PalletInstance",
+                        "value": 50
+                      },
+                      {
+                        "type": "GeneralIndex",
+                        "value": "50000413"
+                      }
+                    ]
+                  }
+                },
+                "500000"
+              ]
+            ]
+          }
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "ItemCompleted"
+        }
+      },
+      {
+        "type": "Utility",
+        "value": {
+          "type": "BatchCompleted"
+        }
+      },
+      {
+        "type": "Balances",
+        "value": {
+          "type": "Deposit",
+          "value": {
+            "who": "5EYCAe5cKPAoFh2HnQQvpKqRYZGqBpaA87u4Zzw89qPE58is",
+            "amount": "38661284"
+          }
+        }
+      },
+      {
+        "type": "TransactionPayment",
+        "value": {
+          "type": "TransactionFeePaid",
+          "value": {
+            "who": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "actual_fee": "38661284",
+            "tip": "0"
+          }
+        }
+      },
+      {
+        "type": "System",
+        "value": {
+          "type": "ExtrinsicSuccess",
+          "value": {
+            "dispatch_info": {
+              "weight": {
+                "ref_time": "5984948902",
+                "proof_size": "7119"
+              },
+              "class": {
+                "type": "Normal"
+              },
+              "pays_fee": {
+                "type": "Yes"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "explorer": "https://dev.papi.how/explorer/0x1f1bef5273d80cf1be437ef73e6f15fbdcd75e807bb8153b0e7f96f9a512587c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+  },
+  "accounts": [
+    {
+      "name": "Demo-1",
+      "address": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+      "plan": {
+        "duration-seconds": "300",
+        "interval-seconds": "30",
+        "denominations": "1,2,3,4",
+        "max-held-raw": "300000",
+        "asset-floor-raw": "100000",
+        "native-budget-raw": "20000000000",
+        "native-floor-raw": "100000000000",
+        "max-unload-fee-raw": "500000000",
+        "min-hold-seconds": "30",
+        "max-unloads-per-tx": "4",
+        "ring-ceiling": "700"
+      },
+      "startedAt": "2026-10-01T11:28:29.330Z",
+      "endsAt": "2026-10-01T11:33:29.330Z",
+      "completedAt": "2026-10-01T11:34:00.273Z",
+      "counters": {
+        "loads": 8,
+        "recycles": 4,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "600000",
+        "assetWithdrawn": "300000",
+        "nativeFees": "1065001272"
+      },
+      "liquidCash": "200000",
+      "heldCash": "300000",
+      "nativeFree": "198934998728",
+      "proofs": [
+        {
+          "op": 0,
+          "kind": "load",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0xd809cac791d5a406ad807d8b58307185d56abfce31d2fac410c7ec2038e90c53",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 152
+            }
+          },
+          "block": {
+            "number": 7205478,
+            "hash": "0x2feddfd1af7ff44bd1cd1ee7b271066d7325e84aa0db88121983054cf75b3a1c",
+            "index": 3
+          },
+          "txHash": "0xdd17a71775509d4f64cd716480fab1ff82170f74b58d4a35e3d1ea47caa66eb7",
+          "explorer": "https://dev.papi.how/explorer/0x2feddfd1af7ff44bd1cd1ee7b271066d7325e84aa0db88121983054cf75b3a1c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 31294
+        },
+        {
+          "op": 1,
+          "kind": "load",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0xdec020d2f4fb864e851cb9e55bcea01146e9095fc4c81c82cb0d7580ce87f7dc",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 152
+            }
+          },
+          "block": {
+            "number": 7205495,
+            "hash": "0xb507a55209349d49107775a84d7db3452225d739bc1c4726256004fb243dc7d6",
+            "index": 2
+          },
+          "txHash": "0x8fbdc2f3d59c0d60ab545f78bea02c94a909bfa455148c92c5444778102c447f",
+          "explorer": "https://dev.papi.how/explorer/0xb507a55209349d49107775a84d7db3452225d739bc1c4726256004fb243dc7d6#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 31939
+        },
+        {
+          "op": 2,
+          "kind": "load",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x9de4faf4ba5da9eb0ca674131d62c00db09ec6d4d36ee0789c4ba07b368c7ef3",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 38
+            }
+          },
+          "block": {
+            "number": 7205513,
+            "hash": "0xeb620fe1be11dd19ab1fb359639756d1f61169c6647b1aa1476d4dbccdd0ffa0",
+            "index": 3
+          },
+          "txHash": "0x7d2c6beeaa9c10ef0c37d223a89756d72ed47a70d9778d22f95815f7f51071be",
+          "explorer": "https://dev.papi.how/explorer/0xeb620fe1be11dd19ab1fb359639756d1f61169c6647b1aa1476d4dbccdd0ffa0#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 35315
+        },
+        {
+          "op": 3,
+          "kind": "load",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x18efb9bb4bcddff172701d34ace83dd14f34c65c13e8833e4b99bf8051e40f9c",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 157
+            }
+          },
+          "block": {
+            "number": 7205533,
+            "hash": "0xa341af9166d6d31da56054f5f04097791343073f4c940e22efe8170d76f5377c",
+            "index": 2
+          },
+          "txHash": "0xcb1a514b184ba4a6461048366f289b4691c9068fe4ec1c5512bfd2b7dc672aea",
+          "explorer": "https://dev.papi.how/explorer/0xa341af9166d6d31da56054f5f04097791343073f4c940e22efe8170d76f5377c#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 33661
+        },
+        {
+          "op": 4,
+          "kind": "recycle",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+              "to": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+              "input_count": 1,
+              "amount": "20000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x71d8e088112f70e3e5fdb18658c1dd477e903114b5271893c8c076fcb557139f",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 162
+            }
+          },
+          "block": {
+            "number": 7205555,
+            "hash": "0xf1ff00925129b1078d8d866b36c2a13c6901770577a3fdc5bec2badc55b5104b",
+            "index": 2
+          },
+          "txHash": "0x4d07c8188f8907d4eb27d75129abb0b4c71b9983fc3e93d31bbee4eba161a622",
+          "explorer": "https://dev.papi.how/explorer/0xf1ff00925129b1078d8d866b36c2a13c6901770577a3fdc5bec2badc55b5104b#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 33338
+        },
+        {
+          "op": 5,
+          "kind": "recycle",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+              "to": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+              "input_count": 1,
+              "amount": "40000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0xf1a168801e7f546f7817f1b89d7d166ed7803db15aef5c3780d70439f291e022",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 164
+            }
+          },
+          "block": {
+            "number": 7205575,
+            "hash": "0xee6a64dc28dc04ef29085dc952aee5ff5b0fd3aa8c94509e4a3aa7a4bc5eba77",
+            "index": 4
+          },
+          "txHash": "0x6c919cca657796e070c726d643e75d667de08db1990e3fa5d775190ae1dd0581",
+          "explorer": "https://dev.papi.how/explorer/0xee6a64dc28dc04ef29085dc952aee5ff5b0fd3aa8c94509e4a3aa7a4bc5eba77#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+          "elapsedMs": 32979
+        },
+        {
+          "op": 6,
+          "kind": "recycle",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+              "to": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+              "input_count": 1,
+              "amount": "80000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x905c7e4fc6847d51b14b8dc2da17a5fe66d289095edd42da9f8303262f76ead2",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 46
+            }
+          },
+          "block": {
+            "number": 7205596,
+            "hash": "0x3fad2c8f763ad6b11b626628200e2c1e1148cb1cae8261e5fc97441da6aed7c1",
+            "index": 2
+          },
+          "txHash": "0x26a7f8929325d05352ffbf1554441fe3e32ac546b82965de1a9242a903dd2c0e",
+          "explorer": "https://dev.papi.how/explorer/0x3fad2c8f763ad6b11b626628200e2c1e1148cb1cae8261e5fc97441da6aed7c1#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 32211
+        },
+        {
+          "op": 7,
+          "kind": "recycle",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+              "to": "5GnCbE6BEu2DgXjZpzyfjj4tEP4jPbo69Ayxt1Q18YGDyh5P",
+              "input_count": 1,
+              "amount": "160000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x37aca7fad8cf55ecf961632d5f6e7d0061e8a4e8590b7d43e54da6d1c278a9cf",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 164
+            }
+          },
+          "block": {
+            "number": 7205617,
+            "hash": "0xc9f0712f04aff9b5ed7c6332e7afe680857f6b19d7a87a181d1219f4feca4540",
+            "index": 2
+          },
+          "txHash": "0x14b6d79638ac4632bfd348295558978a539bfff384f342026a21317a1729a195",
+          "explorer": "https://dev.papi.how/explorer/0xc9f0712f04aff9b5ed7c6332e7afe680857f6b19d7a87a181d1219f4feca4540#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 34978
+        }
+      ]
+    },
+    {
+      "name": "Demo-2",
+      "address": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+      "plan": {
+        "duration-seconds": "300",
+        "interval-seconds": "30",
+        "denominations": "1,2,3,4",
+        "max-held-raw": "300000",
+        "asset-floor-raw": "100000",
+        "native-budget-raw": "20000000000",
+        "native-floor-raw": "100000000000",
+        "max-unload-fee-raw": "500000000",
+        "min-hold-seconds": "30",
+        "max-unloads-per-tx": "4",
+        "ring-ceiling": "700"
+      },
+      "startedAt": "2026-10-01T11:28:33.775Z",
+      "endsAt": "2026-10-01T11:33:33.775Z",
+      "completedAt": "2026-10-01T11:34:11.923Z",
+      "counters": {
+        "loads": 8,
+        "recycles": 4,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "600000",
+        "assetWithdrawn": "300000",
+        "nativeFees": "1065001272"
+      },
+      "liquidCash": "200000",
+      "heldCash": "300000",
+      "nativeFree": "198934998728",
+      "proofs": [
+        {
+          "op": 0,
+          "kind": "load",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x024bac055839f4f37429bec594ac3bf0dc4554ee46bbfdf07a54eefa401fbe15",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 155
+            }
+          },
+          "block": {
+            "number": 7205486,
+            "hash": "0xb863e3ea754c3c6c54ececb8933dbbc2814dd4de9295e5ab5be975f2eb9dcb2f",
+            "index": 3
+          },
+          "txHash": "0x5b525dfeac45fb2a611cdee1918d73714b1b1dc4606922cbcbe7754144561077",
+          "explorer": "https://dev.papi.how/explorer/0xb863e3ea754c3c6c54ececb8933dbbc2814dd4de9295e5ab5be975f2eb9dcb2f#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 34678
+        },
+        {
+          "op": 1,
+          "kind": "load",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0xd0c5e8b8962c0097b0bd5f1bf05989dfbd9e843edceff70664b2643f1b86c8bd",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 155
+            }
+          },
+          "block": {
+            "number": 7205505,
+            "hash": "0x15b7d951b8ceec482999afdc357401445d9617352e09ebaeb1250cda51e9dec4",
+            "index": 3
+          },
+          "txHash": "0x619d833f2c5025299fff152934cce186ded5686e7fd85c68dd310df2d4b5ebc9",
+          "explorer": "https://dev.papi.how/explorer/0x15b7d951b8ceec482999afdc357401445d9617352e09ebaeb1250cda51e9dec4#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 28292
+        },
+        {
+          "op": 2,
+          "kind": "load",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0xd0eacdcdce954e9a2b4aa7eba572b6c0599bb06e68eccabbc97edee3c3a6e0de",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 40
+            }
+          },
+          "block": {
+            "number": 7205521,
+            "hash": "0xc9316f25f02e7e850b269dec305f866db6102942323a8293a31d7f4c8926a81f",
+            "index": 3
+          },
+          "txHash": "0x6e1175bef6c86fab443579083a2bf06725c8f901c9b838653b4f23e59596bb75",
+          "explorer": "https://dev.papi.how/explorer/0xc9316f25f02e7e850b269dec305f866db6102942323a8293a31d7f4c8926a81f#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 34459
+        },
+        {
+          "op": 3,
+          "kind": "load",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x90bbd289e4591207da494947a4cc08f40912c975556c0bf79e87b94e6535b081",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 159
+            }
+          },
+          "block": {
+            "number": 7205540,
+            "hash": "0x129f67ec08bb5c43477bbe7f962474e03fc3992602d390c8001794dd5a0b24c0",
+            "index": 3
+          },
+          "txHash": "0x8d27125f4ecd2fc567100ff328aee0fc8fe1eb5064df797873bd114683d3a2cc",
+          "explorer": "https://dev.papi.how/explorer/0x129f67ec08bb5c43477bbe7f962474e03fc3992602d390c8001794dd5a0b24c0#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 32434
+        },
+        {
+          "op": 4,
+          "kind": "recycle",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+              "to": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+              "input_count": 1,
+              "amount": "20000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0xc0156f32bb25f6b3f173f773a56c70c4b20d8e64c8a6be6be3986589cefa8daf",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 165
+            }
+          },
+          "block": {
+            "number": 7205563,
+            "hash": "0x5f2cb714ab13362bd41dce2a46b31f424e97c43a2de31ff5ab9b3096c3af66f5",
+            "index": 4
+          },
+          "txHash": "0xaf0ed7501fa2ba8e53764de58929191a1e6a859321c5d0c3be793a16ef375cfa",
+          "explorer": "https://dev.papi.how/explorer/0x5f2cb714ab13362bd41dce2a46b31f424e97c43a2de31ff5ab9b3096c3af66f5#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+          "elapsedMs": 34651
+        },
+        {
+          "op": 5,
+          "kind": "recycle",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+              "to": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+              "input_count": 1,
+              "amount": "40000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x5918ea9e540fa1d1d2b87d767519d3cb4084d625732af0c7b9eda41b10848b69",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 168
+            }
+          },
+          "block": {
+            "number": 7205586,
+            "hash": "0x05de8929fe14fb92f01926d4024346cf6768cf983c85253e44067840d66b9f0e",
+            "index": 6
+          },
+          "txHash": "0x64729e467aef9aa24205065839b5b2fc7019c70a2bfdcc520e0e35cdce4c0ebd",
+          "explorer": "https://dev.papi.how/explorer/0x05de8929fe14fb92f01926d4024346cf6768cf983c85253e44067840d66b9f0e#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=6",
+          "elapsedMs": 32877
+        },
+        {
+          "op": 6,
+          "kind": "recycle",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+              "to": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+              "input_count": 1,
+              "amount": "80000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x58a9e05c4c55562b977fbe5b2c1276503f2bb0aafec85c178900ad3253575757",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 54
+            }
+          },
+          "block": {
+            "number": 7205607,
+            "hash": "0x14a977984d999e20e2d7ab44086968d95da24be208d813884ee0df36ea9a7f87",
+            "index": 5
+          },
+          "txHash": "0xbaba21949fd2e58dff8d26a268fa15baa2508ce08fc91839a0bac22c5ee7914d",
+          "explorer": "https://dev.papi.how/explorer/0x14a977984d999e20e2d7ab44086968d95da24be208d813884ee0df36ea9a7f87#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=5",
+          "elapsedMs": 28355
+        },
+        {
+          "op": 7,
+          "kind": "recycle",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+              "to": "5CmDSuuk7WDhPFzNG9thkT4XGQoGMHURUR6BKJFczCN4xra6",
+              "input_count": 1,
+              "amount": "160000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x16d7a2cda45ddd91c6e9fcf33adb62cda802162a44cd727e5d2a62976653f809",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 168
+            }
+          },
+          "block": {
+            "number": 7205625,
+            "hash": "0xeae20c40467f2214a70ecc9a4277f10ea95a2917ea4a6b7846c9b7fa1bb2c9d1",
+            "index": 4
+          },
+          "txHash": "0xe4a665f87674ee7cc62175c7be2a6fe9cd7fbe642dcfd1ddb075255b589db891",
+          "explorer": "https://dev.papi.how/explorer/0xeae20c40467f2214a70ecc9a4277f10ea95a2917ea4a6b7846c9b7fa1bb2c9d1#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+          "elapsedMs": 31278
+        }
+      ]
+    },
+    {
+      "name": "Demo-3",
+      "address": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+      "plan": {
+        "duration-seconds": "300",
+        "interval-seconds": "30",
+        "denominations": "1,2,3,4",
+        "max-held-raw": "300000",
+        "asset-floor-raw": "100000",
+        "native-budget-raw": "20000000000",
+        "native-floor-raw": "100000000000",
+        "max-unload-fee-raw": "500000000",
+        "min-hold-seconds": "30",
+        "max-unloads-per-tx": "4",
+        "ring-ceiling": "700"
+      },
+      "startedAt": "2026-10-01T11:28:41.003Z",
+      "endsAt": "2026-10-01T11:33:41.003Z",
+      "completedAt": "2026-10-01T11:34:11.276Z",
+      "counters": {
+        "loads": 8,
+        "recycles": 4,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "600000",
+        "assetWithdrawn": "300000",
+        "nativeFees": "1065001272"
+      },
+      "liquidCash": "200000",
+      "heldCash": "300000",
+      "nativeFree": "198934998728",
+      "proofs": [
+        {
+          "op": 0,
+          "kind": "load",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0xd63273de9d1fb8716b360d1894071e1572fcc6ce96eb0fb70e050dc3ed4963d5",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 154
+            }
+          },
+          "block": {
+            "number": 7205485,
+            "hash": "0x3bdbc39383f9ba666aca91b1fff34eb264cf9f6656589fce5c931051d8f5daae",
+            "index": 3
+          },
+          "txHash": "0xcb5c85f49c9454778b986f296016e85bae35d8d750935841e27bd38d6a6825c6",
+          "explorer": "https://dev.papi.how/explorer/0x3bdbc39383f9ba666aca91b1fff34eb264cf9f6656589fce5c931051d8f5daae#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 35223
+        },
+        {
+          "op": 1,
+          "kind": "load",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0xd900a8553962a1abdc5e2e40e760cd343641027ce918720b7ec844a0654703b3",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 154
+            }
+          },
+          "block": {
+            "number": 7205504,
+            "hash": "0xee5abbbdf1de38bd542929ba77b9143b22669fdfa60a5377f4451341f2975102",
+            "index": 2
+          },
+          "txHash": "0x996b734f97431c1b083e9c722d2b5072edbcee999a1f51f1ca4d4e2fdb913d08",
+          "explorer": "https://dev.papi.how/explorer/0xee5abbbdf1de38bd542929ba77b9143b22669fdfa60a5377f4451341f2975102#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 29136
+        },
+        {
+          "op": 2,
+          "kind": "load",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x230b02976f073b3b451e4edfabb904c92c81d8bf4dd015f25713e615518fe310",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 41
+            }
+          },
+          "block": {
+            "number": 7205521,
+            "hash": "0xc9316f25f02e7e850b269dec305f866db6102942323a8293a31d7f4c8926a81f",
+            "index": 4
+          },
+          "txHash": "0x0e1f207714da95ac3b8f0a098ccf658b2357e4e3bd33e8cb001486aa4a60ed53",
+          "explorer": "https://dev.papi.how/explorer/0xc9316f25f02e7e850b269dec305f866db6102942323a8293a31d7f4c8926a81f#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+          "elapsedMs": 34594
+        },
+        {
+          "op": 3,
+          "kind": "load",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x86dbd64500ae32a991838dd02e229118d910cdae4073d7446d0200fca87fa0a4",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 160
+            }
+          },
+          "block": {
+            "number": 7205540,
+            "hash": "0x129f67ec08bb5c43477bbe7f962474e03fc3992602d390c8001794dd5a0b24c0",
+            "index": 4
+          },
+          "txHash": "0xc07a84cdd4213620ce0ad796bad0de6ba91c88d8ac97427ecb884281d874673c",
+          "explorer": "https://dev.papi.how/explorer/0x129f67ec08bb5c43477bbe7f962474e03fc3992602d390c8001794dd5a0b24c0#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+          "elapsedMs": 30335
+        },
+        {
+          "op": 4,
+          "kind": "recycle",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+              "to": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+              "input_count": 1,
+              "amount": "20000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x49f0a90302e1ec39849ce9bd02e0bd0f4509eb71671d9ce19edb6354ebaf7a9f",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 164
+            }
+          },
+          "block": {
+            "number": 7205562,
+            "hash": "0xe5573004f39c70e29dae39d285c736ba8d603d5957161bed890d8ae774679042",
+            "index": 4
+          },
+          "txHash": "0x188bb2e77a9d9807ca053ccf890d933279c959667bf42be3de0ccb7509c0128f",
+          "explorer": "https://dev.papi.how/explorer/0xe5573004f39c70e29dae39d285c736ba8d603d5957161bed890d8ae774679042#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+          "elapsedMs": 29842
+        },
+        {
+          "op": 5,
+          "kind": "recycle",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+              "to": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+              "input_count": 1,
+              "amount": "40000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x55dfe3af0e3747ce78326d521d307f3d5693f38d906619232fb59fe8d4721885",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 165
+            }
+          },
+          "block": {
+            "number": 7205581,
+            "hash": "0xad87c28c3a950ed628fdc3220d0ae2d9a312f321d506a1772a7983a946610117",
+            "index": 2
+          },
+          "txHash": "0x3c6c1a1bd3d8ec6994dba05bef9dfe98685edc4e6f11f86cc25168ad41245256",
+          "explorer": "https://dev.papi.how/explorer/0xad87c28c3a950ed628fdc3220d0ae2d9a312f321d506a1772a7983a946610117#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 36180
+        },
+        {
+          "op": 6,
+          "kind": "recycle",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+              "to": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+              "input_count": 1,
+              "amount": "80000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x97855dd3367ff2584f21cbd1fe9452531a66d570b1ee6ed38042af408ca7cab6",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 49
+            }
+          },
+          "block": {
+            "number": 7205604,
+            "hash": "0xff525f157ddefd3b2aaca4898f68890db7cd79b93675ae562eb4511d2d867dd6",
+            "index": 2
+          },
+          "txHash": "0xc6646149652e2cdd7cae2dc13bedad4e6561b5f2ecfd2e99a65cc5719fb0069c",
+          "explorer": "https://dev.papi.how/explorer/0xff525f157ddefd3b2aaca4898f68890db7cd79b93675ae562eb4511d2d867dd6#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 32443
+        },
+        {
+          "op": 7,
+          "kind": "recycle",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+              "to": "5GnY9NwgeK2CTmqwKCwNqpi7dqd4YSBAkV4ghp4HgbBsUz9i",
+              "input_count": 1,
+              "amount": "160000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0xb88647ef16801fc467507083a7f16822fd19e93028d520ad52355d0d2b596106",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 166
+            }
+          },
+          "block": {
+            "number": 7205624,
+            "hash": "0xf45de7a66413cdfdd37efe07de2615595b21df3f77fa438812f0fcc64a976ca4",
+            "index": 2
+          },
+          "txHash": "0xf52c5c2894238713182fc7c2982d93ed190075cc2e02cadf5547c1ccea0c8994",
+          "explorer": "https://dev.papi.how/explorer/0xf45de7a66413cdfdd37efe07de2615595b21df3f77fa438812f0fcc64a976ca4#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 31284
+        }
+      ]
+    },
+    {
+      "name": "Demo-4",
+      "address": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+      "plan": {
+        "duration-seconds": "300",
+        "interval-seconds": "30",
+        "denominations": "1,2,3,4",
+        "max-held-raw": "300000",
+        "asset-floor-raw": "100000",
+        "native-budget-raw": "20000000000",
+        "native-floor-raw": "100000000000",
+        "max-unload-fee-raw": "500000000",
+        "min-hold-seconds": "30",
+        "max-unloads-per-tx": "4",
+        "ring-ceiling": "700"
+      },
+      "startedAt": "2026-10-01T11:28:45.059Z",
+      "endsAt": "2026-10-01T11:33:45.059Z",
+      "completedAt": "2026-10-01T11:33:58.236Z",
+      "counters": {
+        "loads": 8,
+        "recycles": 4,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "600000",
+        "assetWithdrawn": "300000",
+        "nativeFees": "1065001272"
+      },
+      "liquidCash": "200000",
+      "heldCash": "300000",
+      "nativeFree": "198934998728",
+      "proofs": [
+        {
+          "op": 0,
+          "kind": "load",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x1e08e2cdb2e23a98f62924ca7ef3acfac9ad59698e25334ebfb8603b1ae11aa8",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 153
+            }
+          },
+          "block": {
+            "number": 7205483,
+            "hash": "0xc9af1583b00baa8b5b2070330bef09e83f2d4bdd3e7c937b2ced8ff2bce075af",
+            "index": 2
+          },
+          "txHash": "0x89bb2e3a0438c0e4852e5c9c84da82a2ffd8f789d8047562029f25460b88b3e8",
+          "explorer": "https://dev.papi.how/explorer/0xc9af1583b00baa8b5b2070330bef09e83f2d4bdd3e7c937b2ced8ff2bce075af#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 31367
+        },
+        {
+          "op": 1,
+          "kind": "load",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x9a45fd675664e24b218c81b96c130bbccf8fc7c25349fcd9ece872b291725f29",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 153
+            }
+          },
+          "block": {
+            "number": 7205500,
+            "hash": "0xf4689f5ecd07ff30f877bc5b0625f93227d4d191ac34f102d9b4e43455553317",
+            "index": 3
+          },
+          "txHash": "0xd3b28be21e210e959bed884f72966bd8f29a24520a79c117b88be4e4892798a4",
+          "explorer": "https://dev.papi.how/explorer/0xf4689f5ecd07ff30f877bc5b0625f93227d4d191ac34f102d9b4e43455553317#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 35430
+        },
+        {
+          "op": 2,
+          "kind": "load",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x3e1e5035a8d1610a7b5b70455fc78e9bb2711a666151edc389c2e43232cbc909",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 39
+            }
+          },
+          "block": {
+            "number": 7205520,
+            "hash": "0x8cabe1516d9511d4a5486779b4caebb5e7df1d95250e42d8506e968bb72f6ab4",
+            "index": 2
+          },
+          "txHash": "0x6733426252f2eecf4432f783cb16665f75fcdd3487622c3e0acd03e0f6b57ae9",
+          "explorer": "https://dev.papi.how/explorer/0x8cabe1516d9511d4a5486779b4caebb5e7df1d95250e42d8506e968bb72f6ab4#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 32565
+        },
+        {
+          "op": 3,
+          "kind": "load",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0xae7be8598dd38ac7ace54df7d6cb6ad082017ae184ad3704c93a81b1c62822bf",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 158
+            }
+          },
+          "block": {
+            "number": 7205538,
+            "hash": "0xdb55c785ab039c24dcba5ad536035cbb3404e2626b06a6b5a3830efd0fd73d62",
+            "index": 2
+          },
+          "txHash": "0xd998acc20ea712d9ff1973dd0c142f0b681bf3eed12d7d99a271014a7504ea1e",
+          "explorer": "https://dev.papi.how/explorer/0xdb55c785ab039c24dcba5ad536035cbb3404e2626b06a6b5a3830efd0fd73d62#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 28352
+        },
+        {
+          "op": 4,
+          "kind": "recycle",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+              "to": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+              "input_count": 1,
+              "amount": "20000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x18145b54a99016e230897cb0407875063a04cb5492b61b8a117472b9701dbf39",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 163
+            }
+          },
+          "block": {
+            "number": 7205556,
+            "hash": "0x645c8f33b20c4810db47b889b0e1e66f40ffce8579b430754d09f80c0ffa43ce",
+            "index": 3
+          },
+          "txHash": "0x9c70271d0db801890453a90d5f59bd6ff208ec2cf53dc9f117dd1c4783cb5ae4",
+          "explorer": "https://dev.papi.how/explorer/0x645c8f33b20c4810db47b889b0e1e66f40ffce8579b430754d09f80c0ffa43ce#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 30246
+        },
+        {
+          "op": 5,
+          "kind": "recycle",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+              "to": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+              "input_count": 1,
+              "amount": "40000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0xeddd15e2f88e0a4801c96f4995f19c4c963704380dca51dbbd089ffe9abe0bc0",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 163
+            }
+          },
+          "block": {
+            "number": 7205575,
+            "hash": "0xee6a64dc28dc04ef29085dc952aee5ff5b0fd3aa8c94509e4a3aa7a4bc5eba77",
+            "index": 3
+          },
+          "txHash": "0x5ef273c5c0df1a926a8ac83b8558ed51880fa90e6cd22db4437851aa36372112",
+          "explorer": "https://dev.papi.how/explorer/0xee6a64dc28dc04ef29085dc952aee5ff5b0fd3aa8c94509e4a3aa7a4bc5eba77#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 36059
+        },
+        {
+          "op": 6,
+          "kind": "recycle",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+              "to": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+              "input_count": 1,
+              "amount": "80000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x5d23a8e5ff662e9481085658006b4560a00bbf3d0c373c4cb337f5cfded245d8",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 47
+            }
+          },
+          "block": {
+            "number": 7205598,
+            "hash": "0x1d98eca1773417436cb8ba07c13fb0d1c312a0008ef9423765741273e91d2e29",
+            "index": 3
+          },
+          "txHash": "0x7d97f312d91d291d3dc0155cc063581fa9a0271cdef3b8629d7e52361321fe7e",
+          "explorer": "https://dev.papi.how/explorer/0x1d98eca1773417436cb8ba07c13fb0d1c312a0008ef9423765741273e91d2e29#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 32191
+        },
+        {
+          "op": 7,
+          "kind": "recycle",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+              "to": "5HdvZxW4rsqBzEJMgEnHMUEPctEXR5LtanoqhLeNfeXKXnnX",
+              "input_count": 1,
+              "amount": "160000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x8d43197a90e881c146e16cae1805330e82f6f253b97b17f9e2e618f133413bad",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 165
+            }
+          },
+          "block": {
+            "number": 7205618,
+            "hash": "0x55437d279a2799ba00ff61f7420d34c44e95a700e98ad4a2848c27b76df990a3",
+            "index": 3
+          },
+          "txHash": "0x8e5cb500eb1e9a4d0a5d868450a9c18aaf9a8358cf75a79fea58a5e72509881e",
+          "explorer": "https://dev.papi.how/explorer/0x55437d279a2799ba00ff61f7420d34c44e95a700e98ad4a2848c27b76df990a3#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 31275
+        }
+      ]
+    },
+    {
+      "name": "Demo-5",
+      "address": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+      "plan": {
+        "duration-seconds": "300",
+        "interval-seconds": "30",
+        "denominations": "1,2,3,4",
+        "max-held-raw": "300000",
+        "asset-floor-raw": "100000",
+        "native-budget-raw": "20000000000",
+        "native-floor-raw": "100000000000",
+        "max-unload-fee-raw": "500000000",
+        "min-hold-seconds": "30",
+        "max-unloads-per-tx": "4",
+        "ring-ceiling": "700"
+      },
+      "startedAt": "2026-10-01T11:28:49.875Z",
+      "endsAt": "2026-10-01T11:33:49.875Z",
+      "completedAt": "2026-10-01T11:34:10.330Z",
+      "counters": {
+        "loads": 8,
+        "recycles": 4,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "600000",
+        "assetWithdrawn": "300000",
+        "nativeFees": "1065001272"
+      },
+      "liquidCash": "200000",
+      "heldCash": "300000",
+      "nativeFree": "198934998728",
+      "proofs": [
+        {
+          "op": 0,
+          "kind": "load",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x2cd92948e80a35288c03c2523cca03b93ffe3195dfa09c80db70de941d75856e",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 156
+            }
+          },
+          "block": {
+            "number": 7205487,
+            "hash": "0x0701f534e64e4d0ece2dbb408c4301f7ad51345e70c5000529bb7b4bcae55c9e",
+            "index": 3
+          },
+          "txHash": "0x0ba7eb0cc8b79f514c9b8d4d2791cd9f254fbe7be1ea5f05c2c6714bc2f34cea",
+          "explorer": "https://dev.papi.how/explorer/0x0701f534e64e4d0ece2dbb408c4301f7ad51345e70c5000529bb7b4bcae55c9e#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 33489
+        },
+        {
+          "op": 1,
+          "kind": "load",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x00203edc1fc0306f613707f7fe73c79166806eeca48bce050721194078ffdff0",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 156
+            }
+          },
+          "block": {
+            "number": 7205506,
+            "hash": "0x9fd38f59e8e7050fcfba55d46d6a95908d530c8fcb19fcece8f0fcf4f3fcbf08",
+            "index": 3
+          },
+          "txHash": "0xbfe77e0064a82f2e69c983aa2e61d6fcc22e8ffe081f03d71172e04a99d2e5f2",
+          "explorer": "https://dev.papi.how/explorer/0x9fd38f59e8e7050fcfba55d46d6a95908d530c8fcb19fcece8f0fcf4f3fcbf08#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 34652
+        },
+        {
+          "op": 2,
+          "kind": "load",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0xc2e30698470b499fc47cdb9ffeee5cf55b4a9d2af64b8d1fdef82494ba105931",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 42
+            }
+          },
+          "block": {
+            "number": 7205525,
+            "hash": "0x38f34cf848988563bc2abc20ad812c1fa9dfa88688a4723bbbfb4e47a27e45d8",
+            "index": 2
+          },
+          "txHash": "0xb28cc8a56839a5f3c85ed0a18cce6c8977758137891589caf697a2c335876563",
+          "explorer": "https://dev.papi.how/explorer/0x38f34cf848988563bc2abc20ad812c1fa9dfa88688a4723bbbfb4e47a27e45d8#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 33897
+        },
+        {
+          "op": 3,
+          "kind": "load",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0xa6ca302809fd62d072ecde29dad7fbf089b900712da65536b06e06c46cc527bd",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 162
+            }
+          },
+          "block": {
+            "number": 7205544,
+            "hash": "0x68dc6bb0cd9c25fd812cfc4b3c5f71fd8d1331e049b8b48a0ac6b1b2e52afe05",
+            "index": 3
+          },
+          "txHash": "0x9dce4ccf350a7218658539d09cdac0451ff9fbd79c550a54d2c1fe959890528b",
+          "explorer": "https://dev.papi.how/explorer/0x68dc6bb0cd9c25fd812cfc4b3c5f71fd8d1331e049b8b48a0ac6b1b2e52afe05#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 28620
+        },
+        {
+          "op": 4,
+          "kind": "recycle",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+              "to": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+              "input_count": 1,
+              "amount": "20000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0xb0edb6b1fb7f36b5fa1b47e81474a0d9320f9eee9245b7848da17aa33c91fdbb",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 167
+            }
+          },
+          "block": {
+            "number": 7205564,
+            "hash": "0x96bd00020ce837d4d90cc909b6eb3a47f5df62a37024996ad62b322e47e89ce1",
+            "index": 4
+          },
+          "txHash": "0xfd041c631347399741ee2b0ef17647a87df770b4d4f084f06078780277c966c8",
+          "explorer": "https://dev.papi.how/explorer/0x96bd00020ce837d4d90cc909b6eb3a47f5df62a37024996ad62b322e47e89ce1#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+          "elapsedMs": 33854
+        },
+        {
+          "op": 5,
+          "kind": "recycle",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+              "to": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+              "input_count": 1,
+              "amount": "40000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x911803c319f26e7ec7b1df0fd86ed06b4b7c6b18ef772ba35ba69b678d1de15c",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 167
+            }
+          },
+          "block": {
+            "number": 7205585,
+            "hash": "0x1287dd8841cd37e8059c7b81119fc605c645f6fcac24efe241ee6f3028c9ccf6",
+            "index": 3
+          },
+          "txHash": "0xb840e826e9aa253474cae1208af528bc553b80a830e3729e28eeed51472c0e39",
+          "explorer": "https://dev.papi.how/explorer/0x1287dd8841cd37e8059c7b81119fc605c645f6fcac24efe241ee6f3028c9ccf6#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 31752
+        },
+        {
+          "op": 6,
+          "kind": "recycle",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+              "to": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+              "input_count": 1,
+              "amount": "80000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x1d4f46b5b753b503dcaf5eafe444c619f5c5daf8697d89e55c8c4f91e72b16e7",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 52
+            }
+          },
+          "block": {
+            "number": 7205606,
+            "hash": "0x7106df0c0e516126480a75cd9e1f352ec014b6bfafc7287e41400caac3ad736e",
+            "index": 4
+          },
+          "txHash": "0xb8624c491474432bccfe0761e3f2d2be94118e4375ab1f038ef49341e4c42a78",
+          "explorer": "https://dev.papi.how/explorer/0x7106df0c0e516126480a75cd9e1f352ec014b6bfafc7287e41400caac3ad736e#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+          "elapsedMs": 28896
+        },
+        {
+          "op": 7,
+          "kind": "recycle",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+              "to": "5H4F4F8qPLwF6SY8RdMHSZqPsgR7mZqkjF731aNy94CiY151",
+              "input_count": 1,
+              "amount": "160000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0xbdcd350b4a39790f77497953ff99e2ea3d7863886d5c2166016f05cde25b81b8",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 167
+            }
+          },
+          "block": {
+            "number": 7205625,
+            "hash": "0xeae20c40467f2214a70ecc9a4277f10ea95a2917ea4a6b7846c9b7fa1bb2c9d1",
+            "index": 3
+          },
+          "txHash": "0x94883f96066c5b4d39d80702c44fbee54560d55cb6c32bf06b7b70ec3eb87243",
+          "explorer": "https://dev.papi.how/explorer/0xeae20c40467f2214a70ecc9a4277f10ea95a2917ea4a6b7846c9b7fa1bb2c9d1#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 30193
+        }
+      ]
+    },
+    {
+      "name": "Demo-6",
+      "address": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+      "plan": {
+        "duration-seconds": "300",
+        "interval-seconds": "30",
+        "denominations": "1,2,3,4",
+        "max-held-raw": "300000",
+        "asset-floor-raw": "100000",
+        "native-budget-raw": "20000000000",
+        "native-floor-raw": "100000000000",
+        "max-unload-fee-raw": "500000000",
+        "min-hold-seconds": "30",
+        "max-unloads-per-tx": "4",
+        "ring-ceiling": "700"
+      },
+      "startedAt": "2026-10-01T11:28:54.205Z",
+      "endsAt": "2026-10-01T11:33:54.205Z",
+      "completedAt": "2026-10-01T11:34:19.556Z",
+      "counters": {
+        "loads": 8,
+        "recycles": 4,
+        "dropped": 0,
+        "failed": 0,
+        "assetLoaded": "600000",
+        "assetWithdrawn": "300000",
+        "nativeFees": "1065001272"
+      },
+      "liquidCash": "200000",
+      "heldCash": "300000",
+      "nativeFree": "198934998728",
+      "proofs": [
+        {
+          "op": 0,
+          "kind": "load",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x46f6eb209dbceff24904db97e250bd5112e59afaeeebe2f935be1a207b72c94c",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 157
+            }
+          },
+          "block": {
+            "number": 7205490,
+            "hash": "0x06af15bbfe23b1dfd44d7c312aeffd12f7549b4b9c02b0c85ef220ca54f7c6ec",
+            "index": 2
+          },
+          "txHash": "0xe7c5df2df66d225c19e53af8de51a6288e602ba37b142e1b479600ed9128bc31",
+          "explorer": "https://dev.papi.how/explorer/0x06af15bbfe23b1dfd44d7c312aeffd12f7549b4b9c02b0c85ef220ca54f7c6ec#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 30672
+        },
+        {
+          "op": 1,
+          "kind": "load",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x8980962d0d7d8358e0ae4585f1b3272d68ad7c121bc260aca53c90c1440c1041",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 157
+            }
+          },
+          "block": {
+            "number": 7205508,
+            "hash": "0xa43b4e79c97989c7399e42ba07cf006b928f598bdc06916f793c2b7316062337",
+            "index": 4
+          },
+          "txHash": "0x93d011a2e8ce2713c0ea654584770ab4b2b70cfbefa69ce891b6570137afebd5",
+          "explorer": "https://dev.papi.how/explorer/0xa43b4e79c97989c7399e42ba07cf006b928f598bdc06916f793c2b7316062337#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4",
+          "elapsedMs": 31407
+        },
+        {
+          "op": 2,
+          "kind": "load",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x224b4d0bea8810dd69cf8416565c6f5aaed18ea6f51884be27f10cdaa8e37143",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 43
+            }
+          },
+          "block": {
+            "number": 7205525,
+            "hash": "0x38f34cf848988563bc2abc20ad812c1fa9dfa88688a4723bbbfb4e47a27e45d8",
+            "index": 3
+          },
+          "txHash": "0xd51468506d2a17560027ba112f7bee664ec551d8c6f0287524b34baafc44674c",
+          "explorer": "https://dev.papi.how/explorer/0x38f34cf848988563bc2abc20ad812c1fa9dfa88688a4723bbbfb4e47a27e45d8#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 32140
+        },
+        {
+          "op": 3,
+          "kind": "load",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [],
+          "fee": "0",
+          "member": "0x00f4fccc286ba312612f8be828151dfef6180435d82f610ded44793c4d0ff966",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 161
+            }
+          },
+          "block": {
+            "number": 7205544,
+            "hash": "0x68dc6bb0cd9c25fd812cfc4b3c5f71fd8d1331e049b8b48a0ac6b1b2e52afe05",
+            "index": 2
+          },
+          "txHash": "0xb9d79a2bdd0bbccd01aeb85c2988475fbe9f58715f1734d6a7d18ec1913c9122",
+          "explorer": "https://dev.papi.how/explorer/0x68dc6bb0cd9c25fd812cfc4b3c5f71fd8d1331e049b8b48a0ac6b1b2e52afe05#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 28200
+        },
+        {
+          "op": 4,
+          "kind": "recycle",
+          "denomination": 1,
+          "amount": "20000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+              "to": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+              "input_count": 1,
+              "amount": "20000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0xb9c8a5064ff93d6bd765e3fb80c94d527acf1613b53875de036f7542e0dbbcd4",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 1,
+              "ring_position": 166
+            }
+          },
+          "block": {
+            "number": 7205563,
+            "hash": "0x5f2cb714ab13362bd41dce2a46b31f424e97c43a2de31ff5ab9b3096c3af66f5",
+            "index": 5
+          },
+          "txHash": "0x9f9884af785c429d8c1fb05ac864a4a7fd8adcb2be389d803f9725901d77fd5c",
+          "explorer": "https://dev.papi.how/explorer/0x5f2cb714ab13362bd41dce2a46b31f424e97c43a2de31ff5ab9b3096c3af66f5#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=5",
+          "elapsedMs": 32659
+        },
+        {
+          "op": 5,
+          "kind": "recycle",
+          "denomination": 2,
+          "amount": "40000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+              "to": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+              "input_count": 1,
+              "amount": "40000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0xcf464b93b4f34c2c8b671f438ec1d009be257bcd180fc1781a03370f71693a92",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 166
+            }
+          },
+          "block": {
+            "number": 7205585,
+            "hash": "0x1287dd8841cd37e8059c7b81119fc605c645f6fcac24efe241ee6f3028c9ccf6",
+            "index": 2
+          },
+          "txHash": "0x865ec8205b8e67820116eef6d4944a5d4b278e1f72608dc3e99a9f6b5b0b18b0",
+          "explorer": "https://dev.papi.how/explorer/0x1287dd8841cd37e8059c7b81119fc605c645f6fcac24efe241ee6f3028c9ccf6#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2",
+          "elapsedMs": 31646
+        },
+        {
+          "op": 6,
+          "kind": "recycle",
+          "denomination": 3,
+          "amount": "80000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+              "to": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+              "input_count": 1,
+              "amount": "80000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x584c1c3afd03fca8d01d55768c807e24882a3b8b6d01fc8830819a2be1d8a5f2",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 0,
+              "ring_page": 2,
+              "ring_position": 51
+            }
+          },
+          "block": {
+            "number": 7205606,
+            "hash": "0x7106df0c0e516126480a75cd9e1f352ec014b6bfafc7287e41400caac3ad736e",
+            "index": 3
+          },
+          "txHash": "0xe83923393daa314c6ad97979b024d2bbef96189bde9466f53e13bc5c84264dc7",
+          "explorer": "https://dev.papi.how/explorer/0x7106df0c0e516126480a75cd9e1f352ec014b6bfafc7287e41400caac3ad736e#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3",
+          "elapsedMs": 33154
+        },
+        {
+          "op": 7,
+          "kind": "recycle",
+          "denomination": 4,
+          "amount": "160000",
+          "withdrawals": [
+            {
+              "instance_id": 0,
+              "who": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+              "to": "5EXQCipukx11Nb7Cigtffq1gSeUeM1owHVzCsBrVen15refZ",
+              "input_count": 1,
+              "amount": "160000",
+              "fee_currency": {
+                "type": "Native"
+              }
+            }
+          ],
+          "fee": "266250318",
+          "member": "0x91c2a9ca9b4372e3fcbe11576f22d136ffa12fdcc11d09b435271808399146b6",
+          "membership": {
+            "type": "Included",
+            "value": {
+              "ring_index": 1,
+              "ring_page": 1,
+              "ring_position": 169
+            }
+          },
+          "block": {
+            "number": 7205626,
+            "hash": "0xa4adb5603080b8182b9ef6ef62f1753f3fee98c099505ab7796274a49e5240db",
+            "index": 9
+          },
+          "txHash": "0xeaa7716dfdc66c01d0367f49d9072841f7f258fd934f131a0f10a84de25d199d",
+          "explorer": "https://dev.papi.how/explorer/0xa4adb5603080b8182b9ef6ef62f1753f3fee98c099505ab7796274a49e5240db#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=9",
+          "elapsedMs": 35655
+        }
+      ]
+    }
+  ]
+}

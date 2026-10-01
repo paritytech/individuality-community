@@ -18,6 +18,11 @@ command=$1
 run=$(cd "$here" && mkdir -p "$2" && cd "$2" && pwd)
 account=$("$node" -e '
   const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (r.signerSource) {
+    if (!/^[0-9a-f]{64}$/.test(r.signerKey)) throw Error("Invalid private signer identifier");
+    process.stdout.write("private-" + r.signerKey);
+    process.exit(0);
+  }
   const name = r.devAccount || "Bob";
   if (!["Alice", "Bob", "Charlie", "Dave", "Eve", "Ferdie"].includes(name)) throw Error("Unknown dev account");
   process.stdout.write(name.toLowerCase());

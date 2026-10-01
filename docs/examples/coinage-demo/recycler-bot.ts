@@ -26,7 +26,7 @@ import {
   getDynamicBuilder,
   getLookupFn,
 } from "@polkadot-api/metadata-builders";
-import { selectDevAccount } from "./recycler-account.js";
+import { selectBotAccount } from "./recycler-account.js";
 import { blake2b256 } from "@polkadot-labs/hdkd-helpers";
 import {
   alias_in_context,
@@ -82,6 +82,7 @@ const { values } = parseArgs({
     run: { type: "boolean", default: false },
     output: { type: "string" },
     account: { type: "string" },
+    "mnemonic-file": { type: "string" },
     adopt: { type: "string" },
     reconfigure: { type: "boolean", default: false },
     init: { type: "boolean", default: false },
@@ -99,6 +100,7 @@ if (values.help || !values.output) {
   [--max-held-raw 1000000] [--asset-floor-raw 500000] [--min-hold-seconds 3600] [--max-unloads-per-tx 4]
   [--native-budget-raw 2500000000000] [--native-floor-raw 45000000000000] [--max-unload-fee-raw 500000000]
   [--account Bob|Alice|Charlie|Dave|Eve|Ferdie]
+  [--mnemonic-file /absolute/private/accounts.json --account Demo-1]
   [--ring-ceiling 700] [--max-failures 6] [--max-crashes 20]
 Without --run or --init, writes a read-only preflight. --run loads recycler vouchers from the selected public test account on
 public Paseo People and, once max-held-raw is reached, withdraws the oldest vouchers back to that account in
@@ -129,7 +131,8 @@ const resuming = existsSync(runFile);
 if (resuming && values.adopt)
   throw Error("--adopt only applies when a run is created");
 const stored = resuming ? JSON.parse(readFileSync(runFile, "utf8")) : {};
-const { name: devAccount, address, pair } = selectDevAccount(values.account, resuming ? stored : undefined);
+const { name: devAccount, address, pair, signerSource, signerKey, lockName } =
+  selectBotAccount(values.account, resuming ? stored : undefined, values["mnemonic-file"]);
 const plan = {} as Record<PlanKey, string>;
 for (const key of Object.keys(planOptions) as PlanKey[]) {
   const given = values[key];
@@ -868,7 +871,7 @@ async function main() {
   }
 
   // One bot per signer; preserve Bob's original lock for existing processes.
-  const lock = fileURLToPath(new URL(`runs/.recycler-bot-public-${devAccount.toLowerCase()}.lock`, import.meta.url));
+  const lock = fileURLToPath(new URL(`runs/.recycler-bot-${lockName}.lock`, import.meta.url));
   if (existsSync(lock)) {
     const holder = JSON.parse(readFileSync(lock, "utf8"));
     let alive = true;
@@ -912,7 +915,7 @@ async function main() {
     // Written last: a directory without run.json never resumes a half-created run.
     writeFileSync(
       runFile,
-      json({ endpoints, genesis, instance: instanceId, payer: address, devAccount, plan, createdAt: new Date().toISOString() }) + "\n",
+      json({ endpoints, genesis, instance: instanceId, payer: address, devAccount, signerSource, signerKey, plan, createdAt: new Date().toISOString() }) + "\n",
       { flag: "wx", mode: 0o600 },
     );
   }

@@ -495,3 +495,47 @@ loads denominations 1–4 (0.02–0.16 CASH); it does not transact 500 CASH per 
 Validation: TypeScript checking and account/service tests pass. The repository
 check runner passed all 2,831 Rust tests and the priority lint passed. The existing
 issue-link lint failures remain unchanged. No PR was created.
+
+
+## Five-minute test with six private accounts
+
+On October 1, Demo-1 through Demo-6 ran for a configured 300 seconds each,
+then settled their final in-flight transaction before exiting. The last exit was
+11:34:19 UTC. Each account started with 0.50 CASH and 20 PAS. Alice funded the
+CASH through exact-output swaps; her existing bot was paused for funding and
+resumed afterwards. The old bots were not migrated or emptied.
+
+Independent HTTP verification at finalized #7205631 checked all 48 transactions,
+canonical hashes, signed extrinsic hashes, success events, the actual signer,
+Included membership for all new keys and Unloaded states for withdrawn aliases.
+The on-chain amounts and fees match each run's counters. Each account completed
+eight transactions, including four atomic withdrawal/reload batches, covering
+denominations 1–4. There were zero failures, drops or unresolved transactions.
+
+Total loaded: 3.60 CASH. Total withdrawn: 1.80 CASH. Gross turnover: 5.40 CASH
+(reused capital, not distinct funds). Each account retained 0.20 liquid CASH and
+0.30 CASH in vouchers, conserving its initial 0.50 CASH. Each paid 0.1065001272
+PAS in fees and retained 19.8934998728 PAS. The vouchers and private mnemonic
+file remain local and ignored by Git; the bots can resume from their checkpoints.
+
+[All transaction proofs](private-accounts-five-minute-test.json) include links
+to every transaction. The following links show the last withdrawal/reload for
+each account:
+
+| Account | Final verified recycle |
+|---|---|
+| Demo-1 | [#7205617-2](https://dev.papi.how/explorer/0xc9f0712f04aff9b5ed7c6332e7afe680857f6b19d7a87a181d1219f4feca4540#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) |
+| Demo-2 | [#7205625-4](https://dev.papi.how/explorer/0xeae20c40467f2214a70ecc9a4277f10ea95a2917ea4a6b7846c9b7fa1bb2c9d1#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=4) |
+| Demo-3 | [#7205624-2](https://dev.papi.how/explorer/0xf45de7a66413cdfdd37efe07de2615595b21df3f77fa438812f0fcc64a976ca4#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) |
+| Demo-4 | [#7205618-3](https://dev.papi.how/explorer/0x55437d279a2799ba00ff61f7420d34c44e95a700e98ad4a2848c27b76df990a3#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3) |
+| Demo-5 | [#7205625-3](https://dev.papi.how/explorer/0xeae20c40467f2214a70ecc9a4277f10ea95a2917ea4a6b7846c9b7fa1bb2c9d1#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=3) |
+| Demo-6 | [#7205626-9](https://dev.papi.how/explorer/0xa4adb5603080b8182b9ef6ef62f1753f3fee98c099505ab7796274a49e5240db#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=9) |
+
+This proves the private-account script's load, withdrawal, reuse and deadline
+behaviour on Devnet. It does not prove mobile-app readiness at full privacy or
+performance at 500 CASH per account. The short test used a 30-second hold and
+small denominations.
+
+Validation: TypeScript checking and all 39 tests passed; the repository check
+runner passed all 2,831 Rust tests, and priority lint passed. Existing issue-link
+lint failures remain unchanged. No PR was created.

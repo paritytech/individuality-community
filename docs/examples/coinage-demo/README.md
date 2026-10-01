@@ -348,3 +348,35 @@ loaded, before finality, ring ceilings and funding constraints. Withdrawals reus
 that capital; adding incoming and outgoing amounts measures gross turnover, not
 unique funds. These are targets, not measured throughput. Larger CASH balances
 alone do not change denomination coverage or fill other denomination rings.
+
+### Private demo accounts
+
+Use `--mnemonic-file /absolute/path/mnemonics.json --account Demo-1` when
+creating a run with a private signer. The file must have owner-only permissions
+(`chmod 600`). It contains an `accounts` array; each entry has `name`, `address`,
+`mnemonic`, `derivationPath` (an empty string for the generated demo accounts)
+and `crypto: "sr25519"`. Keep this file outside Git or under ignored `runs/`.
+
+Only the file path, entry name and public signer identity go into `run.json`.
+Resume reads the same private file and verifies that the derived address matches.
+Signer changes, duplicate entries, mismatched addresses, well-known dev keys and
+files readable by other users are rejected. Private accounts have independent
+locks and launchd services keyed by their public key. No mnemonic is passed in a
+command-line argument or written to receipts.
+
+The short smoke test uses these settings to exercise both loading and withdrawal:
+
+```sh
+node --import tsx recycler-bot.ts --init \
+  --mnemonic-file /absolute/path/mnemonics.json --account Demo-1 \
+  --output runs/private-smoke-demo-1 --duration-seconds 300 \
+  --interval-seconds 30 --denominations 1,2,3,4 \
+  --max-held-raw 300000 --asset-floor-raw 100000 --min-hold-seconds 30 \
+  --native-floor-raw 100000000000 --native-budget-raw 20000000000
+./recycler-service.sh start runs/private-smoke-demo-1
+```
+
+Fund each account with 0.50 CASH and 20 PAS first. The run stops after its
+five-minute deadline, settling any in-flight transaction. Held voucher secrets
+remain in the run directory for later withdrawal or reuse. The 30-second hold
+is a test setting, not a mobile-app privacy guarantee.
