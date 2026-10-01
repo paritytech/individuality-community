@@ -175,6 +175,30 @@ Bob's free PAS never drops below 4500 (`--native-floor-raw`). Before each signat
 the bot checks the worst case against these bounds and stops rather than exceeding
 one. It also stops after six consecutive failed or dropped transactions.
 
+### Eight-hour restart on October 1
+
+The existing checkpoint was resumed on documented Devnet with denomination IDs
+1, 2, 3 and 4 (0.02, 0.04, 0.08 and 0.16). Its planned end is
+2026-10-01 15:53:08 UTC, or 22:53:08 GMT+7. The interval is 90 seconds,
+the voucher hold time is 30 minutes, the held-value cap is 2.00 and the liquid
+asset floor is 0.50. The native floor is 1500 PAS. These settings supersede the
+historical 96-hour run settings above for this local run.
+
+Withdrawal selection prefers the oldest mature vouchers. If four small vouchers
+cannot fund the next load, it tries the largest mature vouchers within the same
+input limit. It never withdraws young or unconfirmed vouchers for this fallback.
+This fixes the earlier stop while larger recoverable vouchers were available.
+
+The run reuses saved vouchers and remains under launchd supervision. Its directory
+keeps the historical name `runs/recycler-bot-devnet-96h`; the current deadline is
+in `state.json` and `status.json`. The configured duration is measured from the
+original checkpoint start, so it includes the time the bot was stopped.
+
+See [independently checked restart transactions](evidence/recycler-bot-2026-10-01-restart.json).
+Finalization timing is not the mobile app's clearing time. Activity only affects
+the selected denomination pools on this network; it does not establish that
+Alex's full-privacy settings will become ready immediately.
+
 ### Failure handling
 
 - At most one transaction is unresolved. Its signed bytes, nonce and mortal era

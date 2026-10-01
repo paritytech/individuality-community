@@ -443,3 +443,22 @@ Android `d49c5e6db17bfca48bf4872014f676e9fdb884b3`. The release-related commits
 `c5158448f3c4575f40350017d466053d6b19dacb` (Android) are not present in the local
 clones, so they were not re-read. The constants are identical in the Android copy
 under `host-rust-core` `6fc92e721d8bdabe0401d3219d1030cc5d41cdf3`.
+
+## Eight-hour restart on October 1
+
+The bot resumed on public Paseo People at approximately 07:53 UTC, with a planned stop at 15:53:08 UTC (22:53:08 GMT+7). It cycles through denomination IDs 1–4 every 90 seconds, holds vouchers for at least 30 minutes and reuses withdrawals. The held cap is 2.00, the liquid floor is 0.50 and the native floor is 1500 PAS. The existing run directory retains its historical `recycler-bot-devnet-96h` name.
+
+The withdrawal selector now tries larger eligible vouchers when the oldest four cannot fund a load. The first resumed batch withdrew 1.92 from two mature vouchers and loaded 0.16, restoring 1.76 liquid without a swap. The preflight liquid balance was zero.
+
+The following transactions were independently checked through Interweb HTTP RPC: canonical block hash, extrinsic hash, successful dispatch, matching load/member events and current included membership. Withdrawal aliases were checked as unloaded, and fees were recomputed from chain events. Timing is from signing to the bot’s finalized receipt, not mobile clearing time.
+
+| Denomination | Amount | Finalized transaction | Observed seconds |
+|---|---:|---|---:|
+| 1 | 0.02 | [7199193-2](https://dev.papi.how/explorer/0x505f7f9b9d73f7ad0cb73bbdae8e2bccaf7653b9bf6ad7455f218518a9fe30c2#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 31.8 |
+| 2 | 0.04 | [7199238-2](https://dev.papi.how/explorer/0x17fb8288c6b5d8c384ad4e38e5474ea264fdb4df8f5edae3d46505728d209fb3#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 28.6 |
+| 3 | 0.08 | [7199283-2](https://dev.papi.how/explorer/0xfab4ed218091350a93c2bfba3fd321b59e95c1b24fc8ddaa2d89c51e20cd4baa#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 28.6 |
+| 4 | 0.16 | [7199151-2](https://dev.papi.how/explorer/0xf9cc891896727d335d1a344f8d72f37c0f21457f91438c410fc269133168fb58#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2) | 29.9 |
+
+[Full public verification data](recycler-bot-2026-10-01-restart.json). Only these four pools are targeted; this does not establish Alex’s app settings or eliminate its privacy waiting policy.
+
+Validation: TypeScript checking and 34 script tests passed. The repository check runner passed, including 2831 Rust tests, and the transaction-priority lint passed. Existing task-comment-format lint failures remain. A simulation from the resumed checkpoint reached the deadline without exhausting capital under assumed successful 30-second settlements. It is not evidence that the live eight-hour run has completed.

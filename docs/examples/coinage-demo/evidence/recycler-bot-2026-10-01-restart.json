@@ -1,0 +1,173 @@
+{
+  "checkedAt": "2026-10-01T07:59:40.918Z",
+  "endpoint": "https://rpc.interweb-it.com/people-paseo",
+  "genesis": "0xe6c30d6e148f250b887105237bcaa5cb9f16dd203bf7b5b9d4f1da7387cb86ec",
+  "finalized": {
+    "number": 7199302,
+    "hash": "0xd3afbd46125ded44750bccf7c2fbd92e7b6a7a2ad431f945b8045dfd3209c165"
+  },
+  "plan": {
+    "duration-seconds": "100260",
+    "interval-seconds": "90",
+    "denominations": "1,2,3,4",
+    "max-held-raw": "2000000",
+    "asset-floor-raw": "500000",
+    "native-budget-raw": "2500000000000",
+    "native-floor-raw": "15000000000000",
+    "max-unload-fee-raw": "500000000",
+    "min-hold-seconds": "1800",
+    "max-unloads-per-tx": "4",
+    "ring-ceiling": "700"
+  },
+  "balances": {
+    "nonce": 68,
+    "nativeFree": "20329606725656",
+    "liquidAsset": "1620000"
+  },
+  "verified": [
+    {
+      "op": 53,
+      "kind": "recycle",
+      "block": {
+        "number": 7199151,
+        "hash": "0xf9cc891896727d335d1a344f8d72f37c0f21457f91438c410fc269133168fb58",
+        "index": 2
+      },
+      "txHash": "0x9645be93b83eaef1ff5ee6e196da4ec08ec0bf81eea902c9a8730eb39dc59059",
+      "denomination": 4,
+      "amount": "160000",
+      "withdrawals": [
+        {
+          "instance_id": 0,
+          "who": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+          "to": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+          "input_count": 2,
+          "amount": "1920000",
+          "fee_currency": {
+            "type": "Native"
+          }
+        }
+      ],
+      "member": "0xf38fd871859973574d8bc3d14ade33531f801ded9a871a63368d859cbf70f794",
+      "location": {
+        "type": "Included",
+        "value": {
+          "ring_index": 1,
+          "ring_page": 0,
+          "ring_position": 242
+        }
+      },
+      "ring": {
+        "total": 243,
+        "included": 243
+      },
+      "aliases": [
+        {
+          "instance_id": 0,
+          "value": 7,
+          "ring_index": 1,
+          "alias": "0xf07102c2af3f5ea9822bf00135b34ccf4a45ed82c3a59e7310d77715598d952a"
+        },
+        {
+          "instance_id": 0,
+          "value": 6,
+          "ring_index": 1,
+          "alias": "0x735d7723a7f0955e0bac7ddc37713567e9b27804b17c4f79e9d3afbd7881b19a"
+        }
+      ],
+      "fee": "514831017",
+      "observedSeconds": 29.918,
+      "explorer": "https://dev.papi.how/explorer/0xf9cc891896727d335d1a344f8d72f37c0f21457f91438c410fc269133168fb58#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "op": 54,
+      "kind": "load",
+      "block": {
+        "number": 7199193,
+        "hash": "0x505f7f9b9d73f7ad0cb73bbdae8e2bccaf7653b9bf6ad7455f218518a9fe30c2",
+        "index": 2
+      },
+      "txHash": "0x9f64098dde8fbcf5774b68544dd6fb1542316915476964423acc7bd3dd740dae",
+      "denomination": 1,
+      "amount": "20000",
+      "withdrawals": [],
+      "member": "0xbb52e0a101e554c4544e72e2de19fdd340e7431837a8ecaf330da0bfc0cfff6d",
+      "location": {
+        "type": "Included",
+        "value": {
+          "ring_index": 0,
+          "ring_page": 0,
+          "ring_position": 117
+        }
+      },
+      "ring": {
+        "total": 134,
+        "included": 134
+      },
+      "aliases": [],
+      "fee": "0",
+      "observedSeconds": 31.804,
+      "explorer": "https://dev.papi.how/explorer/0x505f7f9b9d73f7ad0cb73bbdae8e2bccaf7653b9bf6ad7455f218518a9fe30c2#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "op": 55,
+      "kind": "load",
+      "block": {
+        "number": 7199238,
+        "hash": "0x17fb8288c6b5d8c384ad4e38e5474ea264fdb4df8f5edae3d46505728d209fb3",
+        "index": 2
+      },
+      "txHash": "0xfca26a7956d2c75bb215455664f990fc73cca833aed2d5143a6092a965300f5b",
+      "denomination": 2,
+      "amount": "40000",
+      "withdrawals": [],
+      "member": "0xbea2138f01b2a05e786883cddc67169d051daf9744961c3534225165921face2",
+      "location": {
+        "type": "Included",
+        "value": {
+          "ring_index": 1,
+          "ring_page": 0,
+          "ring_position": 229
+        }
+      },
+      "ring": {
+        "total": 230,
+        "included": 230
+      },
+      "aliases": [],
+      "fee": "0",
+      "observedSeconds": 28.567,
+      "explorer": "https://dev.papi.how/explorer/0x17fb8288c6b5d8c384ad4e38e5474ea264fdb4df8f5edae3d46505728d209fb3#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    },
+    {
+      "op": 56,
+      "kind": "load",
+      "block": {
+        "number": 7199283,
+        "hash": "0xfab4ed218091350a93c2bfba3fd321b59e95c1b24fc8ddaa2d89c51e20cd4baa",
+        "index": 2
+      },
+      "txHash": "0x4760e326f0824f49a887111cf82d2450230d3d81003cc49a3d56356b45a5f984",
+      "denomination": 3,
+      "amount": "80000",
+      "withdrawals": [],
+      "member": "0xbaa687771eca845b22aa33d5a747804b647d2802b34546f0620fd09dc437db0a",
+      "location": {
+        "type": "Included",
+        "value": {
+          "ring_index": 0,
+          "ring_page": 1,
+          "ring_position": 115
+        }
+      },
+      "ring": {
+        "total": 371,
+        "included": 371
+      },
+      "aliases": [],
+      "fee": "0",
+      "observedSeconds": 28.585,
+      "explorer": "https://dev.papi.how/explorer/0xfab4ed218091350a93c2bfba3fd321b59e95c1b24fc8ddaa2d89c51e20cd4baa#networkId=custom&endpoint=wss%3A%2F%2Fpeople-paseo.rotko.net&tx=2"
+    }
+  ]
+}

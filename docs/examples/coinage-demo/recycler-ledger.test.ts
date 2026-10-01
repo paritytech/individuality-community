@@ -74,13 +74,13 @@ function pending(overrides: Partial<PendingOp> = {}): PendingOp {
     ...overrides,
   };
 }
-const held = (member: string, loadedAt: number, amount = 20000n, ringIndex: number | undefined = 0): HeldVoucher => ({
+const held = (member: string, loadedAt: number, amount = 20000n, ringIndex: number | null = 0): HeldVoucher => ({
   member,
-  denomination: amount === 10000n ? 0 : 1,
+  denomination: Math.log2(Number(amount / 10000n)),
   amount,
   loadedAt,
   block: { number: 1, hash: "0x1", index: 2 },
-  ringIndex,
+  ringIndex: ringIndex ?? undefined,
 });
 function withPending(op: PendingOp): LedgerState {
   return { ...newState(0, 96 * 3600), pending: op, nextOp: op.id + 1 };
@@ -182,7 +182,7 @@ test("a denomination whose current ring reached the ceiling is skipped, and all 
   assert.equal(planAction(s, config, amounts, rich, fee, hour, 6, new Set([0, 1])).type, "wait");
 });
 test("at the held cap the oldest confirmed voucher past its hold age is withdrawn with the next load", () => {
-  const vouchers = [held("0xyoung", 2 * hour), held("0xold", 0), held("0xunconfirmed", 0, 20000n, undefined)];
+  const vouchers = [held("0xyoung", 2 * hour), held("0xold", 0), held("0xunconfirmed", 0, 20000n, null)];
   const s = { ...newState(0, 96 * 3600), held: vouchers, nextLoad: 1 };
   const a = planAction(s, config, amounts, rich, fee, 1.5 * hour, 6);
   assert.equal(a.type, "recycle");
@@ -217,4 +217,38 @@ test("repeated failures and the deadline stop the run", () => {
   const late = newState(0, 60);
   const a = planAction(late, config, amounts, rich, fee, 60000, 6);
   assert.equal(a.type === "stop" && a.reason, "deadline");
+});
+
+test("large mature vouchers unblock a load that the oldest four cannot fund", () => {
+  const c = { ...config, denominations: [8], maxHeldRaw: 4600000n, minHoldSeconds: 1800 };
+  const vouchers = [
+    held("old1", 0, 160000n), held("old2", 1, 10000n),
+    held("old3", 2, 20000n), held("old4", 3, 40000n),
+    held("large1", 4, 1280000n), held("large2", 5, 640000n),
+    held("large3", 6, 320000n),
+    ...[160000n, 160000n, 160000n, 160000n, 160000n, 160000n, 80000n, 40000n, 10000n]
+      .map((amount, i) => held(`rest-${i}`, 7 + i, amount)),
+  ];
+  const s = { ...newState(0, 8 * 3600), held: vouchers };
+  const a = planAction(s, c, [2560000n], rich, fee, hour, 6);
+  assert.equal(a.type, "recycle");
+  if (a.type !== "recycle") throw Error("Expected recycling");
+  assert.deepEqual(a.unloads.map(v => v.member), ["large1", "large2"]);
+  const released = a.unloads.reduce((sum, v) => sum + v.amount, 0n);
+  assert.ok(3560000n - released + a.load.amount <= c.maxHeldRaw);
+  assert.ok(rich.liquidAsset + released - a.load.amount >= c.assetFloorRaw);
+});
+
+test("fallback cannot withdraw young or unconfirmed large vouchers", () => {
+  const c = { ...config, denominations: [8], maxHeldRaw: 7600000n, minHoldSeconds: 1800 };
+  const s = { ...newState(0, 8 * 3600), held: [
+    held("small", 0), held("young", hour, 2560000n), held("unconfirmed", 0, 2560000n, null),
+  ] };
+  assert.equal(planAction(s, c, [2560000n], rich, fee, hour, 6).type, "wait");
+});
+
+test("fallback obeys the unload limit when mature capital is fragmented", () => {
+  const c = { ...config, denominations: [8], maxHeldRaw: 4600000n, minHoldSeconds: 0 };
+  const s = { ...newState(0, 8 * 3600), held: Array.from({ length: 20 }, (_, i) => held(String(i), i, 160000n)) };
+  assert.equal(planAction(s, c, [2560000n], rich, fee, hour, 6).type, "stop");
 });

@@ -252,7 +252,9 @@ export interface Balances {
 /**
  * Chooses the next step. Loads while the held value and asset floor allow it;
  * otherwise withdraws the oldest confirmed vouchers old enough to release in the
- * same transaction as the next load. `worstFee` bounds one transaction's native
+ * same transaction as the next load. If the oldest inputs cannot fund it within
+ * the input limit, the largest eligible vouchers are used instead.
+ * `worstFee` bounds one transaction's native
  * cost excluding unload fees. Denominations in `full` are skipped: their current
  * ring has reached the configured ceiling.
  */
@@ -307,12 +309,25 @@ export function planAction(
         v.loadedAt + config.minHoldSeconds * 1000 <= now,
     )
     .sort((a, b) => a.loadedAt - b.loadedAt);
-  const unloads: HeldVoucher[] = [];
+  let unloads: HeldVoucher[] = [];
   let released = 0n;
   for (const v of eligible) {
     if (fits(released) || unloads.length >= config.maxUnloadsPerTx) break;
     unloads.push(v);
     released += v.amount;
+  }
+  if (!fits(released)) {
+    // Larger vouchers can fund the load when the oldest ones exceed the input limit.
+    unloads = [];
+    released = 0n;
+    const byValue = [...eligible].sort((a, b) =>
+      a.amount === b.amount ? a.loadedAt - b.loadedAt : a.amount > b.amount ? -1 : 1,
+    );
+    for (const v of byValue) {
+      if (fits(released) || unloads.length >= config.maxUnloadsPerTx) break;
+      unloads.push(v);
+      released += v.amount;
+    }
   }
   if (unloads.length && fits(released)) {
     if (!nativeOk(unloads.length))
