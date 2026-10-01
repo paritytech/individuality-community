@@ -2503,24 +2503,7 @@ mod offchain_worker {
 	}
 
 	#[test]
-	fn submits_one_gap_scan_per_run() {
-		new_test_ext().execute_with(|| {
-			// Two collections lag the frontier.
-			setup_active_with_scan_lag(5);
-			RingCollectionStates::<Test>::insert(
-				PEOPLE_LITE,
-				make_collection_ring_state(0, 5, &[], &[]),
-			);
-
-			Pallet::<Test>::offchain_worker(1);
-
-			// Only one scan is submitted, so a run costs one call's proof size.
-			assert_eq!(pending_ocw_calls().len(), 1);
-		});
-	}
-
-	#[test]
-	fn gap_scan_moves_to_the_next_collection_once_one_drains() {
+	fn submits_one_gap_scan_per_lagging_collection() {
 		new_test_ext().execute_with(|| {
 			// Two collections lag, each by less than a full page.
 			setup_active_with_scan_lag(3);
@@ -2529,12 +2512,16 @@ mod offchain_worker {
 				make_collection_ring_state(0, 3, &[], &[]),
 			);
 
-			// Each run scans one collection to its frontier, so two runs cover both.
-			for _ in 0..2 {
-				Pallet::<Test>::offchain_worker(1);
-				drain_ocw_transactions();
-			}
+			Pallet::<Test>::offchain_worker(1);
 
+			// One scan per collection; the map iteration order is not guaranteed.
+			let calls = pending_ocw_calls();
+			assert_eq!(calls.len(), 2);
+			assert!(calls.contains(&RuntimeCall::MembersSubscriber(gap_scan_call(PEOPLE))));
+			assert!(calls.contains(&RuntimeCall::MembersSubscriber(gap_scan_call(PEOPLE_LITE))));
+
+			// A single run scans both collections to their frontier.
+			drain_ocw_transactions();
 			for identifier in [PEOPLE, PEOPLE_LITE] {
 				assert_eq!(next_scan_index(identifier), 3);
 				assert_eq!(RingCollectionStates::<Test>::get(identifier).missing_indices.len(), 3);

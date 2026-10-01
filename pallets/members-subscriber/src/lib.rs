@@ -138,9 +138,8 @@ pub mod pallet {
 		type MaxDeletedRingsPerCollection: Get<u32>;
 
 		/// Number of ring indices the gap scan examines per `detect_missing_rings` call.
-		/// Must exceed `MaxUpdatesPerBatch`. The offchain worker scans one collection per run, so
-		/// a smaller or equal value lets a collection's frontier advance at least as fast as its
-		/// cursor.
+		/// Must exceed `MaxUpdatesPerBatch`, so a lagging collection's cursor advances faster
+		/// than its frontier can grow between scans.
 		#[pallet::constant]
 		type MaxGapScanPerCall: Get<u32>;
 
@@ -1237,8 +1236,8 @@ pub mod pallet {
 			Self::submit_authorized_transaction(call, block_number);
 		}
 
-		/// Submits one gap-scan transaction for the first collection whose scan cursor is behind
-		/// the ring index frontier and whose batch cooldown has elapsed.
+		/// Submits one gap-scan transaction for each collection whose scan cursor is behind the
+		/// ring index frontier and whose batch cooldown has elapsed.
 		fn submit_gap_scan_if_due(
 			block_number: BlockNumberFor<T>,
 			discriminator: BlockNumberFor<T>,
@@ -1277,7 +1276,6 @@ pub mod pallet {
 					discriminator,
 				};
 				Self::submit_authorized_transaction(call, block_number);
-				return;
 			}
 		}
 
