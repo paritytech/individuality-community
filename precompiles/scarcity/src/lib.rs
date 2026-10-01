@@ -309,7 +309,7 @@ fn collection_id_of(address: &[u8; 20]) -> CollectionId {
 ///
 /// Anything else propagates as a plain error, which traps the frame rather than reverting.
 fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error {
-	let cases: [(ScarcityError<T>, &str); 20] = [
+	let cases: [(ScarcityError<T>, &str); 22] = [
 		(ScarcityError::NoPermission, "caller is not the collection owner"),
 		(ScarcityError::UnknownCollection, ERR_UNKNOWN_COLLECTION),
 		(ScarcityError::UnknownItem, ERR_UNKNOWN_ITEM),
@@ -319,6 +319,8 @@ fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error 
 		(ScarcityError::Soulbound, "token is soulbound to its purse key"),
 		(ScarcityError::SupplyOverflow, "item supply exhausted"),
 		(ScarcityError::TooManyInstanceMetadata, "too many instance metadata entries"),
+		(ScarcityError::TooManyCollectionMetadata, "too many collection metadata entries"),
+		(ScarcityError::TooManyItemMetadata, "too many item metadata entries"),
 		(ScarcityError::TooManyItems, "item index space exhausted"),
 		(ScarcityError::TooManyCollections, "collection id space exhausted"),
 		(ScarcityError::TooManyInstances, "instance id space exhausted"),

@@ -17,7 +17,7 @@
 pub use super::*;
 
 use frame_support::{
-	derive_impl, parameter_types,
+	derive_impl, ensure, parameter_types,
 	traits::{
 		fungible::HoldConsideration, ConstU16, ConstU32, ConstU64, ConstU8, LinearStoragePrice,
 	},
@@ -135,6 +135,8 @@ impl indiv_pallet_scarcity::Config for Test {
 	type MetadataDeposit = StoragePrice;
 	type MaxKeyLen = ConstU32<32>;
 	type MaxValueLen = ConstU32<256>;
+	type MaxCollectionMetadata = ConstU32<16>;
+	type MaxItemMetadata = ConstU32<16>;
 	type MaxInstanceMetadata = ConstU32<3>;
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
@@ -168,9 +170,10 @@ impl CollectionSelector<AccountId32> for MockSelector {
 	}
 
 	fn validate(_contract: H160) -> Result<(), DispatchError> {
-		if !MinterContractValid::get() {
-			return Err(DispatchError::Other("no contract code at the minter address"));
-		}
+		ensure!(
+			MinterContractValid::get(),
+			indiv_pallet_nft_claims::Error::<Test>::MinterNotAContract
+		);
 		Ok(())
 	}
 
