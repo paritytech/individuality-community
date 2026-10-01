@@ -922,6 +922,10 @@ pub mod pallet {
 						}
 						// If this index was previously deleted, un-deleting it
 						state.deleted_indices.remove(&update.ring_index);
+						// Skipping already stored revisions
+						if roots.iter().any(|r| r.revision == *revision) {
+							continue;
+						}
 						// Evicting oldest root when the window is full
 						if roots.is_full() {
 							roots.remove(0);
