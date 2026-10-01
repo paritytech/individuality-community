@@ -2409,6 +2409,114 @@ fn set_absence_grace_schedule_rejects_window_too_large() {
 	});
 }
 
+#[test]
+fn force_set_attendance_requires_root() {
+	new_test_ext().execute_with(|| {
+		let user = 7u64;
+		assert_ok!(PalletScore::onboard_for_recognition(&user));
+		let who = AccountOrPerson::Account(user);
+
+		assert_noop!(
+			PalletScore::force_set_attendance(RuntimeOrigin::signed(user), who.clone(), true, 0),
+			DispatchError::BadOrigin
+		);
+		assert_noop!(
+			PalletScore::force_set_attendance(RuntimeOrigin::none(), who.clone(), true, 0),
+			DispatchError::BadOrigin
+		);
+
+		// The participant is untouched.
+		let p = Participants::<Test>::get(&who).unwrap();
+		assert_eq!(p.score, 0);
+		assert_eq!(p.last_attended_game, None);
+	});
+}
+
+#[test]
+fn force_set_attendance_fails_for_non_participant() {
+	new_test_ext().execute_with(|| {
+		let who = AccountOrPerson::Account(7u64);
+		assert_noop!(
+			PalletScore::force_set_attendance(RuntimeOrigin::root(), who, true, 0),
+			Error::<Test>::NoScore
+		);
+	});
+}
+
+/// Root can set attendance outside of a game. The effect on the participant matches a regular
+/// attendance report, and the attendance report session is closed afterwards.
+#[test]
+fn force_set_attendance_works() {
+	new_test_ext().execute_with(|| {
+		advance_to(1);
+		// With a people collection in place, the mutation session semaphore is real, so we can
+		// check below that the call closes the session it opened.
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+		let user = 7u64;
+		assert_ok!(PalletScore::onboard_for_recognition(&user));
+		let who = AccountOrPerson::Account(user);
+
+		// Attended: same outcome as the first attendance in `update_score_with_attendance_works`.
+		assert_ok!(PalletScore::force_set_attendance(RuntimeOrigin::root(), who.clone(), true, 5));
+		let p = Participants::<Test>::get(&who).unwrap();
+		assert_eq!(p.score, 1);
+		assert_eq!(p.streak, Streak::Attended(1));
+		assert_eq!(p.last_attended_game, Some(5));
+		System::assert_last_event(
+			Event::AttendanceForced { who: who.clone(), attended: true, game_index: 5 }.into(),
+		);
+
+		// Absent: score is penalised and `last_attended_game` keeps pointing at game 5.
+		assert_ok!(PalletScore::force_set_attendance(RuntimeOrigin::root(), who.clone(), false, 6));
+		let p = Participants::<Test>::get(&who).unwrap();
+		assert_eq!(p.score, 0);
+		assert_eq!(p.streak, Streak::Absent(1));
+		assert_eq!(p.last_attended_game, Some(5));
+		System::assert_last_event(
+			Event::AttendanceForced { who: who.clone(), attended: false, game_index: 6 }.into(),
+		);
+
+		// The session opened by the call was closed again: there is nothing left to end.
+		assert!(PalletScore::end_attendance_report_session().is_err());
+	});
+}
+
+/// The forced attendance goes through the full `set_attendance` logic, including suspension of
+/// a recognised person in `People`, which requires the mutation session the call opens.
+#[test]
+fn force_set_attendance_absence_suspends_recognised_person() {
+	new_test_ext().execute_with(|| {
+		advance_to(1);
+		let (who, personal_id) = setup_recognised_person(7);
+		assert_eq!(Participants::<Test>::get(&who).unwrap().recognition, Recognized(personal_id));
+
+		// No grace: any absence suspends.
+		let schedule: AbsenceGraceTiers = BoundedVec::try_from(vec![AbsenceGraceTier {
+			population_size_threshold: u32::MAX,
+			window: 0,
+			allowed_misses: 0,
+		}])
+		.unwrap();
+		assert_ok!(PalletScore::set_absence_grace_schedule(RuntimeOrigin::root(), schedule));
+
+		assert_ok!(PalletScore::force_set_attendance(RuntimeOrigin::root(), who.clone(), false, 0));
+		let p = Participants::<Test>::get(&who).unwrap();
+		assert_eq!(p.recognition, Suspended(personal_id));
+		assert!(!p.reached_personhood);
+		System::assert_last_event(
+			Event::AttendanceForced { who: who.clone(), attended: false, game_index: 0 }.into(),
+		);
+		assert!(PalletScore::end_attendance_report_session().is_err());
+	});
+}
+
 /// A valid schedule with window <= 8 should be accepted.
 #[test]
 fn set_absence_grace_schedule_works() {

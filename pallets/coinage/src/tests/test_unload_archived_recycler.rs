@@ -24,7 +24,7 @@ use crate::{
 	*,
 };
 use codec::Encode;
-use frame_support::{assert_noop, assert_ok};
+use frame_support::{assert_noop, assert_ok, dispatch::GetDispatchInfo};
 use frame_system::AuthorizeCall;
 use indiv_support::traits::{Alias, AppendOnlyMembers};
 use sp_core::H256;
@@ -312,11 +312,8 @@ fn recovery_with_fee_above_max_is_rejected_early_and_refunds_the_unused_weight()
 			refunded,
 			<() as crate::WeightInfo>::unload_archived_recycler_into_external_asset_fee_fail()
 		);
-		// `ref_time` is as much as the recorded weights let this assert: the two-dimensional
-		// invariant is `fee_fail_exit_costs_less_than_the_call_refunding_to_it`, which the call's
-		// stale proof size currently blocks.
 		assert!(
-			refunded.ref_time() < charged.ref_time(),
+			refunded.all_lt(charged),
 			"the early exit must cost less than the charged worst case: {refunded:?} vs {charged:?}"
 		);
 		// Nothing was recovered: the archive still counts the coin as recoverable.
@@ -1194,5 +1191,45 @@ fn recovery_proof_bound_to_signer_rejects_other_signer() {
 			),
 			Error::<Test>::InvalidAliasProof
 		);
+	});
+}
+
+#[test]
+fn declared_weight_follows_the_fee_currency() {
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		let setup = setup_archived_recycler(5);
+
+		let signer = ALICE;
+		let proven_msg = Coinage::unload_archived_proof_message(&signer);
+		let (alias_proof, alias) =
+			create_unload_proof(&setup.secrets[10], &setup.ring_members, &proven_msg);
+		let (unloaded_root, proof_nodes) =
+			unloaded_root_and_non_inclusion_proof(&setup.unloaded, &alias);
+
+		let call_with = |fee_currency: FeeCurrency| {
+			crate::Call::<Test>::unload_archived_recycler_into_external_asset {
+				instance_id: TEST_INSTANCE_ID,
+				value: setup.value,
+				index: 0,
+				recycler_root: setup.recycler_root.clone(),
+				unloaded_root,
+				alias_proof: alias_proof.clone(),
+				non_inclusion_proof: to_bounded_proof(proof_nodes.clone()),
+				to: 8888u64,
+				fee_currency,
+				max_fee: native_max_fee_bound(),
+			}
+		};
+
+		let native =
+			<Test as Config>::WeightInfo::unload_archived_recycler_into_external_asset_fee_native();
+		let external = <Test as Config>::WeightInfo::
+			unload_archived_recycler_into_external_asset_fee_external_asset();
+		// The external asset branch reads more storage. `ref_time` is within benchmark noise of
+		// the native branch, so only `proof_size` has a stable order.
+		assert!(native.proof_size() < external.proof_size());
+		assert_eq!(call_with(FeeCurrency::Native).get_dispatch_info().call_weight, native);
+		assert_eq!(call_with(FeeCurrency::ExternalAsset).get_dispatch_info().call_weight, external);
 	});
 }
