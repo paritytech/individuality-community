@@ -72,6 +72,11 @@
 //! so an NFT-only purse does not need a System account. Failed dispatch restores the NFT at the
 //! next state nonce and locks the purse key, which retires the transaction that failed; see the
 //! [replay rules](extension#replay).
+//!
+//! Each instance carries [`Config::MaximumMoves`] feeless moves, spends one per transfer, and any
+//! paid move refills them. The budget bounds the block space one mint buys, as Coinage's
+//! `MaximumAge` does for coins. The holder refills it with
+//! [`transfer_by_holder`](Pallet::transfer_by_holder), which the purse key signs and pays for.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -420,6 +425,12 @@ pub mod pallet {
 		/// dispatch. An instance moved away and back returns at a later nonce, so no old
 		/// authorization revives.
 		pub state_nonce: u64,
+		/// Feeless moves spent out of [`Config::MaximumMoves`].
+		///
+		/// [`Pallet::transfer`] adds one and a paid move resets it to zero. The
+		/// [`AsScarcity`](crate::extension::AsScarcity) extension authorizes no transfer once the
+		/// two are equal.
+		pub moves: u16,
 	}
 
 	/// Post-failure backoff lock for an NFT purse key.
@@ -652,8 +663,8 @@ pub mod pallet {
 		StorageDeposit,
 	}
 
-	/// Version 1 added `transferability` to `ItemDefinition`.
-	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft`.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
 
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
@@ -792,6 +803,13 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxTransferPriority: Get<TransactionPriority>;
 
+		/// Feeless moves one instance gets between paid moves.
+		///
+		/// This bounds the block space one mint buys, since nothing else charges for a feeless
+		/// move.
+		#[pallet::constant]
+		type MaximumMoves: Get<u16>;
+
 		/// Cross-pallet cleanup run when a collection is deleted. Defaults to `()` for runtimes
 		/// with nothing keyed by a collection.
 		type OnCollectionDeleted: crate::OnCollectionDeleted;
@@ -882,7 +900,11 @@ pub mod pallet {
 			let from = owner;
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
+			// The extension checked the budget against this state. Only another move of this
+			// instance could spend it since, and that changes the state nonce the authorization
+			// names.
+			let moves = nft.moves.saturating_add(1);
+			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves, ..nft };
 			NftsByOwner::<T>::insert(&to, nft.clone());
 			Instances::<T>::insert(nft.instance, &to);
 			T::OnPurseOccupied::on_purse_occupied(&to);
@@ -1098,6 +1120,26 @@ pub mod pallet {
 		) -> DispatchResult {
 			let owner = ensure_signed(origin)?;
 			Self::do_force_transfer(&owner, instance, to)
+		}
+
+		/// Move the instance the signer holds, with the fee paid from the signer's account.
+		///
+		/// The move refills the feeless move budget of [`Config::MaximumMoves`].
+		///
+		/// Fails for an instance of a [`Transferability::Soulbound`] definition.
+		#[pallet::call_index(14)]
+		#[pallet::weight(
+			T::WeightInfo::transfer_by_holder()
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
+		)]
+		#[transactional]
+		pub fn transfer_by_holder(
+			origin: OriginFor<T>,
+			instance: InstanceId,
+			to: T::AccountId,
+		) -> DispatchResult {
+			let holder = ensure_signed(origin)?;
+			Self::do_transfer_by_holder(&holder, instance, to)
 		}
 	}
 
@@ -1620,7 +1662,8 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
+			let nft =
+				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
 			NftsByOwner::<T>::remove(&from);
 			Locked::<T>::remove(&from);
@@ -1653,10 +1696,11 @@ pub mod pallet {
 		///
 		/// [`Self::transfer`] is the fee-less holder path and needs an `Origin::Nft`, which only
 		/// the [`AsScarcity`](crate::extension::AsScarcity) extension can produce from a
-		/// purse-signed transaction. This entry serves paid callers that have established holder
-		/// consent by other means, such as a contract environment resolving an approval, and
-		/// therefore applies no consent check beyond `holder` currently holding `instance`. The
-		/// rest-time priority machinery guards the fee-less path only, so it does not apply here.
+		/// purse-signed transaction. This entry serves the paid paths: the signed
+		/// [`Self::transfer_by_holder`] call and contract environments that establish holder
+		/// consent by other means. It applies no consent check beyond `holder` currently holding
+		/// `instance`. The rest-time priority and the feeless move budget guard the fee-less path
+		/// only, so neither applies here.
 		///
 		/// Clearing the source lock keeps the `Locked` entry paired with an NFT, matching both
 		/// other move paths.
@@ -1673,7 +1717,8 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, ..nft };
+			let nft =
+				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
 			NftsByOwner::<T>::remove(holder);
 			Locked::<T>::remove(holder);
@@ -1773,8 +1818,15 @@ pub mod pallet {
 			let next_live_supply =
 				definition.live_supply.checked_add(1).ok_or(Error::<T>::SupplyOverflow)?;
 			let now = T::UnixTime::now().as_secs();
-			let nft =
-				Nft { instance, collection, item, minted_at: now, last_moved: now, state_nonce: 0 };
+			let nft = Nft {
+				instance,
+				collection,
+				item,
+				minted_at: now,
+				last_moved: now,
+				state_nonce: 0,
+				moves: 0,
+			};
 			let instance_deposit = if with_deposit {
 				// Four storage entries back one instance: `NftsByOwner`, the `Instances`
 				// reverse index, `InstanceDeposits`, and `InstanceMetadataCount`. This measures
