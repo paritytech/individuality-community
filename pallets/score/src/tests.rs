@@ -91,6 +91,7 @@ fn update_score_with_attendance_works() {
 				has_ever_reached_personhood: false,
 				reached_personhood: false,
 				last_attended_game: None,
+				attended_games_while_recognized: 0,
 			})
 		);
 
@@ -116,6 +117,7 @@ fn update_score_with_attendance_works() {
 				has_ever_reached_personhood: false,
 				reached_personhood: false,
 				last_attended_game: Some(0),
+				attended_games_while_recognized: 0,
 			})
 		);
 
@@ -2328,6 +2330,100 @@ fn attending_does_not_suspend() {
 			assert!(matches!(p.recognition, Recognized(_)));
 			assert!(p.reached_personhood);
 		}
+	});
+}
+
+fn attended_games_while_recognized(who: &AccountOrPerson<u64>) -> u32 {
+	Participants::<Test>::get(who).unwrap().attended_games_while_recognized
+}
+
+#[test]
+fn attended_games_while_recognized_counts_recognized_attendances_only() {
+	new_test_ext().execute_with(|| {
+		// Participant attended until the threshold and registered.
+		let (who, _personal_id) = setup_recognised_person(99);
+		assert_eq!(attended_games_while_recognized(&who), 0);
+
+		// Participant attends a game.
+		attend(&who, true);
+		// Game is counted.
+		assert_eq!(attended_games_while_recognized(&who), 1);
+
+		// Participant misses a game.
+		attend(&who, false);
+		// Count is unchanged.
+		assert_eq!(attended_games_while_recognized(&who), 1);
+
+		// Participant attends another game.
+		attend(&who, true);
+		// Game is counted.
+		assert_eq!(attended_games_while_recognized(&who), 2);
+	});
+}
+
+#[test]
+fn attended_games_while_recognized_skips_suspended_attendances() {
+	new_test_ext().execute_with(|| {
+		// Person registered, attended one game and the grace period was disabled.
+		let (who, personal_id) = setup_recognised_person(99);
+		attend(&who, true);
+		let schedule: AbsenceGraceTiers = BoundedVec::try_from(vec![AbsenceGraceTier {
+			population_size_threshold: u32::MAX,
+			window: 0,
+			allowed_misses: 0,
+		}])
+		.unwrap();
+		assert_ok!(PalletScore::set_absence_grace_schedule(RuntimeOrigin::root(), schedule));
+
+		// Person misses a game.
+		attend(&who, false);
+		// Person is suspended and the count is unchanged.
+		assert_eq!(Participants::<Test>::get(&who).unwrap().recognition, Suspended(personal_id));
+		assert_eq!(attended_games_while_recognized(&who), 1);
+
+		// Suspended person attends until they reach personhood again.
+		while !Participants::<Test>::get(&who).unwrap().reached_personhood {
+			attend(&who, true);
+		}
+		// Games attended while suspended are not counted.
+		assert_eq!(Participants::<Test>::get(&who).unwrap().recognition, Suspended(personal_id));
+		assert_eq!(attended_games_while_recognized(&who), 1);
+
+		// Person resumes recognition and attends a game.
+		assert_ok!(PalletScore::register(RuntimeOrigin::signed(99), None));
+		attend(&who, true);
+		// Count continues from its value before the suspension.
+		assert_eq!(attended_games_while_recognized(&who), 2);
+	});
+}
+
+#[test]
+fn attended_games_while_recognized_counts_externally_recognized_attendances() {
+	new_test_ext().execute_with(|| {
+		// Person was onboarded as externally recognized.
+		let person_alias = [42u8; 32];
+		assert_ok!(PalletScore::onboard_externally_recognized(&person_alias));
+		let who = AccountOrPerson::Person(person_alias);
+
+		// Person attends a game and misses the next one.
+		attend(&who, true);
+		attend(&who, false);
+		// Only the attended game is counted.
+		assert_eq!(attended_games_while_recognized(&who), 1);
+	});
+}
+
+#[test]
+fn force_set_attendance_counts_attended_games_while_recognized() {
+	new_test_ext().execute_with(|| {
+		// Person registered.
+		advance_to(1);
+		let (who, _personal_id) = setup_recognised_person(7);
+
+		// Root forces an attendance.
+		assert_ok!(PalletScore::force_set_attendance(RuntimeOrigin::root(), who.clone(), true, 5));
+		// Game is counted.
+		assert_eq!(attended_games_while_recognized(&who), 1);
 	});
 }
 
