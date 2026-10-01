@@ -215,7 +215,8 @@ pub struct Participant<Balance> {
 	/// The game index of the last attended game if any.
 	/// A non-attended game does not update this field.
 	pub last_attended_game: Option<u32>,
-	/// The number of games attended while recognized as a person.
+	/// The number of games attended while `Recognized`.
+	/// Games attended while `NotRecognized`, `Suspended` or `ExternallyRecognized` do not count.
 	pub attended_games_while_recognized: u32,
 }
 

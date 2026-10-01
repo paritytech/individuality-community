@@ -2362,6 +2362,23 @@ fn attended_games_while_recognized_counts_recognized_attendances_only() {
 }
 
 #[test]
+fn attended_games_while_recognized_skips_not_recognized_attendances() {
+	new_test_ext().execute_with(|| {
+		// Participant is onboarded for recognition.
+		assert_ok!(PalletScore::onboard_for_recognition(&99));
+		let who = AccountOrPerson::Account(99);
+
+		// Participant attends until they reach personhood but does not register.
+		while !Participants::<Test>::get(&who).unwrap().reached_personhood {
+			attend(&who, true);
+		}
+		// Games attended while not recognized are not counted.
+		assert_eq!(Participants::<Test>::get(&who).unwrap().recognition, NotRecognized);
+		assert_eq!(attended_games_while_recognized(&who), 0);
+	});
+}
+
+#[test]
 fn attended_games_while_recognized_skips_suspended_attendances() {
 	new_test_ext().execute_with(|| {
 		// Person registered, attended one game and the grace period was disabled.
@@ -2398,18 +2415,17 @@ fn attended_games_while_recognized_skips_suspended_attendances() {
 }
 
 #[test]
-fn attended_games_while_recognized_counts_externally_recognized_attendances() {
+fn attended_games_while_recognized_skips_externally_recognized_attendances() {
 	new_test_ext().execute_with(|| {
 		// Person was onboarded as externally recognized.
 		let person_alias = [42u8; 32];
 		assert_ok!(PalletScore::onboard_externally_recognized(&person_alias));
 		let who = AccountOrPerson::Person(person_alias);
 
-		// Person attends a game and misses the next one.
+		// Person attends a game.
 		attend(&who, true);
-		attend(&who, false);
-		// Only the attended game is counted.
-		assert_eq!(attended_games_while_recognized(&who), 1);
+		// Externally recognized games are not counted.
+		assert_eq!(attended_games_while_recognized(&who), 0);
 	});
 }
 
