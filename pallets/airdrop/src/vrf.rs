@@ -83,7 +83,7 @@ pub fn verify_and_extract_entropy(
 ) -> Option<[u8; 32]> {
 	let transcript = transcript_for_event(event_id, public);
 	if !public.vrf_verify(&transcript.clone().into_sign_data(), signature) {
-		return None
+		return None;
 	}
 	public
 		.make_bytes::<32>(VRF_EXPAND_CONTEXT, &transcript, &signature.pre_output)
