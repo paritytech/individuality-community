@@ -381,6 +381,15 @@ pub mod pallet {
 		PersonhoodThresholdScheduleSet,
 		/// The absence-grace schedule has been set.
 		AbsenceGraceScheduleSet,
+		/// The attendance of a participant was set by root.
+		AttendanceForced {
+			/// The participant whose attendance was set.
+			who: AccountOrPerson<T::AccountId>,
+			/// Whether the participant was marked as attended.
+			attended: bool,
+			/// The game index the attendance was recorded for.
+			game_index: u32,
+		},
 	}
 
 	#[pallet::error]
@@ -1040,6 +1049,34 @@ pub mod pallet {
 			validate_personhood_threshold_tiers::<T>(&schedule)?;
 			PersonhoodThresholdSchedule::<T>::put(schedule);
 			Self::deposit_event(Event::PersonhoodThresholdScheduleSet);
+			Ok(Pays::No.into())
+		}
+
+		/// Set the attendance of a participant for `game_index`, bypassing the game.
+		///
+		/// This wraps [`Pallet::set_attendance`] in its own attendance report session, so it
+		/// has the exact same effect on the participant's score, streak, attendance history
+		/// and recognition as a regular attendance report by the game. Starting the session
+		/// also refreshes the personhood threshold and absence-grace ratio, like any other
+		/// session.
+		///
+		/// Fails with [`Error::NoScore`] if `who` is not a participant, or with the underlying
+		/// [`Config::People`] error if a mutation session cannot be started at the moment.
+		///
+		/// Called from root only.
+		#[pallet::call_index(10)]
+		#[pallet::weight(T::WeightInfo::force_set_attendance())]
+		pub fn force_set_attendance(
+			origin: OriginFor<T>,
+			who: AccountOrPerson<T::AccountId>,
+			attended: bool,
+			game_index: u32,
+		) -> DispatchResultWithPostInfo {
+			ensure_root(origin)?;
+			Self::start_attendance_report_session()?;
+			Self::set_attendance(&who, attended, game_index)?;
+			Self::end_attendance_report_session()?;
+			Self::deposit_event(Event::AttendanceForced { who, attended, game_index });
 			Ok(Pays::No.into())
 		}
 	}

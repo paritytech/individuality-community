@@ -29,31 +29,28 @@
 //!
 //! The account checks deliberately see a non-system origin and skip it, so an NFT-only purse needs
 //! neither a System account nor a balance. [`AsScarcity`] consumes the NFT during preparation to
-//! prevent concurrent use. A successful move increments its state nonce. Failed dispatch restores
-//! the same state and applies a temporary backoff lock; once that lock expires, the same signed
-//! transaction can be submitted again. This is the same retry model as Coinage.
+//! prevent concurrent use. Successful and failed dispatches both increment the state nonce. A
+//! failed dispatch also restores the NFT and applies a temporary backoff lock.
 //!
 //! Payment is what the ordering turns on: transaction payment reads the signer from a system
 //! origin, so it charges nothing once this extension has replaced one, and a purse-key call is
 //! free for that reason alone. An integrator placing this extension after payment instead makes a
 //! balance-less purse unable to transact.
 //!
-//! # Replay and mortality
+//! # Replay
 //!
-//! Purse authorization is not account-nonce-based: a signed NFT transaction stays valid for as
-//! long as its purse still holds the named instance at the named state nonce. Two rules bound
-//! stale intent, exactly as in Coinage:
+//! An authorization specifies the instance it expects at the signer's purse key, and the state
+//! nonce it expects on that instance. Anyone who has seen the transaction can submit it while both
+//! still match. Every dispatch increments the nonce, which retires the authorizations signed for
+//! the old state. An authorization that never executes stays valid, so callers should sign mortal
+//! transactions.
 //!
-//! * Callers must sign **mortal** transactions with an era shorter than [`Config::LockPeriod`]. A
-//!   successful move invalidates every outstanding authorization by incrementing the state nonce,
-//!   but an unexecuted transaction is otherwise replayable by anyone who has seen it until its era
-//!   expires.
-//! * Because the era ends before the shortest failure lock does, a failed transaction can never
-//!   re-enter a block: every retry after a failure is a fresh signing decision rather than a
-//!   third-party replay of the old transaction.
+//! # Feeless move budget
 //!
-//! A holder can also cancel an outstanding authorization at any time by moving the NFT, which
-//! increments its state nonce.
+//! An instance carries [`Config::MaximumMoves`] feeless moves and spends one per authorized
+//! transfer. Once they are gone only a paid move can move it, and that move sets the count back
+//! to zero. The holder's paid move is [`Call::transfer_by_holder`], signed without this
+//! extension. Burns stay feeless throughout, because they free storage.
 
 use crate::{pallet::*, weights::WeightInfo, Config, Nft, Transferability};
 use codec::{Decode, DecodeWithMemTracking, Encode};
@@ -115,6 +112,9 @@ pub enum CustomInvalidity {
 	/// unknown. Reported separately from [`Self::Soulbound`] because the cause is broken state
 	/// rather than a property of the token.
 	UnknownItem = 7,
+	/// The instance has spent its feeless moves. The holder refills them with a paid
+	/// [`Call::transfer_by_holder`].
+	MovesExhausted = 8,
 }
 
 impl From<CustomInvalidity> for TransactionValidityError {
@@ -252,6 +252,11 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 				Ok(Transferability::Soulbound) => return Err(CustomInvalidity::Soulbound.into()),
 				Err(_) => return Err(CustomInvalidity::UnknownItem.into()),
 			}
+			// Permanent for this transaction, like the two above: the paid move that refills the
+			// budget also increments the state nonce this authorization names.
+			if nft.moves >= T::MaximumMoves::get() {
+				return Err(CustomInvalidity::MovesExhausted.into());
+			}
 		}
 		let priority = now.saturating_sub(nft.last_moved).min(T::MaxTransferPriority::get());
 		let validity = ValidTransaction::with_tag_prefix("Scarcity")
@@ -304,7 +309,10 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 	) -> Result<Weight, TransactionValidityError> {
 		if let Pre::UsingNft { owner, nft } = pre {
 			if result.is_err() {
-				NftsByOwner::<T>::insert(&owner, nft);
+				// The next state nonce retires the failed transaction, so nobody resubmits it when
+				// the lock expires. A nonce at the maximum stays put, where dispatch fails anyway.
+				let state_nonce = nft.state_nonce.saturating_add(1);
+				NftsByOwner::<T>::insert(&owner, Nft { state_nonce, ..nft });
 				Locked::<T>::insert(&owner, Self::failed_dispatch_lock(Locked::<T>::get(&owner)));
 			} else {
 				Locked::<T>::remove(&owner);

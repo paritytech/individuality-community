@@ -1790,6 +1790,72 @@ fn manually_advance_to_ring(identifier: &Identifier, new_ring: RingIndex) {
 	CurrentRingIndex::<Test>::insert(identifier, new_ring);
 }
 
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmark_ring_sealing_tests {
+	use super::*;
+
+	#[test]
+	fn seal_current_ring_preserves_the_previous_root_and_proof() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+			create_append_only_collection(identifier, 1);
+
+			let first_members = generate_members(identifier, 1, 2);
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::onboard_all_and_build_ring(
+				&identifier,
+				0,
+			));
+			let first_ring_members =
+				<MembersPallet as AppendOnlyMembers>::ring_members(&identifier, 0);
+			let first_revision =
+				<MembersPallet as MembershipProver>::ring_revision(&identifier, 0).unwrap();
+
+			let context = [42; 32];
+			let message = b"sealed-ring-proof";
+			let (first_member, first_secret) = &first_members[0];
+			let commitment =
+				MockCrypto::open((), first_member, first_ring_members.iter().cloned()).unwrap();
+			let (first_proof, _) =
+				MockCrypto::create(commitment, first_secret, &context, message).unwrap();
+
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::seal_current_ring(&identifier));
+			assert_eq!(CurrentRingIndex::<Test>::get(identifier), 1);
+
+			let second_members = generate_members_with_offset(identifier, 1, 2, 0xB2);
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::onboard_all_and_build_ring(
+				&identifier,
+				1,
+			));
+
+			assert_eq!(
+				<MembersPallet as AppendOnlyMembers>::ring_members(&identifier, 0),
+				first_ring_members,
+			);
+			assert_eq!(
+				<MembersPallet as MembershipProver>::ring_revision(&identifier, 0),
+				Some(first_revision),
+			);
+			assert_ne!(
+				<MembersPallet as AppendOnlyMembers>::ring_members(&identifier, 1),
+				first_ring_members,
+			);
+			assert_eq!(
+				<MembersPallet as AppendOnlyMembers>::ring_members(&identifier, 1),
+				second_members.iter().map(|(member, _)| *member).collect::<Vec<_>>(),
+			);
+
+			assert_ok!(<MembersPallet as MembershipProver>::verify_membership(
+				&identifier,
+				&first_proof,
+				0,
+				first_revision,
+				context,
+				message,
+			));
+		});
+	}
+}
+
 mod ring_removal_tests {
 	use super::*;
 

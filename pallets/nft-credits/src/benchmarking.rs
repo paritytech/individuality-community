@@ -42,15 +42,20 @@ mod benches {
 	use super::*;
 
 	// The `on_initialize` path that records a block's root. `n` is the number of leaves the tree
-	// is built over, swept over the whole range one tree holds: the hashing, the awards'
-	// contribution to the proof size, and the retained ring all scale with it.
+	// is built over, swept over the whole range one tree holds: the hashing and the awards'
+	// contribution to the proof size both scale with it.
 	//
-	// The ring is set up full, so the run includes dropping the oldest retained tree, which is the
-	// worst case and the one every block pays for once the chain has been running.
+	// Filing the block for expiry is a fixed pair of writes whatever `n` is, the awards being
+	// removed by a sweep of their own rather than by this path.
+	//
+	// The delivery queue is set up one entry short of `MaxQueuedCreditTrees`, so the run rewrites
+	// a queue that the tree just filled. A full queue instead drops the delivery, which rewrites
+	// nothing and costs less.
 	#[benchmark]
 	fn build_credit_tree(n: Linear<1, AWARDS_PER_TREE>) -> Result<(), BenchmarkError> {
-		let retained = T::MaxRetainedCreditTrees::get();
-		frame_system::Pallet::<T>::set_block_number((retained + 10).into());
+		let capacity = T::MaxQueuedCreditTrees::get();
+		queue_credit_trees::<T>(capacity.saturating_sub(1));
+		frame_system::Pallet::<T>::set_block_number(capacity.saturating_add(10).into());
 		let block = frame_system::Pallet::<T>::block_number();
 
 		// The awards of one buffer, written chunk by chunk the way awarding fills them.
@@ -69,16 +74,6 @@ mod benches {
 		};
 		award_credits(block, n);
 
-		// The block that drops out of the ring, holding a full set of awards to remove.
-		let dropped: BlockNumberFor<T> = 1u32.into();
-		award_credits(dropped, AWARDS_PER_TREE);
-		RetainedCreditTreeBlocks::<T>::put(BoundedVec::<
-			BlockNumberFor<T>,
-			T::MaxRetainedCreditTrees,
-		>::truncate_from(
-			(1..=retained).map(Into::into).collect::<Vec<_>>()
-		));
-
 		CreditBuffers::<T>::insert(
 			block,
 			CreditBuffer { game_index: 7, timestamp: 1_234, awards: n },
@@ -92,11 +87,15 @@ mod benches {
 		let credit_root =
 			NftClaimCreditRoots::<T>::get(block).expect("a root is recorded for the block");
 		assert_eq!(credit_root.leaf_count, n);
+		assert_eq!(CreditTreeDeliveryQueue::<T>::decode_len(), Some(capacity as usize));
 		assert_eq!(
 			NftClaimCreditAwards::<T>::iter_prefix_values(block).count() as u32,
 			n.div_ceil(AWARDS_PER_CHUNK)
 		);
-		assert_eq!(NftClaimCreditAwards::<T>::iter_prefix_values(dropped).count(), 0);
+		assert!(NftClaimCreditAwardExpiries::<T>::contains_key(
+			ExpiryTimestamp::from(credit_root.timestamp),
+			block
+		));
 
 		Ok(())
 	}
@@ -248,6 +247,50 @@ mod benches {
 		Ok(())
 	}
 
+	/// Worst case for `n` removals: `n` tree blocks are due, each under a timestamp of its own and
+	/// each holding a full tree of awards, so the call pays one map key and every one of the
+	/// block's [`CHUNKS_PER_TREE`] chunks per removal. That per-block size is what keeps
+	/// [`Config::MaxAwardBlocksPerSweep`] far below [`Config::MaxRootsPerSweep`]. A tree block
+	/// that is not due follows them, which is the entry the sweep reads to stop.
+	#[benchmark]
+	fn sweep_expired_awards(
+		n: Linear<0, { T::MaxAwardBlocksPerSweep::get() }>,
+	) -> Result<(), BenchmarkError> {
+		fill_due_award_expiries::<T>(n);
+		let origin = RawOrigin::Authorized;
+
+		#[extrinsic_call]
+		_(origin, FIRST_ROOT_TIMESTAMP, BlockNumberFor::<T>::from(0u32));
+
+		// Only the tree block that is not due is left, which is the one filed last.
+		assert_eq!(NftClaimCreditAwards::<T>::iter().count() as u32, CHUNKS_PER_TREE);
+		assert_eq!(NftClaimCreditAwardExpiries::<T>::iter().count(), 1);
+		assert_eq!(
+			oldest_expiry::<NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>(),
+			Some(root_timestamp(n))
+		);
+
+		Ok(())
+	}
+
+	/// As `authorize_sweep_expired_roots`, against [`NftClaimCreditAwardExpiries`] and the shorter
+	/// TTL.
+	#[benchmark]
+	fn authorize_sweep_expired_awards() -> Result<(), BenchmarkError> {
+		fill_due_award_expiries::<T>(T::MaxAwardBlocksPerSweep::get());
+
+		#[block]
+		{
+			pallet::Pallet::<T>::authorize_sweep_expired_awards(
+				TransactionSource::Local,
+				&FIRST_ROOT_TIMESTAMP,
+			)
+			.expect("must authorize");
+		}
+
+		Ok(())
+	}
+
 	// No `impl_benchmark_test_suite!`: a mock for this pallet is a mock of the whole game it sits
 	// on, which the game crate already has, so its tests are the ones that run these paths. The
 	// benchmarks themselves are exercised by `frame-omni-bencher` against the runtime.
@@ -295,6 +338,36 @@ fn fill_due_expiries<T: Config>(n: u32) {
 	<T as Config>::BenchmarkHelper::set_unix_time(expiry_deadline(
 		last_due,
 		pallet::Pallet::<T>::root_ttl(),
+	));
+}
+
+/// Files `n` tree blocks that are due, plus one that is not, each under a timestamp of its own and
+/// each holding a full tree of awards, and sets the clock to the deadline of the last due one. The
+/// tree block filed after it is what stops the sweep.
+fn fill_due_award_expiries<T: Config>(n: u32) {
+	let chunk = (0..AWARDS_PER_CHUNK)
+		.map(|i| NftClaimCreditAward {
+			claimant: AccountOrPerson::Person(sp_io::hashing::blake2_256(&i.encode())),
+			credit: sp_io::hashing::blake2_256(&(i, b"credit").encode()),
+		})
+		.collect::<Vec<_>>();
+	let chunk =
+		BoundedVec::<NftClaimCreditAward<T::AccountId>, ConstU32<AWARDS_PER_CHUNK>>::truncate_from(
+			chunk,
+		);
+
+	for index in 0..=n {
+		let block = BlockNumberFor::<T>::from(index.saturating_add(1));
+		for chunk_index in 0..CHUNKS_PER_TREE {
+			NftClaimCreditAwards::<T>::insert(block, chunk_index, chunk.clone());
+		}
+		pallet::Pallet::<T>::note_award_expiry(block, root_timestamp(index));
+	}
+
+	let last_due = FIRST_ROOT_TIMESTAMP.saturating_add(n).saturating_sub(1);
+	<T as Config>::BenchmarkHelper::set_unix_time(expiry_deadline(
+		last_due,
+		T::AwardRetentionTtl::get(),
 	));
 }
 

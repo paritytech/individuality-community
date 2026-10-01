@@ -75,6 +75,8 @@ impl UnixTime for MockUnixTime {
 type TestStoragePrice = LinearStoragePrice<ConstU64<1>, ConstU64<1>, u64>;
 
 parameter_types! {
+	/// Feeless moves one instance gets. Tests that exhaust the budget lower it.
+	pub storage MaximumMoves: u16 = 16;
 	/// Metadata entries one instance may carry. The integrity tests raise it.
 	pub storage MaxInstanceMetadata: u32 = 3;
 	/// Weight the mock policy charges per metadata pair. The integrity tests raise it.
@@ -102,10 +104,14 @@ impl crate::Config for Test {
 	type MetadataDeposit = TestStoragePrice;
 	type MaxKeyLen = ConstU32<32>;
 	type MaxValueLen = ConstU32<256>;
+	type MaxCollectionMetadata = ConstU32<6>;
+	type MaxItemMetadata = ConstU32<6>;
 	type MaxInstanceMetadata = MaxInstanceMetadata;
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
+	type MaximumMoves = MaximumMoves;
 	type OnCollectionDeleted = RecordCollectionDeletion;
+	type OnCollectionOwnerChanged = RecordCollectionOwnerChange;
 	type OnPurseOccupied = RecordPurseOccupancy;
 	type MetadataPolicy = RejectReservedValue;
 }
@@ -125,6 +131,24 @@ impl crate::OnCollectionDeleted for RecordCollectionDeletion {
 
 	fn on_delete_weight() -> Weight {
 		DeletionHookWeight::get()
+	}
+}
+
+parameter_types! {
+	/// The last collection the owner-change hook was called for, so tests can assert it fired.
+	pub storage LastOwnerChangedCollection: Option<crate::CollectionId> = None;
+}
+
+/// Records the collection passed to the owner-change hook and charges a distinct weight, so
+/// tests can observe both the wiring and the weight added to `claim_collection_ownership`.
+pub struct RecordCollectionOwnerChange;
+impl crate::OnCollectionOwnerChanged for RecordCollectionOwnerChange {
+	fn on_collection_owner_changed(collection: crate::CollectionId) {
+		LastOwnerChangedCollection::set(&Some(collection));
+	}
+
+	fn on_owner_change_weight() -> frame_support::weights::Weight {
+		frame_support::weights::Weight::from_parts(321, 54)
 	}
 }
 

@@ -17,8 +17,10 @@
 pub use super::*;
 
 use frame_support::{
-	derive_impl, parameter_types,
-	traits::{fungible::HoldConsideration, ConstU32, ConstU64, ConstU8, LinearStoragePrice},
+	derive_impl, ensure, parameter_types,
+	traits::{
+		fungible::HoldConsideration, ConstU16, ConstU32, ConstU64, ConstU8, LinearStoragePrice,
+	},
 };
 use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateTransaction, CreateTransactionBase},
@@ -133,10 +135,14 @@ impl indiv_pallet_scarcity::Config for Test {
 	type MetadataDeposit = StoragePrice;
 	type MaxKeyLen = ConstU32<32>;
 	type MaxValueLen = ConstU32<256>;
+	type MaxCollectionMetadata = ConstU32<16>;
+	type MaxItemMetadata = ConstU32<16>;
 	type MaxInstanceMetadata = ConstU32<3>;
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
+	type MaximumMoves = ConstU16<16>;
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Test>;
+	type OnCollectionOwnerChanged = indiv_pallet_nft_claims::ClearCollectionMinter<Test>;
 	// The runtime maps a mint's destination here. These tests cover the registration surface
 	// and mint nothing, so the hook would never run.
 	type OnPurseOccupied = ();
@@ -155,14 +161,19 @@ parameter_types! {
 /// claims are outside this crate's surface, so `select` is never asked.
 pub struct MockSelector;
 impl CollectionSelector<AccountId32> for MockSelector {
-	fn max_weight() -> Weight {
+	fn max_weight(_collection: CollectionId) -> Weight {
+		Weight::from_parts(1_000_000, 5_000)
+	}
+
+	fn contract_max_weight() -> Weight {
 		Weight::from_parts(1_000_000, 5_000)
 	}
 
 	fn validate(_contract: H160) -> Result<(), DispatchError> {
-		if !MinterContractValid::get() {
-			return Err(DispatchError::Other("no contract code at the minter address"));
-		}
+		ensure!(
+			MinterContractValid::get(),
+			indiv_pallet_nft_claims::Error::<Test>::MinterNotAContract
+		);
 		Ok(())
 	}
 
@@ -170,7 +181,7 @@ impl CollectionSelector<AccountId32> for MockSelector {
 		_owner: AccountId32,
 		_contract: H160,
 		_collection: CollectionId,
-		_entropy: NftClaimCredit,
+		_credit: NftClaimCredit,
 	) -> Result<Selection, SelectionError> {
 		Err(SelectionError {
 			error: DispatchError::Other("no claims are dispatched in this mock"),
