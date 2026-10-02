@@ -20,6 +20,7 @@ use super::*;
 
 use codec::Encode;
 use frame_benchmarking::v2::{benchmarks, *};
+use indiv_support::traits::MomentRandomness;
 
 pub trait BenchmarkHelper<AccountSignature, TicketSignature, Ticket, AccountId, AirdropAssetId> {
 	/// Creates an account deterministically from seed.
@@ -437,13 +438,18 @@ mod benches {
 		<T as Config>::BenchmarkHelper::set_valid_time();
 		bench_setup_airdrop_funds::<T>();
 
+		// Fresh randomness so the capture step succeeds and the whole shuffle completes.
+		<T as Config>::Randomness::set_randomness([7u8; 32], 1);
+
 		let game = GameInfo {
 			index: 0,
 			registration_ends: 0,
 			shuffle_deadline: 1, // to not fail at deadline check
 			game_date: 0,
 			report_ends: 0,
-			state: GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } },
+			state: GameState::Shuffle {
+				step: ShuffleStep::Step1CaptureRandomness { randomness_moment: 0 },
+			},
 			max_group_size: T::MaxGroupSize::get(),
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
@@ -458,6 +464,21 @@ mod benches {
 		}
 
 		assert_eq!(Game::<T>::get().unwrap().state, GameState::Reporting { player_count: 0 });
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn shuffle_step_capture_randomness() -> Result<(), BenchmarkError> {
+		<T as Config>::Randomness::set_randomness([7u8; 32], 1);
+
+		let captured;
+		#[block]
+		{
+			captured = pallet::Pallet::<T>::shuffle_step_capture_randomness(0);
+		}
+
+		assert_eq!(captured, Some([7u8; 32]));
 
 		Ok(())
 	}
@@ -507,7 +528,7 @@ mod benches {
 			result.err().unwrap().error
 		);
 
-		let parent_hash = frame_system::Pallet::<T>::parent_hash();
+		let randomness = [7u8; 32];
 		let rounds = n.try_into().unwrap();
 		let mut last_key = None;
 		let mut pending_attendance = 0u32;
@@ -518,7 +539,7 @@ mod benches {
 				&mut last_key,
 				&mut pending_attendance,
 				rounds,
-				&parent_hash
+				&randomness
 			),
 			StepResult::Continue
 		);
@@ -530,7 +551,7 @@ mod benches {
 				&mut last_key,
 				&mut pending_attendance,
 				rounds,
-				&parent_hash,
+				&randomness,
 			);
 		}
 
@@ -586,7 +607,7 @@ mod benches {
 			result.err().unwrap().error
 		);
 
-		let parent_hash = frame_system::Pallet::<T>::parent_hash();
+		let randomness = [7u8; 32];
 		let rounds = n.try_into().unwrap();
 		let mut last_key = None;
 		let mut pending_attendance = 0u32;
@@ -595,13 +616,13 @@ mod benches {
 			&mut last_key,
 			&mut pending_attendance,
 			rounds,
-			&parent_hash,
+			&randomness,
 		);
 		let _ = pallet::Pallet::<T>::shuffle_step_insert(
 			&mut last_key,
 			&mut pending_attendance,
 			rounds,
-			&parent_hash,
+			&randomness,
 		);
 
 		for round in 0..rounds {
@@ -693,23 +714,23 @@ mod benches {
 			);
 		}
 
-		// Run Step1 to insert every player into the per-round shuffle storages.
-		let parent_hash = frame_system::Pallet::<T>::parent_hash();
-		let mut step1_last_key = None;
+		// Run the insert step to insert every player into the per-round shuffle storages.
+		let randomness = [7u8; 32];
+		let mut insert_last_key = None;
 		let mut pending_attendance = 0u32;
 		loop {
 			let r = pallet::Pallet::<T>::shuffle_step_insert(
-				&mut step1_last_key,
+				&mut insert_last_key,
 				&mut pending_attendance,
 				rounds,
-				&parent_hash,
+				&randomness,
 			);
 			if matches!(r, StepResult::Finished) {
 				break;
 			}
 		}
 
-		// Run Step2 to assign player indices in every round.
+		// Run the retrieve step to assign player indices in every round.
 		let mut next_index = 0;
 		let mut phase = ShuffleRetrievePhase::Recognized;
 		let mut cached_last_keys = vec![None; usize::from(rounds)];
@@ -731,7 +752,7 @@ mod benches {
 			panic!("unexpected: shuffle step retrieve did not reach the not-recognized phase");
 		};
 
-		// Warm up Step3 once so the benchmarked call uses `iter_from_key`.
+		// Warm up the compute-weights step once so the benchmarked call uses `iter_from_key`.
 		let mut last_iteration = None;
 		let _ = pallet::Pallet::<T>::shuffle_step_compute_weights(
 			&mut last_iteration,
@@ -803,7 +824,7 @@ mod benches {
 
 		#[block]
 		{
-			// Mirror the logic inside `shuffles` for the `Step4AwaitSession` step:
+			// Mirror the logic inside `shuffles` for the `Step5AwaitSession` step:
 			// both the `can_start` check and the `start` call are on the hot path,
 			// so they must be included in the benchmarked block.
 			assert!(indiv_pallet_score::Pallet::<T>::can_start_attendance_report_session());
@@ -1570,6 +1591,13 @@ mod benches {
 				result.err().unwrap().error
 			);
 		}
+
+		// Fresh randomness so the shuffle capture step succeeds: the watermark recorded at the
+		// registration to shuffle transition is the current moment.
+		<T as Config>::Randomness::set_randomness(
+			[7u8; 32],
+			<T as Config>::Randomness::current_moment().saturating_add(1),
+		);
 
 		let shuffle_time = GameTimes::<T>::registration_end(&game_schedule);
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(shuffle_time.into()));
