@@ -7,6 +7,7 @@
     "test": "pnpm run test:runtime-upgrade",
     "test:init-state": "pnpm --filter @individuality-e2e/suite-initialization-tests run test",
     "test:zombienet": "pnpm run test:init-state",
+    "test:game": "RUN_ZOMBIENET_TESTS=1 vitest run --root suites/game",
     "test:runtime-upgrade": "pnpm run test:runtime-upgrade:paseo-to-next-people-paseo && pnpm run test:runtime-upgrade:paseo-to-next-asset-hub-paseo",
     "test:runtime-upgrade:paseo-to-next-people-paseo": "LOG_LEVEL=warn RUN_RUNTIME_UPGRADE_TESTS=1 NODE_OPTIONS='--max-old-space-size=8192' vitest run --maxWorkers 1 tests/runtime-upgrade/paseo-to-next-people-paseo.test.ts",
     "test:runtime-upgrade:paseo-to-next-asset-hub-paseo": "LOG_LEVEL=warn RUN_RUNTIME_UPGRADE_TESTS=1 NODE_OPTIONS='--max-old-space-size=8192' vitest run --maxWorkers 1 tests/runtime-upgrade/paseo-to-next-asset-hub-paseo.test.ts",

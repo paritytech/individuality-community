@@ -41,6 +41,11 @@ impl OcwWeightBudget {
 		Self { budget: normal_max.saturating_div(2) }
 	}
 
+	/// The budget itself, for a call that meters its work inside it and refunds the rest.
+	pub fn weight(&self) -> Weight {
+		self.budget
+	}
+
 	/// Panic if `weight` does not fit the budget on both weight dimensions.
 	pub fn assert_fits(&self, name: &str, weight: Weight) {
 		assert!(

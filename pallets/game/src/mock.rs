@@ -28,9 +28,74 @@ pub use runtime::*;
 // include the same file; here that name is this crate.
 use crate as indiv_pallet_game;
 
-/// This runtime plays games without minting anything from them; the pair is tested in
-/// `indiv-pallet-nft-credits`, whose mock builds on the same runtime.
-type MockNftClaimCredits = ();
+use indiv_pallet_score::AccountOrPerson;
+use indiv_support::credit_trees::AwardCredits;
+use sp_runtime::AccountId32;
+
+frame_support::parameter_types! {
+	/// What [`MockNftClaimCredits`] reports as its remaining capacity. Tests lower it to hold the
+	/// player process back.
+	pub storage MockCreditCapacity: u32 = u32::MAX;
+}
+
+/// This runtime plays games without minting anything from them. The pair is tested in
+/// `indiv-pallet-nft-credits`, whose mock builds on the same runtime. Only the capacity is
+/// adjustable, through [`MockCreditCapacity`].
+pub struct MockNftClaimCredits;
+impl AwardCredits<AccountId32> for MockNftClaimCredits {
+	fn award_report_credit(
+		game_index: u32,
+		round: u8,
+		attester: &AccountOrPerson<AccountId32>,
+		attestee: &AccountOrPerson<AccountId32>,
+		attester_position: u32,
+		award_time: u32,
+	) -> u32 {
+		<() as AwardCredits<AccountId32>>::award_report_credit(
+			game_index,
+			round,
+			attester,
+			attestee,
+			attester_position,
+			award_time,
+		)
+	}
+
+	fn award_attendance_credits(
+		game_index: u32,
+		rounds: u8,
+		max_group_size: u32,
+		player_count: u32,
+		attendee: &AccountOrPerson<AccountId32>,
+		award_time: u32,
+	) -> u32 {
+		<() as AwardCredits<AccountId32>>::award_attendance_credits(
+			game_index,
+			rounds,
+			max_group_size,
+			player_count,
+			attendee,
+			award_time,
+		)
+	}
+
+	fn remaining_capacity(_: u32) -> u32 {
+		MockCreditCapacity::get()
+	}
+
+	fn clear_game_credits(game_index: u32, limit: u32, cursor: Option<&[u8]>) -> Option<Vec<u8>> {
+		<() as AwardCredits<AccountId32>>::clear_game_credits(game_index, limit, cursor)
+	}
+
+	fn forget_player_credits(game_index: u32, player: &AccountOrPerson<AccountId32>) {
+		<() as AwardCredits<AccountId32>>::forget_player_credits(game_index, player)
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_award_every_slot(game_index: u32, player: &AccountOrPerson<AccountId32>) {
+		<() as AwardCredits<AccountId32>>::benchmark_award_every_slot(game_index, player)
+	}
+}
 
 // Configure a mock runtime to test the pallet.
 frame_support::construct_runtime!(
