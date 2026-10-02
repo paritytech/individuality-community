@@ -430,10 +430,16 @@ mod benches {
 		let message = Pallet::<T>::registration_message(&candidate, &ring_vrf_key);
 		let proof_of_ownership = CryptoOf::<T>::sign(&secret, &message).unwrap();
 
+		// Reach the threshold so the call takes the throttled path.
+		let threshold = T::PaidRegistrationThreshold::get();
+		crate::LitePeopleCount::<T>::put(threshold);
+
 		#[extrinsic_call]
 		_(RawOrigin::Signed(candidate.clone()), ring_vrf_key, proof_of_ownership, None);
 
 		assert!(crate::LitePeople::<T>::contains_key(&candidate));
+		assert_eq!(crate::LitePeopleCount::<T>::get(), threshold.saturating_add(1));
+		assert_eq!(crate::PaidRegistrations::<T>::get().registrations, 1);
 		frame_system::Pallet::<T>::assert_last_event(
 			crate::Event::<T>::PersonRegisteredWithFee { candidate }.into(),
 		);

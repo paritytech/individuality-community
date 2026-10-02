@@ -427,6 +427,10 @@ impl indiv_pallet_people_lite::Config for Test {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type PaidRegistrationClock = TestClock;
+	type PaidRegistrationThreshold = ConstU32<{ u32::MAX }>;
+	type PaidRegistrationPeriod = ConstU32<1>;
+	type PaidRegistrationsPerPeriod = ConstU32<0>;
 	type Suffix = NetworkSuffix;
 	type AccountContexts = ();
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
