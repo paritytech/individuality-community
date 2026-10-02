@@ -18,8 +18,6 @@ use super::*;
 use assets_common::local_and_foreign_assets::TargetFromLeft;
 use codec::{Decode, Encode};
 use cumulus_primitives_core::Junction::{GeneralIndex, PalletInstance, Parachain};
-#[cfg(feature = "runtime-benchmarks")]
-use frame_support::BoundedVec;
 use frame_support::{
 	pallet_prelude::PhantomData,
 	parameter_types,
@@ -27,7 +25,7 @@ use frame_support::{
 		fungible::{HoldConsideration, ItemOf},
 		ConstU128, ConstU32, ConstU8, ConstUint, Footprint, Get, LinearStoragePrice, Randomness,
 	},
-	PalletId,
+	BoundedVec, PalletId,
 };
 #[cfg(feature = "runtime-benchmarks")]
 use indiv_support::traits::PersonalId;
@@ -204,6 +202,7 @@ parameter_types! {
 impl indiv_pallet_people::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people::WeightInfo<Runtime>;
 	type MemberService = Members;
+	type Clock = RuntimeClock;
 	type RingExponent = MembersFlexibleRingExponent;
 	type CollectionOwner = PeopleCollectionOwner;
 	type AccountContexts = AccountContexts;
@@ -730,22 +729,21 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	type MaxCreditTreesPerMessage = ConstU32<32>;
 	type ReplayCooldownSeconds = ConstU64<60>;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
-	// Entries are the distinct blocks whose trees commit a claimant's credits, not a window of
-	// consecutive ones, so the bound counts games rather than time. One game awards a claimant at
-	// most `(MaxGroupSize - 1) * MaxRounds = 15` credits, one per co-player that reported `Person`
-	// on them, plus the attendance backfill, which awards the rest in a single call. Those land in
-	// 16 distinct blocks only if no two reports ever share one, and reports cluster. At one game a
-	// week `AwardRetentionTtl` spans about 13 games, so 208 entries cover the window even at that
-	// worst case; this leaves margin over it, and about 85 games at the few blocks a game usually
-	// takes. The list costs 1 KB at this bound.
+	// Entries are the tree blocks that hold a claimant's credits, so the bound counts games rather
+	// than time. A game puts a claimant's credits in at most 21 blocks: 15 for reports, one for the
+	// attendance backfill and up to 5 for tenure claims. At one game a week `AwardRetentionTtl`
+	// spans about 13 games, so the worst case slightly exceeds this bound, but reports cluster and
+	// a game usually takes a few blocks. A block the ring drops stays mintable through the events.
+	// The list costs 1 KB at this bound.
 	//
 	// Being a count, the window shortens as games run more often. Governance sets the schedule and
 	// `new_game` only refuses a concurrent game, so back-to-back games would fill this in a day.
 	type MaxCreditBlocksPerClaimant = ConstU32<256>;
 	// The claims chain's own deadline, which is what the two have to agree on. What it costs this
 	// chain follows participation rather than a constant: a player earns at most
-	// `(MaxGroupSize - 1) * MaxRounds = 15` credits a game, so at one game a week 90 days is about
-	// 195 credits, or 13 KB at 65 bytes an award. Retaining personhood needs one game per
+	// `(MaxGroupSize - 1) * MaxRounds = 15` report credits and one tenure credit per
+	// `DefaultTenureThresholds` entry a game, so at one game a week 90 days is about 260 credits,
+	// or 17 KB at 65 bytes an award. Retaining personhood needs one game per
 	// `NonPlayingKickoutTime` and costs a fraction of that.
 	type AwardRetentionTtl = ClaimsChainTreeTtl;
 	type EnsureClaimsChainOrigin = EnsureClaimsChainSibling;
@@ -762,6 +760,8 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// `integrity_test` is what holds this to the budget. A block records at most one tree block, so
 	// a call per block removes them eight times faster than they are made.
 	type MaxAwardBlocksPerSweep = ConstU32<8>;
+	type MaxTenureThresholds = MaxTenureThresholds;
+	type DefaultTenureThresholds = DefaultTenureThresholds;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
 }
@@ -774,7 +774,18 @@ parameter_types! {
 	/// roots for less time than the claims chain gives a claimant, which strands credits inside their
 	/// deadline. A value above it keeps roots after the last credit has expired.
 	pub const ClaimsChainTreeTtl: u64 = 90 * 24 * 60 * 60;
+	/// The tenure credits a player earns in one game at most. Each takes a credit slot after the
+	/// game's 18 report slots, out of the 128 a claimant has per game.
+	pub const MaxTenureThresholds: u32 = 16;
+	/// Thresholds at 1, 2, 4, 8 and 13 weeks of recognition. A person earns one tenure credit per
+	/// game for each threshold their tenure reaches, so 5 credits a game from 13 weeks on.
+	pub DefaultTenureThresholds: BoundedVec<u64, MaxTenureThresholds> = BoundedVec::truncate_from(
+		[1, 2, 4, 8, 13].into_iter().map(|weeks| weeks * WEEK_IN_SECONDS).collect::<Vec<_>>()
+	);
 }
+
+/// A week in seconds.
+const WEEK_IN_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// Origin check for the parachain the credit trees are delivered to. Only that chain may name the
 /// roots this chain deletes.

@@ -22,7 +22,7 @@ use core::marker::PhantomData;
 use frame_support::{CloneNoBound, EqNoBound, Parameter, PartialEqNoBound};
 use scale_info::TypeInfo;
 use sp_core::ConstU32;
-use sp_runtime::{traits::Member, BoundedVec, DispatchError, DispatchResult, Weight};
+use sp_runtime::{traits::Member, BoundedVec, DispatchError, DispatchResult, Saturating, Weight};
 use verifiable::{ring::ark_vrf::suites::bandersnatch::BandersnatchSha512Ell2, GenerateVerifiable};
 
 /// Identity of personhood.
@@ -150,6 +150,83 @@ pub struct ContextualAlias {
 	pub context: Context,
 }
 
+/// Upper bound on closed recognition periods kept per person.
+///
+/// When a person closes one more period, the oldest one leaves the list and its length is added to
+/// [`RecognitionHistory::settled`].
+pub const MAX_RECOGNITION_PERIODS: u32 = 16;
+
+/// A closed period during which a person was recognized, in seconds since the UNIX epoch.
+#[frame_support::stored]
+pub struct RecognitionPeriod {
+	/// When the person was recognized.
+	pub start: u64,
+	/// When the person was suspended. Can't be lower than `start`.
+	pub end: u64,
+}
+
+impl RecognitionPeriod {
+	/// Returns the length of the period in seconds.
+	pub fn length(&self) -> u64 {
+		self.end.saturating_sub(self.start)
+	}
+}
+
+/// The periods during which a person was recognized.
+///
+/// Tenure is the total time spent recognized and excludes suspensions. Only the most recent
+/// [`MAX_RECOGNITION_PERIODS`] closed periods are kept individually. Older ones survive only as
+/// their summed length in `settled`.
+#[frame_support::stored]
+#[derive(Default)]
+pub struct RecognitionHistory {
+	/// Start of the open period, in seconds since the UNIX epoch. `None` while suspended.
+	pub recognized_since: Option<u64>,
+	/// The most recent closed periods, oldest first.
+	pub periods: BoundedVec<RecognitionPeriod, ConstU32<MAX_RECOGNITION_PERIODS>>,
+	/// Summed length in seconds of the closed periods that no longer fit in `periods`.
+	pub settled: u64,
+}
+
+impl RecognitionHistory {
+	/// Creates a history with one period open since `now`.
+	pub fn open_since(now: u64) -> Self {
+		Self { recognized_since: Some(now), ..Default::default() }
+	}
+
+	/// Opens a period at `now` and returns whether there was none open.
+	///
+	/// A period already open is kept.
+	pub fn open(&mut self, now: u64) -> bool {
+		if self.recognized_since.is_some() {
+			return false;
+		}
+		self.recognized_since = Some(now);
+		true
+	}
+
+	/// Closes the open period at `now` and returns whether there was one to close.
+	///
+	/// When the list of periods is full, the oldest period is folded into `settled`.
+	pub fn close(&mut self, now: u64) -> bool {
+		let Some(start) = self.recognized_since.take() else { return false };
+		let period = RecognitionPeriod { start, end: now.max(start) };
+		let len = self.periods.len();
+		if let Ok(Some(oldest)) = self.periods.force_insert_keep_right(len, period) {
+			self.settled.saturating_accrue(oldest.length());
+		}
+		true
+	}
+
+	/// Returns the total time in seconds spent recognized up to `now`.
+	pub fn tenure(&self, now: u64) -> u64 {
+		let closed =
+			self.periods.iter().fold(self.settled, |acc, p| acc.saturating_add(p.length()));
+		let open = self.recognized_since.map_or(0, |since| now.saturating_sub(since));
+		closed.saturating_add(open)
+	}
+}
+
 /// Trait to recognize people and handle personal id.
 ///
 /// `PersonalId` goes through multiple state: free, reserved, used; a used personal id can belong
@@ -175,14 +252,19 @@ pub trait AddOnlyPeopleTrait {
 	/// If recognizing a new person, a key must be provided. If resuming the personhood then no key
 	/// must be provided.
 	///
+	/// A recognition period opens for the person, see [`RecognitionHistory`].
+	///
 	/// An error is returned if:
 	/// * `maybe_key` is some and the personal id was not reserved or is used by a recognized or
 	///   suspended person.
-	/// * `maybe_key` is none and the personal id was not recognized before.
+	/// * `maybe_key` is none and the personal id was not recognized before or is not suspended.
 	fn recognize_personhood(
 		who: PersonalId,
 		maybe_key: Option<Self::Member>,
 	) -> Result<(), DispatchError>;
+	/// Returns the recognition history of a person, or `None` if the id does not belong to a
+	/// recognized or suspended person.
+	fn recognition_history(who: PersonalId) -> Option<RecognitionHistory>;
 	// All stuff for benchmarks.
 	#[cfg(feature = "runtime-benchmarks")]
 	type Secret;
@@ -196,6 +278,8 @@ pub trait AddOnlyPeopleTrait {
 /// Trait to recognize and suspend people.
 pub trait PeopleTrait: AddOnlyPeopleTrait {
 	/// Suspend a set of people. This operation must be called within a mutation session.
+	///
+	/// The open recognition period of each person closes, see [`RecognitionHistory`].
 	///
 	/// An error is returned if:
 	/// * a suspended personal id was already suspended.
@@ -230,6 +314,9 @@ impl AddOnlyPeopleTrait for () {
 	}
 	fn recognize_personhood(_: PersonalId, _: Option<Self::Member>) -> Result<(), DispatchError> {
 		Ok(())
+	}
+	fn recognition_history(_: PersonalId) -> Option<RecognitionHistory> {
+		None
 	}
 
 	#[cfg(feature = "runtime-benchmarks")]
@@ -1058,4 +1145,63 @@ pub trait AppendOnlyMembersWeightInfo {
 	/// In a typical implementation this would account for background operation such as onboarding
 	/// and ring building if they happen outside of the `add_members` function.
 	fn add_member_background_weight() -> frame_support::weights::Weight;
+}
+
+#[cfg(test)]
+mod recognition_history_tests {
+	use super::*;
+
+	#[test]
+	fn tenure_sums_closed_and_open_periods() {
+		// Recognized at 100, suspended at 150, recognized again at 200.
+		let mut history = RecognitionHistory::open_since(100);
+		assert_eq!(history.tenure(120), 20);
+		assert!(history.close(150));
+		assert_eq!(history.tenure(1_000), 50);
+		assert!(history.open(200));
+		// Tenure counts the closed period and the open one.
+		assert_eq!(history.tenure(230), 80);
+	}
+
+	#[test]
+	fn close_without_open_period_is_noop() {
+		let mut history = RecognitionHistory::open_since(100);
+		assert!(history.close(150));
+		// A second close has no period to close.
+		assert!(!history.close(200));
+		assert_eq!(history.periods.len(), 1);
+		assert_eq!(history.tenure(300), 50);
+	}
+
+	#[test]
+	fn open_twice_keeps_the_first_period() {
+		let mut history = RecognitionHistory::open_since(100);
+		// A second open has no effect while a period is open.
+		assert!(!history.open(200));
+		assert_eq!(history.recognized_since, Some(100));
+	}
+
+	#[test]
+	fn close_folds_oldest_period_when_full() {
+		// One more cycle than the list holds, each period 10 seconds long.
+		let mut history = RecognitionHistory::default();
+		for i in 0..=MAX_RECOGNITION_PERIODS as u64 {
+			let start = i * 100;
+			assert!(history.open(start));
+			assert!(history.close(start + 10));
+		}
+		// The list stays full and the oldest period is folded into `settled`.
+		assert_eq!(history.periods.len(), MAX_RECOGNITION_PERIODS as usize);
+		assert_eq!(history.periods[0].start, 100);
+		assert_eq!(history.settled, 10);
+		assert_eq!(history.tenure(10_000), 10 * (MAX_RECOGNITION_PERIODS as u64 + 1));
+	}
+
+	#[test]
+	fn close_before_start_yields_empty_period() {
+		let mut history = RecognitionHistory::open_since(100);
+		assert!(history.close(50));
+		assert_eq!(history.periods[0], RecognitionPeriod { start: 100, end: 100 });
+		assert_eq!(history.tenure(1_000), 0);
+	}
 }

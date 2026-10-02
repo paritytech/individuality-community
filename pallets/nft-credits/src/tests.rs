@@ -184,6 +184,36 @@ fn nft_claim_credit_spec() {
 }
 
 #[test]
+fn tenure_credit_spec() {
+	let calculated =
+		NftCredits::compute_tenure_credit(32, 0, &AccountOrPerson::Account([1u8; 32].into()));
+	let expected = (b"polkadot-pop-tenure", 32u32, 0u32, 0u8, [1u8; 32])
+		.using_encoded(sp_io::hashing::blake2_256);
+
+	assert_eq!(calculated, expected);
+	assert_eq!(
+		calculated,
+		[
+			255, 13, 217, 141, 172, 246, 84, 208, 236, 29, 227, 96, 146, 143, 14, 71, 2, 203, 176,
+			213, 140, 4, 151, 198, 63, 193, 73, 3, 23, 222, 246, 79
+		]
+	);
+
+	let calculated = NftCredits::compute_tenure_credit(35, 2, &AccountOrPerson::Person([3u8; 32]));
+	let expected = (b"polkadot-pop-tenure", 35u32, 2u32, 1u8, [3u8; 32])
+		.using_encoded(sp_io::hashing::blake2_256);
+
+	assert_eq!(calculated, expected);
+	assert_eq!(
+		calculated,
+		[
+			241, 155, 168, 115, 201, 224, 243, 79, 254, 16, 202, 214, 233, 200, 19, 98, 4, 130,
+			129, 2, 42, 47, 223, 38, 181, 87, 206, 167, 52, 66, 225, 53
+		]
+	);
+}
+
+#[test]
 fn credit_block_index_keys_the_root_the_credit_lands_in() {
 	new_test_ext().execute_with(|| {
 		let schedule = GameSchedule::<u32, u128> {
@@ -3473,6 +3503,421 @@ mod migration {
 				!RootExpiries::<Test>::contains_key(ExpiryTimestamp::from(later), 11),
 				"the version gate must keep the migration from running twice"
 			);
+		});
+	}
+}
+
+mod tenure_credits {
+	use super::*;
+	use frame_support::{assert_err_ignore_postinfo, dispatch::GetDispatchInfo};
+	use indiv_pallet_game::CancellingStep;
+	use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
+	use indiv_pallet_score::{Participants, Recognition};
+	use indiv_support::traits::{AddOnlyPeopleTrait, AppendOnlyMembers, RingExponent, RingMode};
+	use sp_runtime::DispatchError;
+
+	/// The game's play time. The claim window opens `WINDOW` seconds before it.
+	const PLAY: u32 = 1_000;
+	const WINDOW: u32 = 900;
+	const OPENS: u64 = (PLAY - WINDOW) as u64;
+
+	fn set_time(secs: u64) {
+		MOCK_UNIX_TIME.with(|time| *time.borrow_mut() = Duration::from_secs(secs));
+	}
+
+	fn schedule() -> GameSchedule<u32, u128> {
+		GameSchedule {
+			game_play_time: PLAY,
+			rounds: 1,
+			max_group_size: 4,
+			tenure_claim_window: WINDOW,
+			..Default::default()
+		}
+	}
+
+	fn set_thresholds(thresholds: Vec<u64>) {
+		assert_ok!(NftCredits::set_tenure_thresholds(
+			RuntimeOrigin::root(),
+			BoundedVec::truncate_from(thresholds)
+		));
+	}
+
+	/// Signs `who` up for the game, then recognises them as a person at the current time.
+	fn sign_up_recognised(who: &AccountId32) {
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(who.clone()),
+			DEFAULT_IDENTIFIER_KEY,
+			None,
+		));
+		let id = People::reserve_new_id();
+		let (key, _) = mock_key(id);
+		assert_ok!(People::recognize_personhood(id, Some(key)));
+		Participants::<Test>::mutate(AccountOrPerson::Account(who.clone()), |participant| {
+			participant.as_mut().expect("sign-up onboards the account").recognition =
+				Recognition::Recognized(id);
+		});
+	}
+
+	/// Starts the game at time zero and signs ALICE up as a person recognised since then.
+	fn set_up_alice() -> GameIdx {
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+		start_scheduled_game(&schedule());
+		sign_up_recognised(&ALICE);
+		GameStore::<Test>::get().expect("the game is registering").index
+	}
+
+	fn claim(who: &AccountId32) -> DispatchResultWithPostInfo {
+		NftCredits::claim_tenure_credits(RuntimeOrigin::signed(who.clone()))
+	}
+
+	fn alice_slots(game: GameIdx) -> AwardedCredits {
+		AwardedNftClaimCredits::<Test>::get(game, AccountOrPerson::Account(ALICE))
+	}
+
+	#[test]
+	fn a_new_game_opens_claims_its_window_before_play() {
+		new_test_ext().execute_with(|| {
+			start_scheduled_game(&schedule());
+			assert_eq!(GameStore::<Test>::get().unwrap().tenure_claim_opens, PLAY - WINDOW);
+		});
+	}
+
+	#[test]
+	fn a_claim_awards_one_credit_per_threshold_reached() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![100, 200, 5_000]);
+			let game = set_up_alice();
+			set_time(250);
+
+			let post = claim(&ALICE).expect("ALICE claims");
+
+			assert_eq!(alice_slots(game).count(), 2);
+			assert!(alice_slots(game).contains(NftCredits::tenure_credit_slot(0)));
+			assert!(alice_slots(game).contains(NftCredits::tenure_credit_slot(1)));
+			let alice = AccountOrPerson::Account(ALICE);
+			assert_eq!(
+				awarded_credits(&alice),
+				vec![
+					NftCredits::compute_tenure_credit(game, 0, &alice),
+					NftCredits::compute_tenure_credit(game, 1, &alice),
+				]
+			);
+			System::assert_has_event(
+				Event::<Test>::TenureCreditsClaimed { claimant: alice, game_index: game, count: 2 }
+					.into(),
+			);
+			assert_eq!(post.pays_fee, Pays::No);
+		});
+	}
+
+	#[test]
+	fn claimable_tenure_credits_counts_what_a_claim_awards() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![100, 200, 5_000]);
+			set_up_alice();
+			set_time(250);
+
+			assert_eq!(NftCredits::claimable_tenure_credits(ALICE), Ok(2));
+			assert_ok!(claim(&ALICE));
+			System::assert_has_event(
+				Event::<Test>::TenureCreditsClaimed {
+					claimant: AccountOrPerson::Account(ALICE),
+					game_index: GameStore::<Test>::get().unwrap().index,
+					count: 2,
+				}
+				.into(),
+			);
+
+			assert_eq!(
+				NftCredits::claimable_tenure_credits(ALICE),
+				Err(Error::<Test>::NoTenureCredit.into())
+			);
+		});
+	}
+
+	#[test]
+	fn claimable_tenure_credits_reports_why_a_claim_fails() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(
+				NftCredits::claimable_tenure_credits(ALICE),
+				Err(Error::<Test>::NoGame.into())
+			);
+
+			set_thresholds(vec![0]);
+			set_up_alice();
+			set_time(OPENS - 1);
+			assert_eq!(
+				NftCredits::claimable_tenure_credits(ALICE),
+				Err(Error::<Test>::TenureClaimClosed.into())
+			);
+
+			set_time(OPENS);
+			assert_eq!(
+				NftCredits::claimable_tenure_credits(BOB),
+				Err(Error::<Test>::NotRegistered.into())
+			);
+			assert_err_ignore_postinfo!(claim(&BOB), Error::<Test>::NotRegistered);
+		});
+	}
+
+	#[test]
+	fn a_claim_refunds_down_to_the_credits_it_awards() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![100]);
+			set_up_alice();
+			set_time(OPENS);
+
+			let post = claim(&ALICE).expect("ALICE claims");
+
+			let declared = Call::<Test>::claim_tenure_credits {}.get_dispatch_info().call_weight;
+			let actual = post.actual_weight.expect("the claim reports its weight");
+			assert_eq!(actual, <MockWeightInfo as WeightInfo>::claim_tenure_credits(1));
+			assert!(actual.all_lt(declared));
+		});
+	}
+
+	#[test]
+	fn a_later_claim_awards_only_the_thresholds_reached_since() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![150, 300]);
+			let game = set_up_alice();
+			set_time(200);
+			assert_ok!(claim(&ALICE));
+			assert_eq!(alice_slots(game).count(), 1);
+
+			set_time(350);
+			assert_ok!(claim(&ALICE));
+
+			assert_eq!(alice_slots(game).count(), 2);
+			assert_eq!(awarded_credit_count(), 2);
+		});
+	}
+
+	#[test]
+	fn a_claim_with_nothing_new_is_refused_and_pays() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![100]);
+			set_up_alice();
+			set_time(OPENS);
+			assert_ok!(claim(&ALICE));
+
+			let refused = claim(&ALICE).expect_err("nothing is left to claim");
+
+			assert_eq!(refused.error, Error::<Test>::NoTenureCredit.into());
+			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
+			assert_eq!(awarded_credit_count(), 1);
+		});
+	}
+
+	#[test]
+	fn a_tenure_below_every_threshold_earns_nothing() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![PLAY.into()]);
+			set_up_alice();
+			set_time(OPENS);
+
+			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::NoTenureCredit);
+		});
+	}
+
+	#[test]
+	fn claims_open_at_the_window_and_close_at_play() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0]);
+			set_up_alice();
+
+			set_time(OPENS - 1);
+			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::TenureClaimClosed);
+			set_time(PLAY.into());
+			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::TenureClaimClosed);
+
+			set_time(PLAY as u64 - 1);
+			assert_ok!(claim(&ALICE));
+		});
+	}
+
+	#[test]
+	fn a_game_without_a_window_takes_no_claim() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0]);
+			start_scheduled_game(&GameSchedule { tenure_claim_window: 0, ..schedule() });
+			set_time(PLAY as u64 - 1);
+
+			// Claims open at play, which is also when they close.
+			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::TenureClaimClosed);
+		});
+	}
+
+	#[test]
+	fn a_cancelling_game_takes_no_claim() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0]);
+			set_up_alice();
+			set_time(OPENS);
+			GameStore::<Test>::mutate(|game| {
+				game.as_mut().unwrap().state =
+					GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
+			});
+
+			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::TenureClaimClosed);
+		});
+	}
+
+	#[test]
+	fn a_claim_without_a_game_is_refused() {
+		new_test_ext().execute_with(|| {
+			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::NoGame);
+		});
+	}
+
+	#[test]
+	fn a_player_must_sign_up_to_claim() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0]);
+			set_up_alice();
+			set_time(OPENS);
+
+			assert_err_ignore_postinfo!(claim(&BOB), Error::<Test>::NotRegistered);
+		});
+	}
+
+	#[test]
+	fn a_player_must_be_recognised_to_claim() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0]);
+			set_up_alice();
+			assert_ok!(Game::sign_up_with_account(
+				RuntimeOrigin::signed(BOB),
+				DEFAULT_IDENTIFIER_KEY,
+				None,
+			));
+			set_time(OPENS);
+
+			assert_err_ignore_postinfo!(claim(&BOB), Error::<Test>::NotRecognized);
+		});
+	}
+
+	#[test]
+	fn an_alias_player_cannot_claim() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0]);
+			set_up_alice();
+			let alias = [9u8; 32];
+			let statement_account = AccountId32::new(alias);
+			assert_ok!(Game::sign_up_with_alias(
+				runtime_origin_for_alias(&alias),
+				DEFAULT_IDENTIFIER_KEY,
+				statement_account.clone(),
+				AccountAuthority(statement_account),
+				None,
+			));
+			set_time(OPENS);
+
+			let refused =
+				NftCredits::claim_tenure_credits(runtime_origin_for_alias(&alias)).unwrap_err();
+
+			assert_eq!(
+				refused.error,
+				indiv_pallet_score::Error::<Test>::BadOriginNotSignedNotAccountParticipant.into()
+			);
+			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
+		});
+	}
+
+	#[test]
+	fn a_participant_origin_claims() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0]);
+			let game = set_up_alice();
+			set_time(OPENS);
+
+			assert_ok!(NftCredits::claim_tenure_credits(
+				indiv_pallet_score::Origin::<Test>::AccountParticipant(ALICE).into()
+			));
+
+			assert!(alice_slots(game).contains(NftCredits::tenure_credit_slot(0)));
+		});
+	}
+
+	#[test]
+	fn a_claim_that_does_not_fit_the_buffers_is_refused() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_alice();
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 1);
+
+			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::CreditCapacityExhausted);
+			assert_eq!(alice_slots(game).count(), 0);
+		});
+	}
+
+	#[test]
+	fn the_default_thresholds_apply_until_set() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(TenureThresholds::<Test>::get().into_inner(), vec![WEEK, 2 * WEEK]);
+			assert_eq!(NftCredits::tenure_credit_count(WEEK - 1), 0);
+			assert_eq!(NftCredits::tenure_credit_count(WEEK), 1);
+			assert_eq!(NftCredits::tenure_credit_count(3 * WEEK), 2);
+		});
+	}
+
+	#[test]
+	fn setting_thresholds_requires_the_manager_origin() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			assert_noop!(
+				NftCredits::set_tenure_thresholds(
+					RuntimeOrigin::signed(ALICE),
+					BoundedVec::truncate_from(vec![1])
+				),
+				DispatchError::BadOrigin
+			);
+
+			set_thresholds(vec![1, 2]);
+
+			assert_eq!(TenureThresholds::<Test>::get().into_inner(), vec![1, 2]);
+			System::assert_last_event(
+				Event::<Test>::TenureThresholdsSet {
+					thresholds: BoundedVec::truncate_from(vec![1, 2]),
+				}
+				.into(),
+			);
+		});
+	}
+
+	#[test]
+	fn thresholds_must_be_strictly_ascending() {
+		new_test_ext().execute_with(|| {
+			for unsorted in [vec![2, 1], vec![1, 1]] {
+				assert_noop!(
+					NftCredits::set_tenure_thresholds(
+						RuntimeOrigin::root(),
+						BoundedVec::truncate_from(unsorted)
+					),
+					Error::<Test>::UnsortedTenureThresholds
+				);
+			}
+		});
+	}
+
+	#[test]
+	fn tenure_slots_sit_above_the_report_slots() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(NftCredits::tenure_credit_slot(0), NftCredits::max_report_credit_slots());
+			let last_report_slot = NftCredits::credit_slot(
+				(<<Test as indiv_pallet_game::Config>::MaxRounds as Get<u32>>::get() - 1)
+					as RoundIndex,
+				<<Test as indiv_pallet_game::Config>::MaxGroupSize as Get<u32>>::get() - 1,
+			);
+			assert!(last_report_slot < NftCredits::tenure_credit_slot(0));
 		});
 	}
 }
