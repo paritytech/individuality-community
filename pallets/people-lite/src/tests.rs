@@ -1665,3 +1665,180 @@ mod create_lite_people_collection {
 		});
 	}
 }
+
+mod paid_registration_throttling {
+	use super::*;
+	use crate::{
+		mock::{
+			PaidRegistrationPeriod, PaidRegistrationThreshold, PaidRegistrationsPerPeriod,
+			TestUnixTime,
+		},
+		types::PaidRegistrationWindow,
+		LitePeopleCount, PaidRegistrations,
+	};
+	use frame_support::traits::{GetStorageVersion, Hooks, StorageVersion};
+	use sp_runtime::DispatchResult;
+
+	const DAY: u64 = 24 * 60 * 60;
+
+	/// Registers `user` with a fee. Fund the account first with `fund`.
+	fn try_register_with_fee(user: u64, seed: u8) -> DispatchResult {
+		let secret = secret_from_seed(seed);
+		PeopleLitePallet::<Test>::register_with_fee(
+			Some(user).into(),
+			member_from_secret(&secret),
+			sign_attest_with_secret(&secret, user),
+			None,
+		)
+	}
+
+	fn fund(users: &[u64]) {
+		for user in users {
+			let _ = pallet_balances::Pallet::<Test>::make_free_balance_be(user, 100);
+		}
+	}
+
+	/// Sets a threshold of 2 lite people with 2 paid registrations per day beyond it.
+	fn set_up_throttle() {
+		Pallet::<Test>::set_block_number(1);
+		create_lite_collection();
+		PaidRegistrationThreshold::set(&2);
+		PaidRegistrationsPerPeriod::set(&2);
+		TestUnixTime::set(&(10 * DAY));
+		fund(&[10, 11, 12, 13, 14]);
+	}
+
+	#[test]
+	fn both_methods_increment_the_lite_people_count() {
+		new_test_ext().execute_with(|| {
+			set_up_throttle();
+			register_lite_person(1, 10, 1);
+			assert_eq!(LitePeopleCount::<Test>::get(), 1);
+			assert_ok!(try_register_with_fee(11, 2));
+			assert_eq!(LitePeopleCount::<Test>::get(), 2);
+		});
+	}
+
+	#[test]
+	fn paid_registrations_below_the_threshold_are_not_throttled() {
+		new_test_ext().execute_with(|| {
+			set_up_throttle();
+			PaidRegistrationsPerPeriod::set(&0);
+
+			assert_ok!(try_register_with_fee(10, 1));
+			assert_ok!(try_register_with_fee(11, 2));
+
+			assert_eq!(LitePeopleCount::<Test>::get(), 2);
+			assert_eq!(PaidRegistrations::<Test>::get(), PaidRegistrationWindow::default());
+		});
+	}
+
+	#[test]
+	fn paid_registrations_beyond_the_threshold_are_limited_per_period() {
+		new_test_ext().execute_with(|| {
+			set_up_throttle();
+			register_lite_person(1, 10, 1);
+			register_lite_person(2, 11, 2);
+
+			assert_ok!(try_register_with_fee(12, 3));
+			assert_ok!(try_register_with_fee(13, 4));
+			assert_eq!(
+				PaidRegistrations::<Test>::get(),
+				PaidRegistrationWindow { period: 10, registrations: 2 }
+			);
+			assert_noop!(
+				try_register_with_fee(14, 5),
+				crate::Error::<Test>::PaidRegistrationLimitReached
+			);
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(14), 100);
+			assert_eq!(LitePeopleCount::<Test>::get(), 4);
+		});
+	}
+
+	#[test]
+	fn a_failed_paid_registration_keeps_the_allowance() {
+		new_test_ext().execute_with(|| {
+			set_up_throttle();
+			PaidRegistrationThreshold::set(&0);
+			PaidRegistrationsPerPeriod::set(&1);
+
+			assert_noop!(
+				PeopleLitePallet::<Test>::register_with_fee(
+					Some(10).into(),
+					member_from_secret(&secret_from_seed(1)),
+					sign_attest_with_secret(&secret_from_seed(2), 10),
+					None,
+				),
+				crate::Error::<Test>::InvalidProofOfOwnership
+			);
+			assert_ok!(try_register_with_fee(10, 1));
+		});
+	}
+
+	#[test]
+	fn the_paid_allowance_resets_in_the_next_period() {
+		new_test_ext().execute_with(|| {
+			set_up_throttle();
+			PaidRegistrationThreshold::set(&0);
+			PaidRegistrationsPerPeriod::set(&1);
+			assert_ok!(try_register_with_fee(10, 1));
+
+			// The last second of the period still counts towards it.
+			TestUnixTime::set(&(11 * DAY - 1));
+			assert_noop!(
+				try_register_with_fee(11, 2),
+				crate::Error::<Test>::PaidRegistrationLimitReached
+			);
+
+			TestUnixTime::set(&(11 * DAY));
+			assert_ok!(try_register_with_fee(11, 2));
+			assert_eq!(
+				PaidRegistrations::<Test>::get(),
+				PaidRegistrationWindow { period: 11, registrations: 1 }
+			);
+		});
+	}
+
+	#[test]
+	fn attestations_ignore_the_paid_allowance() {
+		new_test_ext().execute_with(|| {
+			set_up_throttle();
+			PaidRegistrationThreshold::set(&0);
+			PaidRegistrationsPerPeriod::set(&0);
+			assert_noop!(
+				try_register_with_fee(10, 1),
+				crate::Error::<Test>::PaidRegistrationLimitReached
+			);
+
+			register_lite_person(1, 11, 2);
+
+			assert_eq!(LitePeopleCount::<Test>::get(), 1);
+			assert_eq!(PaidRegistrations::<Test>::get(), PaidRegistrationWindow::default());
+		});
+	}
+
+	#[test]
+	#[should_panic(expected = "PaidRegistrationPeriod must be non-zero")]
+	fn integrity_test_rejects_a_zero_period() {
+		new_test_ext().execute_with(|| {
+			PaidRegistrationPeriod::set(&0);
+			<PeopleLitePallet<Test> as Hooks<u64>>::integrity_test();
+		});
+	}
+
+	#[test]
+	fn migration_counts_existing_lite_people() {
+		new_test_ext().execute_with(|| {
+			set_up_throttle();
+			register_lite_person(1, 10, 1);
+			assert_ok!(try_register_with_fee(11, 2));
+			LitePeopleCount::<Test>::kill();
+			StorageVersion::new(0).put::<PeopleLitePallet<Test>>();
+
+			crate::migration::MigrateV0ToV1::<Test>::on_runtime_upgrade();
+
+			assert_eq!(LitePeopleCount::<Test>::get(), 2);
+			assert_eq!(PeopleLitePallet::<Test>::on_chain_storage_version(), 1);
+		});
+	}
+}

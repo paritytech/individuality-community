@@ -18,8 +18,13 @@
 
 extern crate alloc;
 
-use crate::{Config, LitePeopleCollectionCreated, Pallet, WeightInfo};
-use frame_support::{pallet_prelude::*, traits::OnRuntimeUpgrade};
+use crate::{Config, LitePeople, LitePeopleCollectionCreated, LitePeopleCount, Pallet, WeightInfo};
+use frame_support::{
+	migrations::VersionedMigration,
+	pallet_prelude::*,
+	traits::{OnRuntimeUpgrade, UncheckedOnRuntimeUpgrade},
+};
+use sp_runtime::SaturatedConversion;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-people-lite::migration";
 
@@ -50,5 +55,42 @@ impl<T: Config> OnRuntimeUpgrade for CreateLitePeopleCollection<T> {
 			"lite people collection must exist after migration"
 		);
 		Ok(())
+	}
+}
+
+/// Sets [`LitePeopleCount`](crate::LitePeopleCount) to the number of registered lite people.
+///
+/// Pallet version 0 does not keep the count, so a chain upgrading from it must run this migration.
+/// It iterates every `LitePeople` key in one block.
+pub type MigrateV0ToV1<T> = VersionedMigration<
+	0,
+	1,
+	v1::InitializeLitePeopleCount<T>,
+	Pallet<T>,
+	<T as frame_system::Config>::DbWeight,
+>;
+
+pub mod v1 {
+	use super::*;
+
+	/// Use [`MigrateV0ToV1`] rather than this directly.
+	pub struct InitializeLitePeopleCount<T>(PhantomData<T>);
+
+	impl<T: Config> UncheckedOnRuntimeUpgrade for InitializeLitePeopleCount<T> {
+		fn on_runtime_upgrade() -> Weight {
+			let count = LitePeople::<T>::iter_keys().count() as u64;
+			LitePeopleCount::<T>::put(count.saturated_into::<u32>());
+			log::info!(target: LOG_TARGET, "counted {count} lite people");
+			T::DbWeight::get().reads_writes(count.saturating_add(1), 1)
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn post_upgrade(_state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+			ensure!(
+				LitePeopleCount::<T>::get() as usize == LitePeople::<T>::iter_keys().count(),
+				"the lite people count must match the registered lite people"
+			);
+			Ok(())
+		}
 	}
 }

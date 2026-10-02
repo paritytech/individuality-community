@@ -54,6 +54,26 @@ pub struct LitePersonInfo<Member, Method> {
 pub type LitePersonInfoOf<T> =
 	LitePersonInfo<MemberOf<T>, RecognitionMethod<<T as frame_system::Config>::AccountId>>;
 
+/// Paid registrations accepted in one throttled period.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	Clone,
+	Default,
+	PartialEq,
+	Eq,
+	Debug,
+	TypeInfo,
+	MaxEncodedLen,
+)]
+pub struct PaidRegistrationWindow {
+	/// The period index, the current Unix time divided by `PaidRegistrationPeriod`.
+	pub period: u32,
+	/// The number of paid registrations accepted in `period`.
+	pub registrations: u32,
+}
+
 /// Request parameters to be automatically enrolled as a lite consumer when registering as a lite
 /// person.
 #[derive(

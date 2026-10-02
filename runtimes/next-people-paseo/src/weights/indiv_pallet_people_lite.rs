@@ -193,17 +193,18 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 		//  Measured:  `320`
 		//  Estimated: `11671`
 		// Minimum execution time: 1_346_404_000 picoseconds.
+		// Placeholder for the `LitePeopleCount` read and write. The benchmark bot regenerates this.
 		Weight::from_parts(1_375_979_000, 0)
-			.saturating_add(Weight::from_parts(0, 11671))
-			.saturating_add(T::DbWeight::get().reads(9))
-			.saturating_add(T::DbWeight::get().writes(6))
+			.saturating_add(Weight::from_parts(0, 12174))
+			.saturating_add(T::DbWeight::get().reads(10))
+			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	// Placeholder for fee-to-pot registration. The benchmark bot regenerates this after push.
 	fn register_with_fee() -> Weight {
 		Weight::from_parts(1_374_450_000, 0)
-			.saturating_add(Weight::from_parts(0, 11671))
-			.saturating_add(T::DbWeight::get().reads(11))
-			.saturating_add(T::DbWeight::get().writes(8))
+			.saturating_add(Weight::from_parts(0, 13180))
+			.saturating_add(T::DbWeight::get().reads(14))
+			.saturating_add(T::DbWeight::get().writes(10))
 	}
 	fn dispatch_as_signer() -> Weight {
 		// Proof Size summary in bytes:
