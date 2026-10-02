@@ -7,6 +7,7 @@
       "tests/**/*.ts",
       "packages/*/src/**/*.ts",
       "suites/*/src/**/*.ts",
+      "coinage-instance/src/**/*.ts",
       "packages/*/scripts/**/*.mjs",
       "zombienet/scripts/**/*.mjs"
     ]
