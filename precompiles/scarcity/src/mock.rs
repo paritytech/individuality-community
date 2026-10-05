@@ -18,7 +18,7 @@ pub use super::*;
 
 use frame_support::{
 	derive_impl, parameter_types,
-	traits::{fungible::HoldConsideration, ConstU32, ConstU64, LinearStoragePrice},
+	traits::{fungible::HoldConsideration, ConstU16, ConstU32, ConstU64, LinearStoragePrice},
 };
 use indiv_precompile_support::test_helpers::{
 	map_account as map_account_shared, precompile_address,
@@ -81,9 +81,12 @@ impl indiv_pallet_scarcity::Config for Test {
 	type MetadataDeposit = StoragePrice;
 	type MaxKeyLen = ConstU32<32>;
 	type MaxValueLen = ConstU32<256>;
+	type MaxCollectionMetadata = ConstU32<16>;
+	type MaxItemMetadata = ConstU32<16>;
 	type MaxInstanceMetadata = ConstU32<3>;
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
+	type MaximumMoves = ConstU16<16>;
 	// Nothing in this mock keys state by a collection or its owner, so neither deletion nor a
 	// handover needs a cleanup hook.
 	type OnCollectionDeleted = ();

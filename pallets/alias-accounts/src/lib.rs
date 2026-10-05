@@ -45,11 +45,14 @@
 //! once fixes the deadline against later changes to the ring's history.
 //!
 //! A stamp is not permanent. Every path that rewrites [`AccountToAlias`] drops it, and so does a
-//! sweep that finds the revision verifying again, which a collection torn down and re-created under
-//! the same identifier can cause by restarting its revisions at zero. That last case is only
-//! noticed when a sweep runs, so it bounds how far the stamp can be trusted rather than removing
-//! the problem: a mapping that goes stale, resolves again and goes stale once more between two
-//! sweeps still carries its first stamp.
+//! sweep that finds the revision verifying again. That last case is only noticed when a sweep runs,
+//! so it bounds how far the stamp can be trusted rather than removing the problem: a mapping that
+//! goes stale, resolves again and goes stale once more between two sweeps still carries its first
+//! stamp.
+//!
+//! A stored ring and revision identify one member set, because the member service does not reuse
+//! the identifier of a deleted collection. Reuse would restart the revisions at zero, so a mapping
+//! from the deleted collection would verify against the new one.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -657,10 +660,9 @@ pub mod pallet {
 
 		/// Drop the [`StaleSince`] stamp of each mapping in `accounts`, which verifies again.
 		///
-		/// A revision can verify again after it stopped: a collection torn down and re-created
-		/// under the same identifier restarts its revisions at zero, so a stored revision can be
-		/// reissued. Dropping the stamp keeps the next staleness to a full
-		/// [`Config::MappingRetention`] rather than letting it remove the mapping on the spot.
+		/// A revision verifies again when the subscriber rebuilds its ring window. Without this
+		/// call, the next staleness removes the mapping at once instead of after
+		/// [`Config::MappingRetention`].
 		///
 		/// `accounts` must be in strictly ascending order, and every one of them must hold a
 		/// stamped mapping whose revision verifies.

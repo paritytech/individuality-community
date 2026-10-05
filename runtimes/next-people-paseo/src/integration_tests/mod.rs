@@ -94,6 +94,7 @@ mod transaction_era;
 mod trusted_query;
 mod tx_extension_pipeline;
 mod tx_payment_external_asset;
+mod xcm_aliases;
 mod xcm_fee_api;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
