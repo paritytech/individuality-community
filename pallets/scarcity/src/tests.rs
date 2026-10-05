@@ -21,17 +21,22 @@ use crate::{
 	extension::{AsScarcity, AsScarcityInfo, CustomInvalidity, Pre, Val},
 	mock::*,
 	runtime_api::{
-		BatchError, MetadataLayers, MetadataQuery, MetadataTarget, MAX_METADATA_QUERIES,
+		MetadataLayers, MetadataQueries, MetadataQuery, MetadataTarget, MAX_METADATA_QUERIES,
 	},
-	CollectionMetadata, Collections, Error, Event, InstanceDeposits, InstanceMetadata,
-	InstanceMetadataCount, Instances, ItemDefs, ItemMetadata, LockInfo, Locked, MetadataKeyOf,
-	MetadataValueOf, MintWithoutDeposit, NextCollectionId, NextInstanceId, Nft, NftsByOwner,
-	OnCollectionDeleted, Origin, Transferability,
+	CollectionMetadata, Collections, Error, Event, InspectCollection, InstanceDeposits,
+	InstanceMetadata, InstanceMetadataCount, Instances, ItemDefs, ItemMetadata, LockInfo, Locked,
+	MetadataEntry, MetadataKeyOf, MetadataValueOf, MintWithoutDeposit, NextCollectionId,
+	NextInstanceId, Nft, NftsByOwner, OnCollectionDeleted, OnCollectionOwnerChanged, Origin,
+	Transferability,
 };
-use codec::Encode;
+use codec::{Decode, Encode};
 #[cfg(feature = "try-runtime")]
 use frame_support::traits::Hooks;
-use frame_support::{assert_noop, assert_ok, dispatch::Pays, traits::OriginTrait};
+use frame_support::{
+	assert_noop, assert_ok,
+	dispatch::{GetDispatchInfo, Pays},
+	traits::{Get, OriginTrait},
+};
 use sp_runtime::{
 	traits::{TransactionExtension, TxBaseImplication},
 	transaction_validity::{
@@ -317,6 +322,8 @@ fn claim_fails_atomically_when_nominee_cannot_back_the_deposit() {
 		assert_eq!(after.owner_deposit, before.owner_deposit);
 		assert_eq!(held(OWNER), owner_hold);
 		assert_eq!(held(99), 0);
+		// The failed claim changed no owner, so the owner-change hook did not run.
+		assert_eq!(LastOwnerChangedCollection::get(), None);
 		assert_ok!(Scarcity::do_try_state());
 	});
 }
@@ -352,6 +359,10 @@ fn claim_moves_exact_collection_deposit_and_authority() {
 			Some(OTHER),
 		));
 		assert_ok!(Scarcity::claim_collection_ownership(RuntimeOrigin::signed(OTHER), 0));
+
+		// The owner-change hook ran for this collection, so state the previous owner authorized
+		// is cleared.
+		assert_eq!(LastOwnerChangedCollection::get(), Some(0));
 
 		let claimed = Collections::<Test>::get(0).expect("claimed collection exists");
 		assert_eq!(claimed.owner, OTHER);
@@ -620,15 +631,19 @@ fn metadata_batch_returns_positionally_aligned_stored_layers() {
 
 		let empty = MetadataLayers::default();
 		assert_eq!(
-			Scarcity::metadata_batch(vec![
-				MetadataQuery::Instance(0),
-				MetadataQuery::Item { collection: 0, item: 0 },
-				MetadataQuery::Collection(0),
-				MetadataQuery::Instance(99),
-				MetadataQuery::Item { collection: 0, item: 99 },
-				MetadataQuery::Collection(99),
-			]),
-			Ok(vec![
+			Scarcity::metadata_batch(
+				vec![
+					MetadataQuery::Instance(0),
+					MetadataQuery::Item { collection: 0, item: 0 },
+					MetadataQuery::Collection(0),
+					MetadataQuery::Instance(99),
+					MetadataQuery::Item { collection: 0, item: 99 },
+					MetadataQuery::Collection(99),
+				]
+				.try_into()
+				.expect("six queries fit the cap"),
+			),
+			vec![
 				MetadataLayers {
 					resolved: Some(MetadataTarget::Instance {
 						instance: 0,
@@ -654,7 +669,7 @@ fn metadata_batch_returns_positionally_aligned_stored_layers() {
 				empty.clone(),
 				empty.clone(),
 				empty,
-			])
+			]
 		);
 	});
 }
@@ -680,8 +695,9 @@ fn metadata_batch_orders_entries_by_raw_key_bytes() {
 		}
 
 		// Storage iteration order is hash order; the API promises raw key byte order.
-		let layers = Scarcity::metadata_batch(vec![MetadataQuery::Collection(0)])
-			.expect("one query fits the cap");
+		let layers = Scarcity::metadata_batch(
+			vec![MetadataQuery::Collection(0)].try_into().expect("one query fits the cap"),
+		);
 		assert_eq!(
 			layers[0].collection,
 			vec![
@@ -697,16 +713,14 @@ fn metadata_batch_orders_entries_by_raw_key_bytes() {
 }
 
 #[test]
-fn metadata_batch_rejects_an_oversized_request() {
-	new_test_ext().execute_with(|| {
-		assert_eq!(
-			Scarcity::metadata_batch(vec![
-				MetadataQuery::Collection(0);
-				MAX_METADATA_QUERIES as usize + 1
-			]),
-			Err(BatchError::TooLarge { max: MAX_METADATA_QUERIES })
-		);
-	});
+fn metadata_query_bound_rejects_an_oversized_request_at_decode() {
+	let full = vec![MetadataQuery::Collection(0); MAX_METADATA_QUERIES as usize].encode();
+	let oversized = vec![MetadataQuery::Collection(0); MAX_METADATA_QUERIES as usize + 1].encode();
+
+	// The bound rejects an oversized batch at decode, before any query is materialized, so no
+	// storage scan can run for a request over the ceiling.
+	assert!(MetadataQueries::decode(&mut &full[..]).is_ok());
+	assert!(MetadataQueries::decode(&mut &oversized[..]).is_err());
 }
 
 #[test]
@@ -1196,15 +1210,15 @@ fn removing_absent_metadata_is_a_no_op() {
 }
 
 #[test]
-fn define_item_accepts_more_than_old_cap_and_charges_each_metadata_entry() {
+fn define_item_charges_each_metadata_entry_up_to_the_cap() {
 	new_test_ext().execute_with(|| {
+		let cap = <Test as crate::Config>::MaxItemMetadata::get();
 		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
 		let held_before = held(OWNER);
-		let metadata = (0..41)
-			.map(|index| {
-				(key(format!("key-{index}").as_bytes()), value(format!("value-{index}").as_bytes()))
-			})
-			.collect::<Vec<_>>();
+		let entry = |index: u32| {
+			(key(format!("key-{index}").as_bytes()), value(format!("value-{index}").as_bytes()))
+		};
+		let metadata = (0..cap).map(entry).collect::<Vec<_>>();
 		assert_ok!(Scarcity::define_item(
 			RuntimeOrigin::signed(OWNER),
 			0,
@@ -1213,13 +1227,84 @@ fn define_item_accepts_more_than_old_cap_and_charges_each_metadata_entry() {
 		));
 
 		let definition = ItemDefs::<Test>::get(0, 0).expect("item definition exists");
-		assert_eq!(ItemMetadata::<Test>::iter_prefix((0, 0)).count(), 41);
-		assert_eq!(Scarcity::item_metadata_of(0, 0, &key(b"key-40")), Some(value(b"value-40")),);
+		assert_eq!(ItemMetadata::<Test>::iter_prefix((0, 0)).count(), cap as usize);
 		let metadata_deposit = ItemMetadata::<Test>::iter_prefix((0, 0))
 			.map(|(_, entry)| entry.deposit)
 			.sum::<u64>();
 		assert_eq!(held(OWNER), held_before + definition.deposit + metadata_deposit);
 		assert_eq!(Collections::<Test>::get(0).unwrap().owner_deposit, held(OWNER));
+
+		// The cap counts live entries, so one more insert fails until an entry is removed.
+		assert_noop!(
+			Scarcity::set_item_metadata(
+				RuntimeOrigin::signed(OWNER),
+				0,
+				0,
+				key(b"over-cap"),
+				Some(value(b"over-cap"))
+			),
+			Error::<Test>::TooManyItemMetadata
+		);
+		assert_ok!(Scarcity::set_item_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			0,
+			key(b"key-0"),
+			None
+		));
+		assert_ok!(Scarcity::set_item_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			0,
+			key(b"over-cap"),
+			Some(value(b"over-cap"))
+		));
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+#[test]
+fn collection_metadata_insertion_stops_at_the_cap() {
+	new_test_ext().execute_with(|| {
+		let cap = <Test as crate::Config>::MaxCollectionMetadata::get();
+		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+		for index in 0..cap {
+			assert_ok!(Scarcity::set_collection_metadata(
+				RuntimeOrigin::signed(OWNER),
+				0,
+				key(format!("key-{index}").as_bytes()),
+				Some(value(b"v"))
+			));
+		}
+
+		// Replacing an existing entry stays within the cap; a new key does not.
+		assert_ok!(Scarcity::set_collection_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			key(b"key-0"),
+			Some(value(b"replaced"))
+		));
+		assert_noop!(
+			Scarcity::set_collection_metadata(
+				RuntimeOrigin::signed(OWNER),
+				0,
+				key(b"over-cap"),
+				Some(value(b"v"))
+			),
+			Error::<Test>::TooManyCollectionMetadata
+		);
+		assert_ok!(Scarcity::set_collection_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			key(b"key-0"),
+			None
+		));
+		assert_ok!(Scarcity::set_collection_metadata(
+			RuntimeOrigin::signed(OWNER),
+			0,
+			key(b"over-cap"),
+			Some(value(b"v"))
+		));
 		assert_ok!(Scarcity::do_try_state());
 	});
 }
@@ -1655,7 +1740,9 @@ fn failed_dispatch_restores_and_locks() {
 		let dispatch = Scarcity::transfer(origin, 4);
 		assert_noop!(dispatch, Error::<Test>::AddressOccupied);
 		post_dispatch(pre, Err(Error::<Test>::AddressOccupied.into()));
+		// The instance comes back at the next state nonce, which retires the failed transaction.
 		assert_eq!(NftsByOwner::<Test>::get(OWNER).map(|nft| nft.instance), Some(0));
+		assert_eq!(NftsByOwner::<Test>::get(OWNER).map(|nft| nft.state_nonce), Some(1));
 		assert_eq!(Locked::<Test>::get(OWNER), Some(LockInfo { retries: 1, until: 60 }));
 		assert_ok!(Scarcity::do_try_state());
 		// While locked, even a fresh empty destination is rejected at the pool.
@@ -1669,6 +1756,48 @@ fn failed_dispatch_restores_and_locks() {
 		assert_noop!(dispatch, Error::<Test>::AddressOccupied);
 		post_dispatch(pre, Err(Error::<Test>::AddressOccupied.into()));
 		assert_eq!(Locked::<Test>::get(OWNER), Some(LockInfo { retries: 2, until: 180 }));
+	});
+}
+
+#[test]
+fn a_failed_transaction_cannot_be_replayed_after_the_lock_expires() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		define(0);
+		mint(0, OWNER);
+
+		// The authorization a third party sees on the wire.
+		let signed = current_authorization(OWNER);
+
+		let (_, val, origin) = validate_transfer_as(OWNER, 4, signed.clone()).unwrap();
+		mint(1, 4);
+		let pre = prepare_transfer(val, &origin, 4);
+		assert_noop!(Scarcity::transfer(origin, 4), Error::<Test>::AddressOccupied);
+		post_dispatch(pre, Err(Error::<Test>::AddressOccupied.into()));
+
+		assert_invalidity(
+			validate_transfer_as(OWNER, 6, signed.clone())
+				.err()
+				.expect("the purse is locked"),
+			CustomInvalidity::NftTemporarilyLocked,
+		);
+		MockNow::set(60);
+
+		// The instance that made the transfer fail still sits at the destination. Burn it, so that
+		// the replayed call would otherwise succeed.
+		let (_, val, origin) = validate_burn(4).unwrap();
+		let pre = prepare_burn(val, &origin);
+		assert_ok!(Scarcity::burn(origin));
+		post_dispatch(pre, Ok(()));
+
+		// The purse holds the same instance, so the state nonce is what refuses the replay.
+		assert!(!NftsByOwner::<Test>::contains_key(4));
+		assert_state_mismatch(
+			validate_transfer_as(OWNER, 4, signed).err().expect("the state nonce moved on"),
+		);
+
+		// The same call validates with an authorization for the current state.
+		assert!(validate_transfer(OWNER, 4).is_ok());
 	});
 }
 
@@ -2058,6 +2187,11 @@ fn soulbound_instances_reject_both_holder_paths() {
 			Scarcity::do_transfer_by_holder(&RECIPIENT, 0, OTHER),
 			Error::<Test>::Soulbound
 		);
+		// The paid signed call.
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER),
+			Error::<Test>::Soulbound
+		);
 
 		assert_eq!(Instances::<Test>::get(0), Some(RECIPIENT));
 		assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("still held").state_nonce, 0);
@@ -2295,6 +2429,10 @@ fn delete_item_requires_dependencies_to_be_removed_and_never_reuses_its_id() {
 		let info = Collections::<Test>::get(0).expect("collection remains");
 		assert_eq!(info.item_count, 0);
 		assert_eq!(info.next_item_index, 1);
+		// The inspection view answers from the live item set, not the allocation counter, so
+		// a deleted index below `next_item_index` reads as absent and the count as empty.
+		assert_eq!(<Scarcity as InspectCollection<u64>>::item_draw_bounds(0), Some((1, 0)));
+		assert!(!<Scarcity as InspectCollection<u64>>::item_exists(0, 0));
 		assert_eq!(held(OWNER), held_before - definition_deposit);
 		System::assert_has_event(Event::<Test>::ItemDeleted { collection: 0, item: 0 }.into());
 
@@ -2369,6 +2507,21 @@ fn delete_collection_weight_includes_the_deletion_hook() {
 				.saturating_add(RecordCollectionDeletion::on_delete_weight())
 		);
 	});
+}
+
+#[test]
+fn claim_collection_ownership_weight_includes_the_owner_change_hook() {
+	use crate::weights::WeightInfo;
+	use frame_support::dispatch::GetDispatchInfo;
+
+	let declared = crate::Call::<Test>::claim_collection_ownership { collection: 0 }
+		.get_dispatch_info()
+		.call_weight;
+	assert_eq!(
+		declared,
+		<() as WeightInfo>::claim_collection_ownership()
+			.saturating_add(RecordCollectionOwnerChange::on_owner_change_weight())
+	);
 }
 
 #[test]
@@ -2545,6 +2698,45 @@ fn try_state_rejects_item_metadata_counter_mismatch() {
 		});
 
 		assert_try_state_error("item metadata count does not match stored entries");
+	});
+}
+
+#[test]
+fn try_state_rejects_collection_metadata_count_above_maximum() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+		let cap = <Test as crate::Config>::MaxCollectionMetadata::get();
+		for index in 0..=cap {
+			CollectionMetadata::<Test>::insert(
+				0,
+				key(&[index as u8]),
+				MetadataEntry { value: value(b"v"), deposit: 0 },
+			);
+		}
+		Collections::<Test>::mutate(0, |maybe_info| {
+			maybe_info.as_mut().expect("collection exists").metadata_count = cap + 1;
+		});
+
+		assert_try_state_error("collection metadata count exceeds configured maximum");
+	});
+}
+
+#[test]
+fn try_state_rejects_item_metadata_count_above_maximum() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		let cap = <Test as crate::Config>::MaxItemMetadata::get();
+		for index in 0..=cap {
+			ItemMetadata::<Test>::insert(
+				(0, 0, key(&[index as u8])),
+				MetadataEntry { value: value(b"v"), deposit: 0 },
+			);
+		}
+		ItemDefs::<Test>::mutate(0, 0, |maybe_definition| {
+			maybe_definition.as_mut().expect("item definition exists").metadata_count = cap + 1;
+		});
+
+		assert_try_state_error("item metadata count exceeds configured maximum");
 	});
 }
 
@@ -2726,9 +2918,200 @@ fn try_state_accepts_issuer_depositless_transferred_and_burned_states() {
 	});
 }
 
+/// One feeless move through the whole extension pipeline.
+fn feeless_move(from: u64, to: u64) {
+	let (_, val, origin) = validate_transfer(from, to).expect("the move is authorized");
+	let pre = prepare_transfer(val, &origin, to);
+	assert_ok!(Scarcity::transfer(origin, to));
+	post_dispatch(pre, Ok(()));
+}
+
+/// Spend the whole feeless budget of the instance held by `holder`, one key per move.
+///
+/// Returns the key holding it afterwards.
+fn spend_the_budget(holder: u64) -> u64 {
+	let mut holder = holder;
+	for step in 0..MaximumMoves::get() {
+		let next = 10 + u64::from(step);
+		feeless_move(holder, next);
+		holder = next;
+	}
+	holder
+}
+
+/// The budget is what stops a holder of many instances filling blocks with feeless moves.
+#[test]
+fn feeless_moves_stop_at_the_budget() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&2);
+		setup_item();
+		mint(0, RECIPIENT);
+		assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("minted").moves, 0);
+
+		feeless_move(RECIPIENT, OTHER);
+		assert_eq!(NftsByOwner::<Test>::get(OTHER).expect("moved once").moves, 1);
+		feeless_move(OTHER, 4);
+		assert_eq!(NftsByOwner::<Test>::get(4).expect("moved twice").moves, 2);
+
+		assert_invalidity(
+			validate_transfer(4, 5).err().expect("the budget is spent"),
+			CustomInvalidity::MovesExhausted,
+		);
+		// Pool rejection is side-effect free: NFT untouched, no failure lock written.
+		assert!(NftsByOwner::<Test>::contains_key(4));
+		assert_eq!(Locked::<Test>::get(4), None);
+	});
+}
+
+/// Both paid move paths refill the budget, so an instance is never stuck.
+#[test]
+fn paid_moves_refill_the_budget() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&1);
+		setup_item();
+		mint(0, RECIPIENT);
+
+		let holder = spend_the_budget(RECIPIENT);
+		assert!(validate_transfer(holder, 5).is_err());
+		assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, 5));
+		assert_eq!(NftsByOwner::<Test>::get(5).expect("force-transferred").moves, 0);
+
+		let holder = spend_the_budget(5);
+		assert!(validate_transfer(holder, 6).is_err());
+		assert_ok!(Scarcity::do_transfer_by_holder(&holder, 0, 6));
+		assert_eq!(NftsByOwner::<Test>::get(6).expect("transferred by holder").moves, 0);
+
+		assert!(validate_transfer(6, 7).is_ok());
+	});
+}
+
+/// A burn is exempt: it frees storage and cannot be repeated, so it needs no budget.
+#[test]
+fn a_burn_needs_no_feeless_move() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&1);
+		setup_item();
+		mint(0, RECIPIENT);
+		let holder = spend_the_budget(RECIPIENT);
+
+		let (_, val, origin) = validate_burn(holder).expect("a burn needs no budget");
+		let pre = prepare_burn(val, &origin);
+		assert_ok!(Scarcity::burn(origin));
+		post_dispatch(pre, Ok(()));
+		assert!(!NftsByOwner::<Test>::contains_key(holder));
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+/// A holder whose instance has spent its budget refills it by paying for one move.
+#[test]
+fn the_paid_holder_call_refills_the_budget() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&1);
+		setup_item();
+		mint(0, RECIPIENT);
+		let holder = spend_the_budget(RECIPIENT);
+		assert!(validate_transfer(holder, 5).is_err());
+
+		assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(holder), 0, 5));
+
+		let moved = NftsByOwner::<Test>::get(5).expect("destination holds the NFT");
+		assert_eq!(moved.moves, 0);
+		assert_eq!(moved.state_nonce, 2);
+		assert!(!NftsByOwner::<Test>::contains_key(holder));
+		assert_eq!(Instances::<Test>::get(0), Some(5));
+		System::assert_has_event(
+			Event::<Test>::Transferred { instance: 0, collection: 0, from: holder, to: 5 }.into(),
+		);
+		assert!(validate_transfer(5, 6).is_ok());
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+/// The fee is what bounds the block space a refill buys, so the call must never be feeless.
+#[test]
+fn the_paid_holder_call_pays_its_fee() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		let call = crate::Call::<Test>::transfer_by_holder { instance: 0, to: OTHER };
+
+		assert_eq!(call.get_dispatch_info().pays_fee, Pays::Yes);
+	});
+}
+
+#[test]
+fn the_paid_holder_call_needs_the_signing_holder() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		define(0);
+		mint(0, RECIPIENT);
+		mint(1, OTHER);
+
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::root(), 0, 4),
+			sp_runtime::DispatchError::BadOrigin
+		);
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::none(), 0, 4),
+			sp_runtime::DispatchError::BadOrigin
+		);
+		// The signer holds nothing, or holds another instance.
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(OWNER), 0, 4),
+			Error::<Test>::UnknownInstance
+		);
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(OTHER), 0, 4),
+			Error::<Test>::UnknownInstance
+		);
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER),
+			Error::<Test>::AddressOccupied
+		);
+		assert_noop!(
+			Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, RECIPIENT),
+			Error::<Test>::SelfTransfer
+		);
+
+		assert_eq!(Instances::<Test>::get(0), Some(RECIPIENT));
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+/// The extension must leave the signed origin in place, or the payment extension has no account
+/// to charge.
+#[test]
+fn the_extension_passes_the_paid_holder_call_through() {
+	new_test_ext().execute_with(|| {
+		MaximumMoves::set(&1);
+		setup_item();
+		mint(0, RECIPIENT);
+		let holder = spend_the_budget(RECIPIENT);
+		let call = RuntimeCall::Scarcity(crate::Call::transfer_by_holder { instance: 0, to: 5 });
+
+		let (_, val, origin) = scarcity_extension(current_authorization(holder))
+			.validate(
+				RuntimeOrigin::signed(holder),
+				&call,
+				&Default::default(),
+				0,
+				(),
+				&TxBaseImplication(()),
+				TransactionSource::External,
+			)
+			.expect("the spent budget does not gate the paid call");
+
+		assert!(matches!(val, Val::NotUsing));
+		assert!(matches!(origin.as_system_ref(), Some(frame_system::Origin::<Test>::Signed(who)) if *who == holder));
+	});
+}
+
 mod migration {
 	use super::*;
-	use crate::migration::{v1::MigrateToTransferability, MigrateV0ToV1};
+	use crate::migration::{
+		v1::MigrateToTransferability, v2::MigrateToMoves, MigrateV0ToV1, MigrateV1ToV2,
+	};
 	#[cfg(feature = "try-runtime")]
 	use codec::Decode;
 	use frame_support::{
@@ -2973,6 +3356,158 @@ mod migration {
 				"the gate must leave a soulbound item alone"
 			);
 			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));
+		});
+	}
+
+	/// Write an NFT in the shape stored before the feeless move budget existed.
+	///
+	/// Encoded as the bare field sequence rather than through the migration's own `OldNft`, so a
+	/// mistake in that struct fails here instead of round-tripping through itself and passing.
+	fn put_old_nft(owner: u64, instance: u64) {
+		let old = (instance, 0u32, 0u32, 7u64, 9u64, 3u64);
+		unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(owner), &old.encode());
+	}
+
+	/// Mint through the pallet, then downgrade only the stored NFT.
+	///
+	/// Leaves every counter, deposit and index exactly as a chain running the old code would have
+	/// them, which is what lets the state be checked as a whole after migrating.
+	fn downgrade_a_real_nft() {
+		setup_item();
+		mint(0, RECIPIENT);
+		let nft = NftsByOwner::<Test>::get(RECIPIENT).expect("the instance was minted");
+		let old = (
+			nft.instance,
+			nft.collection,
+			nft.item,
+			nft.minted_at,
+			nft.last_moved,
+			nft.state_nonce,
+		);
+		unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(RECIPIENT), &old.encode());
+		assert_eq!(NftsByOwner::<Test>::get(RECIPIENT), None, "the downgrade must be unreadable");
+	}
+
+	/// The old encoding is unreadable under the current type, and the migration recovers it.
+	///
+	/// The first assertion is the whole reason this migration exists: a trailing field turns
+	/// every pre-existing NFT into `None`, which reads as an empty purse key and takes transfer,
+	/// burn and every authorization with it.
+	#[test]
+	fn translates_nfts_written_before_the_move_budget() {
+		new_test_ext().execute_with(|| {
+			for (owner, instance) in [(RECIPIENT, 4), (OTHER, 5), (6, 6)] {
+				put_old_nft(owner, instance);
+			}
+			assert_eq!(NftsByOwner::<Test>::iter().count(), 0, "the old encoding must not decode");
+
+			MigrateToMoves::<Test>::on_runtime_upgrade();
+
+			assert_eq!(NftsByOwner::<Test>::iter().count(), 3, "every NFT is translated");
+			let nft = NftsByOwner::<Test>::get(RECIPIENT).expect("the migration restored the NFT");
+			assert_eq!(nft.instance, 4);
+			assert_eq!(nft.minted_at, 7);
+			assert_eq!(nft.last_moved, 9);
+			assert_eq!(nft.state_nonce, 3);
+			// Moves made before the budget existed were feeless and unbounded. Charging for them
+			// now would strand an instance that is already past the new limit.
+			assert_eq!(nft.moves, 0);
+		});
+	}
+
+	/// A translated NFT is usable again, and the state it belongs to stays consistent.
+	#[test]
+	fn a_translated_nft_is_usable_again() {
+		new_test_ext().execute_with(|| {
+			downgrade_a_real_nft();
+			assert!(validate_transfer_as(RECIPIENT, OTHER, authorization(0, 0)).is_err());
+
+			MigrateToMoves::<Test>::on_runtime_upgrade();
+
+			assert_ok!(Scarcity::do_try_state());
+			feeless_move(RECIPIENT, OTHER);
+			assert_eq!(NftsByOwner::<Test>::get(OTHER).expect("moved").moves, 1);
+		});
+	}
+
+	/// The gate runs the translation on a chain still at version 1, and closes behind it.
+	#[test]
+	fn the_move_migration_translates_and_bumps_the_version() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(1).put::<Scarcity>();
+			put_old_nft(RECIPIENT, 4);
+
+			let weight = <MigrateV1ToV2<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("translated").moves, 0);
+			assert_eq!(Scarcity::on_chain_storage_version(), 2, "the gate must close behind it");
+			// One read and write for the one NFT, one more read for the end of the prefix
+			// iteration, and a read and write for the version the gate checks and stamps.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			assert_eq!(weight, db.reads_writes(3, 2), "the translation must charge what it did");
+		});
+	}
+
+	/// A chain built from this code is already at version 2, so the gate holds shut.
+	///
+	/// Without it a second run would decode a migrated NFT as its own six-field prefix and reset
+	/// a spent budget, which is the refill this migration must not hand out for free.
+	#[test]
+	fn a_fresh_chain_skips_the_move_migration() {
+		new_test_ext().execute_with(|| {
+			MaximumMoves::set(&2);
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_move(RECIPIENT, OTHER);
+
+			let weight = <MigrateV1ToV2<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				NftsByOwner::<Test>::get(OTHER).expect("the NFT exists").moves,
+				1,
+				"the gate must leave a spent budget alone"
+			);
+			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));
+		});
+	}
+
+	/// The try-runtime checks pass over the state the migration is meant for.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_try_runtime_checks_span_the_move_translation() {
+		new_test_ext().execute_with(|| {
+			for (owner, instance) in [(RECIPIENT, 0), (OTHER, 1), (4, 2)] {
+				put_old_nft(owner, instance);
+			}
+			assert_eq!(
+				NftsByOwner::<Test>::iter().count(),
+				0,
+				"nothing decodes before the migration"
+			);
+
+			let state = MigrateToMoves::<Test>::pre_upgrade().expect("counts the keys");
+			assert_eq!(u32::decode(&mut &state[..]).unwrap(), 3, "keys are counted, not entries");
+
+			MigrateToMoves::<Test>::on_runtime_upgrade();
+
+			assert_ok!(MigrateToMoves::<Test>::post_upgrade(state));
+		});
+	}
+
+	/// `post_upgrade` fails when an NFT does not survive, rather than reporting success.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_post_upgrade_check_catches_a_lost_nft() {
+		new_test_ext().execute_with(|| {
+			put_old_nft(RECIPIENT, 0);
+			let state = MigrateToMoves::<Test>::pre_upgrade().expect("counts the keys");
+
+			// A value that decodes as neither shape is dropped by `translate_values`, which is
+			// the loss the count is there to notice.
+			unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(RECIPIENT), &[0xffu8]);
+			MigrateToMoves::<Test>::on_runtime_upgrade();
+
+			assert!(MigrateToMoves::<Test>::post_upgrade(state).is_err());
 		});
 	}
 }
