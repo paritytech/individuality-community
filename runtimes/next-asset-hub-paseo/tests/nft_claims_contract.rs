@@ -68,6 +68,24 @@ fn fixture(fixture: &str) -> Vec<u8> {
 	code
 }
 
+/// The PolkaVM blob of the Solidity `fixture` compiled with resolc, or `None` with a loud
+/// message when the artefacts were skipped at build time.
+fn resolc_fixture(fixture: &str) -> Option<Vec<u8>> {
+	match pallet_revive_fixtures::compile_module_with_type(
+		fixture,
+		pallet_revive_fixtures::FixtureType::Resolc,
+	) {
+		Ok((code, _hash)) => Some(code),
+		Err(error) => {
+			eprintln!(
+				"SKIPPED: revive fixture `{fixture}` is unavailable ({error}); \
+				build without SKIP_PALLET_REVIVE_FIXTURES to run this test",
+			);
+			None
+		},
+	}
+}
+
 /// Create the collection with one item, owned by `owner`, funded well past every deposit in
 /// both the native token and PGAS, which is what this runtime pays revive storage deposits in.
 fn create_collection(owner: &sp_runtime::AccountId32) {
@@ -305,7 +323,7 @@ fn a_malformed_contract_return_fails_the_claim_and_random_recovers_it() {
 
 		let credit: NftClaimCredit = [7u8; 32];
 		let proof = store_tree(&AccountOrPerson::Account(claimant.clone()), credit);
-		assert!(NftClaims::claim(
+		let error = NftClaims::claim(
 			RuntimeOrigin::signed(claimant.clone()),
 			ClaimantKind::Account,
 			BLOCK,
@@ -313,9 +331,13 @@ fn a_malformed_contract_return_fails_the_claim_and_random_recovers_it() {
 			0,
 			proof.clone(),
 			COLLECTION,
-			purse.clone()
+			purse.clone(),
 		)
-		.is_err());
+		.expect_err("a malformed return fails the claim");
+		assert_eq!(
+			error.error,
+			indiv_pallet_nft_claims::Error::<Runtime>::MinterContractInvalidReturn.into()
+		);
 		assert!(indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&purse).is_none());
 
 		// The credit was not spent: the owner switches the collection to the random item and
@@ -376,6 +398,48 @@ fn a_gas_burning_contract_is_stopped_by_the_selector_ceiling() {
 	});
 }
 
+/// A minter that executes an explicit `REVERT` fails the claim with the revert error and
+/// leaves no mint behind.
+///
+/// `Dummy` is a Solidity contract without functions: its dispatcher reverts on the claim's
+/// `mint(uint32,bytes32)` calldata, which revive reports as a reverted return, not a trap.
+#[test]
+fn a_reverting_contract_fails_the_claim_with_the_revert_error() {
+	let Some(code) = resolc_fixture("Dummy") else { return };
+	new_test_ext().execute_with(|| {
+		let owner = account(1);
+		let claimant = account(2);
+		let purse = account(3);
+		create_collection(&owner);
+		let contract = instantiate(&owner, code, 0);
+
+		assert_ok!(NftClaims::set_collection_minter(
+			RuntimeOrigin::signed(owner),
+			COLLECTION,
+			Some(ItemSelection::Contract(contract))
+		));
+
+		let credit: NftClaimCredit = [7u8; 32];
+		let proof = store_tree(&AccountOrPerson::Account(claimant.clone()), credit);
+		let error = NftClaims::claim(
+			RuntimeOrigin::signed(claimant),
+			ClaimantKind::Account,
+			BLOCK,
+			credit,
+			0,
+			proof,
+			COLLECTION,
+			purse.clone(),
+		)
+		.expect_err("a reverting minter fails the claim");
+		assert_eq!(
+			error.error,
+			indiv_pallet_nft_claims::Error::<Runtime>::MinterContractReverted.into()
+		);
+		assert!(indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&purse).is_none());
+	});
+}
+
 /// Registering an address with no code is rejected by the real code lookup, before any claim.
 #[test]
 fn an_address_without_code_is_rejected_at_registration() {
@@ -383,12 +447,13 @@ fn an_address_without_code_is_rejected_at_registration() {
 		let owner = account(1);
 		create_collection(&owner);
 
-		assert!(NftClaims::set_collection_minter(
+		let error = NftClaims::set_collection_minter(
 			RuntimeOrigin::signed(owner),
 			COLLECTION,
-			Some(ItemSelection::Contract(H160::repeat_byte(0xEE)))
+			Some(ItemSelection::Contract(H160::repeat_byte(0xEE))),
 		)
-		.is_err());
+		.expect_err("an address without code cannot be registered");
+		assert_eq!(error, indiv_pallet_nft_claims::Error::<Runtime>::MinterNotAContract.into());
 		assert_eq!(CollectionMinters::<Runtime>::get(COLLECTION), None);
 	});
 }

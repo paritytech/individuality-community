@@ -550,18 +550,22 @@ interface IScarcityCollection {
     /// @custom:reverts "unknown item"
     function itemSupply(uint32 item) external view returns (uint32 supply, uint32 liveSupply);
 
-    /// @notice Item index, mint time, last move time and state nonce of a live instance.
+    /// @notice Item index, mint time, last move time, state nonce and feeless move budget of a
+    /// live instance.
     /// @dev This precompile's own function, not part of any ERC standard.
     /// @param tokenId The instance to query.
     /// @return item The item definition the instance was minted from.
     /// @return mintedAt Unix seconds at mint.
     /// @return lastMoved Unix seconds of the last move, equal to `mintedAt` until the first move.
     /// @return stateNonce The monotonic ownership-state revision.
+    /// @return feelessMovesLeft The feeless purse-signed moves left before a move must pay. A
+    /// paid move, such as `transferFrom`, refills it. A non-zero value does not guarantee that
+    /// the next feeless move is authorized, because a lock on the purse key can also refuse it.
     /// @custom:reverts "unknown token"
     function instanceInfo(uint256 tokenId)
         external
         view
-        returns (uint32 item, uint64 mintedAt, uint64 lastMoved, uint64 stateNonce);
+        returns (uint32 item, uint64 mintedAt, uint64 lastMoved, uint64 stateNonce, uint16 feelessMovesLeft);
 
     /// @notice Collection-scope metadata value for `key`, or empty bytes when unset.
     /// @dev This precompile's own function, not part of any ERC standard.

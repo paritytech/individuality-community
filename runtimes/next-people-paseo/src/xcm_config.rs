@@ -18,25 +18,27 @@ extern crate alloc;
 
 use super::{
 	AccountId, AllPalletsWithSystem, Balances, ParachainInfo, ParachainSystem, PolkadotXcm,
-	Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, WeightToFee, XcmpQueue,
+	Runtime, RuntimeCall, RuntimeEvent, RuntimeHoldReason, RuntimeOrigin, WeightToFee, XcmpQueue,
 };
 use crate::{people::ExternalAssetLocation, AssetRate, Assets, Balance, TransactionByteFee, CENTS};
 use cumulus_primitives_utility::TakeFirstAssetTrader;
 use frame_support::{
 	parameter_types,
 	traits::{
+		fungible::HoldConsideration,
 		tokens::imbalance::{ResolveAssetTo, ResolveTo},
-		ConstU32, Contains, ContainsPair, Disabled, Equals, Everything, EverythingBut, Nothing,
-		ProcessMessageError,
+		ConstU32, Contains, ContainsPair, Equals, Everything, EverythingBut, LinearStoragePrice,
+		Nothing, ProcessMessageError,
 	},
 };
 use frame_system::EnsureRoot;
 use pallet_collator_selection::StakingPotAccountId;
-use pallet_xcm::XcmPassthrough;
+use pallet_xcm::{AuthorizedAliasers, XcmPassthrough};
 use parachains_common::{
 	xcm_config::{
-		AllSiblingSystemParachains, AssetFeeAsExistentialDepositMultiplier,
-		ConcreteAssetFromSystem, ParentRelayOrSiblingParachains, RelayOrOtherSystemParachains,
+		AliasAccountId32FromSiblingSystemChain, AllSiblingSystemParachains,
+		AssetFeeAsExistentialDepositMultiplier, ConcreteAssetFromSystem,
+		ParentRelayOrSiblingParachains, RelayOrOtherSystemParachains,
 	},
 	TREASURY_PALLET_ID,
 };
@@ -45,7 +47,8 @@ use polkadot_parachain_primitives::primitives::Sibling;
 use sp_runtime::traits::{AccountIdConversion, TryConvertInto};
 use xcm::latest::prelude::*;
 use xcm_builder::{
-	AccountId32Aliases, AllowExplicitUnpaidExecutionFrom, AllowHrmpNotificationsFromRelayChain,
+	AccountId32Aliases, AliasChildLocation, AliasOriginRootUsingFilter,
+	AllowExplicitUnpaidExecutionFrom, AllowHrmpNotificationsFromRelayChain,
 	AllowKnownQueryResponses, AllowSubscriptionsFrom, AllowTopLevelPaidExecutionFrom,
 	DenyRecursively, DenyReserveTransferToRelayChain, DenyThenTry, DescribeTerminus,
 	EnsureXcmOrigin, FrameTransactionalProcessor, FungibleAdapter, FungiblesAdapter,
@@ -244,11 +247,21 @@ pub type Barrier = TrailingSetTopicAsId<
 					// allow it.
 					AllowTopLevelPaidExecutionFrom<Everything>,
 					// Parent and its pluralities (i.e. governance bodies) get free execution.
-					AllowExplicitUnpaidExecutionFrom<ParentOrParentsPlurality>,
+					AllowExplicitUnpaidExecutionFrom<
+						ParentOrParentsPlurality,
+						// The barrier runs before fees: keep this computation-only.
+						// Do not use `TrustedAliasers` here.
+						CheapTrustedAliasers,
+					>,
 					// The chain the credit trees are delivered to. It sends back the roots it is
 					// finished with. Unlike `AllowAssetHubExecution` above, this accepts only a
 					// message that asks for free execution.
-					AllowExplicitUnpaidExecutionFrom<Equals<NextAhLocation>>,
+					AllowExplicitUnpaidExecutionFrom<
+						Equals<NextAhLocation>,
+						// The barrier runs before fees: keep this computation-only.
+						// Do not use `TrustedAliasers` here.
+						CheapTrustedAliasers,
+					>,
 					// Subscriptions for version tracking are OK.
 					AllowSubscriptionsFrom<ParentRelayOrSiblingParachains>,
 					// HRMP notifications from the relay chain are OK.
@@ -269,6 +282,31 @@ pub type WaivedLocations = (
 	Equals<RootLocation>,
 	LocalPlurality,
 );
+
+/// Rejects aliases into the location that `LocationAsSuperuser` converts to Root.
+pub struct DenyAliasIntoSuperuser<Inner>(core::marker::PhantomData<Inner>);
+impl<Inner: ContainsPair<Location, Location>> ContainsPair<Location, Location>
+	for DenyAliasIntoSuperuser<Inner>
+{
+	fn contains(origin: &Location, target: &Location) -> bool {
+		target != &NextAhLocation::get() && Inner::contains(origin, target)
+	}
+}
+
+/// Aliasing rules that the barrier evaluates before charging fees.
+/// These filters must not read storage selected by an untrusted message.
+/// Stored authorizations belong only in [`TrustedAliasers`].
+pub type CheapTrustedAliasers = DenyAliasIntoSuperuser<UnguardedCheapAliasers>;
+
+type UnguardedCheapAliasers = (
+	AliasChildLocation,
+	AliasAccountId32FromSiblingSystemChain,
+	AliasOriginRootUsingFilter<AssetHubLocation, Everything>,
+);
+
+/// Execution permits cheap aliases and stored authorizations except into the superuser location.
+pub type TrustedAliasers =
+	DenyAliasIntoSuperuser<(UnguardedCheapAliasers, AuthorizedAliasers<Runtime>)>;
 
 /// Accept an external asset as a teleport only when it comes from Asset Hub.
 pub struct ExternalAssetFromAssetHub;
@@ -367,7 +405,7 @@ impl xcm_executor::Config for XcmConfig {
 	type UniversalAliases = Nothing;
 	type CallDispatcher = RuntimeCall;
 	type SafeCallFilter = Everything;
-	type Aliasers = Nothing;
+	type Aliasers = TrustedAliasers;
 	type TransactionalProcessor = FrameTransactionalProcessor;
 	type HrmpNewChannelOpenRequestHandler = ();
 	type HrmpChannelAcceptedHandler = ();
@@ -388,8 +426,21 @@ pub type XcmRouter = WithUniqueTopic<(
 	XcmpQueue,
 )>;
 
+parameter_types! {
+	pub const DepositPerItem: Balance = crate::deposit(1, 0);
+	pub const DepositPerByte: Balance = crate::deposit(0, 1);
+	pub const AuthorizeAliasHoldReason: RuntimeHoldReason =
+		RuntimeHoldReason::PolkadotXcm(pallet_xcm::HoldReason::AuthorizeAlias);
+}
+
 impl pallet_xcm::Config for Runtime {
-	type AuthorizedAliasConsideration = Disabled;
+	// xcm_executor::Config::Aliasers includes pallet_xcm::AuthorizedAliasers.
+	type AuthorizedAliasConsideration = HoldConsideration<
+		AccountId,
+		Balances,
+		AuthorizeAliasHoldReason,
+		LinearStoragePrice<DepositPerItem, DepositPerByte, Balance>,
+	>;
 	type RuntimeEvent = RuntimeEvent;
 	// We want to disallow users sending (arbitrary) XCM programs from this chain.
 	type SendXcmOrigin = EnsureXcmOrigin<RuntimeOrigin, ()>;

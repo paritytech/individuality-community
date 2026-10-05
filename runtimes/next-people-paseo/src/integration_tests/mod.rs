@@ -93,6 +93,7 @@ mod statement_allowance;
 mod transaction_era;
 mod trusted_query;
 mod tx_payment_external_asset;
+mod xcm_aliases;
 mod xcm_asset_rate_trader;
 mod xcm_fee_api;
 
