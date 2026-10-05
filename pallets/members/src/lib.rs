@@ -188,6 +188,11 @@ pub mod pallet {
 	pub type Collections<T: Config> =
 		StorageMap<_, Identity, Identifier, CollectionInfo<T::AccountId, T::Location>>;
 
+	/// Identifiers of collections marked for deletion. No new collection can use them. Entries
+	/// are never removed.
+	#[pallet::storage]
+	pub type RetiredIdentifiers<T: Config> = StorageMap<_, Identity, Identifier, ()>;
+
 	/// Collections that have been marked for deletion and are being processed.
 	/// Once a collection is moved here, normal operations will fail with CollectionNotFound.
 	#[pallet::storage]
@@ -407,6 +412,8 @@ pub mod pallet {
 		CollectionNotFound,
 		/// The collection already exists.
 		CollectionAlreadyExists,
+		/// The identifier belonged to a deleted collection and cannot be reused.
+		IdentifierRetired,
 		/// Too many collections for this owner.
 		TooManyCollections,
 		/// Flexible collections must use the MaxFlexibleRingExponent ring size.
@@ -2964,6 +2971,12 @@ pub mod pallet {
 					!SuspendedCollections::<T>::contains_key(identifier),
 				Error::<T>::CollectionAlreadyExists
 			);
+			// Reuse restarts the ring revisions at zero, so a mapping from the deleted collection
+			// would verify against the new one.
+			ensure!(
+				!RetiredIdentifiers::<T>::contains_key(identifier),
+				Error::<T>::IdentifierRetired
+			);
 			// Flexible collections can only use sizes less than or equal to the
 			// `MaxFlexibleRingExponent` ring size. This ensures they never need more than one page
 			// for ring keys storage.
@@ -3179,6 +3192,7 @@ pub mod pallet {
 			// Move collection from Collections to SuspendedCollections
 			Collections::<T>::remove(identifier);
 			SuspendedCollections::<T>::insert(identifier, collection_info);
+			RetiredIdentifiers::<T>::insert(identifier, ());
 
 			Self::deposit_event(Event::CollectionMarkedForDeletion { identifier: *identifier });
 
@@ -3230,6 +3244,9 @@ impl<T: Config> RingRootsProvider<MembersOf<T>> for Pallet<T> {
 		identifier: Identifier,
 		indices: &[RingIndex],
 	) -> Vec<(RingIndex, MembersOf<T>, RevisionIndex)> {
+		if !Collections::<T>::contains_key(identifier) {
+			return Vec::new();
+		}
 		indices
 			.iter()
 			.filter_map(|&idx| Root::<T>::get(identifier, idx).map(|r| (idx, r.root, r.revision)))
@@ -3250,6 +3267,9 @@ impl<T: Config> RingRootsProvider<MembersOf<T>> for Pallet<T> {
 		after_key: Option<RingIndex>,
 		limit: u32,
 	) -> Vec<(RingIndex, MembersOf<T>, RevisionIndex)> {
+		if !Collections::<T>::contains_key(identifier) {
+			return Vec::new();
+		}
 		match after_key {
 			Some(key) => {
 				let raw_key = Root::<T>::hashed_key_for(identifier, key);

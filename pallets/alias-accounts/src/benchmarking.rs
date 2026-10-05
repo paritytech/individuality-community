@@ -397,9 +397,8 @@ mod benches {
 		Ok(())
 	}
 
-	/// The clearing sweep: `n` stamped mappings whose revision verifies again, which a collection
-	/// re-created under the same identifier produces. Each is stored under the newest revision, the
-	/// last entry of a full window, so the validity check scans all of it.
+	/// The clearing sweep: `n` stamped mappings whose revision verifies again. Each is stored under
+	/// the newest revision, the last entry of a full window, so the validity check scans all of it.
 	#[benchmark]
 	fn clear_stale_alias_reports(
 		n: Linear<1, { T::MaxStaleAliasBatch::get() }>,
