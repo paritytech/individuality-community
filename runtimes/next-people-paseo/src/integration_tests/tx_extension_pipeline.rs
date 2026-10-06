@@ -18,8 +18,12 @@
 
 use super::*;
 use codec::{Compact, Decode, Encode};
-use frame_support::traits::SignedTransactionBuilder;
-use sp_runtime::traits::TransactionExtension;
+use frame_support::{assert_ok, traits::SignedTransactionBuilder};
+use indiv_pallet_people_airdrops::DrawSalts;
+use sp_runtime::{
+	traits::TransactionExtension,
+	transaction_validity::{InvalidTransaction, TransactionValidityError},
+};
 
 const V0_PIPELINE: [&str; 11] = [
 	"AuthorizeCall",
@@ -67,10 +71,8 @@ fn remark(remark: &[u8]) -> RuntimeCall {
 	})
 }
 
-fn signed_v0(who: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
-	let account = who.to_account_id();
-	let nonce = frame_system::Pallet::<Runtime>::account_nonce(&account);
-	let ext: TxExtensionV0 = (
+fn standard_v0_extension(nonce: u32) -> TxExtensionV0 {
+	(
 		frame_system::AuthorizeCall::<Runtime>::new(),
 		frame_system::CheckNonZeroSender::<Runtime>::new(),
 		frame_system::CheckSpecVersion::<Runtime>::new(),
@@ -82,7 +84,12 @@ fn signed_v0(who: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
 		pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None),
 		frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 	)
-		.into();
+		.into()
+}
+
+fn signed_v0(who: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
+	let account = who.to_account_id();
+	let ext = standard_v0_extension(frame_system::Pallet::<Runtime>::account_nonce(&account));
 	let payload = generic::SignedPayload::new(call.clone(), ext.clone())
 		.expect("the V0 standard payload is constructible");
 	let signature = payload.using_encoded(|bytes| who.sign(bytes));
@@ -92,6 +99,24 @@ fn signed_v0(who: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
 		MultiSignature::Sr25519(signature),
 		ext,
 	)
+}
+
+fn authorized_v0(call: RuntimeCall) -> UncheckedExtrinsic {
+	UncheckedExtrinsic::from_parts(
+		call,
+		generic::Preamble::General(sp_runtime::traits::ExtensionVariant::V0(
+			standard_v0_extension(0),
+		)),
+	)
+}
+
+fn due_draw_salt_cleanup_call(event_id: [u8; 32]) -> RuntimeCall {
+	RuntimeCall::PeopleAirdrops(indiv_pallet_people_airdrops::Call::clean_up_draw_salt { event_id })
+}
+
+fn set_due_draw_salt_cleanup(event_id: [u8; 32]) {
+	DrawSalts::<Runtime>::insert(event_id, ([0; 32], 60));
+	pallet_timestamp::Now::<Runtime>::put(61_000u64);
 }
 
 #[test]
@@ -130,9 +155,34 @@ fn legacy_v4_signed_transaction_uses_v0_and_charges_the_standard_fee() {
 fn general_v1_without_an_authorization_is_rejected() {
 	new_test_ext().execute_with(|| {
 		let unsigned = finalize_uxt(remark(b"unsigned"), base_tx_ext(remark(b"unsigned")));
-		assert!(
-			Executive::apply_extrinsic(unsigned).is_err(),
+		assert_eq!(
+			Executive::apply_extrinsic(unsigned),
+			Err(TransactionValidityError::Invalid(InvalidTransaction::UnknownOrigin)),
 			"an ordinary V1 call cannot use a disabled VerifySignature as its origin"
+		);
+	});
+}
+
+#[test]
+fn general_v0_authorized_call_dispatches_only_while_its_preconditions_hold() {
+	new_test_ext().execute_with(|| {
+		let event_id = [87; 32];
+		set_due_draw_salt_cleanup(event_id);
+		let encoded = authorized_v0(due_draw_salt_cleanup_call(event_id)).encode();
+		let decoded = UncheckedExtrinsic::decode(&mut &encoded[..])
+			.expect("a V0 authorised transaction decodes using the real runtime type");
+		assert_ok!(Executive::apply_extrinsic(decoded).unwrap());
+		assert!(!DrawSalts::<Runtime>::contains_key(event_id));
+
+		// The first dispatch consumes the salt. A fresh V0 transaction must therefore
+		// be rejected by the pallet-level `AuthorizeCall` precondition before dispatch.
+		assert_eq!(
+			Executive::apply_extrinsic(authorized_v0(due_draw_salt_cleanup_call(event_id)))
+				.unwrap_err(),
+			TransactionValidityError::Invalid(InvalidTransaction::Custom(
+				indiv_pallet_people_airdrops::AuthorizeInvalidity::UnknownDraw as u8
+			)),
+			"V0 AuthorizeCall must not bypass the draw-salt cleanup preconditions"
 		);
 	});
 }
@@ -146,8 +196,9 @@ fn general_v1_rejects_a_signature_over_the_v0_implication() {
 			signed_as_v0.preamble,
 			generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(_))
 		));
-		assert!(
-			Executive::apply_extrinsic(signed_as_v0).is_err(),
+		assert_eq!(
+			Executive::apply_extrinsic(signed_as_v0),
+			Err(TransactionValidityError::Invalid(InvalidTransaction::BadProof)),
 			"V1 VerifySignature must reject a signature that omits the V1 pipeline version"
 		);
 	});

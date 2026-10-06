@@ -1465,7 +1465,14 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 			TRANSACTION_POOL.with_borrow_mut(|pool| std::mem::take(&mut pool.write().transactions))
 		};
 		for tx in transactions {
-			let tx = Decode::decode(&mut &tx[..]).unwrap();
+			let tx: UncheckedExtrinsic = Decode::decode(&mut &tx[..]).unwrap();
+			assert!(
+				matches!(
+					&tx.preamble,
+					generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(_))
+				),
+				"runtime-created authorized OCW transactions must select V1"
+			);
 			Executive::apply_extrinsic(tx)
 				.expect("transaction is valid")
 				.expect("dispatch succeeds");
