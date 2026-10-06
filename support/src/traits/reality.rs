@@ -605,6 +605,9 @@ pub trait AppendOnlyMembers: MembershipProver {
 
 	/// Create a member set collection with a particular identifier.
 	///
+	/// Fails for the identifier of a deleted collection. A replacement collection needs a new
+	/// identifier.
+	///
 	/// The `ring_size` parameter specifies the exponent for the ring capacity (2^exponent - 257).
 	/// The `self_inclusion_delay` parameter specifies the minimum time in seconds a member must
 	/// wait in the onboarding queue before they can self-include via a signed extrinsic. `None`
@@ -619,7 +622,7 @@ pub trait AppendOnlyMembers: MembershipProver {
 	) -> DispatchResult;
 	/// Delete a member set collection with a particular identifier.
 	///
-	/// All of the information associated with the collection will be removed.
+	/// Removes all information of the collection and retires its identifier permanently.
 	fn delete_collection(owner: Self::Location, identifier: &Identifier) -> DispatchResult;
 	/// Returns the number of active members in a set.
 	fn active_count(identifier: &Identifier) -> u32;

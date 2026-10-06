@@ -27,7 +27,9 @@
 //! separately.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![recursion_limit = "256"]
+// The recursion depth of `impl_benchmark_test_suite!` grows with the number of benchmarks and
+// exceeds the default limit of 128.
+#![cfg_attr(test, recursion_limit = "256")]
 
 extern crate alloc;
 

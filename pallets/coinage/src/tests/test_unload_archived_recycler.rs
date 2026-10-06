@@ -312,11 +312,8 @@ fn recovery_with_fee_above_max_is_rejected_early_and_refunds_the_unused_weight()
 			refunded,
 			<() as crate::WeightInfo>::unload_archived_recycler_into_external_asset_fee_fail()
 		);
-		// `ref_time` is as much as the recorded weights let this assert: the two-dimensional
-		// invariant is `fee_fail_exit_costs_less_than_the_call_refunding_to_it`, which the call's
-		// stale proof size currently blocks.
 		assert!(
-			refunded.ref_time() < charged.ref_time(),
+			refunded.all_lt(charged),
 			"the early exit must cost less than the charged worst case: {refunded:?} vs {charged:?}"
 		);
 		// Nothing was recovered: the archive still counts the coin as recoverable.
@@ -1229,7 +1226,9 @@ fn declared_weight_follows_the_fee_currency() {
 			<Test as Config>::WeightInfo::unload_archived_recycler_into_external_asset_fee_native();
 		let external = <Test as Config>::WeightInfo::
 			unload_archived_recycler_into_external_asset_fee_external_asset();
-		assert!(native.all_lt(external));
+		// The external asset branch reads more storage. `ref_time` is within benchmark noise of
+		// the native branch, so only `proof_size` has a stable order.
+		assert!(native.proof_size() < external.proof_size());
 		assert_eq!(call_with(FeeCurrency::Native).get_dispatch_info().call_weight, native);
 		assert_eq!(call_with(FeeCurrency::ExternalAsset).get_dispatch_info().call_weight, external);
 	});
