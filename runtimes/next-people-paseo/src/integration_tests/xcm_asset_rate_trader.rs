@@ -276,6 +276,17 @@ fn fee_api_filters_rated_locations_and_preserves_xcm_versions() {
 }
 
 #[test]
+fn fee_api_skips_rated_locations_without_an_asset() {
+	new_test_ext().execute_with(|| {
+		let asset = other_asset();
+		register_rate(&asset, 4);
+		assert!(!accepted_assets(XCM_VERSION).contains(&AssetId(asset.clone()).into()));
+		create_asset(&asset, 1);
+		assert!(accepted_assets(XCM_VERSION).contains(&AssetId(asset).into()));
+	});
+}
+
+#[test]
 fn quotes_do_not_change_asset_balances_or_issuance() {
 	new_test_ext().execute_with(|| {
 		let asset = other_asset();

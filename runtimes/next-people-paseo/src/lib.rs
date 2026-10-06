@@ -1531,14 +1531,14 @@ impl_runtime_apis! {
 
 	impl xcm_runtime_apis::fees::XcmPaymentApi<Block> for Runtime {
 		fn query_acceptable_payment_assets(xcm_version: xcm::Version) -> Result<Vec<VersionedAssetId>, XcmPaymentApiError> {
-			// PAS and rated assets accepted by the same matcher as the trader.
+			// PAS and existing rated assets accepted by the same matcher as the trader.
 			let acceptable_assets = core::iter::once(AssetId(xcm_config::RelayLocation::get()))
 				.chain(
 					pallet_asset_rate::ConversionRateToNative::<Runtime>::iter_keys()
 						.filter(|location| {
 							xcm_config::AssetsConvertedConcreteId::matches_fungibles(
 								&(location.clone(), 1u128).into(),
-							).is_ok()
+							).is_ok() && pallet_assets::Asset::<Runtime>::contains_key(location)
 						})
 						.map(AssetId),
 				)
