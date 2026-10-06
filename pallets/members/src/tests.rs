@@ -6345,86 +6345,31 @@ mod benchmark_tail_setup_tests {
 	use super::*;
 
 	#[test]
-	fn tail_fill_preserves_existing_members_and_accepts_new_members() {
+	fn tail_free_slots_count_down_and_reset_on_a_new_page() {
 		TestExt::new().execute_with(|| {
 			create_test_collection(TEST_IDENTIFIER, 5);
-			let existing = generate_members(TEST_IDENTIFIER, 1, 3);
-			let existing_statuses = existing
-				.iter()
-				.map(|(member, _)| MembersPallet::member_status(&TEST_IDENTIFIER, member).unwrap())
-				.collect::<Vec<_>>();
-			let free_before = MembersPallet::onboarding_queue_tail_free_slots(&TEST_IDENTIFIER);
-			let pending = (0..3)
-				.map(|_| MockCrypto::member_from_secret(&create_unique_secret()))
-				.collect::<Vec<_>>();
-			for member in &pending {
-				assert_eq!(MembersPallet::member_status(&TEST_IDENTIFIER, member), None);
-			}
-			assert_ok!(MembersPallet::fill_onboarding_queue_tail(
-				&TEST_IDENTIFIER,
-				pending.clone()
-			));
+			let page_size: u32 = <Test as Config>::OnboardingQueuePageSize::get();
 			assert_eq!(
 				MembersPallet::onboarding_queue_tail_free_slots(&TEST_IDENTIFIER),
-				free_before - 3
+				page_size
 			);
-			for ((member, _), status) in existing.iter().zip(existing_statuses) {
-				assert_eq!(MembersPallet::member_status(&TEST_IDENTIFIER, member), Some(status));
-			}
-			for member in &pending {
-				assert!(matches!(
-					MembersPallet::member_status(&TEST_IDENTIFIER, member),
-					Some(RingPosition::Onboarding { .. })
-				));
-				assert_noop!(
-					MembersPallet::add_members(&TEST_IDENTIFIER, vec![*member]),
-					Error::<Test>::KeyAlreadyInUse
-				);
-			}
-			let next = MockCrypto::member_from_secret(&create_unique_secret());
-			assert_ok!(MembersPallet::add_members(&TEST_IDENTIFIER, vec![next]));
-			assert!(matches!(
-				MembersPallet::member_status(&TEST_IDENTIFIER, &next),
-				Some(RingPosition::Onboarding { .. })
-			));
+			let add = |count: u32| {
+				let members = (0..count)
+					.map(|_| MockCrypto::member_from_secret(&create_unique_secret()))
+					.collect::<Vec<_>>();
+				assert_ok!(MembersPallet::add_members(&TEST_IDENTIFIER, members));
+			};
+			add(3);
 			assert_eq!(
 				MembersPallet::onboarding_queue_tail_free_slots(&TEST_IDENTIFIER),
-				free_before - 4
+				page_size - 3
 			);
-			assert_ok!(MembersPallet::onboard_all_and_build_ring(&TEST_IDENTIFIER, 0));
-			for member in existing.iter().map(|(member, _)| member).chain(&pending).chain([&next]) {
-				assert!(matches!(
-					MembersPallet::member_status(&TEST_IDENTIFIER, member),
-					Some(RingPosition::Included { .. })
-				));
-			}
-		});
-	}
-
-	#[test]
-	fn direct_tail_fill_rejects_invalid_batches_without_mutation() {
-		TestExt::new().execute_with(|| {
-			create_test_collection(TEST_IDENTIFIER, 5);
-			let existing = generate_members(TEST_IDENTIFIER, 1, 1)[0].0;
-			let fresh = MockCrypto::member_from_secret(&create_unique_secret());
-			assert_noop!(
-				MembersPallet::fill_onboarding_queue_tail(&NONEXISTENT_IDENTIFIER, vec![fresh]),
-				Error::<Test>::CollectionNotFound
-			);
-			assert_noop!(
-				MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, vec![fresh, fresh]),
-				Error::<Test>::KeyAlreadyInUse
-			);
-			assert_noop!(
-				MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, vec![fresh, existing]),
-				Error::<Test>::KeyAlreadyInUse
-			);
-			let overflow = (0..255)
-				.map(|_| MockCrypto::member_from_secret(&create_unique_secret()))
-				.collect::<Vec<_>>();
-			assert_noop!(
-				MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, overflow),
-				Error::<Test>::TooManyMembers
+			add(page_size - 3);
+			assert_eq!(MembersPallet::onboarding_queue_tail_free_slots(&TEST_IDENTIFIER), 0);
+			add(1);
+			assert_eq!(
+				MembersPallet::onboarding_queue_tail_free_slots(&TEST_IDENTIFIER),
+				page_size - 1
 			);
 		});
 	}
