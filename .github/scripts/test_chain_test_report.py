@@ -1,9 +1,13 @@
 import copy
+import contextlib
+import io
+import subprocess
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import unittest
 
-from chain_test_report import MARKER, compose, report, test_failures
+from chain_test_report import MARKER, api, compose, list_artifacts, report
 
 
 RUN = {
@@ -17,7 +21,8 @@ RUN = {
 def job(name, conclusion="success", steps=None):
     return {"name": f"chain-tests / {name}", "conclusion": conclusion,
             "html_url": "https://github.com/owner/repo/actions/runs/123/job/456",
-            "steps": steps or []}
+            "steps": steps or [], "started_at": "2026-10-05T10:00:00Z",
+            "completed_at": "2026-10-05T11:00:00Z"}
 
 
 class ReportTests(unittest.TestCase):
@@ -28,8 +33,11 @@ class ReportTests(unittest.TestCase):
         self.run = copy.deepcopy(RUN)
         self.jobs = [job("plan"), job("gate (previewnet · target)", "failure"),
                      job("gate (paseo-next-v2 · target)")]
-        self.pull = {"state": "open", "head": {"sha": RUN["head_sha"]},
+        self.pull = {"state": "open", "head": {"sha": RUN["head_sha"], "repo": {"full_name": "owner/repo"}},
                      "base": {"repo": {"full_name": "owner/repo"}}}
+        self.artifacts = []
+        self.old_jobs = []
+        self.download_outcome = "success"
         self.comments = []
         self.writes = []
         self.latest = {"run_attempt": 1, "status": "completed"}
@@ -40,10 +48,13 @@ class ReportTests(unittest.TestCase):
             return {}
         if endpoint == "repos/owner/repo/actions/runs/123":
             return self.latest
+        if "/artifacts?" in endpoint:
+            return [{"artifacts": [{"name": "unrelated", "expired": False},
+                                    {"name": "release-gate-test-results-expired", "expired": True}]},
+                    {"artifacts": self.artifacts}]
         if "/jobs?" in endpoint:
-            self.assertTrue(paginate)
-            self.assertIn("filter=latest", endpoint)
-            return [{"jobs": self.jobs[:1]}, {"jobs": self.jobs[1:]}]
+            jobs = self.jobs if "filter=latest" in endpoint else self.old_jobs + self.jobs
+            return [{"jobs": jobs[:1]}, {"jobs": jobs[1:]}]
         if "/commits/" in endpoint:
             return [[{"number": 7}]]
         if "/comments?" in endpoint:
@@ -57,12 +68,25 @@ class ReportTests(unittest.TestCase):
                           "user": {"login": login, "type": user_type}}]
 
     def execute(self):
-        report(self.run, "owner/repo", self.directory, self.request)
+        report(self.run, "owner/repo", self.directory, self.request,
+               artifacts=list_artifacts(self.run, "owner/repo", self.request),
+               download_outcome=self.download_outcome)
 
-    def xml(self, name, content, network="previewnet"):
-        path = self.directory / f"release-gate-test-results-{network}-target" / name
-        path.parent.mkdir(exist_ok=True)
-        path.write_text(content)
+    def xml(self, name, content, network="previewnet", candidate="target"):
+        artifact = f"release-gate-test-results-{network}-{candidate}"
+        if not any(item["name"] == artifact for item in self.artifacts):
+            if len(self.artifacts) == 1:
+                files = list(self.directory.iterdir())
+                destination = self.directory / self.artifacts[0]["name"]
+                destination.mkdir()
+                for file in files:
+                    file.rename(destination / file.name)
+            self.artifacts.append({"name": artifact, "id": len(self.artifacts) + 1,
+                                   "created_at": "2026-10-05T10:59:00Z", "expired": False})
+        root = self.directory if len(self.artifacts) == 1 else self.directory / artifact
+        root.mkdir(exist_ok=True)
+        path = root / name
+        path.write_bytes(content if isinstance(content, bytes) else content.encode())
 
     def test_failure_creates_comment_even_when_workflow_passes(self):
         self.xml("tests.xml", '<testsuites><testsuite failures="1" name="aliases"><testcase name="claim"><failure/></testcase></testsuite></testsuites>')
@@ -101,6 +125,89 @@ class ReportTests(unittest.TestCase):
         self.execute()
         self.assertEqual([write[0] for write in self.writes], ["POST", "PATCH"])
         self.assertEqual(self.writes[1][1], "repos/owner/repo/issues/comments/8")
+
+    def test_only_latest_attempt_jobs_are_reported(self):
+        self.run["run_attempt"] = self.latest["run_attempt"] = 2
+        self.old_jobs = [job("gate (obsolete · target)", "failure")]
+        self.jobs[1]["steps"] = [{"name": "Current failure", "conclusion": "failure"}]
+        self.execute()
+        body = self.writes[0][2]
+        self.assertIn("Current failure", body)
+        self.assertNotIn("obsolete", body)
+
+    def test_passing_gate_and_other_candidate_artifacts_add_nothing(self):
+        self.xml("junit.xml", '<testsuite name="passing gate old failure" failures="1"/>', network="paseo-next-v2")
+        self.xml("junit.xml", '<testsuite name="wrong candidate" failures="1"/>', candidate="other")
+        self.execute()
+        body = self.writes[0][2]
+        self.assertNotIn("passing gate old failure", body)
+        self.assertNotIn("wrong candidate", body)
+
+    def test_rerun_setup_failure_does_not_reuse_old_artifact(self):
+        self.xml("junit.xml", '<testsuite name="old failure" failures="1"/>')
+        self.run["run_attempt"] = self.latest["run_attempt"] = 2
+        self.jobs[1].update(started_at="2026-10-06T10:00:00Z", completed_at="2026-10-06T11:00:00Z",
+                            steps=[{"name": "Start fork", "conclusion": "failure"}])
+        self.execute()
+        body = self.writes[0][2]
+        self.assertIn("Start fork", body)
+        self.assertNotIn("old failure", body)
+
+    def test_partial_rerun_keeps_retained_job_report(self):
+        self.xml("junit.xml", '<testsuite name="retained failure" failures="1"/>')
+        self.run["run_attempt"] = self.latest["run_attempt"] = 2
+        self.run["run_started_at"] = "2026-10-06T10:00:00Z"
+        self.jobs[1]["run_attempt"] = 2
+        self.execute()
+        self.assertIn("previewnet-target: retained failure", self.writes[0][2])
+
+    def test_missing_or_outside_job_times_do_not_attribute_tests(self):
+        self.xml("junit.xml", '<testsuite name="unverified failure" failures="1"/>')
+        for timestamp in (None, "invalid", "2026-10-05T11:01:00Z"):
+            with self.subTest(timestamp=timestamp):
+                self.jobs[1]["started_at"] = timestamp
+                self.execute()
+                self.assertNotIn("unverified failure", self.writes[-1][2])
+
+    def test_nested_suite_does_not_duplicate_failure(self):
+        self.xml("junit.xml", '<testsuite name="parent" failures="1"><testsuite name="leaf" failures="1"><testcase name="broken"><failure/></testcase></testsuite></testsuite>')
+        self.execute()
+        body = self.writes[0][2]
+        self.assertIn("leaf / broken", body)
+        self.assertNotIn("parent", body)
+
+    def test_utf16_entity_reports_are_rejected(self):
+        xml = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE testsuite [<!ENTITY x "entity failure">]><testsuite name="&x;" failures="1"/>'
+        for encoding in ("utf-16", "utf-16-le", "utf-16-be"):
+            with self.subTest(encoding=encoding):
+                self.xml("junit.xml", xml.encode(encoding))
+                self.execute()
+                self.assertNotIn("entity failure", self.writes[-1][2])
+                self.assertIn("No readable", self.writes[-1][2])
+
+    def test_fork_pr_is_ignored(self):
+        self.pull["head"]["repo"]["full_name"] = "fork/repo"
+        self.execute()
+        self.assertEqual(self.writes, [])
+
+    def test_download_failure_is_explicit(self):
+        self.xml("junit.xml", '<testsuite name="partial download" failures="1"/>')
+        self.download_outcome = "failure"
+        self.execute()
+        body = self.writes[0][2]
+        self.assertIn("test reports could not be downloaded", body)
+        self.assertNotIn("partial download", body)
+        self.assertNotIn("may have failed during setup", body)
+
+    def test_api_failure_prints_stderr_without_credentials(self):
+        error = subprocess.CalledProcessError(1, ["gh", "api"], stderr="HTTP 403: denied secret-token")
+        output = io.StringIO()
+        with patch("chain_test_report.subprocess.run", side_effect=error), \
+                patch.dict("os.environ", {"GH_TOKEN": "secret-token"}), contextlib.redirect_stderr(output):
+            with self.assertRaises(subprocess.CalledProcessError):
+                api("repos/owner/repo")
+        self.assertIn("HTTP 403: denied", output.getvalue())
+        self.assertNotIn("secret-token", output.getvalue())
 
     def test_initial_success_stays_silent(self):
         self.jobs[1]["conclusion"] = "success"
@@ -196,9 +303,14 @@ class ReportTests(unittest.TestCase):
         self.xml("errors.xml", '<testsuite name="identity"><testcase name="register"><error/></testcase></testsuite>')
         self.xml("suite.xml", '<testsuite errors="2" name="setup"/>')
         self.xml("broken.xml", '<not-xml')
+        self.xml("encoding.xml", '<?xml version="1.0" encoding = "ISO-8859-1"?><testsuite name="ignored encoding" failures="1"/>')
+        self.xml("oversize.xml", '<testsuite name="ignored oversize" failures="1">' + ' ' * 2_000_000 + '</testsuite>')
         self.xml("dtd.xml", '<!DOCTYPE a [<!ENTITY x "no">]><testsuite name="ignored" failures="1"/>')
-        self.assertEqual(test_failures(self.directory),
-                         ["previewnet-target: identity / register", "previewnet-target: setup"])
+        self.execute()
+        body = self.writes[0][2]
+        self.assertIn("previewnet-target: identity / register", body)
+        self.assertIn("previewnet-target: setup", body)
+        self.assertNotIn("ignored", body)
 
     def test_artifact_names_are_escaped_and_mentions_disabled(self):
         self.xml("unsafe.xml", '<testsuite name="&lt;img&gt; @team" failures="1"/>')

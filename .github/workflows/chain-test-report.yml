@@ -7,16 +7,19 @@ on:
 
 permissions: {}
 
-# Serialize reports for the same PR branch, including reruns of one commit.
-concurrency:
-  group: chain-test-report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: false
-
 jobs:
   report:
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion != 'cancelled'
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      github.event.workflow_run.conclusion != 'skipped' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    # Queue eligible reports so an older rerun cannot replace a pending new head.
+    concurrency:
+      group: chain-test-report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+      queue: max
+    env:
+      ARTIFACT_MANIFEST: ${{ runner.temp }}/chain-test-artifacts.json
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -30,17 +33,28 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
+      - name: List chain test artifacts
+        id: artifacts
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/chain_test_report.py --list-artifacts
+
       - name: Download chain test results
+        id: download
+        if: steps.artifacts.outputs.ids != ''
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           github-token: ${{ github.token }}
           run-id: ${{ github.event.workflow_run.id }}
-          pattern: release-gate-test-results-*
+          artifact-ids: ${{ steps.artifacts.outputs.ids }}
+          merge-multiple: false
           path: ${{ runner.temp }}/chain-test-results
 
       - name: Update the PR comment
         env:
           GH_TOKEN: ${{ github.token }}
+          DOWNLOAD_OUTCOME: ${{ steps.artifacts.outcome == 'success' && steps.artifacts.outputs.ids == '' && 'success' || steps.download.outcome }}
           RESULTS_DIR: ${{ runner.temp }}/chain-test-results
         run: python3 .github/scripts/chain_test_report.py
