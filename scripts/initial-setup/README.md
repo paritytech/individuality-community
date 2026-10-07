@@ -13,6 +13,8 @@ For a reproducible local Relay + People + Asset Hub network, follow the
 ENV=local   ./00-requirements.sh
 
 # Run all scripts for an environment
+ENV=next    ./start.sh
+ENV=preview ./start.sh
 ENV=local   ./start.sh
 
 # Run a single script
@@ -23,6 +25,8 @@ ENV=local   ./08a-setup-people-collection.sh
 
 | Env | Relay | People | Target |
 |-----|-------|--------|--------|
+| `next` | paseo.dotters.network | paseo-people-next-system-rpc.polkadot.io | Paseo Next v2 |
+| `preview` | previewnet.substrate.dev | previewnet.substrate.dev/people | PreviewNet |
 | `local` | localhost:10000 | localhost:10010 | Local development |
 
 Set `ENV` before running any script. Defaults to `local` if unset.
@@ -41,7 +45,7 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 | **03a-g** | XTRNL: create, AssetHub pool, AssetHub metadata, People metadata, conversion rate, Coinage instance, People pool |
 | **04a-b** | USDT/USDC: create on AssetHub with metadata, pool, and liquidity; create as foreign assets on People with metadata |
 | **05a-c** | Stablecoin faucet: acquire USDT/USDC for the owner on AssetHub, fund the People faucet with USDT/USDC via XCM, fund the AssetHub faucet with USDT/USDC by swapping PAS |
-| **06a-c** | PGAS: create, pool, alias fee |
+| **06a-b** | PGAS: create, alias fee |
 | **07** | Adds ZK chunks on People |
 | **08a-b** | Creates the people and people-lite collections on People |
 | **09** | Overrides onboarding size for the people and people-lite collections on People |
@@ -49,12 +53,13 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 | **11** | Adds Proof of Ink design families from snapshot |
 | **12a-c** | Attestation account: invites, allowances, proxy |
 | **13** | Sets the DotNS gateway dispatcher address on AssetHub |
+| **14** | Creates the attestation NFT collection on People |
 
 ## File Structure
 
 ```
 config-base.env                  # Shared config (token params, constants)
-config-local.env                 # Per-environment overrides (RPCs, parachain IDs, signers, accounts, DotNS gateway dispatcher address)
+config-{next,preview,local}.env  # Per-environment overrides (RPCs, parachain IDs, signers, accounts, DotNS gateway dispatcher address)
 load-config.sh                   # Sources config for ENV, registers chain aliases
 utils.sh                         # Shared helpers (has_funds, has_hrmp_channel, etc.)
 start.sh                         # Orchestrator: runs all scripts sequentially
@@ -65,7 +70,7 @@ poi-design-families.json         # Proof of Ink design family data
 ## How It Works
 
 1. Every script sources `load-config.sh`, which:
-   - Validates `ENV` (must be `local`)
+   - Validates `ENV` (must be `next`, `preview`, or `local`)
    - Loads `config-base.env` + `config-${ENV}.env`
    - Validates all required per-env variables are set
    - Registers chain aliases (`relay`, `people`, `asset-hub`, `bulletin`)
@@ -77,13 +82,13 @@ poi-design-families.json         # Proof of Ink design family data
 
 ## Required Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
-| `PEOPLE_SUDO_MNEMONIC` | People sudo signer mnemonic |
-| `AH_SUDO_MNEMONIC` | AssetHub sudo signer mnemonic |
-| `ATTESTATION_MNEMONIC` | Attestation signer mnemonic |
-| `ASSET_OWNER_MNEMONIC` | Asset owner signer mnemonic |
-| `ENV` | Target environment (defaults to `local`) |
+| Variable | When needed | Purpose |
+|----------|-------------|---------|
+| `PEOPLE_SUDO_MNEMONIC` | `next`, `preview` envs | People sudo signer mnemonic |
+| `AH_SUDO_MNEMONIC` | `next`, `preview` envs | AssetHub sudo signer mnemonic |
+| `ATTESTATION_MNEMONIC` | `next`, `preview` envs | Attestation signer mnemonic |
+| `STABLECOIN_OWNER_MNEMONIC` | `next`, `preview` envs | Stablecoin owner signer mnemonic |
+| `ENV` | Always (defaults to `local`) | Target environment |
 
 On `local`, the People sudo, AssetHub sudo, attestation, and asset owner signers are all built-in dev accounts, so no mnemonics are required.
 
