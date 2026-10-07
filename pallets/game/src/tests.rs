@@ -42,13 +42,9 @@ const DAVE: AccountId32 = AccountId32::new(*b"40______________________________")
 const EVE: AccountId32 = AccountId32::new(*b"50______________________________");
 
 /// The earliest `game_play_time` `schedule_games` accepts for the game following `previous`.
-///
-/// The gap holds the previous game's player-process phase, the next game's registration, shuffle
-/// and post-shuffle margin, and one `OcwStepLatency` for `start_game` to be included.
 fn minimal_next_game_play_time(previous: &GameSchedule<u32, u128>) -> u32 {
 	let durations = <Test as Config>::DefaultPhaseDurations::get();
 	GameTimes::<Test>::player_process_end(previous) +
-		<<Test as Config>::OcwStepLatency as Get<u32>>::get() +
 		durations.registration +
 		durations.shuffle +
 		durations.post_shuffle_margin
@@ -5530,22 +5526,45 @@ mod set_game_phases {
 	}
 
 	#[test]
-	fn shuffle_shorter_than_the_offchain_worker_needs_is_rejected() {
+	fn shuffle_below_the_floor_is_rejected() {
 		new_test_ext().execute_with(|| {
-			let minimum = Game::min_shuffle_duration();
-			assert!(minimum > 0, "the mock must enforce a minimum for this test to mean anything");
+			let minimum = <<Test as Config>::MinStepPhaseDuration as Get<u32>>::get();
+			assert!(minimum > 0, "the mock must enforce a floor for this test to mean anything");
 
-			// One second below the minimum: the offchain worker could not complete the shuffle
+			// One second below the floor: the offchain worker could not complete the shuffle
 			// before its deadline, so every game would be cancelled.
 			let too_short = PhaseDurationValues { shuffle: minimum - 1, ..distinct_phases() };
 			assert_noop!(
 				Game::set_game_phases(RuntimeOrigin::root(), too_short),
-				Error::<Test>::ShuffleTooShort,
+				Error::<Test>::PhaseTooShort,
 			);
 			assert!(StoredPhaseDurations::<Test>::get().is_none());
 
-			// Exactly the minimum is accepted.
+			// Exactly the floor is accepted.
 			let shortest = PhaseDurationValues { shuffle: minimum, ..distinct_phases() };
+			assert_ok!(Game::set_game_phases(RuntimeOrigin::root(), shortest.clone()));
+			assert_eq!(StoredPhaseDurations::<Test>::get(), Some(shortest));
+		});
+	}
+
+	#[test]
+	fn player_process_below_the_floor_is_rejected() {
+		new_test_ext().execute_with(|| {
+			let minimum = <<Test as Config>::MinStepPhaseDuration as Get<u32>>::get();
+			assert!(minimum > 0, "the mock must enforce a floor for this test to mean anything");
+
+			// One second below the floor: `end_reporting` and the processing steps could not
+			// land before the next game's registration is due to start.
+			let too_short =
+				PhaseDurationValues { player_process: minimum - 1, ..distinct_phases() };
+			assert_noop!(
+				Game::set_game_phases(RuntimeOrigin::root(), too_short),
+				Error::<Test>::PhaseTooShort,
+			);
+			assert!(StoredPhaseDurations::<Test>::get().is_none());
+
+			// Exactly the floor is accepted.
+			let shortest = PhaseDurationValues { player_process: minimum, ..distinct_phases() };
 			assert_ok!(Game::set_game_phases(RuntimeOrigin::root(), shortest.clone()));
 			assert_eq!(StoredPhaseDurations::<Test>::get(), Some(shortest));
 		});
@@ -5563,7 +5582,7 @@ mod set_game_phases {
 				shuffle: 3,
 				post_shuffle_margin: 2,
 				reporting: 1,
-				player_process: 1,
+				player_process: 3,
 			};
 			assert_ok!(Game::set_game_phases(RuntimeOrigin::root(), phases));
 
@@ -7661,13 +7680,27 @@ fn integrity_test_passes() {
 	});
 }
 
-/// A runtime shipping a shuffle the offchain worker cannot complete fails at construction, rather
-/// than cancelling every game it ever runs.
+/// A runtime shipping a shuffle below the floor fails at construction, rather than cancelling
+/// every game it ever runs.
 #[test]
-#[should_panic(expected = "`DefaultPhaseDurations.shuffle` must be at least `2 * OcwStepLatency`")]
-fn integrity_test_rejects_a_shuffle_shorter_than_the_offchain_worker_needs() {
+#[should_panic(expected = "must be at least `MinStepPhaseDuration`")]
+fn integrity_test_rejects_a_shuffle_below_the_floor() {
 	new_test_ext().execute_with(|| {
-		MockShuffleDuration::set(&(Game::min_shuffle_duration() - 1));
+		MockShuffleDuration::set(
+			&(<<Test as Config>::MinStepPhaseDuration as Get<u32>>::get() - 1),
+		);
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+/// A runtime shipping a player process below the floor fails at construction.
+#[test]
+#[should_panic(expected = "must be at least `MinStepPhaseDuration`")]
+fn integrity_test_rejects_a_player_process_below_the_floor() {
+	new_test_ext().execute_with(|| {
+		MockPlayerProcessDuration::set(
+			&(<<Test as Config>::MinStepPhaseDuration as Get<u32>>::get() - 1),
+		);
 		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }

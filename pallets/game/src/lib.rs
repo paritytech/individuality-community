@@ -62,6 +62,13 @@
 //! that iterates over players declares the offchain worker budget as its weight. That budget is
 //! half of `Normal.max_extrinsic`. The step runs as many items as fit and refunds the rest.
 //!
+//! A step applies in a block after the one in which it became due, and how many blocks later
+//! depends on block production, transaction propagation and pool pressure. Phase deadlines are
+//! compared against the block timestamp, which advances in jumps. The `shuffle` and
+//! `player_process` phases and the gap between consecutive games must therefore leave room for
+//! every step the phase needs, and that count grows with the player count.
+//! [`Config::MinStepPhaseDuration`] rejects only a phase that can never complete.
+//!
 //! # player index, groups, rounds and report.
 //!
 //! After the shuffle phase, each player obtained a unique index for each round. This index is used
@@ -409,15 +416,12 @@ pub mod pallet {
 		#[pallet::constant]
 		type DefaultPhaseDurations: Get<PhaseDurationValues>;
 
-		/// The seconds needed for one offchain worker step to be submitted and included.
+		/// The minimum accepted duration of phases `shuffle` and `player_process`, in seconds.
 		///
-		/// A step is a transaction the offchain worker submits at the end of a block, so it
-		/// applies in a later one. Phase durations and game schedules must leave room for that
-		/// delay, otherwise a phase deadline passes before its step lands. Set this from the
-		/// chain's observed step delay, not from its nominal block time: the deadlines are
-		/// compared against the block timestamp, which advances one slot at a time.
+		/// A phase shorter than this cannot complete, because its steps land in blocks after
+		/// they become due (see the module doc).
 		#[pallet::constant]
-		type OcwStepLatency: Get<u32>;
+		type MinStepPhaseDuration: Get<u32>;
 
 		/// The Maximum number of game schedules the pallet can store.
 		#[pallet::constant]
@@ -812,10 +816,10 @@ pub mod pallet {
 		/// `report`: fewer NFT claim credits can be recorded right now than the report may award.
 		/// Submit it again once later blocks have committed the buffered credits.
 		CreditCapacityExhausted,
-		/// `set_game_phases`: the shuffle is shorter than the offchain worker needs to complete
-		/// it, so every game would pass its shuffle deadline and be cancelled. The minimum is
-		/// [`Pallet::min_shuffle_duration`].
-		ShuffleTooShort,
+		/// `set_game_phases`: `shuffle` or `player_process` is shorter than
+		/// [`Config::MinStepPhaseDuration`], so the offchain worker could not complete that
+		/// phase in any game.
+		PhaseTooShort,
 	}
 
 	/// A reason for this pallet placing a hold on funds.
@@ -861,9 +865,9 @@ pub mod pallet {
 
 			assert!(
 				Self::validate_phase_durations(&T::DefaultPhaseDurations::get()).is_ok(),
-				"game: `DefaultPhaseDurations.shuffle` must be at least `2 * OcwStepLatency`, \
-				otherwise every game passes its shuffle deadline before the offchain worker \
-				completes the shuffle, and is cancelled",
+				"game: `DefaultPhaseDurations.shuffle` and `.player_process` must be at least \
+				`MinStepPhaseDuration`, otherwise the offchain worker cannot complete that phase \
+				in any game",
 			);
 
 			let max_votes = Self::max_received_votes();
@@ -1586,14 +1590,12 @@ pub mod pallet {
 				},
 			);
 
-			let step_latency = Duration::from_secs(T::OcwStepLatency::get().into());
-
 			for schedule in &games_schedules {
 				// Checks that games do not overlap in time and that schedules were provided in
 				// chronological order.
 
 				ensure!(
-					last_game_end_time.saturating_add(step_latency) <=
+					last_game_end_time <=
 						Duration::from_secs(GameTimes::<T>::registration_start(schedule) as u64),
 					Error::<T>::InvalidGameSetup
 				);
@@ -1786,8 +1788,9 @@ pub mod pallet {
 		/// prevents changing phase durations once players have committed to a game
 		/// whose timing is already locked in.
 		///
-		/// `phases.shuffle` must be at least [`Pallet::min_shuffle_duration`], otherwise the call
-		/// fails with [`Error::ShuffleTooShort`].
+		/// `phases.shuffle` and `phases.player_process` must be at least
+		/// [`Config::MinStepPhaseDuration`], otherwise the call fails with
+		/// [`Error::PhaseTooShort`].
 		#[pallet::call_index(14)]
 		#[pallet::weight(<T as Config>::WeightInfo::set_game_phases())]
 		pub fn set_game_phases(
@@ -2108,24 +2111,14 @@ pub mod pallet {
 			Ok(game)
 		}
 
-		/// The shortest shuffle the offchain worker can complete, in seconds.
-		///
-		/// A shuffle holds two steps: `end_registration`, which moves the game into the shuffle,
-		/// and at least one `advance_shuffle`. Each costs one [`Config::OcwStepLatency`]. This is
-		/// a floor against a configuration that can never work, not a guarantee: a shuffle over
-		/// many players needs more than one `advance_shuffle`.
-		pub fn min_shuffle_duration() -> u32 {
-			T::OcwStepLatency::get().saturating_mul(2)
-		}
-
-		/// Checks the phase durations against the pace the offchain worker can keep.
-		///
-		/// [`Pallet::set_game_phases`] and the integrity test share this, so the value a runtime
-		/// ships and the value a manager sets are held to one rule.
+		/// Checks that the shuffle and player_process phases are longer than
+		/// [`Config::MinStepPhaseDuration`].
 		pub(crate) fn validate_phase_durations(
 			phases: &PhaseDurationValues,
 		) -> Result<(), Error<T>> {
-			ensure!(phases.shuffle >= Self::min_shuffle_duration(), Error::<T>::ShuffleTooShort);
+			let minimum = T::MinStepPhaseDuration::get();
+			ensure!(phases.shuffle >= minimum, Error::<T>::PhaseTooShort);
+			ensure!(phases.player_process >= minimum, Error::<T>::PhaseTooShort);
 			Ok(())
 		}
 

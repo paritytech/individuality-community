@@ -29,7 +29,7 @@ use cumulus_primitives_core::relay_chain::BlockNumber as RelayBlockNumber;
 use frame_support::{
 	traits::{
 		fungible::{Inspect, InspectHold, Mutate},
-		Get as _, Hooks, OffchainWorker, OnIdle,
+		Get, Hooks, OffchainWorker, OnIdle,
 	},
 	weights::{Weight, WeightMeter},
 };
@@ -1623,18 +1623,20 @@ const PAYOUT_DURATION: u32 = 300 / GAME_PHASE_SPEEDUP; // 60 blocks (120 seconds
 /// Reduce game phase durations to speed up game integration tests.
 fn reduce_game_phase_durations() {
 	let durations = crate::people::GamePhaseDurations::get();
+	let minimum = <<Runtime as indiv_pallet_game::Config>::MinStepPhaseDuration as Get<u32>>::get();
+	let shuffle = (durations.shuffle / GAME_PHASE_SPEEDUP).max(minimum);
+	let player_process = (durations.player_process / GAME_PHASE_SPEEDUP).max(minimum);
+	let floor_surplus = (shuffle - durations.shuffle / GAME_PHASE_SPEEDUP) +
+		(player_process - durations.player_process / GAME_PHASE_SPEEDUP);
 
 	Game::set_game_phases(
 		RuntimeOrigin::root(),
 		indiv_pallet_game::PhaseDurationValues {
-			registration: durations.registration / GAME_PHASE_SPEEDUP,
-			// The shuffle does not shrink below what the offchain worker needs to complete it,
-			// which `set_game_phases` enforces.
-			shuffle: (durations.shuffle / GAME_PHASE_SPEEDUP)
-				.max(indiv_pallet_game::Pallet::<Runtime>::min_shuffle_duration()),
+			registration: durations.registration / GAME_PHASE_SPEEDUP - floor_surplus,
+			shuffle,
 			post_shuffle_margin: durations.post_shuffle_margin / GAME_PHASE_SPEEDUP,
 			reporting: durations.reporting / GAME_PHASE_SPEEDUP,
-			player_process: durations.player_process / GAME_PHASE_SPEEDUP,
+			player_process,
 		},
 	)
 	.unwrap();

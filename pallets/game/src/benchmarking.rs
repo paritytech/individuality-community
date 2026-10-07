@@ -2186,14 +2186,13 @@ mod benches {
 			GameState::Registration { .. },
 		));
 
-		// The shuffle must clear `min_shuffle_duration`, which the call validates. Deriving it
-		// keeps the input valid whatever `OcwStepLatency` a runtime configures.
+		let minimum = T::MinStepPhaseDuration::get().max(1);
 		let phases = PhaseDurationValues {
 			registration: 1,
-			shuffle: pallet::Pallet::<T>::min_shuffle_duration().max(1),
+			shuffle: minimum,
 			post_shuffle_margin: 1,
 			reporting: 1,
-			player_process: 1,
+			player_process: minimum,
 		};
 
 		#[extrinsic_call]

@@ -596,7 +596,7 @@ impl<T: Config, AccountId: Into<sp_statement_store::AccountId>> GameTimes<T>
 pub struct PhaseDurationValues {
 	/// Registration phase minimum duration in seconds
 	pub registration: u32,
-	/// Shuffle phase duration in seconds
+	/// Shuffle phase duration in seconds. At least `Config::MinStepPhaseDuration`.
 	pub shuffle: u32,
 	/// Minimum time between shuffle and game play time in seconds
 	pub post_shuffle_margin: u32,
@@ -607,7 +607,7 @@ pub struct PhaseDurationValues {
 	/// So the reporting duration must take into account the time needed for players to play the
 	/// game and submit their reports.
 	pub reporting: u32,
-	/// Player process phase duration in seconds
+	/// Player process phase duration in seconds. At least `Config::MinStepPhaseDuration`.
 	pub player_process: u32,
 }
 
