@@ -38,7 +38,7 @@ SCRIPT_NAMES=(
   "12b-setup-attestation-allowances.sh"
   "12c-setup-attestation-proxy.sh"
   "13-setup-dotns-dispatcher-address.sh"
-  "14-setup-attestation-nft-collection.sh"
+  # "14-setup-attestation-nft-collection.sh"
 )
 
 if [ "${#SCRIPT_NAMES[@]}" -eq 0 ]; then
