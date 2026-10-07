@@ -6127,6 +6127,7 @@ dependencies = [
  "pallet-xcm",
  "pallet-xcm-benchmarks",
  "parachains-common",
+ "parachains-runtimes-test-utils",
  "parity-scale-codec",
  "parking_lot",
  "paseo-runtime-constants",
