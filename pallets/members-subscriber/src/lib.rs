@@ -922,7 +922,7 @@ pub mod pallet {
 						}
 						// If this index was previously deleted, un-deleting it
 						state.deleted_indices.remove(&update.ring_index);
-						// Skipping already stored revisions
+						// Skipping already stored revisions that may arrive via replays
 						if roots.iter().any(|r| r.revision == *revision) {
 							continue;
 						}
