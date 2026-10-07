@@ -31,7 +31,7 @@ use crate::{
 use indiv_support::traits::RingExponent;
 
 const TEST_RING_EXPONENT: RingExponent = RingExponent::R2e9;
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use frame_support::{
 	assert_noop, assert_ok,
 	pallet_prelude::{BoundedBTreeMap, BoundedBTreeSet},
@@ -129,11 +129,14 @@ fn authorized() -> RuntimeOrigin {
 	RuntimeOrigin::from(frame_system::RawOrigin::Authorized)
 }
 
+/// The block the offchain worker tests run at, which the submitted calls carry as discriminator.
+const OCW_BLOCK: u64 = 1;
+
 /// A purge call for the queued page. `authorize` reads the queued purge and dispatch ignores
 /// these arguments, so any values dispatch the same page.
 fn purge_call() -> crate::pallet::Call<Test> {
 	let (generation, page) = queued_purge().unwrap_or_default();
-	crate::pallet::Call::purge_stale_ring_roots { generation, page, discriminator: 0 }
+	crate::pallet::Call::purge_stale_ring_roots { generation, page, discriminator: OCW_BLOCK }
 }
 
 /// A gap-scan call for the collection. `authorize` reads the stored cursor and dispatch ignores
@@ -142,7 +145,7 @@ fn gap_scan_call(identifier: Identifier) -> crate::pallet::Call<Test> {
 	crate::pallet::Call::detect_missing_rings {
 		identifier,
 		scan_from: next_scan_index(identifier),
-		discriminator: 0,
+		discriminator: OCW_BLOCK,
 	}
 }
 
@@ -2215,7 +2218,6 @@ mod recent_ring_roots {
 
 mod offchain_worker {
 	use super::*;
-	use crate::pallet::TX_RETRY_WINDOW;
 
 	fn setup_active_with_missing(missing: &[(u32, u32)]) {
 		setup_active_ocw_ready();
@@ -2294,7 +2296,7 @@ mod offchain_worker {
 				vec![RuntimeCall::MembersSubscriber(crate::pallet::Call::replay_missing_roots {
 					identifier: PEOPLE,
 					indices: bounded_vec![1, 3],
-					discriminator: 0,
+					discriminator: OCW_BLOCK,
 				})]
 			);
 		});
@@ -2318,14 +2320,14 @@ mod offchain_worker {
 				crate::pallet::Call::replay_missing_roots {
 					identifier: PEOPLE,
 					indices: bounded_vec![1],
-					discriminator: 0,
+					discriminator: OCW_BLOCK,
 				}
 			)));
 			assert!(calls.contains(&RuntimeCall::MembersSubscriber(
 				crate::pallet::Call::replay_missing_roots {
 					identifier: PEOPLE_LITE,
 					indices: bounded_vec![5],
-					discriminator: 0,
+					discriminator: OCW_BLOCK,
 				}
 			)));
 		});
@@ -2351,7 +2353,7 @@ mod offchain_worker {
 				vec![RuntimeCall::MembersSubscriber(crate::pallet::Call::replay_missing_roots {
 					identifier: PEOPLE_LITE,
 					indices: bounded_vec![5],
-					discriminator: 0,
+					discriminator: OCW_BLOCK,
 				})]
 			);
 		});
@@ -2400,22 +2402,23 @@ mod offchain_worker {
 	}
 
 	#[test]
-	fn a_retry_in_a_later_window_carries_a_fresh_discriminator() {
+	fn each_run_carries_its_block_number_as_discriminator() {
 		new_test_ext().execute_with(|| {
 			setup_active_with_missing(&[(1, 0)]);
 
-			Pallet::<Test>::offchain_worker(TX_RETRY_WINDOW.into());
+			Pallet::<Test>::offchain_worker(1);
+			Pallet::<Test>::offchain_worker(2);
 
-			// The window the block falls in is the discriminator, so a retry in a later window
-			// gets a fresh transaction hash.
-			assert_eq!(
-				pending_ocw_calls(),
-				vec![RuntimeCall::MembersSubscriber(crate::pallet::Call::replay_missing_roots {
+			// The block number is the discriminator, so every run submits a fresh transaction
+			// hash for the same job.
+			let replay = |discriminator| {
+				RuntimeCall::MembersSubscriber(crate::pallet::Call::replay_missing_roots {
 					identifier: PEOPLE,
 					indices: bounded_vec![1],
-					discriminator: 1,
-				})]
-			);
+					discriminator,
+				})
+			};
+			assert_eq!(pending_ocw_calls(), vec![replay(1), replay(2)]);
 		});
 	}
 
@@ -3949,6 +3952,82 @@ mod collection_bound {
 				<() as WeightInfo>::process_ring_updates_stale_batch().saturating_add(db.reads(1));
 			assert_eq!(actual, expected);
 			assert!(actual.all_lt(charged));
+		});
+	}
+}
+
+mod migration {
+	use super::*;
+	use crate::migration::MigrateV0ToV1;
+	use codec::Encode;
+	use frame_support::{
+		storage::unhashed,
+		traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion},
+	};
+
+	const OLD_SEQUENCE: u64 = 7;
+	const OLD_BATCH_TIME: u64 = 1_000;
+	const OLD_REPLAY_TIME: u64 = 2_000;
+
+	/// Writes both storages in the shape stored before version 1.
+	fn put_old_state() {
+		let old_processing = (OLD_SEQUENCE, OLD_BATCH_TIME, OLD_REPLAY_TIME);
+		unhashed::put_raw(&ProcessingState::<Test>::hashed_key(), &old_processing.encode());
+
+		let missing = BTreeMap::from([(3u32, 2u32)]);
+		let deleted = BTreeSet::from([5u32]);
+		let old_collection = (9u32, 10u32, 8u32, missing, deleted);
+		unhashed::put_raw(
+			&RingCollectionStates::<Test>::hashed_key_for(PEOPLE),
+			&old_collection.encode(),
+		);
+	}
+
+	#[test]
+	fn versioned_migration_translates_and_bumps_the_version() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<MembersSubscriber>();
+			put_old_state();
+			// The old collection state does not decode under the current type.
+			assert_eq!(RingCollectionStates::<Test>::get(PEOPLE), Default::default());
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			// Processing state keeps the sequence and the replay time.
+			let processing = ProcessingState::<Test>::get();
+			assert_eq!(processing.last_processed_sequence, OLD_SEQUENCE);
+			assert_eq!(processing.last_replay_request_time, OLD_REPLAY_TIME);
+
+			// Collection state keeps every old field and takes the old global batch time.
+			let state = RingCollectionStates::<Test>::get(PEOPLE);
+			assert_eq!(state.ring_count, 9);
+			assert_eq!(state.next_ring_index, 10);
+			assert_eq!(state.next_scan_index, 8);
+			assert_eq!(state.missing_indices.get(&3), Some(&2));
+			assert!(state.deleted_indices.contains(&5));
+			assert_eq!(state.last_batch_received_time, OLD_BATCH_TIME);
+
+			assert_eq!(MembersSubscriber::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn versioned_migration_does_nothing_at_the_current_version() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<MembersSubscriber>();
+			put_old_state();
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			let migrated =
+				(ProcessingState::<Test>::get(), RingCollectionStates::<Test>::get(PEOPLE));
+
+			// Without the gate a second run would reset every collection's batch time to zero.
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				(ProcessingState::<Test>::get(), RingCollectionStates::<Test>::get(PEOPLE)),
+				migrated
+			);
+			assert_eq!(MembersSubscriber::on_chain_storage_version(), 1);
 		});
 	}
 }

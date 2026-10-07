@@ -215,19 +215,9 @@ mod benches {
 			fill_in_ring_roots::<T>(BENCH_IDENTIFIER, i as RingIndex, i);
 		}
 
-		// Missing indices for the collection
-		let mut missing_rings = BoundedBTreeMap::<_, _, T::MaxMissingRootsPerCollection>::new();
-		for i in 0..n {
-			missing_rings.try_insert(i, 0u32).expect("within bounds");
-		}
 		RingCollectionStates::<T>::insert(
 			BENCH_IDENTIFIER,
-			RingCollectionState {
-				ring_count: n,
-				next_ring_index: n,
-				missing_indices: missing_rings,
-				..Default::default()
-			},
+			RingCollectionState { ring_count: n, ..worst_case_collection_state::<T>() },
 		);
 
 		// Updates for a single collection
@@ -257,8 +247,11 @@ mod benches {
 		assert_eq!(ProcessingState::<T>::get().last_processed_sequence, 2);
 		assert_eq!(RingRoots::<T>::iter().count(), n as usize);
 
-		// missing_indices were cleared
-		assert!(RingCollectionStates::<T>::get(BENCH_IDENTIFIER).missing_indices.is_empty());
+		// Every updated index left the missing set
+		assert_eq!(
+			RingCollectionStates::<T>::get(BENCH_IDENTIFIER).missing_indices.len(),
+			T::MaxMissingRootsPerCollection::get().saturating_sub(n) as usize
+		);
 
 		Ok(())
 	}

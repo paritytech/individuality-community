@@ -3110,6 +3110,7 @@ pub mod migrations {
 		indiv_pallet_scarcity::migration::MigrateV1ToV2<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_members_subscriber::migration::MigrateV0ToV1<Runtime>,
 	);
 
 	/// Migrations/checks that do not need to be versioned and can run on every update.

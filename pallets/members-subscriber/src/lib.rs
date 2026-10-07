@@ -42,6 +42,7 @@ use alloc::{collections::BTreeSet, vec, vec::Vec};
 
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
+pub mod migration;
 pub mod types;
 pub mod weights;
 
@@ -64,11 +65,9 @@ pub mod pallet {
 		pallet_prelude::*,
 		traits::{Defensive, EnsureOrigin, GetCallName, UnixTime},
 	};
-	use frame_system::{
-		offchain::{CreateAuthorizedTransaction, SubmitTransaction},
-		pallet_prelude::*,
-	};
+	use frame_system::{offchain::CreateAuthorizedTransaction, pallet_prelude::*};
 	use indiv_support::{
+		offchain::{submit_authorized, TX_LONGEVITY},
 		traits::{
 			Context, ContextualAlias, MembershipMultiProver, MembershipProver, RingExponent,
 			RingMembershipProof,
@@ -81,25 +80,10 @@ pub mod pallet {
 
 	const LOG_TARGET: &str = "pallet-members-subscriber";
 
-	/// Number of blocks that an offchain worker transaction stays valid in the
-	/// transaction pool. Must not be below `TX_RETRY_WINDOW`, so a transaction survives its
-	/// retry window.
-	const TX_LONGEVITY: u64 = 8;
-
-	/// Retry window, in blocks, for offchain-worker transactions.
-	/// Retries inside one window are byte-identical, so the transaction pool deduplicates them.
-	/// A window switch changes the discriminator and the transaction hash, so the retry passes
-	/// both pool deduplication and the rotator's ban on an already-included hash.
-	pub(crate) const TX_RETRY_WINDOW: u32 = 8;
-
-	// To enforce the values relation of these constants in the future.
-	const _: () = assert!(TX_LONGEVITY >= TX_RETRY_WINDOW as u64);
-
-	/// Number of offchain worker runs between repeated failure warnings, so that an eventual
-	/// transaction-pool stall is not logged at each run.
-	const STALL_WARN_PERIOD: u32 = 32;
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -376,11 +360,11 @@ pub mod pallet {
 				return;
 			}
 
-			// A discriminator of a retry window to enable pool-level deduplication.
-			let discriminator = block_number / TX_RETRY_WINDOW.into();
+			// The block number gives every run a fresh transaction hash
+			let discriminator = block_number;
 
 			// Purging stale ring data also while the subscription is Terminated
-			Self::submit_ring_purge_if_due(block_number, discriminator);
+			Self::submit_ring_purge_if_due(discriminator);
 
 			if !matches!(Subscription::<T>::get(), SubscriptionStatus::Active { .. }) {
 				return;
@@ -389,13 +373,8 @@ pub mod pallet {
 			let now = T::UnixTime::now().as_secs();
 			let processing_state = ProcessingState::<T>::get();
 
-			Self::submit_gap_scan_if_due(block_number, discriminator, now);
-			Self::submit_replay_requests_if_due(
-				block_number,
-				discriminator,
-				now,
-				&processing_state,
-			);
+			Self::submit_gap_scan_if_due(discriminator, now);
+			Self::submit_replay_requests_if_due(discriminator, now, &processing_state);
 		}
 
 		fn integrity_test() {
@@ -449,13 +428,6 @@ pub mod pallet {
 			assert!(
 				T::OffchainWorkerInterval::get() > 0u32.into(),
 				"OffchainWorkerInterval must be greater than 0"
-			);
-
-			// Retries deduplicate only when several offchain worker runs share one retry window.
-			// At or above the window every run carries a fresh discriminator.
-			assert!(
-				T::OffchainWorkerInterval::get() < TX_RETRY_WINDOW.into(),
-				"OffchainWorkerInterval must be less than TX_RETRY_WINDOW"
 			);
 
 			let budget = OcwWeightBudget::from_normal_max::<T>();
@@ -890,8 +862,8 @@ pub mod pallet {
 			Ok((validity, Weight::zero()))
 		}
 
-		/// Background-progress priority raised by the block height. The bump makes a retry outbid
-		/// the stranded predecessor it replaces, which carries the same `provides` tag.
+		/// Background-progress priority raised by the block height. The bump makes each run's
+		/// transaction outbid the previous run's, which carries the same `provides` tag.
 		fn local_priority() -> u64 {
 			tx_priority::BACKGROUND_PROGRESS
 				.saturating_add(frame_system::Pallet::<T>::block_number().saturated_into::<u64>())
@@ -1220,10 +1192,7 @@ pub mod pallet {
 		}
 
 		/// Submits a purge transaction when stale ring data awaits removal.
-		fn submit_ring_purge_if_due(
-			block_number: BlockNumberFor<T>,
-			discriminator: BlockNumberFor<T>,
-		) {
+		fn submit_ring_purge_if_due(discriminator: BlockNumberFor<T>) {
 			let Some(progress) = QueuedRingPurge::<T>::get() else {
 				return;
 			};
@@ -1233,16 +1202,13 @@ pub mod pallet {
 				page: progress.page,
 				discriminator,
 			};
-			Self::submit_authorized_transaction(call, block_number);
+			let call_name = call.get_call_name();
+			submit_authorized::<T, _>(call, call_name, LOG_TARGET);
 		}
 
 		/// Submits one gap-scan transaction for each collection whose scan cursor is behind the
 		/// ring index frontier and whose batch cooldown has elapsed.
-		fn submit_gap_scan_if_due(
-			block_number: BlockNumberFor<T>,
-			discriminator: BlockNumberFor<T>,
-			now: u64,
-		) {
+		fn submit_gap_scan_if_due(discriminator: BlockNumberFor<T>, now: u64) {
 			for (identifier, state) in RingCollectionStates::<T>::iter() {
 				// Some rest time after the collection's last received batch is given to account
 				// for incoming batches that may contain indices considered as missing
@@ -1260,12 +1226,10 @@ pub mod pallet {
 				if state.missing_indices.len() as u32 >= T::MaxMissingRootsPerCollection::get() ||
 					state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get()
 				{
-					Self::warn_periodically(
-						block_number,
-						format_args!(
-							"gap scan skipped: missing_indices or deleted_indices at capacity \
-							 for collection {identifier:?}"
-						),
+					log::warn!(
+						target: LOG_TARGET,
+						"offchain worker: gap scan skipped: missing_indices or deleted_indices \
+						 at capacity for collection {identifier:?}"
 					);
 					continue;
 				}
@@ -1275,13 +1239,13 @@ pub mod pallet {
 					scan_from: state.next_scan_index,
 					discriminator,
 				};
-				Self::submit_authorized_transaction(call, block_number);
+				let call_name = call.get_call_name();
+				submit_authorized::<T, _>(call, call_name, LOG_TARGET);
 			}
 		}
 
 		/// Submits a replay transaction for each collection with missing ring indices.
 		fn submit_replay_requests_if_due(
-			block_number: BlockNumberFor<T>,
 			discriminator: BlockNumberFor<T>,
 			now: u64,
 			processing_state: &UpdatesProcessingState,
@@ -1304,12 +1268,10 @@ pub mod pallet {
 				}
 
 				if state.deleted_indices.len() as u32 >= T::MaxDeletedRingsPerCollection::get() {
-					Self::warn_periodically(
-						block_number,
-						format_args!(
-							"replay skipped: deleted_indices at capacity for collection \
-							 {identifier:?}"
-						),
+					log::warn!(
+						target: LOG_TARGET,
+						"offchain worker: replay skipped: deleted_indices at capacity for \
+						 collection {identifier:?}"
 					);
 					continue;
 				}
@@ -1318,34 +1280,9 @@ pub mod pallet {
 					BoundedVec::truncate_from(state.missing_indices.keys().copied().collect());
 
 				let call = Call::replay_missing_roots { identifier, indices, discriminator };
-				Self::submit_authorized_transaction(call, block_number);
+				let call_name = call.get_call_name();
+				submit_authorized::<T, _>(call, call_name, LOG_TARGET);
 			}
-		}
-
-		/// Logs a warning once per `STALL_WARN_PERIOD` offchain worker runs, and a debug message
-		/// otherwise. The offchain worker runs only at multiples of `OffchainWorkerInterval`,
-		/// so the run index advances by one per run whatever the interval.
-		fn warn_periodically(block_number: BlockNumberFor<T>, message: core::fmt::Arguments) {
-			let run = block_number / T::OffchainWorkerInterval::get();
-			if (run % STALL_WARN_PERIOD.into()).is_zero() {
-				log::warn!(target: LOG_TARGET, "offchain worker: {message}");
-			} else {
-				log::debug!(target: LOG_TARGET, "offchain worker: {message}");
-			}
-		}
-
-		/// Submits an authorized transaction from the offchain worker with stall-aware logging.
-		fn submit_authorized_transaction(call: Call<T>, block_number: BlockNumberFor<T>) {
-			let call_name = call.get_call_name();
-			let tx = T::create_authorized_transaction(call.into());
-			if SubmitTransaction::<T, _>::submit_transaction(tx).is_ok() {
-				log::debug!(target: LOG_TARGET, "offchain worker: submitted `{call_name}`");
-				return;
-			}
-			Self::warn_periodically(
-				block_number,
-				format_args!("`{call_name}` rejected by the transaction pool"),
-			);
 		}
 
 		/// Sends a replay request to the notifier via XCM.
