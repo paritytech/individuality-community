@@ -1273,7 +1273,7 @@ impl From<InvalidTransaction> for TransactionExecutionError {
 }
 
 /// Execute a bare extrinsic with the given call.
-pub fn exec_tx(x: Extrinsic) -> Result<(), TransactionExecutionError> {
+pub fn exec_tx(x: Extrinsic, source: TransactionSource) -> Result<(), TransactionExecutionError> {
 	let info = x.get_dispatch_info();
 	let len = x.encoded_size();
 
@@ -1281,7 +1281,7 @@ pub fn exec_tx(x: Extrinsic) -> Result<(), TransactionExecutionError> {
 
 	// validation is always rollbacked in production.
 	with_transaction(|| {
-		let valid = checked.validate::<Test>(TransactionSource::External, &info, len);
+		let valid = checked.validate::<Test>(source, &info, len);
 
 		TransactionOutcome::Rollback(Result::<_, DispatchError>::Ok(valid))
 	})
@@ -1297,7 +1297,7 @@ pub fn exec_tx(x: Extrinsic) -> Result<(), TransactionExecutionError> {
 pub fn exec_bare_tx(call: impl Into<RuntimeCall>) -> Result<(), TransactionExecutionError> {
 	let x = Extrinsic::new_bare(call.into());
 
-	exec_tx(x)
+	exec_tx(x, TransactionSource::External)
 }
 
 /// Execute a signed extrinsic with the invited transaction extension and the given call.
@@ -1318,7 +1318,7 @@ pub fn exec_invited_tx(
 		),
 	);
 
-	exec_tx(x)
+	exec_tx(x, TransactionSource::External)
 }
 
 /// Execute a signed extrinsic with the given call.
@@ -1338,7 +1338,7 @@ pub fn exec_signed_tx(
 		),
 	);
 
-	exec_tx(x)
+	exec_tx(x, TransactionSource::External)
 }
 
 /// Execute a signed extrinsic with the participant transaction extension and the given call.
@@ -1361,7 +1361,7 @@ pub fn exec_participant_tx(
 		),
 	);
 
-	exec_tx(x)
+	exec_tx(x, TransactionSource::External)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1486,7 +1486,7 @@ pub fn dispatch_next_step() {
 	let tx = <Test as CreateAuthorizedTransaction<RuntimeCall>>::create_authorized_transaction(
 		call.into(),
 	);
-	exec_tx(tx).expect("the due game step is valid");
+	exec_tx(tx, TransactionSource::Local).expect("the due game step is valid");
 }
 
 /// Advances one block and runs the due game step, if any, at the step budget `block_weight`

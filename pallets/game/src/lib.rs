@@ -53,9 +53,10 @@
 //! # Game steps
 //!
 //! The steps above and the cancellation of a game (`advance_cancelling`) are authorized calls.
-//! This pallet's offchain worker submits the next step whenever it can make progress. Anyone else
-//! may submit it too. The `authorize` check accepts a step only when [`Pallet::next_step`] says it
-//! is due for the named game. No step runs early or out of order. A one-shot step cannot run
+//! This pallet's offchain worker submits the next step whenever it can make progress. A step is
+//! accepted from a local or in-block source only, so it cannot be submitted externally. The
+//! `authorize` check accepts a step only when [`Pallet::next_step`] says it is due for the named
+//! game. No step runs early or out of order. A one-shot step cannot run
 //! twice. The calls take no input that shapes the work. Every step carries a `discriminator` and
 //! the block the worker runs on. Retries therefore hash differently. The transaction tag is the
 //! step and the game index. The pool therefore holds one transaction per step at a time. A step
@@ -63,7 +64,8 @@
 //! half of `Normal.max_extrinsic`. The step runs as many items as fit and refunds the rest.
 //!
 //! A step applies in a block after the one in which it became due, and how many blocks later
-//! depends on block production, transaction propagation and pool pressure. Phase deadlines are
+//! depends on block production, on whether the block author runs the offchain worker and on
+//! pool pressure. Phase deadlines are
 //! compared against the block timestamp, which advances in jumps. The `shuffle` and
 //! `player_process` phases and the gap between consecutive games must therefore leave room for
 //! every step the phase needs, and that count grows with the player count.
@@ -831,7 +833,7 @@ pub mod pallet {
 
 	/// Why an authorized game step is invalid.
 	///
-	/// Both variants drop the transaction from the pool. A step that is not yet due becomes due
+	/// Every variant drops the transaction from the pool. A step that is not yet due becomes due
 	/// later. The offchain worker resubmits it every block, so the pool keeps nothing.
 	#[repr(u8)]
 	pub enum AuthorizeInvalidity {
@@ -839,6 +841,8 @@ pub mod pallet {
 		NotDue = 200,
 		/// The call names a game other than the current one.
 		WrongGame = 201,
+		/// The transaction did not come from this node's offchain worker or a block.
+		TransactionNotLocal = 202,
 	}
 
 	impl From<AuthorizeInvalidity> for TransactionValidityError {
@@ -1837,8 +1841,8 @@ pub mod pallet {
 		///
 		/// Authorized game step, see the module documentation.
 		#[pallet::call_index(22)]
-		#[pallet::authorize(|_source, _discriminator| {
-			Self::authorize_step(NextStep::StartGame, None)
+		#[pallet::authorize(|source, _discriminator| {
+			Self::authorize_step(source, NextStep::StartGame, None)
 		})]
 		#[pallet::weight(<T as Config>::WeightInfo::start_game())]
 		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
@@ -1856,8 +1860,8 @@ pub mod pallet {
 		///
 		/// Authorized game step, see the module documentation.
 		#[pallet::call_index(23)]
-		#[pallet::authorize(|_source, game_index, _discriminator| {
-			Self::authorize_step(NextStep::EndRegistration, Some(*game_index))
+		#[pallet::authorize(|source, game_index, _discriminator| {
+			Self::authorize_step(source, NextStep::EndRegistration, Some(*game_index))
 		})]
 		#[pallet::weight(Pallet::<T>::end_registration_max_weight())]
 		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
@@ -1877,8 +1881,8 @@ pub mod pallet {
 		///
 		/// Authorized game step, see the module documentation.
 		#[pallet::call_index(24)]
-		#[pallet::authorize(|_source, game_index, _discriminator| {
-			Self::authorize_step(NextStep::AdvanceShuffle, Some(*game_index))
+		#[pallet::authorize(|source, game_index, _discriminator| {
+			Self::authorize_step(source, NextStep::AdvanceShuffle, Some(*game_index))
 		})]
 		#[pallet::weight(Pallet::<T>::step_budget())]
 		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
@@ -1899,8 +1903,8 @@ pub mod pallet {
 		///
 		/// Authorized game step, see the module documentation.
 		#[pallet::call_index(25)]
-		#[pallet::authorize(|_source, game_index, _discriminator| {
-			Self::authorize_step(NextStep::EndReporting, Some(*game_index))
+		#[pallet::authorize(|source, game_index, _discriminator| {
+			Self::authorize_step(source, NextStep::EndReporting, Some(*game_index))
 		})]
 		#[pallet::weight(<T as Config>::WeightInfo::end_reporting())]
 		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
@@ -1922,8 +1926,8 @@ pub mod pallet {
 		///
 		/// Authorized game step, see the module documentation.
 		#[pallet::call_index(26)]
-		#[pallet::authorize(|_source, game_index, _discriminator| {
-			Self::authorize_step(NextStep::ProcessPlayers, Some(*game_index))
+		#[pallet::authorize(|source, game_index, _discriminator| {
+			Self::authorize_step(source, NextStep::ProcessPlayers, Some(*game_index))
 		})]
 		#[pallet::weight(Pallet::<T>::step_budget())]
 		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
@@ -1951,8 +1955,8 @@ pub mod pallet {
 		///
 		/// Authorized game step, see the module documentation.
 		#[pallet::call_index(27)]
-		#[pallet::authorize(|_source, game_index, _discriminator| {
-			Self::authorize_step(NextStep::AdvanceCancelling, Some(*game_index))
+		#[pallet::authorize(|source, game_index, _discriminator| {
+			Self::authorize_step(source, NextStep::AdvanceCancelling, Some(*game_index))
 		})]
 		#[pallet::weight(Pallet::<T>::step_budget())]
 		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_game_step())]
@@ -2223,14 +2227,19 @@ pub mod pallet {
 
 		/// Validates a step call.
 		///
-		/// `game_index`, when given, must be the current game. `expected` must be the due step.
-		/// The tag is the step and the game index. The pool therefore holds one transaction per
-		/// step per game at a time, whoever submits it. A `start_game` call is tagged with the
-		/// index the new game takes.
+		/// `source` must be local or in-block. `game_index`, when given, must be the current
+		/// game. `expected` must be the due step. The tag is the step and the game index. The
+		/// pool therefore holds one transaction per step per game at a time. A `start_game` call
+		/// is tagged with the index the new game takes.
 		pub(crate) fn authorize_step(
+			source: TransactionSource,
 			expected: NextStep,
 			game_index: Option<GameIdx>,
 		) -> TransactionValidityWithRefund {
+			ensure!(
+				matches!(source, TransactionSource::InBlock | TransactionSource::Local),
+				AuthorizeInvalidity::TransactionNotLocal
+			);
 			let current = GameIndex::<T>::get();
 			let tag_index = match game_index {
 				Some(index) => {
@@ -2242,12 +2251,13 @@ pub mod pallet {
 			ensure!(Self::next_step() == Some(expected), AuthorizeInvalidity::NotDue);
 
 			// One step is due per game at a time. The tag holds one transaction per step. At most
-			// one game step therefore lands per block.
+			// one game step therefore lands per block. Propagation is off because peers validate
+			// gossiped transactions with a source of `External`, which this call rejects.
 			let validity = ValidTransaction::with_tag_prefix("indiv-pallet-game")
 				.and_provides((expected as u8, tag_index))
 				.priority(tx_priority::PROTOCOL_LIVENESS)
 				.longevity(TX_LONGEVITY)
-				.propagate(true)
+				.propagate(false)
 				.build()
 				.expect("tag prefix is not empty; qed");
 			Ok((validity, Weight::zero()))

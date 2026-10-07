@@ -8274,6 +8274,10 @@ mod game_steps {
 		InvalidTransaction::Custom(AuthorizeInvalidity::WrongGame as u8).into()
 	}
 
+	fn not_local() -> TransactionValidityError {
+		InvalidTransaction::Custom(AuthorizeInvalidity::TransactionNotLocal as u8).into()
+	}
+
 	/// A game with one signed-up player, then forced into `state`. Returns the game index.
 	fn one_player_game(max_group_size: u32, state: GameState<AccountId32>) -> GameIdx {
 		let schedule = GameSchedule::<u32, u128> {
@@ -8399,7 +8403,7 @@ mod game_steps {
 		new_test_ext().execute_with(|| {
 			put_game(GameState::Registration { next_player_index: 0 }, 200);
 			let authorize = |call: Call<Test>| {
-				call.authorize(TransactionSource::External).expect("the call is authorized")
+				call.authorize(TransactionSource::Local).expect("the call is authorized")
 			};
 			let end_registration = |game_index, discriminator| Call::<Test>::end_registration {
 				game_index,
@@ -8419,7 +8423,7 @@ mod game_steps {
 				Err(not_due())
 			);
 
-			// The due step is valid from an external source.
+			// The due step is valid from a local source.
 			let (validity, refund) = authorize(end_registration(1, 0)).expect("the step is due");
 			assert_eq!(refund, Weight::zero());
 			assert_eq!(
@@ -8427,7 +8431,7 @@ mod game_steps {
 				vec![("indiv-pallet-game", (NextStep::EndRegistration as u8, 1u32)).encode()]
 			);
 			assert_eq!(validity.priority, tx_priority::PROTOCOL_LIVENESS);
-			assert!(validity.propagate);
+			assert!(!validity.propagate);
 			// The discriminator does not change the tag.
 			assert_eq!(authorize(end_registration(1, 7)).unwrap().0.provides, validity.provides);
 
@@ -8450,11 +8454,33 @@ mod game_steps {
 	}
 
 	#[test]
+	fn step_from_an_external_source_rejected() {
+		new_test_ext().execute_with(|| {
+			// Game 1 in registration and its deadline has passed, so `end_registration` is due.
+			put_game(GameState::Registration { next_player_index: 0 }, 200);
+			set_time(100);
+			let end_registration =
+				Call::<Test>::end_registration { game_index: 1, discriminator: 0 };
+
+			// The due step is rejected from an external source.
+			assert_eq!(
+				end_registration.authorize(TransactionSource::External),
+				Some(Err(not_local()))
+			);
+
+			// Local and in-block sources are accepted.
+			for source in [TransactionSource::Local, TransactionSource::InBlock] {
+				assert!(end_registration.authorize(source).unwrap().is_ok());
+			}
+		});
+	}
+
+	#[test]
 	fn start_game_is_not_due_with_a_game_or_without_a_schedule() {
 		new_test_ext().execute_with(|| {
 			let start_game = Call::<Test>::start_game { discriminator: 0 };
 			// Nothing scheduled.
-			assert_eq!(start_game.authorize(TransactionSource::External), Some(Err(not_due())));
+			assert_eq!(start_game.authorize(TransactionSource::Local), Some(Err(not_due())));
 
 			// A schedule, but a game is ongoing.
 			let schedule = GameSchedule::<u32, u128> {
@@ -8465,7 +8491,7 @@ mod game_steps {
 			};
 			assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule]));
 			put_game(GameState::Registration { next_player_index: 0 }, 200);
-			assert_eq!(start_game.authorize(TransactionSource::External), Some(Err(not_due())));
+			assert_eq!(start_game.authorize(TransactionSource::Local), Some(Err(not_due())));
 		});
 	}
 
@@ -8477,11 +8503,11 @@ mod game_steps {
 			put_game(GameState::Reporting { player_count: 1 }, 200);
 			crate::Game::<Test>::mutate(|game| game.as_mut().unwrap().pending_attendance = 1);
 			set_time(200);
-			assert_eq!(end_reporting.authorize(TransactionSource::External), Some(Err(not_due())));
+			assert_eq!(end_reporting.authorize(TransactionSource::Local), Some(Err(not_due())));
 
 			// The last attendance settles.
 			crate::Game::<Test>::mutate(|game| game.as_mut().unwrap().pending_attendance = 0);
-			assert!(end_reporting.authorize(TransactionSource::External).unwrap().is_ok());
+			assert!(end_reporting.authorize(TransactionSource::Local).unwrap().is_ok());
 		});
 	}
 

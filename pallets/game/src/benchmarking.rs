@@ -406,7 +406,7 @@ mod benches {
 
 		#[block]
 		{
-			call.authorize(TransactionSource::External)
+			call.authorize(TransactionSource::InBlock)
 				.ok_or("call must require authorization")??;
 		}
 
