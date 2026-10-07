@@ -975,6 +975,7 @@ impl indiv_pallet_people_lite::Config for Test {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type MaxLitePeople = ConstU32<{ u32::MAX }>;
 	type PaidRegistrationClock = Test;
 	type PaidRegistrationThreshold = ConstU32<{ u32::MAX }>;
 	type PaidRegistrationPeriod = ConstU32<1>;

@@ -1842,3 +1842,112 @@ mod paid_registration_throttling {
 		});
 	}
 }
+
+mod lite_people_cap {
+	use super::*;
+	use crate::{
+		mock::{MaxLitePeople, PaidRegistrationThreshold, PaidRegistrationsPerPeriod},
+		LitePeopleCount,
+	};
+	use frame_support::dispatch::DispatchResultWithPostInfo;
+	use sp_runtime::DispatchResult;
+
+	/// Registers `user` with a fee. `set_up_cap` funds the accounts 10 to 14.
+	fn try_register_with_fee(user: u64, seed: u8) -> DispatchResult {
+		let secret = secret_from_seed(seed);
+		PeopleLitePallet::<Test>::register_with_fee(
+			Some(user).into(),
+			member_from_secret(&secret),
+			sign_attest_with_secret(&secret, user),
+			None,
+		)
+	}
+
+	/// Attests `user` by `verifier`, which needs an attestation allowance.
+	fn try_attest(verifier: u64, user: u64, seed: u8) -> DispatchResultWithPostInfo {
+		let secret = secret_from_seed(seed);
+		PeopleLitePallet::<Test>::attest(
+			Some(verifier).into(),
+			user,
+			sp_runtime::testing::UintAuthorityId(user),
+			member_from_secret(&secret),
+			sign_attest_with_secret(&secret, user),
+			None,
+		)
+	}
+
+	/// Sets a cap of 2 lite people and funds the accounts 10 to 14.
+	fn set_up_cap() {
+		Pallet::<Test>::set_block_number(1);
+		create_lite_collection();
+		MaxLitePeople::set(&2);
+		for user in 10..=14 {
+			let _ = pallet_balances::Pallet::<Test>::make_free_balance_be(&user, 100);
+		}
+	}
+
+	#[test]
+	fn paid_registration_fails_at_the_cap() {
+		new_test_ext().execute_with(|| {
+			set_up_cap();
+			register_lite_person(1, 10, 1);
+			assert_ok!(try_register_with_fee(11, 2));
+
+			assert_noop!(try_register_with_fee(12, 3), crate::Error::<Test>::TooManyLitePeople);
+			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(12), 100);
+		});
+	}
+
+	#[test]
+	fn attestation_fails_at_the_cap() {
+		new_test_ext().execute_with(|| {
+			set_up_cap();
+			assert_ok!(try_register_with_fee(10, 1));
+			register_lite_person(1, 11, 2);
+
+			AttestationAllowance::<Test>::insert(2, 1);
+			assert_noop!(try_attest(2, 12, 3), crate::Error::<Test>::TooManyLitePeople);
+			assert_eq!(AttestationAllowance::<Test>::get(2), 1);
+		});
+	}
+
+	#[test]
+	fn paid_registration_at_the_cap_reports_the_cap_before_the_throttle() {
+		new_test_ext().execute_with(|| {
+			set_up_cap();
+			MaxLitePeople::set(&0);
+			PaidRegistrationThreshold::set(&0);
+			PaidRegistrationsPerPeriod::set(&0);
+
+			assert_noop!(try_register_with_fee(10, 1), crate::Error::<Test>::TooManyLitePeople);
+		});
+	}
+
+	#[test]
+	fn a_cap_below_the_count_keeps_existing_lite_people() {
+		new_test_ext().execute_with(|| {
+			set_up_cap();
+			register_lite_person(1, 10, 1);
+			assert_ok!(try_register_with_fee(11, 2));
+			MaxLitePeople::set(&1);
+
+			assert_noop!(try_register_with_fee(12, 3), crate::Error::<Test>::TooManyLitePeople);
+			assert!(LitePeople::<Test>::contains_key(10));
+			assert!(LitePeople::<Test>::contains_key(11));
+			assert_eq!(LitePeopleCount::<Test>::get(), 2);
+		});
+	}
+
+	#[test]
+	fn a_raised_cap_admits_new_lite_people() {
+		new_test_ext().execute_with(|| {
+			set_up_cap();
+			MaxLitePeople::set(&0);
+			assert_noop!(try_register_with_fee(10, 1), crate::Error::<Test>::TooManyLitePeople);
+
+			MaxLitePeople::set(&1);
+			assert_ok!(try_register_with_fee(10, 1));
+			assert_eq!(LitePeopleCount::<Test>::get(), 1);
+		});
+	}
+}

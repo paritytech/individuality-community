@@ -55,10 +55,10 @@ use crate::{
 		LitePersonStatementLimit, LiteStmtStoreSlotsPerPeriod,
 		LongTermStorageAllowanceForLitePeople, LongTermStorageAllowanceForPeople,
 		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
-		LongTermStoragePeriodDuration, NotificationAllowance, NotificationPeriodDuration,
-		NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource, PersonStatementLimit,
-		StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreReplacementCooldown,
-		StmtStoreSlotsPerPeriod,
+		LongTermStoragePeriodDuration, MaxLitePeople, NotificationAllowance,
+		NotificationPeriodDuration, NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource,
+		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow,
+		StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -1293,6 +1293,7 @@ impl indiv_pallet_people_lite::Config for Runtime {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type MaxLitePeople = MaxLitePeople;
 	type PaidRegistrationClock = RuntimeClock;
 	type PaidRegistrationThreshold = LitePaidRegistrationThreshold;
 	type PaidRegistrationPeriod = LitePaidRegistrationPeriod;

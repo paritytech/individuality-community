@@ -21,6 +21,11 @@
 //! `LitePerson` and `LiteAlias` can do.
 //! The recommended approach is to use pallet-origin-restriction.
 //!
+//! ## Lite people cap
+//!
+//! The pallet registers at most `MaxLitePeople` lite people. The cap applies to attested
+//! registrations ([`Call::attest`]) and paid registrations ([`Call::register_with_fee`]).
+//!
 //! ## Paid registration throttling
 //!
 //! From `PaidRegistrationThreshold` lite people on, the pallet accepts at most
@@ -135,6 +140,11 @@ pub mod pallet {
 		/// The getter can use a dynamic parameter or future pricing adapter without changing this
 		/// pallet.
 		type RegistrationFee: Get<BalanceOf<Self>>;
+
+		/// Maximum number of lite people, attested as well as paid.
+		///
+		/// Lowering it below `LitePeopleCount` removes no lite person.
+		type MaxLitePeople: Get<u32>;
 
 		/// Clock that defines the paid registration periods.
 		type PaidRegistrationClock: UnixTime;
@@ -326,6 +336,8 @@ pub mod pallet {
 		InvalidConsumerRegistrationAccount,
 		/// The paid registrations allowed in the current period are used up.
 		PaidRegistrationLimitReached,
+		/// The number of lite people reached `MaxLitePeople`.
+		TooManyLitePeople,
 	}
 
 	#[pallet::call]
@@ -430,6 +442,7 @@ pub mod pallet {
 				.checked_sub(1)
 				.ok_or(Error::<T>::NoAttestationAllowance)?;
 			Self::ensure_lite_collection_created()?;
+			Self::ensure_below_lite_people_cap()?;
 
 			let msg = Self::registration_message(&candidate, &ring_vrf_key);
 			ensure!(
@@ -515,6 +528,7 @@ pub mod pallet {
 				);
 			}
 			Self::ensure_lite_collection_created()?;
+			Self::ensure_below_lite_people_cap()?;
 			Self::throttle_paid_registration()?;
 
 			let msg = Self::registration_message(&candidate, &ring_vrf_key);
@@ -752,6 +766,8 @@ pub mod pallet {
 
 		/// Store `info` for `candidate`, count it and add its ring VRF key to the lite member
 		/// collection.
+		///
+		/// The caller must call [`Self::ensure_below_lite_people_cap`] first.
 		fn insert_lite_person(
 			candidate: &T::AccountId,
 			info: LitePersonInfoOf<T>,
@@ -761,6 +777,18 @@ pub mod pallet {
 			LitePeopleCount::<T>::mutate(|count| count.saturating_inc());
 			T::MemberService::add_members(LITE_PEOPLE_MEMBER_IDENTIFIER, vec![ring_vrf_key])?;
 			frame_system::Pallet::<T>::inc_sufficients(candidate);
+			Ok(())
+		}
+
+		/// Ensure the lite people count is below `MaxLitePeople`.
+		///
+		/// Fails with [`Error::TooManyLitePeople`] otherwise. Registrations check it before the
+		/// paid registration throttle, so a caller at the cap does not get a period error.
+		fn ensure_below_lite_people_cap() -> DispatchResult {
+			ensure!(
+				LitePeopleCount::<T>::get() < T::MaxLitePeople::get(),
+				Error::<T>::TooManyLitePeople
+			);
 			Ok(())
 		}
 

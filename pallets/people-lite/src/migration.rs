@@ -58,7 +58,7 @@ impl<T: Config> OnRuntimeUpgrade for CreateLitePeopleCollection<T> {
 	}
 }
 
-/// Sets [`LitePeopleCount`](crate::LitePeopleCount) to the number of registered lite people.
+/// Sets [`LitePeopleCount`] to the number of registered lite people.
 ///
 /// Pallet version 0 does not keep the count, so a chain upgrading from it must run this migration.
 /// It iterates every `LitePeople` key in one block.

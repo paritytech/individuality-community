@@ -138,6 +138,7 @@ impl crate::Config for Test {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type MaxLitePeople = MaxLitePeople;
 	type PaidRegistrationClock = TestClock;
 	type PaidRegistrationThreshold = PaidRegistrationThreshold;
 	type PaidRegistrationPeriod = PaidRegistrationPeriod;
@@ -157,6 +158,7 @@ impl crate::Config for Test {
 
 parameter_types! {
 	pub storage LitePersonRegistrationFee: u64 = 10;
+	pub storage MaxLitePeople: u32 = u32::MAX;
 	pub storage PaidRegistrationThreshold: u32 = 1_000;
 	pub storage PaidRegistrationPeriod: u32 = 24 * 60 * 60;
 	pub storage PaidRegistrationsPerPeriod: u32 = 2;
