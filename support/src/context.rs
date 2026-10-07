@@ -15,10 +15,14 @@
 // limitations under the License.
 
 //! Product-scoped ring VRF context construction.
+//!
+//! A product identifier is the dotNS name `product_name.network_suffix`. Its contexts are
+//! `blake2_256("product/" ++ product_name ++ "." ++ network_suffix ++ "/" ++ suffix)`, with a
+//! 32-byte `suffix`, as specified by truAPI RFC-0004 and RFC-0022.
 
 use alloc::vec::Vec;
 
-use crate::traits::Context;
+use crate::{labels::is_dns_label, traits::Context};
 use frame_support::{traits::ConstU32, BoundedVec};
 
 const PRODUCT_PREFIX: [u8; 8] = *b"product/";
@@ -60,6 +64,11 @@ const INDEX_MAGIC: [u8; 28] = [
 	0x12, 0xe8, 0x60, 0x13, 0x73, 0x6c, 0x54, 0x98, 0xf0, 0x50, 0xb0, 0x3c, 0xdc, 0x16, 0x95, 0x7d,
 	0xff, 0x0e, 0x42, 0x2f, 0xb9, 0x2c, 0xa7, 0x7e, 0xc3, 0xab, 0x16, 0x8f,
 ];
+
+/// Returns whether `name` is a bare product name: a single DNS label without the network suffix.
+pub fn is_product_name(name: &[u8]) -> bool {
+	is_dns_label(name)
+}
 
 /// Build a context for `product_name.network_suffix`.
 ///
@@ -182,6 +191,20 @@ mod tests {
 		let indexed = ProductContextSuffix::Index(7).bytes();
 
 		assert_eq!(indexed, ProductContextSuffix::Raw(indexed).bytes());
+	}
+
+	#[test]
+	fn product_name_is_a_single_dns_label() {
+		assert!(is_product_name(personhood::PRODUCT_NAME));
+		assert!(is_product_name(b"dim2"));
+		assert!(is_product_name(b"my-product"));
+
+		assert!(!is_product_name(b""));
+		assert!(!is_product_name(b"dim2.dot"));
+		assert!(!is_product_name(b"Dim2"));
+		assert!(!is_product_name(b"-dim2"));
+		assert!(!is_product_name(b"dim2-"));
+		assert!(!is_product_name(b"dim_2"));
 	}
 
 	#[test]

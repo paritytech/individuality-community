@@ -263,7 +263,7 @@ use frame_support::{
 use frame_system::offchain::CreateAuthorizedTransaction;
 use indiv_pallet_airdrop::types::{
 	Airdrop, EventId as AirdropEventId, EventInfo as AirdropEventInfo,
-	RegistrationEntry as AirdropRegistrationEntry,
+	ProductName as AirdropProductName, RegistrationEntry as AirdropRegistrationEntry,
 };
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
@@ -315,6 +315,12 @@ pub mod pallet {
 	pub const GAME_PROCESS_SKIPPED_BLOCK: u32 = 8;
 
 	pub(crate) const LOG_TARGET: &str = "runtime::indiv-pallet-game";
+
+	/// The name of the product owning the game's airdrop contexts, without the network suffix.
+	///
+	/// `dim2.<tld>` is the game's product identity reserved in [truAPI
+	/// RFC-0022](https://github.com/paritytech/trinity-user-agents/blob/63a450d025462f113311a26408dc53627d1a268d/docs/rfcs/0022-account-derivations.md).
+	pub const PRODUCT_NAME: &[u8] = b"dim2";
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -497,6 +503,11 @@ pub mod pallet {
 		/// [`Pallet::airdrop_event_id`]).
 		pub fn airdrop_event_id_base() -> [u8; 27] {
 			*b"pop:game:airdrop:          "
+		}
+
+		/// [`PRODUCT_NAME`] as stored with every airdrop event the game schedules.
+		pub fn product_name() -> AirdropProductName {
+			AirdropProductName::truncate_from(PRODUCT_NAME.to_vec())
 		}
 	}
 
@@ -803,6 +814,15 @@ pub mod pallet {
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		fn integrity_test() {
+			assert!(
+				AirdropProductName::try_from(PRODUCT_NAME.to_vec()).is_ok(),
+				"the game's airdrop product name must fit the airdrop pallet's bound"
+			);
+			assert!(
+				indiv_support::context::is_product_name(PRODUCT_NAME),
+				"the game's airdrop product name must be a bare dotNS label"
+			);
+
 			let max_votes = Self::max_received_votes();
 			assert!(
 				max_votes as u64 * T::PeopleVoteWeight::get() as u64 <= u8::MAX as u64,
@@ -2092,6 +2112,7 @@ pub mod pallet {
 				let draw_time = game_play_time.saturating_add(airdrop.draw_offset as u64);
 				let end_time = draw_time.saturating_add(airdrop.claim_window as u64);
 				let info = AirdropEventInfo {
+					product_name: Self::product_name(),
 					prize: airdrop.prize.clone(),
 					registration_starts,
 					draw_time,
