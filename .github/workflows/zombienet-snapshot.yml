@@ -36,7 +36,7 @@ jobs:
       - name: Install build + bootstrap deps
         # build-essential/clang/cmake/protobuf for the runtime + node-binary builds; llvm-dev and
         # libclang-dev for clang-sys while building polkadot-sdk from source; jq+bc for initial-setup
-        # (00-requirements auto-installs `dot` and jq, but never bc).
+        # (00-requirements also installs `dot`, jq and bc when they are missing).
         run: sudo apt update && sudo apt install --assume-yes cmake protobuf-compiler build-essential clang llvm-dev libclang-dev jq bc
 
       - name: Checkout
