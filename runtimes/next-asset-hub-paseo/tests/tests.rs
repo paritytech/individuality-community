@@ -1729,14 +1729,14 @@ mod tx_extension_pipeline {
 		"StorageWeightReclaim",
 	];
 
-	/// Every extension of the pipeline, in the order it runs.
+	/// Every extension of the V1 pipeline, in the order it runs.
 	///
 	/// The five ahead of `RestrictOrigins` are the ones that replace the origin, and everything
 	/// that charges the transaction runs after it. An extension that installs an origin the
 	/// payment extensions do not charge therefore needs an allowance in
 	/// `pallet-origin-restriction` to bound it, which is why an addition anywhere in this list is
 	/// a deliberate change rather than an implementation detail.
-	const PIPELINE: [&str; 19] = [
+	const V1_PIPELINE: [&str; 19] = [
 		"UnitTransactionExtension",
 		"VerifyMultiSignature",
 		"AsScarcity",
@@ -1771,7 +1771,7 @@ mod tx_extension_pipeline {
 			.map(|meta| meta.identifier)
 			.collect::<Vec<_>>();
 
-		assert_eq!(identifiers, PIPELINE);
+		assert_eq!(identifiers, V1_PIPELINE);
 	}
 
 	#[test]
@@ -1813,13 +1813,13 @@ mod tx_extension_pipeline {
 					(*version, identifiers)
 				})
 				.collect::<Vec<_>>();
-			assert_eq!(pipelines, vec![(0, V0_PIPELINE.to_vec()), (1, PIPELINE.to_vec())]);
+			assert_eq!(pipelines, vec![(0, V0_PIPELINE.to_vec()), (1, V1_PIPELINE.to_vec())]);
 		});
 	}
 }
 
-/// Runtime-created members-subscriber retries select V1 and retain call authorization.
-mod authorized_ocw_v1 {
+/// Runtime-created members-subscriber retries select V0 and keep call authorization.
+mod authorized_ocw {
 	use asset_test_utils::ExtBuilder;
 	use codec::{Decode, Encode};
 	use frame_support::assert_ok;
@@ -1828,19 +1828,12 @@ mod authorized_ocw_v1 {
 		types::{RingCollectionState, SubscriptionStatus},
 		RingCollectionStates, Subscription,
 	};
-	use next_asset_hub_paseo_runtime::{
-		Address, Balances, Executive, ExistentialDeposit, Runtime, RuntimeCall,
-		TxExtensionOtherVersions, TxExtensionV0, TxExtensionV1, UncheckedExtrinsic,
-		INDIVIDUALITY_EXTENSION_VERSION,
-	};
-	use parachains_common::AccountId;
-	use polkadot_runtime_common::claims as pallet_claims;
-	use sp_keyring::Sr25519Keyring;
+	use next_asset_hub_paseo_runtime::{Executive, Runtime, RuntimeCall, UncheckedExtrinsic};
 	use sp_runtime::{
 		generic,
-		traits::{PipelineVersion, TransactionExtension},
+		traits::ExtensionVariant,
 		transaction_validity::{InvalidTransaction, TransactionValidityError},
-		BoundedVec, DispatchError, MultiSignature,
+		BoundedVec,
 	};
 
 	fn due_replay_missing_roots_call() -> RuntimeCall {
@@ -1874,118 +1867,34 @@ mod authorized_ocw_v1 {
 			.copied()
 	}
 
-	/// Takes the extension the offchain worker builds and enables its `VerifySignature` with a
-	/// valid signature of `sender` over the V1 implication.
-	fn sign_the_ocw_extension(sender: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
-		let mut tx_ext: TxExtensionV1 =
-			<Runtime as CreateAuthorizedTransaction<RuntimeCall>>::create_extension();
-		let rest_ext = (
-			(
-				tx_ext.0 .0 .2.clone(),
-				tx_ext.0 .0 .3.clone(),
-				tx_ext.0 .0 .4.clone(),
-				tx_ext.0 .0 .5.clone(),
-			),
-			tx_ext.0 .1.clone(),
-			tx_ext.0 .2.clone(),
-			tx_ext.0 .3.clone(),
-			tx_ext.0 .4.clone(),
-			tx_ext.0 .5.clone(),
-			tx_ext.0 .6.clone(),
-			tx_ext.0 .7.clone(),
-			tx_ext.0 .8.clone(),
-			tx_ext.0 .9.clone(),
-			tx_ext.0 .10.clone(),
-			(tx_ext.0 .11 .0.clone(), tx_ext.0 .11 .1.clone()),
-		);
-		let message =
-			(INDIVIDUALITY_EXTENSION_VERSION, &call, &rest_ext, &rest_ext.implicit().unwrap())
-				.using_encoded(sp_io::hashing::blake2_256);
-		tx_ext.0 .0 .1 = pallet_verify_signature::VerifySignature::<Runtime>::new_with_signature(
-			MultiSignature::Sr25519(sender.sign(&message)),
-			AccountId::from(sender.public()),
-		);
-		generic::UncheckedExtrinsic::<
-			Address,
-			RuntimeCall,
-			MultiSignature,
-			TxExtensionV0,
-			TxExtensionOtherVersions,
-		>::from_parts(
-			call,
-			generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(
-				TxExtensionOtherVersions::new(tx_ext),
-			)),
-		)
-		.into()
+	fn ocw_transaction(call: RuntimeCall) -> UncheckedExtrinsic {
+		let encoded =
+			<Runtime as CreateAuthorizedTransaction<RuntimeCall>>::create_authorized_transaction(
+				call,
+			)
+			.encode();
+		UncheckedExtrinsic::decode(&mut &encoded[..])
+			.expect("the runtime-created authorized transaction decodes")
 	}
 
 	#[test]
-	fn due_authorized_replay_is_decoded_and_applied_as_v1() {
+	fn due_authorized_replay_selects_v0_and_dispatches_only_while_due() {
 		ExtBuilder::<Runtime>::default().build().execute_with(|| {
+			let identifier = *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER;
 			set_due_replay_missing_root();
-			let call = due_replay_missing_roots_call();
-			let encoded = <Runtime as CreateAuthorizedTransaction<RuntimeCall>>::
-				create_authorized_transaction(call)
-			.encode();
-			let decoded = UncheckedExtrinsic::decode(&mut &encoded[..])
-				.expect("the runtime-created authorized transaction decodes");
-			match &decoded.0.preamble {
-				generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(other)) =>
-					assert_eq!(other.version(), INDIVIDUALITY_EXTENSION_VERSION),
-				preamble => panic!("authorized OCW transaction must select V1, got {preamble:?}"),
-			}
+			let xt = ocw_transaction(due_replay_missing_roots_call());
+			assert!(
+				matches!(xt.0.preamble, generic::Preamble::General(ExtensionVariant::V0(_))),
+				"the authorized OCW transaction must select V0"
+			);
 
-			assert_ok!(Executive::apply_extrinsic(decoded).unwrap());
+			assert_ok!(Executive::apply_extrinsic(xt).unwrap());
 			assert_eq!(
 				missing_root_attempts(),
 				Some(1),
 				"the due authorized call dispatches and records its replay attempt"
 			);
-		});
-	}
 
-	fn authorized_v0(call: RuntimeCall) -> UncheckedExtrinsic {
-		let extension = TxExtensionV0::from((
-			frame_system::AuthorizeCall::<Runtime>::new(),
-			frame_system::CheckNonZeroSender::<Runtime>::new(),
-			frame_system::CheckSpecVersion::<Runtime>::new(),
-			frame_system::CheckTxVersion::<Runtime>::new(),
-			frame_system::CheckGenesis::<Runtime>::new(),
-			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
-			frame_system::CheckNonce::<Runtime>::from(0),
-			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
-			pallet_claims::PrevalidateAttests::<Runtime>::new(),
-			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
-			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
-		));
-		generic::UncheckedExtrinsic::<
-			Address,
-			RuntimeCall,
-			MultiSignature,
-			TxExtensionV0,
-			TxExtensionOtherVersions,
-		>::from_parts(
-			call,
-			generic::Preamble::General(sp_runtime::traits::ExtensionVariant::V0(extension)),
-		)
-		.into()
-	}
-
-	#[test]
-	fn general_v0_authorized_call_dispatches_only_while_its_preconditions_hold() {
-		ExtBuilder::<Runtime>::default().build().execute_with(|| {
-			let identifier = *indiv_pallet_alias_accounts::PEOPLE_IDENTIFIER;
-			set_due_replay_missing_root();
-			let encoded = authorized_v0(due_replay_missing_roots_call()).encode();
-			let decoded = UncheckedExtrinsic::decode(&mut &encoded[..])
-				.expect("a V0 authorised transaction decodes using the real runtime type");
-			assert_ok!(Executive::apply_extrinsic(decoded).unwrap());
-			assert_eq!(
-				RingCollectionStates::<Runtime>::get(identifier).missing_indices.get(&0),
-				Some(&1)
-			);
 			// Model receipt of the root and move past the cooldown. The retry must fail
 			// because this root is no longer missing.
 			RingCollectionStates::<Runtime>::mutate(identifier, |state| {
@@ -1993,36 +1902,12 @@ mod authorized_ocw_v1 {
 			});
 			pallet_timestamp::Now::<Runtime>::put(1_000_000u64);
 			assert_eq!(
-				Executive::apply_extrinsic(authorized_v0(due_replay_missing_roots_call()))
+				Executive::apply_extrinsic(ocw_transaction(due_replay_missing_roots_call()))
 					.unwrap_err(),
 				TransactionValidityError::Invalid(InvalidTransaction::Stale),
-				"V0 AuthorizeCall must not bypass the replay preconditions"
+				"AuthorizeCall must not bypass the replay preconditions"
 			);
 		});
-	}
-
-	/// A valid signature turns the origin into `Signed`, so `AuthorizeCall` no longer authorizes
-	/// the call. The transaction is still valid, so the signer pays a fee for a dispatch that the
-	/// call rejects.
-	#[test]
-	fn signed_authorized_replay_pays_a_fee_and_fails_at_dispatch() {
-		let bob = AccountId::from(Sr25519Keyring::Bob.public());
-		let endowment = 100 * ExistentialDeposit::get();
-		ExtBuilder::<Runtime>::default()
-			.with_balances(vec![
-				(bob.clone(), endowment),
-				(pallet_dap::Pallet::<Runtime>::staging_account(), ExistentialDeposit::get()),
-			])
-			.build()
-			.execute_with(|| {
-				set_due_replay_missing_root();
-				let signed =
-					sign_the_ocw_extension(Sr25519Keyring::Bob, due_replay_missing_roots_call());
-
-				assert_eq!(Executive::apply_extrinsic(signed), Ok(Err(DispatchError::BadOrigin)));
-				assert_eq!(missing_root_attempts(), Some(0), "the replay is not recorded");
-				assert!(Balances::free_balance(&bob) < endowment, "the signer pays the fee");
-			});
 	}
 }
 

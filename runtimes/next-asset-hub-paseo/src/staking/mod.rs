@@ -689,22 +689,10 @@ impl<LocalCall> frame_system::offchain::CreateTransaction<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
 {
-	type Extension = TxExtensionV1;
+	type Extension = TxExtensionV0;
 
-	fn create_transaction(call: RuntimeCall, extension: TxExtensionV1) -> UncheckedExtrinsic {
-		generic::UncheckedExtrinsic::<
-			Address,
-			RuntimeCall,
-			Signature,
-			TxExtensionV0,
-			TxExtensionOtherVersions,
-		>::from_parts(
-			call,
-			generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(
-				TxExtensionOtherVersions::new(extension),
-			)),
-		)
-		.into()
+	fn create_transaction(call: RuntimeCall, extension: TxExtensionV0) -> UncheckedExtrinsic {
+		GenericUncheckedExtrinsic::new_transaction(call, extension).into()
 	}
 }
 

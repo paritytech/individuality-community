@@ -3033,26 +3033,15 @@ impl EthExtra for EthExtraImpl {
 	}
 }
 
-/// Builds a `TxExtensionV1` carrying only authorization-related checks. Used by the
-/// members-subscriber offchain worker when submitting `replay_missing_roots` via
-/// `frame_system::AuthorizeCall`.
+/// Builds a `TxExtensionV0` for the members-subscriber offchain worker, which submits
+/// `replay_missing_roots` through `frame_system::AuthorizeCall`.
 impl<LocalCall> frame_system::offchain::CreateAuthorizedTransaction<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
 {
 	fn create_extension() -> Self::Extension {
-		TxExtensionV1::from((
-			(
-				(),
-				// The OCW has no signer and AuthorizeCall authorizes the call, so signature
-				// verification is disabled.
-				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
-				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
-				frame_system::AuthorizeCall::<Runtime>::new(),
-				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
-				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
-			),
-			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(true),
+		(
+			frame_system::AuthorizeCall::<Runtime>::new(),
 			frame_system::CheckNonZeroSender::<Runtime>::new(),
 			frame_system::CheckSpecVersion::<Runtime>::new(),
 			frame_system::CheckTxVersion::<Runtime>::new(),
@@ -3060,24 +3049,29 @@ where
 			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
 			frame_system::CheckNonce::<Runtime>::from(0),
 			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_pgas_allowance::ChargePGAS::<
-				Runtime,
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::new_skip_pgas(
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
-			),
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
 			pallet_claims::PrevalidateAttests::<Runtime>::new(),
-			(
-				frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
-				pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
-			),
-		))
+			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
+			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
+		)
+			.into()
 	}
 }
 
 /// Unchecked extrinsic type as expected by this runtime.
 pub type UncheckedExtrinsic =
 	pallet_revive::evm::runtime::UncheckedExtrinsic<Address, Signature, EthExtraImpl>;
+
+/// The extrinsic that [`UncheckedExtrinsic`] wraps.
+/// Signed and version 0 general transactions use [`TxExtensionV0`].
+/// General transactions of other versions use [`TxExtensionOtherVersions`].
+pub type GenericUncheckedExtrinsic = generic::UncheckedExtrinsic<
+	Address,
+	RuntimeCall,
+	Signature,
+	TxExtensionV0,
+	TxExtensionOtherVersions,
+>;
 
 /// The runtime migrations per release.
 #[allow(missing_docs)]

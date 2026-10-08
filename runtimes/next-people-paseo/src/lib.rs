@@ -1201,17 +1201,12 @@ impl<LocalCall> CreateTransaction<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
 {
-	type Extension = TxExtensionV1;
+	type Extension = TxExtensionV0;
 	fn create_transaction(
 		call: <Self as frame_system::offchain::CreateTransactionBase<LocalCall>>::RuntimeCall,
 		extension: Self::Extension,
 	) -> Self::Extrinsic {
-		UncheckedExtrinsic::from_parts(
-			call,
-			generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(
-				TxExtensionOtherVersions::new(extension),
-			)),
-		)
+		UncheckedExtrinsic::new_transaction(call, extension)
 	}
 }
 
@@ -1234,21 +1229,7 @@ where
 {
 	fn create_extension() -> Self::Extension {
 		(
-			(
-				(),
-				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
-				indiv_pallet_people::extension::AsPerson::<Runtime>::new(None),
-				indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipant::<Runtime>::new(None),
-				indiv_pallet_score::ScoreAsParticipant::<Runtime>::new(None),
-				indiv_pallet_game::GameAsInvited::<Runtime>::new(None),
-				indiv_pallet_people_lite::extension::PeopleLiteAuth::<Runtime>::new(None),
-				indiv_pallet_members::extension::AsMember::<Runtime>::new(None),
-				indiv_pallet_coinage::extension::AsCoinage::<Runtime>::new(None),
-				indiv_pallet_resources::extension::AsResources::<Runtime>::new(None),
-				indiv_pallet_honour::extension::VoterAuth::<Runtime>::new(None),
-				frame_system::AuthorizeCall::<Runtime>::new(),
-			),
-			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(false),
+			frame_system::AuthorizeCall::<Runtime>::new(),
 			frame_system::CheckNonZeroSender::<Runtime>::new(),
 			frame_system::CheckSpecVersion::<Runtime>::new(),
 			frame_system::CheckTxVersion::<Runtime>::new(),
@@ -1262,10 +1243,7 @@ where
 			)),
 			frame_system::CheckNonce::<Runtime>::from(0),
 			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_skip_feeless_payment::SkipCheckIfFeeless::<
-				Runtime,
-				pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None)),
+			pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None),
 			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 		)
 			.into()
