@@ -210,7 +210,6 @@ pallet-revive = { version = "0.19.1", default-features = false }
 pallet-revive-fixtures = { version = "0.15.1" }
 pallet-scheduler = { version = "50.0.0", default-features = false }
 pallet-session = { version = "49.0.0", default-features = false }
-pallet-skip-feeless-payment = { version = "23.0.0", default-features = false }
 pallet-staking = { version = "49.0.0", default-features = false }
 pallet-staking-async = { version = "0.15.0", default-features = false }
 pallet-staking-async-rc-client = { version = "0.11.0", default-features = false }

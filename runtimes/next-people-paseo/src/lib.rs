@@ -251,10 +251,7 @@ pub type TxExtensionV1 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 		frame_system::CheckEra<Runtime>,
 		frame_system::CheckNonce<Runtime>,
 		frame_system::CheckWeight<Runtime>,
-		pallet_skip_feeless_payment::SkipCheckIfFeeless<
-			Runtime,
-			pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-		>,
+		pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
 		frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
 	),
 >;
@@ -489,10 +486,6 @@ impl pallet_transaction_payment::Config for Runtime {
 	type LengthToFee = LengthToFee;
 	type FeeMultiplierUpdate = SlowAdjustingFeeUpdate<Self>;
 	type WeightInfo = weights::pallet_transaction_payment::WeightInfo<Runtime>;
-}
-
-impl pallet_skip_feeless_payment::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
 }
 
 impl pallet_sudo::Config for Runtime {
@@ -1268,7 +1261,6 @@ construct_runtime!(
 		// Monetary stuff.
 		Balances: pallet_balances = 10,
 		TransactionPayment: pallet_transaction_payment = 11,
-		SkipFeelessPayment: pallet_skip_feeless_payment = 12,
 		OriginRestriction: indiv_pallet_origin_restriction = 13,
 		Assets: pallet_assets = 14,
 		AssetsHolder: pallet_assets_holder = 15,
