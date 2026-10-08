@@ -220,12 +220,12 @@ mod benches {
 			RingCollectionState { ring_count: n, ..worst_case_collection_state::<T>() },
 		);
 
-		// Updates for a single collection
+		let revision = T::MaxRecentRootsPerRing::get().saturating_add(1);
 		let mut updates = BoundedVec::new();
 		for i in 0..n {
 			let update = RingRootUpdate::<T> {
 				ring_index: i as RingIndex,
-				op: RingRootOp::Built { revision: 1, root: T::mock_ring_root(i) },
+				op: RingRootOp::Built { revision, root: T::mock_ring_root(i) },
 			};
 			updates.try_push(update).expect("updates ok");
 		}
@@ -246,6 +246,11 @@ mod benches {
 
 		assert_eq!(ProcessingState::<T>::get().last_processed_sequence, 2);
 		assert_eq!(RingRoots::<T>::iter().count(), n as usize);
+		for i in 0..n {
+			let roots = Pallet::<T>::current_ring_roots(&BENCH_IDENTIFIER, i as RingIndex)
+				.expect("ring stored");
+			assert_eq!(roots.last().map(|r| r.revision), Some(revision));
+		}
 
 		// Every updated index left the missing set
 		assert_eq!(

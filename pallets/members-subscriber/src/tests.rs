@@ -2072,6 +2072,72 @@ mod recent_ring_roots {
 	}
 
 	#[test]
+	fn replay_of_stored_revision_neither_duplicates_nor_evicts() {
+		new_test_ext().execute_with(|| {
+			setup_active_subscription();
+
+			// Window at ring index 0 filled with revisions 1 and 2 (MaxRecentRootsPerRing = 2).
+			let batch1 = mock_ring_root_updates_batch(2, 1000, [0], PEOPLE, 1);
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch1));
+
+			let batch2 = RingRootUpdatesBatch::<Test> {
+				identifier: PEOPLE,
+				sequence: 3,
+				source_time: 2000,
+				updates: bounded_vec![RingRootUpdate {
+					ring_index: 0,
+					op: RingRootOp::Built { revision: 2, root: mock_ring_root(20) },
+				}],
+				next_ring_index: 1,
+			};
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch2));
+
+			// Notifier replays revision 2 with the same sequence and a later source time.
+			let replay = RingRootUpdatesBatch::<Test> {
+				identifier: PEOPLE,
+				sequence: 3,
+				source_time: 5000,
+				updates: bounded_vec![RingRootUpdate {
+					ring_index: 0,
+					op: RingRootOp::Built { revision: 2, root: mock_ring_root(20) },
+				}],
+				next_ring_index: 1,
+			};
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), replay));
+
+			// Window is unchanged: revision 1 is not evicted and revision 2 keeps its
+			// original source time.
+			let roots = ring_roots(PEOPLE, 0).unwrap();
+			assert_eq!(roots.iter().map(|r| r.revision).collect::<Vec<_>>(), vec![1, 2]);
+			assert_eq!(roots[1].source_time, 2000);
+			assert_eq!(get_ring_count(PEOPLE), 1);
+		});
+	}
+
+	#[test]
+	fn replay_of_stored_revision_still_clears_missing_index() {
+		new_test_ext().execute_with(|| {
+			setup_active_subscription();
+
+			// Ring index 0 stored at revision 1 and later marked missing.
+			let batch1 = mock_ring_root_updates_batch(2, 1000, [0], PEOPLE, 1);
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), batch1));
+			RingCollectionStates::<Test>::mutate(PEOPLE, |s| {
+				s.missing_indices.try_insert(0, 0).unwrap();
+			});
+			assert!(is_missing(PEOPLE, 0));
+
+			// Notifier replays revision 1 for ring index 0.
+			let replay = mock_ring_root_updates_batch(2, 3000, [0], PEOPLE, 1);
+			assert_ok!(MembersSubscriber::process_ring_updates(RuntimeOrigin::root(), replay));
+
+			// Index is no longer missing and the window still holds a single record.
+			assert!(!is_missing(PEOPLE, 0));
+			assert_eq!(ring_roots(PEOPLE, 0).unwrap().len(), 1);
+		});
+	}
+
+	#[test]
 	fn evicts_oldest_when_window_full() {
 		new_test_ext().execute_with(|| {
 			setup_active_subscription();
@@ -2655,6 +2721,34 @@ mod proof_verification {
 			next_ring_index: 1,
 		};
 		Pallet::<Test>::store_ring_roots(&batch);
+	}
+
+	#[test]
+	fn replayed_revision_keeps_live_root_valid() {
+		new_test_ext().execute_with(|| {
+			// Revision 1 seeded at `start` and replayed at a later time.
+			let start = 1_000;
+			set_time_secs(start);
+			seed_single_root(PEOPLE, 1, 42);
+			set_time_secs(start + 10);
+			push_revision(PEOPLE, 1, 42);
+			assert_eq!(ring_roots(PEOPLE, RING).unwrap().len(), 1);
+
+			// Retention window measured from the replay passes.
+			set_time_secs(start + 10 + OldRootRetentionDuration::get());
+
+			// Revision 1 is still the live root and verifies.
+			assert_eq!(Pallet::<Test>::ring_revision(&PEOPLE, RING), Some(1));
+			assert!(Pallet::<Test>::is_revision_valid(&PEOPLE, RING, 1));
+			assert_ok!(Pallet::<Test>::verify_membership(
+				&PEOPLE,
+				&proof_for(42),
+				RING,
+				1,
+				CTX,
+				MSG
+			));
+		});
 	}
 
 	#[test]
