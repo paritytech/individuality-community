@@ -119,6 +119,7 @@ system-parachains-common = { workspace = true }
 assets-common = { workspace = true }
 
 [dev-dependencies]
+parachains-runtimes-test-utils = { workspace = true }
 parking_lot = { workspace = true }
 sp-trie = { workspace = true }
 
