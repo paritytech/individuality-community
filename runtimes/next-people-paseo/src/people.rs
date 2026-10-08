@@ -667,6 +667,7 @@ impl indiv_pallet_game::Config for Runtime {
 	type MaxAttendanceHistoryDepth = ConstU32<12>;
 	type NftClaimCredits = NftCredits;
 	type DefaultPhaseDurations = GamePhaseDurations;
+	type MinStepPhaseDuration = ConstU32<24>;
 	type AccountSignature = Signature;
 	type PlayerStatementLimit = PlayerStatementLimit;
 	type PeopleVoteWeight = ConstUint<2>;

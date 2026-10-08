@@ -306,8 +306,8 @@ pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 	/// settled. Settlement happens *early* when an incoming `report` makes a
 	/// named player's tally decisive (via `try_early_attendance_enactment`),
 	/// or *late* when `player_process_step1` resolves the rest after `report_ends`.
-	/// When the counter reaches zero before `report_ends`, `process_reporting`
-	/// leaves the reporting phase early instead of waiting for the deadline.
+	/// When the counter reaches zero before `report_ends`, the `end_reporting` step
+	/// is due early instead of waiting for the deadline.
 	pub pending_attendance: u32,
 	/// The number of airdrop events successfully scheduled for this game; the events carry the
 	/// airdrop indices `0..airdrops_scheduled`. Scheduling stops at the first failure, so this
@@ -596,7 +596,7 @@ impl<T: Config, AccountId: Into<sp_statement_store::AccountId>> GameTimes<T>
 pub struct PhaseDurationValues {
 	/// Registration phase minimum duration in seconds
 	pub registration: u32,
-	/// Shuffle phase duration in seconds
+	/// Shuffle phase duration in seconds. At least `Config::MinStepPhaseDuration`.
 	pub shuffle: u32,
 	/// Minimum time between shuffle and game play time in seconds
 	pub post_shuffle_margin: u32,
@@ -607,7 +607,7 @@ pub struct PhaseDurationValues {
 	/// So the reporting duration must take into account the time needed for players to play the
 	/// game and submit their reports.
 	pub reporting: u32,
-	/// Player process phase duration in seconds
+	/// Player process phase duration in seconds. At least `Config::MinStepPhaseDuration`.
 	pub player_process: u32,
 }
 

@@ -29,7 +29,7 @@ use cumulus_primitives_core::relay_chain::BlockNumber as RelayBlockNumber;
 use frame_support::{
 	traits::{
 		fungible::{Inspect, InspectHold, Mutate},
-		Get as _, Hooks, OffchainWorker, OnIdle,
+		Get, Hooks, OffchainWorker, OnIdle,
 	},
 	weights::{Weight, WeightMeter},
 };
@@ -1453,8 +1453,6 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 		// Run on_poll for pallets that drive state forward
 		let mut wm_people = WeightMeter::with_limit(Weight::MAX);
 		indiv_pallet_people::Pallet::<Runtime>::on_poll(next, &mut wm_people);
-		let mut wm_game = WeightMeter::with_limit(Weight::MAX);
-		indiv_pallet_game::Pallet::<Runtime>::on_poll(next, &mut wm_game);
 		let mut wm_score = WeightMeter::with_limit(Weight::MAX);
 		indiv_pallet_score::Pallet::<Runtime>::on_poll(next, &mut wm_score);
 
@@ -1653,15 +1651,20 @@ const PAYOUT_DURATION: u32 = 300 / GAME_PHASE_SPEEDUP; // 60 blocks (120 seconds
 /// Reduce game phase durations to speed up game integration tests.
 fn reduce_game_phase_durations() {
 	let durations = crate::people::GamePhaseDurations::get();
+	let minimum = <<Runtime as indiv_pallet_game::Config>::MinStepPhaseDuration as Get<u32>>::get();
+	let shuffle = (durations.shuffle / GAME_PHASE_SPEEDUP).max(minimum);
+	let player_process = (durations.player_process / GAME_PHASE_SPEEDUP).max(minimum);
+	let floor_surplus = (shuffle - durations.shuffle / GAME_PHASE_SPEEDUP) +
+		(player_process - durations.player_process / GAME_PHASE_SPEEDUP);
 
 	Game::set_game_phases(
 		RuntimeOrigin::root(),
 		indiv_pallet_game::PhaseDurationValues {
-			registration: durations.registration / GAME_PHASE_SPEEDUP,
-			shuffle: durations.shuffle / GAME_PHASE_SPEEDUP,
+			registration: durations.registration / GAME_PHASE_SPEEDUP - floor_surplus,
+			shuffle,
 			post_shuffle_margin: durations.post_shuffle_margin / GAME_PHASE_SPEEDUP,
 			reporting: durations.reporting / GAME_PHASE_SPEEDUP,
-			player_process: durations.player_process / GAME_PHASE_SPEEDUP,
+			player_process,
 		},
 	)
 	.unwrap();
@@ -1798,9 +1801,9 @@ fn build_alias_airdrop_vrfs(
 }
 
 /// Advance blocks until the airdrop event reaches `Status::Registering`. Tolerates the
-/// event not yet existing — `do_schedule_airdrop` runs inside `Game::on_poll` once a slot
-/// in `GameSchedules` becomes the active game, which takes at least one block after
-/// `Game::schedule_games`.
+/// event not yet existing. `do_schedule_airdrop` runs inside the `start_game` step once a slot
+/// in `GameSchedules` becomes the active game. That takes at least two blocks after
+/// `Game::schedule_games`: the offchain worker submits the step, the next block applies it.
 fn drive_airdrop_to_registering(event_id: [u8; 32]) {
 	const MAX_BLOCKS: u32 = 20_000;
 	let mut seen = false;
