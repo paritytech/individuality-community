@@ -200,8 +200,31 @@ pub type SignedBlock = generic::SignedBlock<Block>;
 /// BlockId type as expected by this runtime.
 pub type BlockId = generic::BlockId<Block>;
 
-/// The extension to the basic transaction logic.
-pub type TransactionExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
+/// The Individuality transaction extension pipeline version.
+pub const INDIVIDUALITY_EXTENSION_VERSION: u8 = 1;
+
+/// The frozen standard transaction extension pipeline version 0.
+/// This follows the fellowship People Polkadot runtime implementation.
+pub type TxExtensionV0 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
+	Runtime,
+	(
+		frame_system::AuthorizeCall<Runtime>,
+		frame_system::CheckNonZeroSender<Runtime>,
+		frame_system::CheckSpecVersion<Runtime>,
+		frame_system::CheckTxVersion<Runtime>,
+		frame_system::CheckGenesis<Runtime>,
+		frame_system::CheckEra<Runtime>,
+		frame_system::CheckNonce<Runtime>,
+		frame_system::CheckWeight<Runtime>,
+		pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
+		frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
+	),
+>;
+
+/// The transaction extension pipeline version 1 carries the Individuality extensions.
+/// This follows the fellowship People Polkadot runtime implementation with the Paseo
+/// authorization extensions.
+pub type TxExtensionV1 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	Runtime,
 	(
 		// Origin modifiers
@@ -232,12 +255,22 @@ pub type TransactionExtension = cumulus_pallet_weight_reclaim::StorageWeightRecl
 			Runtime,
 			pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
 		>,
+		frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
 	),
 >;
 
+/// The transaction extension pipelines a general transaction may select other than version 0.
+pub type TxExtensionOtherVersions =
+	sp_runtime::traits::PipelineAtVers<INDIVIDUALITY_EXTENSION_VERSION, TxExtensionV1>;
+
 /// Unchecked extrinsic type as expected by this runtime.
-pub type UncheckedExtrinsic =
-	generic::UncheckedExtrinsic<Address, RuntimeCall, Signature, TransactionExtension>;
+pub type UncheckedExtrinsic = generic::UncheckedExtrinsic<
+	Address,
+	RuntimeCall,
+	Signature,
+	TxExtensionV0,
+	TxExtensionOtherVersions,
+>;
 
 /// Migrations to apply on runtime upgrade.
 pub type Migrations = (
@@ -280,7 +313,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_version: 3_003_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
-	transaction_version: 5,
+	transaction_version: 6,
 	system_version: 1,
 };
 
@@ -548,7 +581,7 @@ impl pallet_verify_signature::BenchmarkHelper<MultiSignature, AccountId>
 impl pallet_verify_signature::Config for Runtime {
 	type Signature = MultiSignature;
 	type AccountIdentifier = MultiSigner;
-	type WeightInfo = ();
+	type WeightInfo = weights::pallet_verify_signature::WeightInfo<Runtime>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = VerifySignatureBenchmarkHelper;
 }
@@ -1169,7 +1202,7 @@ impl<LocalCall> CreateTransaction<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
 {
-	type Extension = TransactionExtension;
+	type Extension = TxExtensionV0;
 	fn create_transaction(
 		call: <Self as frame_system::offchain::CreateTransactionBase<LocalCall>>::RuntimeCall,
 		extension: Self::Extension,
@@ -1197,21 +1230,7 @@ where
 {
 	fn create_extension() -> Self::Extension {
 		(
-			(
-				(),
-				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
-				indiv_pallet_people::extension::AsPerson::<Runtime>::new(None),
-				indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipant::<Runtime>::new(None),
-				indiv_pallet_score::ScoreAsParticipant::<Runtime>::new(None),
-				indiv_pallet_game::GameAsInvited::<Runtime>::new(None),
-				indiv_pallet_people_lite::extension::PeopleLiteAuth::<Runtime>::new(None),
-				indiv_pallet_members::extension::AsMember::<Runtime>::new(None),
-				indiv_pallet_coinage::extension::AsCoinage::<Runtime>::new(None),
-				indiv_pallet_resources::extension::AsResources::<Runtime>::new(None),
-				indiv_pallet_honour::extension::VoterAuth::<Runtime>::new(None),
-				frame_system::AuthorizeCall::<Runtime>::new(),
-			),
-			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(false),
+			frame_system::AuthorizeCall::<Runtime>::new(),
 			frame_system::CheckNonZeroSender::<Runtime>::new(),
 			frame_system::CheckSpecVersion::<Runtime>::new(),
 			frame_system::CheckTxVersion::<Runtime>::new(),
@@ -1225,10 +1244,8 @@ where
 			)),
 			frame_system::CheckNonce::<Runtime>::from(0),
 			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_skip_feeless_payment::SkipCheckIfFeeless::<
-				Runtime,
-				pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None)),
+			pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None),
+			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 		)
 			.into()
 	}
@@ -1319,6 +1336,7 @@ mod benches {
 		[pallet_session, SessionBench::<Runtime>]
 		[pallet_proxy, Proxy]
 		[pallet_utility, Utility]
+		[pallet_verify_signature, VerifySignature]
 		[pallet_timestamp, Timestamp]
 		[pallet_migrations, MultiBlockMigrations]
 		[pallet_parameters, Parameters]
