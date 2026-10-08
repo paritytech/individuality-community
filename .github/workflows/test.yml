@@ -108,9 +108,6 @@ jobs:
       runtime_asset_hub: artifact:e2e-runtime-wasm
       runtime_people: artifact:e2e-runtime-wasm
       runs_on: parity-large
-      # Temporary: runs the suite from paritytech/polkadot-pop-e2e#43 (V1 extension
-      # pipeline support). To be removed before merge.
-      gate_ref: zebedeusz/v1-extension-pipeline
       # Only the two chains named above are upgraded. Every other chain stays at
       # whatever the fork took from the live network, which is what this build
       # would meet in a real deployment. To move more, set any of these:
