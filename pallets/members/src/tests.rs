@@ -6373,4 +6373,64 @@ mod benchmark_tail_setup_tests {
 			);
 		});
 	}
+
+	#[test]
+	fn tail_fill_queues_members_that_onboard_like_added_members() {
+		TestExt::new().execute_with(|| {
+			create_test_collection(TEST_IDENTIFIER, 1);
+			let added = MockCrypto::member_from_secret(&create_unique_secret());
+			assert_ok!(MembersPallet::add_members(&TEST_IDENTIFIER, vec![added]));
+			let filled = (0..3)
+				.map(|_| MockCrypto::member_from_secret(&create_unique_secret()))
+				.collect::<Vec<_>>();
+			assert_ok!(MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, filled.clone()));
+			let page_size: u32 = <Test as Config>::OnboardingQueuePageSize::get();
+			assert_eq!(
+				MembersPallet::onboarding_queue_tail_free_slots(&TEST_IDENTIFIER),
+				page_size - 4
+			);
+			// A filled member is in use, so it cannot be added again.
+			assert_noop!(
+				MembersPallet::add_members(&TEST_IDENTIFIER, vec![filled[0]]),
+				Error::<Test>::KeyAlreadyInUse
+			);
+			assert_ok!(MembersPallet::onboard_all_and_build_ring(&TEST_IDENTIFIER, 0));
+			for member in filled.iter().chain([&added]) {
+				assert!(matches!(
+					MembersPallet::member_status(&TEST_IDENTIFIER, member),
+					Some(RingPosition::Included { .. })
+				));
+			}
+		});
+	}
+
+	#[test]
+	fn tail_fill_rejects_invalid_batches_without_mutation() {
+		TestExt::new().execute_with(|| {
+			create_test_collection(TEST_IDENTIFIER, 5);
+			let existing = MockCrypto::member_from_secret(&create_unique_secret());
+			assert_ok!(MembersPallet::add_members(&TEST_IDENTIFIER, vec![existing]));
+			let fresh = MockCrypto::member_from_secret(&create_unique_secret());
+			assert_noop!(
+				MembersPallet::fill_onboarding_queue_tail(&NONEXISTENT_IDENTIFIER, vec![fresh]),
+				Error::<Test>::CollectionNotFound
+			);
+			assert_noop!(
+				MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, vec![fresh, fresh]),
+				Error::<Test>::KeyAlreadyInUse
+			);
+			assert_noop!(
+				MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, vec![fresh, existing]),
+				Error::<Test>::KeyAlreadyInUse
+			);
+			let free = MembersPallet::onboarding_queue_tail_free_slots(&TEST_IDENTIFIER);
+			let overflow = (0..=free)
+				.map(|_| MockCrypto::member_from_secret(&create_unique_secret()))
+				.collect::<Vec<_>>();
+			assert_noop!(
+				MembersPallet::fill_onboarding_queue_tail(&TEST_IDENTIFIER, overflow),
+				Error::<Test>::TooManyMembers
+			);
+		});
+	}
 }

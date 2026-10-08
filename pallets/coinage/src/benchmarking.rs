@@ -203,6 +203,17 @@ fn funded_held_tier<T: Config>(
 	tier
 }
 
+/// Derives an onboarding-queue filler member from its page index and denomination group.
+///
+/// The bytes are not a validated public key. Deriving and validating a real key costs a curve
+/// multiplication per filler, and a setup fills up to a full page per group. The measured call
+/// only decodes and re-encodes queued members, so the filler needs the size of a member, not its
+/// validity.
+fn filler_member<T: Config>(i: u32, group: u32) -> MemberOf<T> {
+	let bytes = sp_crypto_hashing::blake2_256(&(i, group).encode());
+	codec::DecodeAll::decode_all(&mut bytes.as_slice()).expect("a member encodes to 32 bytes; qed")
+}
+
 /// Create a new secret key and public key from indices.
 fn new_member_from<T: Config>(i: u32, seed: u32) -> (SecretOf<T>, MemberOf<T>) {
 	let mut entropy = &(i, seed).encode()[..];
@@ -1077,10 +1088,12 @@ mod benches {
 			let remaining = group_size - 1;
 			let fill =
 				free.checked_sub(remaining).ok_or("onboarding tail cannot hold the group")?;
-			let pending = (0..fill)
-				.map(|i| (value, new_member_from::<T>(i, 20_000 + group as u32).1))
-				.collect::<Vec<_>>();
-			RecyclerManager::<T>::load_batch_grouped(INSTANCE_ID, &pending)
+			let pending =
+				(0..fill).map(|i| filler_member::<T>(i, group as u32)).collect::<Vec<_>>();
+			for member in &pending {
+				RecyclersCoinToRecycler::<T>::insert(member, (INSTANCE_ID, value));
+			}
+			T::MemberService::fill_onboarding_queue_tail(&identifier, pending)
 				.expect("target onboarding page must fill");
 			assert_eq!(T::MemberService::onboarding_queue_tail_free_slots(&identifier), remaining);
 		}

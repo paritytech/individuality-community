@@ -3104,6 +3104,33 @@ pub mod pallet {
 		}
 
 		#[cfg(feature = "runtime-benchmarks")]
+		fn fill_onboarding_queue_tail(
+			identifier: &Identifier,
+			members: Vec<MemberOf<T>>,
+		) -> DispatchResult {
+			ensure!(Collections::<T>::contains_key(identifier), Error::<T>::CollectionNotFound);
+			let mut seen = alloc::collections::BTreeSet::new();
+			for member in &members {
+				ensure!(
+					seen.insert(member.encode()) && !Members::<T>::contains_key(identifier, member),
+					Error::<T>::KeyAlreadyInUse
+				);
+			}
+			let (_, tail) = QueuePageIndices::<T>::get(identifier);
+			let mut keys = OnboardingQueue::<T>::get(identifier, tail);
+			keys.try_extend(members.iter().cloned())
+				.map_err(|_| Error::<T>::TooManyMembers)?;
+			OnboardingQueue::<T>::insert(identifier, tail, keys);
+			let position =
+				RingPosition::Onboarding { queue_page: tail, queued_at: T::Clock::now().as_secs() };
+			for member in members {
+				Members::<T>::insert(identifier, &member, position.clone());
+				Self::deposit_event(Event::<T>::MemberAdded { key: member });
+			}
+			Ok(())
+		}
+
+		#[cfg(feature = "runtime-benchmarks")]
 		fn onboard_all_and_build_ring(
 			identifier: &Identifier,
 			ring_index: RingIndex,

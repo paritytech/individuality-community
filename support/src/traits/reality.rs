@@ -661,6 +661,13 @@ pub trait AppendOnlyMembers: MembershipProver {
 	/// Returns the unused slots in the current onboarding tail page for benchmark setup.
 	#[cfg(feature = "runtime-benchmarks")]
 	fn onboarding_queue_tail_free_slots(identifier: &Identifier) -> u32;
+	/// Appends members to the current onboarding tail page without validating them.
+	/// The members must be fresh and fit the page.
+	#[cfg(feature = "runtime-benchmarks")]
+	fn fill_onboarding_queue_tail(
+		identifier: &Identifier,
+		members: Vec<<Self::Crypto as GenerateVerifiable>::Member>,
+	) -> DispatchResult;
 	/// Onboards all queued members and builds the ring until all are included.
 	#[cfg(feature = "runtime-benchmarks")]
 	fn onboard_all_and_build_ring(identifier: &Identifier, ring_index: RingIndex)
