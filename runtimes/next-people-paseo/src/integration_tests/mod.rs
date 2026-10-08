@@ -395,10 +395,7 @@ fn base_tx_ext(_call: RuntimeCall) -> TxExtensionV1 {
 		frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
 		frame_system::CheckNonce::<Runtime>::from(0),
 		frame_system::CheckWeight::<Runtime>::new(),
-		pallet_skip_feeless_payment::SkipCheckIfFeeless::<
-			Runtime,
-			pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-		>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None)),
+		pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None),
 		frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 	)
 		.into()
