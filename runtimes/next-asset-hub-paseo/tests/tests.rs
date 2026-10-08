@@ -28,7 +28,14 @@ use assets_common::local_and_foreign_assets::ForeignAssetReserveData;
 use codec::{Decode, Encode};
 use frame_support::{
 	assert_err, assert_ok,
-	traits::{fungibles::InspectEnumerable, ContainsPair},
+	traits::{
+		fungible::Inspect as FungibleInspect,
+		fungibles::{
+			Create, Inspect as FungiblesInspect, InspectEnumerable, Mutate as FungiblesMutate,
+		},
+		ContainsPair, OnIdle,
+	},
+	weights::Weight,
 };
 use next_asset_hub_paseo_runtime::{
 	genesis_config_presets::EXTERNAL_ASSET_ID,
@@ -36,15 +43,23 @@ use next_asset_hub_paseo_runtime::{
 		bridging, CheckingAccount, DotLocation, ExternalAssetLocation, LocationToAccountId,
 		RelayChainLocation, StakingPot, TrustBackedAssetsPalletLocation, XcmConfig,
 	},
-	AllPalletsWithoutSystem, AssetDeposit, Assets, Balances, Block, ExistentialDeposit,
-	ForeignAssets, ForeignAssetsInstance, MetadataDepositBase, MetadataDepositPerByte,
-	ParachainSystem, PolkadotXcm, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, SessionKeys,
-	ToKusamaXcmRouterInstance, TrustBackedAssetsInstance, XcmpQueue, SLOT_DURATION,
+	AllPalletsWithoutSystem, AssetConversion, AssetDeposit, Assets, Balances, Block, Executive,
+	ExistentialDeposit, ForeignAssets, ForeignAssetsInstance, GenericUncheckedExtrinsic,
+	MetadataDepositBase, MetadataDepositPerByte, ParachainSystem, PolkadotXcm, Runtime,
+	RuntimeCall, RuntimeEvent, RuntimeOrigin, SessionKeys, System, ToKusamaXcmRouterInstance,
+	TrustBackedAssetsInstance, TxExtensionOtherVersions, TxExtensionV1, UncheckedExtrinsic,
+	XcmpQueue, INDIVIDUALITY_EXTENSION_VERSION, SLOT_DURATION,
 };
 use parachains_common::{AccountId, AssetIdForTrustBackedAssets, AuraId, Balance};
+use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
 use sp_consensus_aura::SlotDuration;
 use sp_core::crypto::Ss58Codec;
-use sp_runtime::{traits::MaybeEquivalence, Either, TryRuntimeError};
+use sp_keyring::Sr25519Keyring;
+use sp_runtime::{
+	generic,
+	traits::{MaybeEquivalence, TransactionExtension},
+	Either, MultiSignature, TryRuntimeError,
+};
 use system_parachains_constants::paseo::{
 	consensus::RELAY_CHAIN_SLOT_DURATION_MILLIS, currency::UNITS,
 	fee::WeightToFee as PaseoWeightToFee,
@@ -70,6 +85,155 @@ type AssetIdForTrustBackedAssetsConvertLatest =
 
 type RuntimeHelper = asset_test_utils::RuntimeHelper<Runtime, AllPalletsWithoutSystem>;
 type WeightToFee = PaseoWeightToFee<Runtime>;
+
+/// Builds a general V1 extrinsic from `tx_ext`. It enables `VerifySignature` with a signature of
+/// `sender` over the extensions that follow it.
+fn sign_v1(
+	sender: Sr25519Keyring,
+	call: RuntimeCall,
+	mut tx_ext: TxExtensionV1,
+) -> UncheckedExtrinsic {
+	let (
+		(_, _, scarcity, authorize, pgas, dotns),
+		restrict,
+		non_zero,
+		spec,
+		tx,
+		genesis,
+		era,
+		nonce,
+		weight,
+		payment,
+		claims,
+		tail,
+	) = tx_ext.0.clone();
+	let rest_ext = (
+		(scarcity, authorize, pgas, dotns),
+		restrict,
+		non_zero,
+		spec,
+		tx,
+		genesis,
+		era,
+		nonce,
+		weight,
+		payment,
+		claims,
+		tail,
+	);
+	let message =
+		(INDIVIDUALITY_EXTENSION_VERSION, &call, &rest_ext, &rest_ext.implicit().unwrap())
+			.using_encoded(sp_io::hashing::blake2_256);
+	tx_ext.0 .0 .1 = pallet_verify_signature::VerifySignature::<Runtime>::new_with_signature(
+		MultiSignature::Sr25519(sender.sign(&message)),
+		AccountId::from(sender.public()),
+	);
+	GenericUncheckedExtrinsic::from_parts(
+		call,
+		generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(
+			TxExtensionOtherVersions::new(tx_ext),
+		)),
+	)
+	.into()
+}
+
+/// Creates a sufficient trust-backed asset `id` and a native pool for it, funded by `owner`.
+/// A transaction can then pay its fee in the asset. `owner` needs native balance for the pool
+/// deposits and liquidity.
+fn create_asset_with_native_pool(id: AssetIdForTrustBackedAssets, owner: &AccountId) -> Location {
+	let location = AssetIdForTrustBackedAssetsConvertLatest::convert_back(&id).unwrap();
+	let liquidity = 100 * UNITS;
+	assert_ok!(<Assets as Create<AccountId>>::create(id, owner.clone(), true, 1));
+	assert_ok!(<Assets as FungiblesMutate<AccountId>>::mint_into(id, owner, 2 * liquidity));
+	assert_ok!(AssetConversion::create_pool(
+		RuntimeHelper::origin_of(owner.clone()),
+		Box::new(DotLocation::get()),
+		Box::new(location.clone())
+	));
+	assert_ok!(AssetConversion::add_liquidity(
+		RuntimeHelper::origin_of(owner.clone()),
+		Box::new(DotLocation::get()),
+		Box::new(location.clone()),
+		liquidity,
+		liquidity,
+		1,
+		1,
+		owner.clone()
+	));
+	location
+}
+
+/// Checks where a fee paid in a non-native asset goes. `construct` builds a signed remark from
+/// the signer that pays its fee in the given asset. The fee is swapped to native and goes to the
+/// collators' `StakingPot`, not to the DAP.
+fn assert_asset_fee_goes_to_staking_pot(
+	construct: impl Fn(Sr25519Keyring, RuntimeCall, Location) -> UncheckedExtrinsic,
+) {
+	let alice = AccountId::from(ALICE);
+	let owner = AccountId::from(SOME_ASSET_ADMIN);
+	let bob = AccountId::from(Sr25519Keyring::Bob.public());
+	let buffer = pallet_dap::Pallet::<Runtime>::buffer_account();
+	let staging = pallet_dap::Pallet::<Runtime>::staging_account();
+	let ed = ExistentialDeposit::get();
+	let asset_id = 1;
+
+	ExtBuilder::<Runtime>::default()
+		.with_collators(vec![alice.clone()])
+		.with_session_keys(vec![(
+			alice.clone(),
+			alice,
+			SessionKeys { aura: AuraId::from(sp_core::sr25519::Public::from_raw(ALICE)) },
+		)])
+		.with_balances(vec![
+			(owner.clone(), 1_000 * UNITS),
+			(bob.clone(), 100 * ed),
+			(StakingPot::get(), ed),
+			(buffer.clone(), ed),
+			(staging.clone(), ed),
+		])
+		.with_para_id(ASSET_HUB_ID.into())
+		.build()
+		.execute_with(|| {
+			let location = create_asset_with_native_pool(asset_id, &owner);
+			let endowment = 10 * UNITS;
+			assert_ok!(<Assets as FungiblesMutate<AccountId>>::mint_into(
+				asset_id, &bob, endowment
+			));
+
+			let native = |who: &AccountId| <Balances as FungibleInspect<AccountId>>::balance(who);
+			let bob_native_before = native(&bob);
+			let pot_before = native(&StakingPot::get());
+			let buffer_before = native(&buffer);
+			let staging_before = native(&staging);
+			let issuance_before = <Balances as FungibleInspect<AccountId>>::total_issuance();
+
+			let call = RuntimeCall::System(frame_system::Call::remark { remark: vec![] });
+			let xt = construct(Sr25519Keyring::Bob, call, location.clone());
+			assert_ok!(Executive::apply_extrinsic(xt).unwrap());
+
+			let paid = endowment - <Assets as FungiblesInspect<AccountId>>::balance(asset_id, &bob);
+			assert!(paid > 0, "the fee should have been taken in the asset");
+			assert_eq!(native(&bob), bob_native_before, "no native fee should have been taken");
+			assert!(
+				System::events().iter().any(|record| matches!(
+					&record.event,
+					RuntimeEvent::AssetTxPayment(
+						pallet_asset_conversion_tx_payment::Event::AssetTxFeePaid {
+							who, actual_fee, asset_id, ..
+						}
+					) if *who == bob && *actual_fee == paid && *asset_id == location
+				)),
+				"an AssetTxFeePaid event should report the asset fee"
+			);
+			assert!(native(&StakingPot::get()) > pot_before, "the swapped fee goes to the pot");
+
+			<AllPalletsWithoutSystem as OnIdle<_>>::on_idle(System::block_number(), Weight::MAX);
+
+			assert_eq!(native(&buffer), buffer_before, "the DAP buffer receives nothing");
+			assert_eq!(native(&staging), staging_before, "the DAP staging receives nothing");
+			assert_eq!(<Balances as FungibleInspect<AccountId>>::total_issuance(), issuance_before);
+		});
+}
 
 fn collator_session_key(account: [u8; 32]) -> CollatorSessionKey<Runtime> {
 	CollatorSessionKey::new(
@@ -956,14 +1120,24 @@ mod dap {
 	use sp_core::U256;
 	use sp_keyring::Sr25519Keyring;
 	use sp_runtime::{generic, MultiSignature};
+	use xcm::latest::Location;
 
 	use asset_test_utils::ExtBuilder;
 
-	use super::ALICE;
+	use super::{assert_asset_fee_goes_to_staking_pot, ALICE};
 
 	const BOB: [u8; 32] = [2u8; 32];
 
 	fn construct_extrinsic(sender: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
+		construct_extrinsic_paying_in(sender, call, None)
+	}
+
+	/// Builds a V0 signed extrinsic that pays its fee in `asset_id`, or natively for `None`.
+	fn construct_extrinsic_paying_in(
+		sender: Sr25519Keyring,
+		call: RuntimeCall,
+		asset_id: Option<Location>,
+	) -> UncheckedExtrinsic {
 		let account_id = AccountId::from(sender.public());
 		let nonce = frame_system::Pallet::<Runtime>::account(&account_id).nonce;
 		let tx_ext = TxExtensionV0::from((
@@ -975,7 +1149,7 @@ mod dap {
 			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
 			frame_system::CheckNonce::<Runtime>::from(nonce),
 			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, asset_id),
 			pallet_claims::PrevalidateAttests::<Runtime>::new(),
 			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
@@ -1117,6 +1291,13 @@ mod dap {
 	}
 
 	#[test]
+	fn asset_fee_goes_to_staking_pot() {
+		assert_asset_fee_goes_to_staking_pot(|sender, call, asset_id| {
+			construct_extrinsic_paying_in(sender, call, Some(asset_id))
+		});
+	}
+
+	#[test]
 	fn dust_removal_goes_to_dap_buffer() {
 		let alice = AccountId::from(ALICE);
 		let bob = AccountId::from(BOB);
@@ -1170,13 +1351,14 @@ mod pgas_fees {
 		traits::{
 			fungible::Inspect as FungibleInspect,
 			fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
+			OnIdle,
 		},
+		weights::Weight,
 	};
 	use next_asset_hub_paseo_runtime::{
-		Address, Assets, Balances, Executive, ExistentialDeposit, NftClaims, PgasAssetId,
-		PgasMinBalance, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, Scarcity, SessionKeys,
-		System, TransactionPayment, TxExtensionOtherVersions, TxExtensionV0, TxExtensionV1,
-		UncheckedExtrinsic,
+		AllPalletsWithoutSystem, Assets, Balances, Executive, ExistentialDeposit, NftClaims,
+		PgasAssetId, PgasMinBalance, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, Scarcity,
+		SessionKeys, System, TransactionPayment, TxExtensionV1, UncheckedExtrinsic,
 	};
 	use parachains_common::{AccountId, AuraId};
 	use paseo_runtime_constants::system_parachain::ASSET_HUB_ID;
@@ -1184,20 +1366,19 @@ mod pgas_fees {
 	use sp_keyring::Sr25519Keyring;
 	use sp_runtime::{
 		generic,
-		traits::TransactionExtension,
 		transaction_validity::{InvalidTransaction, TransactionValidityError},
-		MultiSignature,
 	};
+	use xcm::latest::Location;
 
 	use asset_test_utils::ExtBuilder;
 
-	use super::ALICE;
+	use super::{assert_asset_fee_goes_to_staking_pot, sign_v1, ALICE};
 
 	/// Builds a signed extrinsic whose `ChargePGAS` has the PGAS path enabled. The `dap` module's
 	/// helper cannot be reused: it intentionally creates a legacy V0 signed transaction with
 	/// ordinary asset payment rather than a V1 `ChargePGAS` transaction.
 	fn construct_extrinsic(sender: Sr25519Keyring, call: RuntimeCall) -> UncheckedExtrinsic {
-		construct_extrinsic_with_tip(sender, call, 0)
+		construct_extrinsic_with_payment(sender, call, 0, None)
 	}
 
 	fn construct_extrinsic_with_tip(
@@ -1205,80 +1386,54 @@ mod pgas_fees {
 		call: RuntimeCall,
 		tip: u128,
 	) -> UncheckedExtrinsic {
+		construct_extrinsic_with_payment(sender, call, tip, None)
+	}
+
+	/// Builds the V1 extrinsic. `ChargeAssetTxPayment` pays in `asset_id`, or natively for `None`,
+	/// when `ChargePGAS` does not take the fee in PGAS.
+	fn construct_extrinsic_with_payment(
+		sender: Sr25519Keyring,
+		call: RuntimeCall,
+		tip: u128,
+		asset_id: Option<Location>,
+	) -> UncheckedExtrinsic {
 		let account_id = AccountId::from(sender.public());
 		let nonce = frame_system::Pallet::<Runtime>::account(&account_id).nonce;
-		let mut tx_ext = TxExtensionV1::from((
-			(
-				(),
-				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
-				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
-				frame_system::AuthorizeCall::<Runtime>::new(),
-				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
-				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
-			),
-			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(true),
-			frame_system::CheckNonZeroSender::<Runtime>::new(),
-			frame_system::CheckSpecVersion::<Runtime>::new(),
-			frame_system::CheckTxVersion::<Runtime>::new(),
-			frame_system::CheckGenesis::<Runtime>::new(),
-			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
-			frame_system::CheckNonce::<Runtime>::from(nonce),
-			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_pgas_allowance::ChargePGAS::<
-				Runtime,
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::from(pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
-				tip, None,
-			)),
-			pallet_claims::PrevalidateAttests::<Runtime>::new(),
-			(
-				frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
-				pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
-			),
-		));
-		let rest_ext = (
-			(
-				tx_ext.0 .0 .2.clone(),
-				tx_ext.0 .0 .3.clone(),
-				tx_ext.0 .0 .4.clone(),
-				tx_ext.0 .0 .5.clone(),
-			),
-			tx_ext.0 .1.clone(),
-			tx_ext.0 .2.clone(),
-			tx_ext.0 .3.clone(),
-			tx_ext.0 .4.clone(),
-			tx_ext.0 .5.clone(),
-			tx_ext.0 .6.clone(),
-			tx_ext.0 .7.clone(),
-			tx_ext.0 .8.clone(),
-			tx_ext.0 .9.clone(),
-			tx_ext.0 .10.clone(),
-			(tx_ext.0 .11 .0.clone(), tx_ext.0 .11 .1.clone()),
-		);
-		let message = (
-			next_asset_hub_paseo_runtime::INDIVIDUALITY_EXTENSION_VERSION,
-			&call,
-			&rest_ext,
-			&rest_ext.implicit().unwrap(),
-		)
-			.using_encoded(sp_io::hashing::blake2_256);
-		tx_ext.0 .0 .1 = pallet_verify_signature::VerifySignature::<Runtime>::new_with_signature(
-			MultiSignature::Sr25519(sender.sign(&message)),
-			account_id,
-		);
-		generic::UncheckedExtrinsic::<
-			Address,
-			RuntimeCall,
-			MultiSignature,
-			TxExtensionV0,
-			TxExtensionOtherVersions,
-		>::from_parts(
+		sign_v1(
+			sender,
 			call,
-			generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(
-				TxExtensionOtherVersions::new(tx_ext),
+			TxExtensionV1::from((
+				(
+					(),
+					pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
+					indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
+					frame_system::AuthorizeCall::<Runtime>::new(),
+					indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
+					indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
+				),
+				indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(true),
+				frame_system::CheckNonZeroSender::<Runtime>::new(),
+				frame_system::CheckSpecVersion::<Runtime>::new(),
+				frame_system::CheckTxVersion::<Runtime>::new(),
+				frame_system::CheckGenesis::<Runtime>::new(),
+				frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
+				frame_system::CheckNonce::<Runtime>::from(nonce),
+				frame_system::CheckWeight::<Runtime>::new(),
+				pallet_pgas_allowance::ChargePGAS::<
+					Runtime,
+					pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
+				>::from(
+					pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
+						tip, asset_id,
+					),
+				),
+				pallet_claims::PrevalidateAttests::<Runtime>::new(),
+				(
+					frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
+					pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
+				),
 			)),
 		)
-		.into()
 	}
 
 	#[test]
@@ -1642,6 +1797,61 @@ mod pgas_fees {
 					"no fee should have been taken in PGAS"
 				);
 			});
+	}
+
+	/// A native fee that a V1 transaction pays goes to the DAP buffer, as with V0.
+	#[test]
+	fn native_fee_goes_to_dap_buffer() {
+		let alice = AccountId::from(ALICE);
+		let bob = AccountId::from(Sr25519Keyring::Bob.public());
+		let buffer = pallet_dap::Pallet::<Runtime>::buffer_account();
+		let staging = pallet_dap::Pallet::<Runtime>::staging_account();
+		let ed = ExistentialDeposit::get();
+
+		// `on_idle` drains staging with `Preservation::Preserve`, so staging holds ED.
+		ExtBuilder::<Runtime>::default()
+			.with_collators(vec![alice.clone()])
+			.with_session_keys(vec![(
+				alice.clone(),
+				alice,
+				SessionKeys { aura: AuraId::from(sp_core::sr25519::Public::from_raw(ALICE)) },
+			)])
+			.with_balances(vec![(bob.clone(), 100 * ed), (buffer.clone(), ed), (staging, ed)])
+			.with_para_id(ASSET_HUB_ID.into())
+			.build()
+			.execute_with(|| {
+				let bob_before = <Balances as FungibleInspect<AccountId>>::balance(&bob);
+				let buffer_before = <Balances as FungibleInspect<AccountId>>::balance(&buffer);
+				let issuance_before = <Balances as FungibleInspect<AccountId>>::total_issuance();
+
+				let call = RuntimeCall::System(frame_system::Call::remark { remark: vec![] });
+				let xt = construct_extrinsic(Sr25519Keyring::Bob, call);
+				assert_ok!(Executive::apply_extrinsic(xt).unwrap());
+
+				let paid = bob_before - <Balances as FungibleInspect<AccountId>>::balance(&bob);
+				assert!(paid > 0, "the fee should have been taken from the native balance");
+
+				<AllPalletsWithoutSystem as OnIdle<_>>::on_idle(
+					System::block_number(),
+					Weight::MAX,
+				);
+
+				assert_eq!(
+					<Balances as FungibleInspect<AccountId>>::balance(&buffer),
+					buffer_before + paid
+				);
+				assert_eq!(
+					<Balances as FungibleInspect<AccountId>>::total_issuance(),
+					issuance_before
+				);
+			});
+	}
+
+	#[test]
+	fn asset_fee_goes_to_staking_pot() {
+		assert_asset_fee_goes_to_staking_pot(|sender, call, asset_id| {
+			construct_extrinsic_with_payment(sender, call, 0, Some(asset_id))
+		});
 	}
 }
 
