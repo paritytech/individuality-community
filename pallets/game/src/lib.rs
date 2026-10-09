@@ -232,6 +232,7 @@ extern crate self as indiv_pallet_game;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 mod extension;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
@@ -316,7 +317,11 @@ pub mod pallet {
 
 	pub(crate) const LOG_TARGET: &str = "runtime::indiv-pallet-game";
 
+	/// The current storage version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -2030,6 +2035,7 @@ pub mod pallet {
 				rounds: schedule.rounds,
 				pending_attendance: 0,
 				airdrops_scheduled,
+				tenure_claim_opens: game_play_time.saturating_sub(schedule.tenure_claim_window),
 			});
 			GameHistory::<T>::insert(index, game_play_time);
 

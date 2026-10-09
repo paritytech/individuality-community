@@ -77,6 +77,8 @@ impl crate::Config for Test {
 	type ClaimsChainTreeTtl = ClaimsChainTreeTtl;
 	type MaxRootsPerSweep = MaxRootsPerSweep;
 	type MaxAwardBlocksPerSweep = MaxAwardBlocksPerSweep;
+	type MaxTenureThresholds = MaxTenureThresholds;
+	type DefaultTenureThresholds = DefaultTenureThresholds;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = MockCreditsBenchmarkHelper;
 }
@@ -143,6 +145,14 @@ impl CreditsWeightInfo for MockWeightInfo {
 	fn authorize_sweep_expired_awards() -> Weight {
 		Weight::from_parts(70, 0)
 	}
+	fn set_tenure_thresholds() -> Weight {
+		Weight::from_parts(80, 0)
+	}
+	/// Non-zero and scales with `n`, so a claim that awards fewer credits than
+	/// `MaxTenureThresholds` refunds a measurable amount.
+	fn claim_tenure_credits(n: u32) -> Weight {
+		Weight::from_parts(600 + 10 * n as u64, 60 + n as u64)
+	}
 }
 
 parameter_types! {
@@ -164,7 +174,14 @@ parameter_types! {
 	pub storage ClaimsChainTreeTtl: u64 = 2 * 24 * 60 * 60;
 	/// Below `root_ttl`, as the `integrity_test` requires.
 	pub storage AwardRetentionTtl: u64 = 24 * 60 * 60;
+	pub const MaxTenureThresholds: u32 = 4;
+	/// One and two weeks.
+	pub DefaultTenureThresholds: crate::TenureThresholdsOf<Test> =
+		frame_support::BoundedVec::truncate_from(vec![WEEK, 2 * WEEK]);
 }
+
+/// A week in seconds.
+pub const WEEK: u64 = 7 * 24 * 60 * 60;
 
 /// Captures the XCM messages the pallet sends to the NFT claims chain and can be made to fail
 /// so that a test can drive the retry path.
