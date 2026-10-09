@@ -23,6 +23,7 @@ serde_json = { features = ["alloc"], workspace = true }
 # Substrate
 frame-benchmarking = { workspace = true, optional = true }
 frame-executive = { workspace = true }
+frame-metadata-hash-extension = { workspace = true }
 frame-support = { workspace = true }
 frame-system = { workspace = true }
 frame-system-benchmarking = { workspace = true, optional = true }
@@ -42,7 +43,6 @@ pallet-multisig = { workspace = true }
 pallet-parameters = { workspace = true }
 pallet-proxy = { workspace = true }
 pallet-session = { workspace = true }
-pallet-skip-feeless-payment = { workspace = true }
 pallet-sudo = { workspace = true }
 pallet-timestamp = { workspace = true }
 pallet-transaction-payment = { workspace = true }
@@ -118,6 +118,7 @@ system-parachains-common = { workspace = true }
 assets-common = { workspace = true }
 
 [dev-dependencies]
+parachains-runtimes-test-utils = { workspace = true }
 parking_lot = { workspace = true }
 sp-trie = { workspace = true }
 
@@ -139,6 +140,7 @@ std = [
 	"enumflags2/std",
 	"frame-benchmarking?/std",
 	"frame-executive/std",
+	"frame-metadata-hash-extension/std",
 	"frame-support/std",
 	"frame-system-benchmarking?/std",
 	"frame-system-rpc-runtime-api/std",
@@ -180,7 +182,6 @@ std = [
 	"pallet-parameters/std",
 	"pallet-proxy/std",
 	"pallet-session/std",
-	"pallet-skip-feeless-payment/std",
 	"pallet-sudo/std",
 	"pallet-timestamp/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",
@@ -269,7 +270,6 @@ runtime-benchmarks = [
 	"pallet-parameters/runtime-benchmarks",
 	"pallet-proxy/runtime-benchmarks",
 	"pallet-session/runtime-benchmarks",
-	"pallet-skip-feeless-payment/runtime-benchmarks",
 	"pallet-sudo/runtime-benchmarks",
 	"pallet-timestamp/runtime-benchmarks",
 	"pallet-transaction-payment/runtime-benchmarks",
@@ -298,6 +298,12 @@ coinage-benchmark-proof-cache-regenerate = [
 # expose those host functions (executor param `EccRfc163`). Weights in this repository
 # are measured against the default in-runtime backend.
 ec-crypto-hostcalls = ["indiv-support/ec-crypto-hostcalls"]
+
+# Enable metadata hash generation at compile time for the `CheckMetadataHash` extension.
+metadata-hash = ["substrate-wasm-builder?/metadata-hash"]
+
+# A feature that should be enabled when the runtime should be built for on-chain deployment.
+on-chain-release-build = ["metadata-hash", "sp-api/disable-logging"]
 
 try-runtime = [
 	"assets-common/try-runtime",
@@ -344,7 +350,6 @@ try-runtime = [
 	"pallet-parameters/try-runtime",
 	"pallet-proxy/try-runtime",
 	"pallet-session/try-runtime",
-	"pallet-skip-feeless-payment/try-runtime",
 	"pallet-sudo/try-runtime",
 	"pallet-timestamp/try-runtime",
 	"pallet-transaction-payment/try-runtime",

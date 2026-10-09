@@ -55,10 +55,11 @@ fn build_unload_paid_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let encoded_implications = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext_for_implication;
 		let implication_implicit = &rest_ext_for_implication.implicit().unwrap();
 		(implication_base, implication_explicit, implication_implicit).encode()
