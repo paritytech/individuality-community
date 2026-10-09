@@ -28,7 +28,7 @@ use frame_support::{
 	BoundedVec,
 };
 use indiv_pallet_members::RingMode;
-use indiv_support::traits::RingExponent;
+use indiv_support::traits::{RecognitionPeriod, RingExponent, MAX_RECOGNITION_PERIODS};
 use sp_runtime::transaction_validity::{
 	InvalidTransaction::{self, BadSigner},
 	TransactionSource,
@@ -1745,6 +1745,237 @@ fn set_alias_account_fails_for_invalid_context_in_extension() {
 		// Verify that no alias was set.
 		assert!(crate::AccountToAlias::<Test>::get(10).is_none());
 	});
+}
+
+mod tenure {
+	use super::*;
+	use frame_support::traits::{GetStorageVersion, StorageVersion};
+	use migration::{v0, MigrateV0ToV1};
+
+	fn create_collection() {
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+	}
+
+	fn suspend(id: PersonalId) {
+		assert_ok!(PeoplePallet::start_people_set_mutation_session());
+		assert_ok!(PeoplePallet::suspend_personhood(&[id]));
+		assert_ok!(PeoplePallet::end_people_set_mutation_session());
+		Members::process_maintenance();
+	}
+
+	fn history(id: PersonalId) -> RecognitionHistory {
+		PeoplePallet::recognition_history(id).expect("person exists")
+	}
+
+	#[test]
+	fn recognition_opens_a_period() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			MockNow::set(&1_000);
+
+			// Person recognized at 1000.
+			let (id, _, _) = generate_people_with_index(0, 0)[0];
+
+			// A single period is open since recognition and nothing is settled.
+			let history = history(id);
+			assert_eq!(history.recognized_since, Some(1_000));
+			assert!(history.periods.is_empty());
+			assert_eq!(history.settled, 0);
+			assert_eq!(history.tenure(1_000), 0);
+			// Tenure grows with time.
+			assert_eq!(history.tenure(1_300), 300);
+		});
+	}
+
+	#[test]
+	fn suspension_closes_the_period() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			MockNow::set(&1_000);
+			let (id, _, _) = generate_people_with_index(0, 0)[0];
+			Members::process_maintenance();
+
+			// Person suspended at 1500.
+			MockNow::set(&1_500);
+			suspend(id);
+
+			// The period is closed and tenure stops growing.
+			let history = history(id);
+			assert_eq!(history.recognized_since, None);
+			assert_eq!(
+				history.periods.to_vec(),
+				vec![RecognitionPeriod { start: 1_000, end: 1_500 }]
+			);
+			assert_eq!(history.tenure(1_500), 500);
+			assert_eq!(history.tenure(9_000), 500);
+		});
+	}
+
+	#[test]
+	fn resume_opens_a_new_period() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			MockNow::set(&1_000);
+			let (id, _, _) = generate_people_with_index(0, 0)[0];
+			Members::process_maintenance();
+			MockNow::set(&1_500);
+			suspend(id);
+
+			// Person recognized again at 2000.
+			MockNow::set(&2_000);
+			assert_ok!(PeoplePallet::recognize_personhood(id, None));
+
+			// The closed period is kept and a new one is open.
+			let history = history(id);
+			assert_eq!(history.recognized_since, Some(2_000));
+			assert_eq!(
+				history.periods.to_vec(),
+				vec![RecognitionPeriod { start: 1_000, end: 1_500 }]
+			);
+			// Tenure excludes the suspension.
+			assert_eq!(history.tenure(2_100), 600);
+		});
+	}
+
+	#[test]
+	fn resume_fails_if_not_suspended() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			let (id, _, _) = generate_people_with_index(0, 0)[0];
+
+			assert_noop!(PeoplePallet::recognize_personhood(id, None), Error::<Test>::NotSuspended);
+		});
+	}
+
+	#[test]
+	fn oldest_period_is_settled_when_the_list_is_full() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			MockNow::set(&0);
+			let (id, _, _) = generate_people_with_index(0, 0)[0];
+			Members::process_maintenance();
+
+			// One suspension more than the list holds, each period 10 seconds long.
+			for i in 0..=MAX_RECOGNITION_PERIODS as u64 {
+				if i > 0 {
+					MockNow::set(&(i * 100));
+					assert_ok!(PeoplePallet::recognize_personhood(id, None));
+					Members::process_maintenance();
+				}
+				MockNow::set(&(i * 100 + 10));
+				suspend(id);
+			}
+
+			// The list stays full and the first period survives only in `settled`.
+			let history = history(id);
+			assert_eq!(history.periods.len(), MAX_RECOGNITION_PERIODS as usize);
+			assert_eq!(history.periods[0], RecognitionPeriod { start: 100, end: 110 });
+			assert_eq!(history.settled, 10);
+			assert_eq!(history.tenure(10_000), 10 * (MAX_RECOGNITION_PERIODS as u64 + 1));
+		});
+	}
+
+	#[test]
+	fn unknown_person_has_no_history() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			generate_people_with_index(0, 0);
+
+			assert_eq!(PeoplePallet::recognition_history(42), None);
+		});
+	}
+
+	#[test]
+	fn force_recognize_personhood_opens_a_period() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			MockNow::set(&7_000);
+			let secret = MockCrypto::new_secret([9; 32]);
+			let key = MockCrypto::member_from_secret(&secret);
+
+			assert_ok!(PeoplePallet::force_recognize_personhood(RuntimeOrigin::root(), vec![key]));
+
+			let id = Keys::<Test>::get(key).expect("person recognized");
+			assert_eq!(history(id).recognized_since, Some(7_000));
+		});
+	}
+
+	#[test]
+	fn failed_suspension_leaves_records_untouched() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			let people = generate_people_with_index(0, 1);
+			let (a, _, _) = people[0];
+			let (b, _, _) = people[1];
+			Members::process_maintenance();
+			// Person A holds an account and no mutation session is open.
+			System::set_block_number(1);
+			let origin = RuntimeOrigin::from(PeopleOrigin::PersonalIdentity(a));
+			assert_ok!(PeoplePallet::set_personal_id_account(origin, 42, 0));
+
+			// Suspending A and B fails in the member collection and writes nothing for A.
+			assert_noop!(
+				PeoplePallet::suspend_personhood(&[a, b]),
+				indiv_pallet_members::Error::<Test>::NoRemovalSession
+			);
+		});
+	}
+
+	#[test]
+	fn migration_adds_history_from_member_status() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			// Included, onboarding and suspended people exist under the old record layout.
+			let people = generate_people_with_index(0, 1);
+			let (included, _, _) = people[0];
+			let (suspended, _, _) = people[1];
+			Members::process_maintenance();
+			suspend(suspended);
+			let (onboarding, _, _) = generate_people_with_index(2, 2)[0];
+			for id in [included, onboarding, suspended] {
+				let record = People::<Test>::get(id).expect("person exists");
+				v0::People::<Test>::insert(
+					id,
+					v0::PersonRecord { key: record.key, account: record.account },
+				);
+			}
+			// A person whose key the collection has never seen.
+			let unknown = 99;
+			let unknown_key = MockCrypto::member_from_secret(&MockCrypto::new_secret([77; 32]));
+			v0::People::<Test>::insert(
+				unknown,
+				v0::PersonRecord { key: unknown_key, account: None },
+			);
+			StorageVersion::new(0).put::<PeoplePallet>();
+			MockNow::set(&5_000);
+
+			// The migration runs.
+			#[cfg(feature = "try-runtime")]
+			let state = MigrateV0ToV1::<Test>::pre_upgrade().expect("pre-upgrade passes");
+			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+			#[cfg(feature = "try-runtime")]
+			assert_ok!(MigrateV0ToV1::<Test>::post_upgrade(state));
+
+			// Active members get a period open since the upgrade, the others none.
+			assert_eq!(history(included).recognized_since, Some(5_000));
+			assert_eq!(history(onboarding).recognized_since, Some(5_000));
+			assert_eq!(history(suspended).recognized_since, None);
+			assert_eq!(history(unknown).recognized_since, None);
+			for id in [included, onboarding, suspended, unknown] {
+				let record = People::<Test>::get(id).expect("person exists");
+				assert!(record.history.periods.is_empty());
+				assert_eq!(record.history.settled, 0);
+			}
+			assert_eq!(PeoplePallet::on_chain_storage_version(), StorageVersion::new(1));
+		});
+	}
 }
 
 mod create_people_collection {
