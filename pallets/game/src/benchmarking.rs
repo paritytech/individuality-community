@@ -1352,6 +1352,7 @@ mod benches {
 				has_ever_reached_personhood: true,
 				recognition: indiv_pallet_score::Recognition::ExternallyRecognized,
 				last_attended_game: None,
+				attended_games_while_recognized: 0,
 			},
 		);
 		let deposit = T::PlayDeposit::new(&caller, pallet::PlayDepositAmount::<T>::get())?;
@@ -2321,6 +2322,7 @@ mod benches {
 				has_ever_reached_personhood: true,
 				recognition: indiv_pallet_score::Recognition::ExternallyRecognized,
 				last_attended_game: Some(game.index),
+				attended_games_while_recognized: 0,
 			},
 		);
 

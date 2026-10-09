@@ -5693,6 +5693,7 @@ mod airdrop {
 				has_ever_reached_personhood: false,
 				recognition,
 				last_attended_game,
+				attended_games_while_recognized: 0,
 			},
 		);
 	}
