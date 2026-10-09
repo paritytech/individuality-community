@@ -7,6 +7,6 @@
   },
   "dependencies": {
     "@polkadot-api/descriptors": "file:.papi/descriptors",
-    "polkadot-api": "^2.1.7"
+    "polkadot-api": "^3.0.0"
   }
 }
