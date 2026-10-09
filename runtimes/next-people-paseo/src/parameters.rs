@@ -99,13 +99,25 @@ pub mod dynamic_params {
 			PalletId(*b"pop/pads").into_account_truncating();
 	}
 
-	/// Lite-person registration pricing.
+	/// Lite-person registration pricing, cap and throttling.
 	#[dynamic_pallet_params]
 	#[codec(index = 3)]
 	pub mod lite_personhood {
 		/// Non-refundable native fee required to register as a lite person.
 		#[codec(index = 0)]
 		pub static RegistrationFee: Balance = 75 * UNITS;
+		/// Number of lite people from which paid registrations are throttled.
+		#[codec(index = 1)]
+		pub static PaidRegistrationThreshold: u32 = 1_000;
+		/// Length of a paid registration period in seconds.
+		#[codec(index = 2)]
+		pub static PaidRegistrationPeriod: u32 = SECONDS_PER_DAY;
+		/// Number of paid registrations accepted per period once the threshold is reached.
+		#[codec(index = 3)]
+		pub static PaidRegistrationsPerPeriod: u32 = 10;
+		/// Maximum number of lite people, attested and paid together.
+		#[codec(index = 4)]
+		pub static MaxLitePeople: u32 = 10_000;
 	}
 }
 
@@ -198,6 +210,20 @@ pub type LongTermStorageAllowanceForLitePeople =
 /// pot account from existing.
 pub type LitePersonRegistrationFee =
 	AtLeast<dynamic_params::lite_personhood::RegistrationFee, ExistentialDeposit>;
+
+/// Maximum number of lite people. Any value is valid; zero stops every lite registration.
+pub type MaxLitePeople = dynamic_params::lite_personhood::MaxLitePeople;
+
+/// Lite people count from which paid registrations are throttled. Any value is valid.
+pub type LitePaidRegistrationThreshold = dynamic_params::lite_personhood::PaidRegistrationThreshold;
+
+/// Paid lite registration period, kept non-zero.
+pub type LitePaidRegistrationPeriod =
+	AtLeastOne<dynamic_params::lite_personhood::PaidRegistrationPeriod>;
+
+/// Paid lite registrations per period. Zero stops paid registrations beyond the threshold.
+pub type LitePaidRegistrationsPerPeriod =
+	dynamic_params::lite_personhood::PaidRegistrationsPerPeriod;
 
 /// Any account is a valid prize source, so the value is read unclamped.
 pub type PeopleAirdropsPrizeSource = dynamic_params::people_airdrops::PrizeSource;

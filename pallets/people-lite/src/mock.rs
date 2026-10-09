@@ -138,6 +138,11 @@ impl crate::Config for Test {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type MaxLitePeople = MaxLitePeople;
+	type PaidRegistrationClock = TestClock;
+	type PaidRegistrationThreshold = PaidRegistrationThreshold;
+	type PaidRegistrationPeriod = PaidRegistrationPeriod;
+	type PaidRegistrationsPerPeriod = PaidRegistrationsPerPeriod;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = MockMemberService;
@@ -153,6 +158,11 @@ impl crate::Config for Test {
 
 parameter_types! {
 	pub storage LitePersonRegistrationFee: u64 = 10;
+	pub storage MaxLitePeople: u32 = u32::MAX;
+	pub storage PaidRegistrationThreshold: u32 = 1_000;
+	pub storage PaidRegistrationPeriod: u32 = 24 * 60 * 60;
+	pub storage PaidRegistrationsPerPeriod: u32 = 2;
+	pub storage TestUnixTime: u64 = 0;
 	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
 	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
 		b"paseo".to_vec().try_into().expect("network suffix fits");
@@ -168,6 +178,14 @@ thread_local! {
 	static MOCK_FAIL_NEXT_ADD_MEMBERS: RefCell<bool> = const { RefCell::new(false) };
 	static MOCK_REGISTERED_CONSUMERS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 	static MOCK_FAIL_NEXT_CONSUMER_REGISTRATION: RefCell<bool> = const { RefCell::new(false) };
+}
+
+/// Unix time read from [`TestUnixTime`].
+pub struct TestClock;
+impl frame_support::traits::UnixTime for TestClock {
+	fn now() -> core::time::Duration {
+		core::time::Duration::from_secs(TestUnixTime::get())
+	}
 }
 
 pub struct MockConsumerRegistrar;

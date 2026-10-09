@@ -195,10 +195,11 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 		//  Measured:  `354`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_661_360_000 picoseconds.
+		// Placeholder for the `LitePeopleCount` read and write. The benchmark bot regenerates this.
 		Weight::from_parts(2_695_022_000, 0)
-			.saturating_add(Weight::from_parts(0, 11671))
-			.saturating_add(T::DbWeight::get().reads(10))
-			.saturating_add(T::DbWeight::get().writes(6))
+			.saturating_add(Weight::from_parts(0, 12174))
+			.saturating_add(T::DbWeight::get().reads(11))
+			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	/// Storage: `PeopleLite::LitePeople` (r:1 w:1)
 	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
@@ -225,10 +226,11 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 		//  Measured:  `280`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_605_787_000 picoseconds.
+		// Placeholder for the throttle and cap storage. The benchmark bot regenerates this.
 		Weight::from_parts(2_636_677_000, 0)
-			.saturating_add(Weight::from_parts(0, 11671))
-			.saturating_add(T::DbWeight::get().reads(10))
-			.saturating_add(T::DbWeight::get().writes(5))
+			.saturating_add(Weight::from_parts(0, 13180))
+			.saturating_add(T::DbWeight::get().reads(13))
+			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	fn dispatch_as_signer() -> Weight {
 		// Proof Size summary in bytes:

@@ -276,6 +276,8 @@ pub type Migrations = (
 	cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_people_lite::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)

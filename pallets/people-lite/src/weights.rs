@@ -208,9 +208,10 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `354`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_649_503_000 picoseconds.
-		Weight::from_parts(2_703_335_000, 11671)
-			.saturating_add(T::DbWeight::get().reads(10_u64))
-			.saturating_add(T::DbWeight::get().writes(6_u64))
+		// Placeholder for the `LitePeopleCount` read and write. The benchmark bot regenerates this.
+		Weight::from_parts(2_703_335_000, 12174)
+			.saturating_add(T::DbWeight::get().reads(11_u64))
+			.saturating_add(T::DbWeight::get().writes(7_u64))
 	}
 	/// Storage: `PeopleLite::LitePeople` (r:1 w:1)
 	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
@@ -237,9 +238,10 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `280`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_604_299_000 picoseconds.
-		Weight::from_parts(2_646_694_000, 11671)
-			.saturating_add(T::DbWeight::get().reads(10_u64))
-			.saturating_add(T::DbWeight::get().writes(5_u64))
+		// Placeholder for the throttle and cap storage. The benchmark bot regenerates this.
+		Weight::from_parts(2_646_694_000, 13180)
+			.saturating_add(T::DbWeight::get().reads(13_u64))
+			.saturating_add(T::DbWeight::get().writes(7_u64))
 	}
 	fn dispatch_as_signer() -> Weight {
 		// Proof Size summary in bytes:
@@ -454,9 +456,10 @@ impl WeightInfo for () {
 		//  Measured:  `354`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_649_503_000 picoseconds.
-		Weight::from_parts(2_703_335_000, 11671)
-			.saturating_add(RocksDbWeight::get().reads(10_u64))
-			.saturating_add(RocksDbWeight::get().writes(6_u64))
+		// Placeholder for the `LitePeopleCount` read and write. The benchmark bot regenerates this.
+		Weight::from_parts(2_703_335_000, 12174)
+			.saturating_add(RocksDbWeight::get().reads(11_u64))
+			.saturating_add(RocksDbWeight::get().writes(7_u64))
 	}
 	/// Storage: `PeopleLite::LitePeople` (r:1 w:1)
 	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
@@ -483,9 +486,10 @@ impl WeightInfo for () {
 		//  Measured:  `280`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_604_299_000 picoseconds.
-		Weight::from_parts(2_646_694_000, 11671)
-			.saturating_add(RocksDbWeight::get().reads(10_u64))
-			.saturating_add(RocksDbWeight::get().writes(5_u64))
+		// Placeholder for the throttle and cap storage. The benchmark bot regenerates this.
+		Weight::from_parts(2_646_694_000, 13180)
+			.saturating_add(RocksDbWeight::get().reads(13_u64))
+			.saturating_add(RocksDbWeight::get().writes(7_u64))
 	}
 	fn dispatch_as_signer() -> Weight {
 		// Proof Size summary in bytes:
