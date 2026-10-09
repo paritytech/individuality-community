@@ -126,9 +126,11 @@ pub mod pallet {
 		/// In production, wired to pallet_revive's `AccountId32Mapper`.
 		type AddressMapper: AddressMapper<Self::AccountId>;
 
-		/// Maximum weight budget for a single contract call. The extrinsic pre-charges
-		/// pallet overhead + this budget and refunds unused weight based on the actual
-		/// weight reported by the contract caller.
+		/// Maximum weight budget for a single contract call.
+		/// The extrinsic pre-charges pallet overhead + this budget and refunds unused weight based
+		/// on the actual weight reported by the contract caller.
+		/// In case of actual contract call weight surpassing this weight, only this much will be
+		/// refunded.
 		#[pallet::constant]
 		type MaxContractCallWeight: Get<Weight>;
 
@@ -575,13 +577,21 @@ pub mod pallet {
 
 		/// Calls `RootGatewayDispatcher` with the given ABI-encoded `calldata`
 		/// (which the dispatcher forwards to `DotnsPopController`) and returns
-		/// the weight reported by the contract caller.
+		/// the weight reported by the contract caller, capped at
+		/// [`Config::MaxContractCallWeight`].
 		fn call_dispatcher(calldata: Vec<u8>) -> Result<Weight, Error<T>> {
 			let address =
 				DispatcherAddress::<T>::get().ok_or(Error::<T>::DispatcherAddressNotSet)?;
-			T::ContractCaller::call(address, calldata, 0)
-				.map(|(_, weight)| weight)
-				.map_err(Error::<T>::from)
+			let (_, weight) =
+				T::ContractCaller::call(address, calldata, 0).map_err(Error::<T>::from)?;
+			let budget = T::MaxContractCallWeight::get();
+			if weight.any_gt(budget) {
+				log::error!(
+					target: LOG_TARGET,
+					"contract caller reported {weight:?}, above budget {budget:?}",
+				);
+			}
+			Ok(weight.min(budget))
 		}
 
 		/// Verifies a ring membership proof against the `MemberService`.
