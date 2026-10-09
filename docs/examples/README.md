@@ -6,6 +6,12 @@ Runnable TypeScript examples for performing calls against a People chain and Ass
 Each example is a small script that performs one task end to end. The calls are
 typed from the chain's own metadata.
 
+> [!NOTE]
+> The polkadot.js apps UI cannot submit extrinsics to this chain: it supports
+> neither v5 general transactions nor the custom transaction extensions. Use PAPI
+> instead. [`lib/general-signer.ts`](lib/general-signer.ts) builds a v5 general
+> transaction.
+
 | Script | Side | What it does |
 |---|---|---|
 | `game_scheduling.ts` | operations | Schedule a game (`Game.schedule_games`). |
