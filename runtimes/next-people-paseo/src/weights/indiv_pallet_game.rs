@@ -189,6 +189,17 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 			.saturating_add(T::DbWeight::get().reads(11))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
+	/// Storage: `RelayRandomness::Randomness` (r:1 w:0)
+	/// Proof: `RelayRandomness::Randomness` (`max_values`: Some(1), `max_size`: Some(74), added: 569, mode: `MaxEncodedLen`)
+	fn shuffle_step_capture_randomness() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `173`
+		//  Estimated: `1559`
+		// Minimum execution time: 2_848_000 picoseconds.
+		Weight::from_parts(3_282_000, 0)
+			.saturating_add(Weight::from_parts(0, 1559))
+			.saturating_add(T::DbWeight::get().reads(1))
+	}
 	/// Storage: `Game::Players` (r:2 w:1)
 	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
 	/// Storage: `Score::Participants` (r:1 w:0)
