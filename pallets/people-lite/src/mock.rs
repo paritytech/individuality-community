@@ -346,6 +346,11 @@ impl AppendOnlyMembers for MockMemberService {
 		0
 	}
 
+	fn onboarding_queue_page_size() -> u32 {
+		// The mock queue has no pages.
+		u32::MAX
+	}
+
 	fn add_members(
 		identifier: &Identifier,
 		members: Vec<<Self::Crypto as verifiable::GenerateVerifiable>::Member>,
@@ -410,6 +415,19 @@ impl AppendOnlyMembers for MockMemberService {
 
 	#[cfg(feature = "runtime-benchmarks")]
 	fn initialize_chunks(_ring_size: RingExponent) {}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn onboarding_queue_tail_free_slots(_identifier: &Identifier) -> u32 {
+		0
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn fill_onboarding_queue_tail(
+		identifier: &Identifier,
+		members: Vec<<Self::Crypto as verifiable::GenerateVerifiable>::Member>,
+	) -> frame_support::dispatch::DispatchResult {
+		Self::add_members(identifier, members)
+	}
 
 	#[cfg(feature = "runtime-benchmarks")]
 	fn onboard_all_and_build_ring(

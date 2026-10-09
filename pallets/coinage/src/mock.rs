@@ -33,9 +33,11 @@ use frame_support::{
 		AsEnsureOriginWithArg, ConstU32, ConstU64, ConstantStoragePrice, Currency, OffchainWorker,
 		UnixTime,
 	},
+	weights::{constants::WEIGHT_REF_TIME_PER_SECOND, Weight},
 	BoundedVec,
 };
 use frame_system::{
+	limits::BlockWeights,
 	offchain::{CreateAuthorizedTransaction, CreateTransaction, CreateTransactionBase},
 	AuthorizeCall,
 };
@@ -51,7 +53,7 @@ use sp_runtime::{
 	},
 	testing::UintAuthorityId,
 	transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidityError},
-	BuildStorage,
+	BuildStorage, Perbill,
 };
 use verifiable::ring::RingDomainSize;
 
@@ -97,9 +99,18 @@ frame_support::construct_runtime!(
 	}
 );
 
+parameter_types! {
+	/// Production-sized limits for the pallet's worst-case block-budget checks.
+	pub storage MockBlockWeights: BlockWeights = BlockWeights::with_sensible_defaults(
+		Weight::from_parts(2 * WEIGHT_REF_TIME_PER_SECOND, 10 * 1024 * 1024),
+		Perbill::from_percent(75),
+	);
+}
+
 #[derive_impl(frame_system::config_preludes::TestDefaultConfig)]
 impl frame_system::Config for Test {
 	type Block = Block;
+	type BlockWeights = MockBlockWeights;
 	type AccountData = pallet_balances::AccountData<u64>;
 }
 
@@ -176,6 +187,7 @@ impl
 
 parameter_types! {
 	pub const FlexibleRingExp: RingExponent = RingExponent::R2e9;
+	pub storage OnboardingQueuePageSize: u32 = 40;
 }
 
 impl indiv_pallet_members::Config for Test {
@@ -185,7 +197,7 @@ impl indiv_pallet_members::Config for Test {
 	type ChunksManager = ChunksManager;
 	type Clock = MockTime;
 	type MaxCollections = ConstU32<20>;
-	type OnboardingQueuePageSize = ConstU32<40>;
+	type OnboardingQueuePageSize = OnboardingQueuePageSize;
 	type MaxFlexibleRingExponent = FlexibleRingExp;
 	type RingBuildingMemberLimit = ConstU32<100>;
 	type OldRootRetentionDuration = ConstU64<600>;
@@ -229,6 +241,8 @@ pub const UNDERLYING_ASSET_UNIT: u64 = 1_000;
 // RingExponent::R2e10 currently yields a usable ring capacity of 767 members.
 pub const R2E10_RING_CAPACITY: u32 = 767;
 pub const MAX_SPLIT_OUTPUTS: u32 = 32;
+/// Number of denominations from [`MinimumExponent`] to [`MaximumExponent`] at their defaults.
+pub const DENOMINATION_COUNT: u32 = 10;
 pub const RECYCLER_EXPIRATION_TIME: u32 = 100;
 pub const PAID_UNLOAD_TOKEN_RING_EXPIRATION_TIME: u32 = 200;
 pub const UNLOAD_TOKEN_ALLOWANCE_PER_TIME_PERIOD_FOR_PEOPLE: u64 = 10;
