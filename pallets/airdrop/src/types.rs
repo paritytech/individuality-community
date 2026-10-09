@@ -29,6 +29,14 @@ use verifiable::GenerateVerifiable;
 /// A 32-byte event identifier supplied by the scheduling caller.
 pub type EventId = [u8; 32];
 
+/// Maximum length, in bytes, of the product name stored with an event.
+pub const MAX_PRODUCT_NAME_LENGTH: u32 = 32;
+
+/// The name of the product owning an event's ring VRF context, without the network suffix.
+///
+/// Scheduling requires a bare dotNS label, see [`indiv_support::context::is_product_name`].
+pub type ProductName = BoundedVec<u8, ConstU32<MAX_PRODUCT_NAME_LENGTH>>;
+
 pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 pub type AssetIdOf<T> =
 	<<T as Config>::Fungibles as frame_support::traits::tokens::fungibles::Inspect<
@@ -78,6 +86,8 @@ pub type AirdropPrizeOf<T> = AirdropPrize<AssetIdOf<T>, AssetBalanceOf<T>>;
 	Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
 )]
 pub struct EventInfo<AssetId, AssetBalance> {
+	/// The name of the product owning the event's ring VRF context, see [`ProductName`].
+	pub product_name: ProductName,
 	/// The prize specification for the event.
 	pub prize: AirdropPrize<AssetId, AssetBalance>,
 	/// Unix timestamp, in seconds, at which registration opens.
