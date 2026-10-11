@@ -311,4 +311,15 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 			.saturating_add(Weight::from_parts(0, 1486))
 			.saturating_add(T::DbWeight::get().reads(1))
 	}
+	/// Storage: `PeopleLite::LitePeople` (r:1 w:0)
+	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
+	/// Storage: `PeopleLite::CounterForLitePeople` (r:1 w:1)
+	/// Proof: `PeopleLite::CounterForLitePeople` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	fn migrate_v1_step() -> Weight {
+		// Placeholder for the migration step. The benchmark bot regenerates this.
+		Weight::from_parts(10_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3578))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
 }

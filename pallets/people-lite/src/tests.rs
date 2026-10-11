@@ -1669,6 +1669,7 @@ mod create_lite_people_collection {
 mod paid_registration_throttling {
 	use super::*;
 	use crate::{
+		migration::v1::{v0, LazyMigrationV0ToV1},
 		mock::{
 			PaidRegistrationPeriod, PaidRegistrationThreshold, PaidRegistrationsPerPeriod,
 			TestUnixTime,
@@ -1676,7 +1677,11 @@ mod paid_registration_throttling {
 		types::PaidRegistrationWindow,
 		PaidRegistrations,
 	};
-	use frame_support::traits::{GetStorageVersion, StorageVersion};
+	use frame_support::{
+		migrations::{SteppedMigration, SteppedMigrationError},
+		traits::{GetStorageVersion, StorageVersion},
+		weights::{Weight, WeightMeter},
+	};
 	use sp_runtime::DispatchResult;
 
 	const DAY: u64 = 24 * 60 * 60;
@@ -1835,19 +1840,67 @@ mod paid_registration_throttling {
 		});
 	}
 
+	/// Registers three lite people, then resets the counter and the storage version to version 0.
+	fn set_up_v0() {
+		set_up_throttle();
+		register_lite_person(1, 10, 1);
+		assert_ok!(try_register_with_fee(11, 2));
+		assert_ok!(try_register_with_fee(12, 3));
+		frame_support::storage::unhashed::kill(&LitePeople::<Test>::counter_storage_final_key());
+		StorageVersion::new(0).put::<PeopleLitePallet<Test>>();
+		assert_eq!(LitePeople::<Test>::count(), 0);
+		assert_eq!(v0::LitePeople::<Test>::iter_keys().count(), 3);
+	}
+
 	#[test]
-	fn migration_counts_existing_lite_people() {
+	fn migration_counts_one_lite_person_per_step_weight() {
 		new_test_ext().execute_with(|| {
-			set_up_throttle();
-			register_lite_person(1, 10, 1);
-			assert_ok!(try_register_with_fee(11, 2));
-			frame_support::storage::unhashed::kill(&LitePeople::<Test>::counter_storage_final_key());
-			StorageVersion::new(0).put::<PeopleLitePallet<Test>>();
+			set_up_v0();
+			let step_weight = <() as crate::WeightInfo>::migrate_v1_step();
 
-			crate::migration::MigrateV0ToV1::<Test>::on_runtime_upgrade();
+			let mut cursor = None;
+			let mut steps = 0;
+			loop {
+				let mut meter = WeightMeter::with_limit(step_weight);
+				cursor = LazyMigrationV0ToV1::<Test>::step(cursor, &mut meter).unwrap();
+				steps += 1;
+				if cursor.is_none() {
+					break;
+				}
+				assert_eq!(LitePeople::<Test>::count(), steps);
+				assert_eq!(PeopleLitePallet::<Test>::on_chain_storage_version(), 0);
+			}
 
-			assert_eq!(LitePeople::<Test>::count(), 2);
+			assert_eq!(steps, 4);
+			assert_eq!(LitePeople::<Test>::count(), 3);
 			assert_eq!(PeopleLitePallet::<Test>::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn migration_step_requires_the_weight_of_one_lite_person() {
+		new_test_ext().execute_with(|| {
+			set_up_v0();
+			let step_weight = <() as crate::WeightInfo>::migrate_v1_step();
+			let mut meter =
+				WeightMeter::with_limit(step_weight.saturating_sub(Weight::from_parts(1, 0)));
+
+			assert_eq!(
+				LazyMigrationV0ToV1::<Test>::step(None, &mut meter),
+				Err(SteppedMigrationError::InsufficientWeight { required: step_weight })
+			);
+		});
+	}
+
+	#[test]
+	fn migration_does_nothing_after_version_0() {
+		new_test_ext().execute_with(|| {
+			set_up_v0();
+			StorageVersion::new(1).put::<PeopleLitePallet<Test>>();
+
+			let mut meter = WeightMeter::new();
+			assert_eq!(LazyMigrationV0ToV1::<Test>::step(None, &mut meter), Ok(None));
+			assert_eq!(LitePeople::<Test>::count(), 0);
 		});
 	}
 }

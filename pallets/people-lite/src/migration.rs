@@ -19,11 +19,8 @@
 extern crate alloc;
 
 use crate::{Config, LitePeople, LitePeopleCollectionCreated, Pallet, WeightInfo};
-use frame_support::{
-	migrations::VersionedMigration,
-	pallet_prelude::*,
-	traits::{OnRuntimeUpgrade, UncheckedOnRuntimeUpgrade},
-};
+use frame_support::{pallet_prelude::*, traits::OnRuntimeUpgrade};
+use sp_runtime::Saturating;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-people-lite::migration";
 
@@ -57,29 +54,78 @@ impl<T: Config> OnRuntimeUpgrade for CreateLitePeopleCollection<T> {
 	}
 }
 
-/// Sets the counter of [`LitePeople`] to the number of registered lite people.
-///
-/// Pallet version 0 does not keep the count, so a chain upgrading from it must run this migration.
-/// It iterates every `LitePeople` key in one block.
-pub type MigrateV0ToV1<T> = VersionedMigration<
-	0,
-	1,
-	v1::InitializeLitePeopleCount<T>,
-	Pallet<T>,
-	<T as frame_system::Config>::DbWeight,
->;
-
 pub mod v1 {
 	use super::*;
+	use frame_support::{
+		migrations::{MigrationId, SteppedMigration, SteppedMigrationError},
+		storage_alias,
+		weights::WeightMeter,
+	};
 
-	/// Use [`MigrateV0ToV1`] rather than this directly.
-	pub struct InitializeLitePeopleCount<T>(PhantomData<T>);
+	/// The storage as version 0 sees it.
+	pub mod v0 {
+		use super::*;
+		use crate::types::LitePersonInfoOf;
 
-	impl<T: Config> UncheckedOnRuntimeUpgrade for InitializeLitePeopleCount<T> {
-		fn on_runtime_upgrade() -> Weight {
-			let count = LitePeople::<T>::initialize_counter();
-			log::info!(target: LOG_TARGET, "counted {count} lite people");
-			T::DbWeight::get().reads_writes(u64::from(count).saturating_add(1), 1)
+		/// The lite people map without its counter.
+		#[storage_alias]
+		pub type LitePeople<T: Config> = StorageMap<
+			Pallet<T>,
+			Blake2_128Concat,
+			<T as frame_system::Config>::AccountId,
+			LitePersonInfoOf<T>,
+		>;
+	}
+
+	/// The counter of the [`LitePeople`] counted map.
+	#[storage_alias]
+	type CounterForLitePeople<T: Config> = StorageValue<Pallet<T>, u32, ValueQuery>;
+
+	/// Counts the lite people of version 0 into the counter of [`LitePeople`] over several blocks.
+	///
+	/// The cursor is the last counted account. The migration sets the storage version to 1 when it
+	/// completes. It does nothing if the storage version is not 0.
+	pub struct LazyMigrationV0ToV1<T>(PhantomData<T>);
+
+	impl<T: Config> SteppedMigration for LazyMigrationV0ToV1<T> {
+		type Cursor = <T as frame_system::Config>::AccountId;
+		type Identifier = MigrationId<24>;
+
+		fn id() -> Self::Identifier {
+			MigrationId { pallet_id: *b"indiv-pallet-people-lite", version_from: 0, version_to: 1 }
+		}
+
+		fn step(
+			mut cursor: Option<Self::Cursor>,
+			meter: &mut WeightMeter,
+		) -> Result<Option<Self::Cursor>, SteppedMigrationError> {
+			if Pallet::<T>::on_chain_storage_version() != 0 {
+				return Ok(None);
+			}
+			let required = <T as Config>::WeightInfo::migrate_v1_step();
+			if meter.remaining().any_lt(required) {
+				return Err(SteppedMigrationError::InsufficientWeight { required });
+			}
+			while meter.try_consume(required).is_ok() {
+				let mut keys = match &cursor {
+					Some(last) => v0::LitePeople::<T>::iter_keys_from(
+						v0::LitePeople::<T>::hashed_key_for(last),
+					),
+					None => v0::LitePeople::<T>::iter_keys(),
+				};
+				let Some(account) = keys.next() else {
+					log::info!(
+						target: LOG_TARGET,
+						"counted {} lite people",
+						CounterForLitePeople::<T>::get()
+					);
+					StorageVersion::new(1).put::<Pallet<T>>();
+					return Ok(None);
+				};
+				CounterForLitePeople::<T>::mutate(|count| count.saturating_inc());
+				cursor = Some(account);
+			}
+			Ok(cursor)
 		}
 
 		#[cfg(feature = "try-runtime")]
@@ -87,6 +133,10 @@ pub mod v1 {
 			ensure!(
 				LitePeople::<T>::count() as usize == LitePeople::<T>::iter_keys().count(),
 				"the lite people count must match the registered lite people"
+			);
+			ensure!(
+				Pallet::<T>::on_chain_storage_version() == 1,
+				"the storage version must be 1 after the migration"
 			);
 			Ok(())
 		}
