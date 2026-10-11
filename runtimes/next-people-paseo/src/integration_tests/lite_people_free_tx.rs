@@ -209,7 +209,7 @@ fn root_parameter_updates_throttle_paid_registrations() {
 #[test]
 fn root_parameter_update_caps_lite_people() {
 	new_test_ext().execute_with(|| {
-		let cap = indiv_pallet_people_lite::LitePeopleCount::<Runtime>::get().saturating_add(1);
+		let cap = indiv_pallet_people_lite::LitePeople::<Runtime>::count().saturating_add(1);
 		assert_ok!(Parameters::set_parameter(
 			RuntimeOrigin::root(),
 			RuntimeParameters::LitePersonhood((lite_personhood::MaxLitePeople, cap).into())

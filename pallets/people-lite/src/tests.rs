@@ -1674,7 +1674,7 @@ mod paid_registration_throttling {
 			TestUnixTime,
 		},
 		types::PaidRegistrationWindow,
-		LitePeopleCount, PaidRegistrations,
+		PaidRegistrations,
 	};
 	use frame_support::traits::{GetStorageVersion, Hooks, StorageVersion};
 	use sp_runtime::DispatchResult;
@@ -1713,9 +1713,9 @@ mod paid_registration_throttling {
 		new_test_ext().execute_with(|| {
 			set_up_throttle();
 			register_lite_person(1, 10, 1);
-			assert_eq!(LitePeopleCount::<Test>::get(), 1);
+			assert_eq!(LitePeople::<Test>::count(), 1);
 			assert_ok!(try_register_with_fee(11, 2));
-			assert_eq!(LitePeopleCount::<Test>::get(), 2);
+			assert_eq!(LitePeople::<Test>::count(), 2);
 		});
 	}
 
@@ -1728,7 +1728,7 @@ mod paid_registration_throttling {
 			assert_ok!(try_register_with_fee(10, 1));
 			assert_ok!(try_register_with_fee(11, 2));
 
-			assert_eq!(LitePeopleCount::<Test>::get(), 2);
+			assert_eq!(LitePeople::<Test>::count(), 2);
 			assert_eq!(PaidRegistrations::<Test>::get(), PaidRegistrationWindow::default());
 		});
 	}
@@ -1751,7 +1751,7 @@ mod paid_registration_throttling {
 				crate::Error::<Test>::PaidRegistrationLimitReached
 			);
 			assert_eq!(pallet_balances::Pallet::<Test>::free_balance(14), 100);
-			assert_eq!(LitePeopleCount::<Test>::get(), 4);
+			assert_eq!(LitePeople::<Test>::count(), 4);
 		});
 	}
 
@@ -1812,7 +1812,7 @@ mod paid_registration_throttling {
 
 			register_lite_person(1, 11, 2);
 
-			assert_eq!(LitePeopleCount::<Test>::get(), 1);
+			assert_eq!(LitePeople::<Test>::count(), 1);
 			assert_eq!(PaidRegistrations::<Test>::get(), PaidRegistrationWindow::default());
 		});
 	}
@@ -1832,12 +1832,12 @@ mod paid_registration_throttling {
 			set_up_throttle();
 			register_lite_person(1, 10, 1);
 			assert_ok!(try_register_with_fee(11, 2));
-			LitePeopleCount::<Test>::kill();
+			frame_support::storage::unhashed::kill(&LitePeople::<Test>::counter_storage_final_key());
 			StorageVersion::new(0).put::<PeopleLitePallet<Test>>();
 
 			crate::migration::MigrateV0ToV1::<Test>::on_runtime_upgrade();
 
-			assert_eq!(LitePeopleCount::<Test>::get(), 2);
+			assert_eq!(LitePeople::<Test>::count(), 2);
 			assert_eq!(PeopleLitePallet::<Test>::on_chain_storage_version(), 1);
 		});
 	}
@@ -1845,10 +1845,7 @@ mod paid_registration_throttling {
 
 mod lite_people_cap {
 	use super::*;
-	use crate::{
-		mock::{MaxLitePeople, PaidRegistrationThreshold, PaidRegistrationsPerPeriod},
-		LitePeopleCount,
-	};
+	use crate::mock::{MaxLitePeople, PaidRegistrationThreshold, PaidRegistrationsPerPeriod};
 	use frame_support::dispatch::DispatchResultWithPostInfo;
 	use sp_runtime::DispatchResult;
 
@@ -1934,7 +1931,7 @@ mod lite_people_cap {
 			assert_noop!(try_register_with_fee(12, 3), crate::Error::<Test>::TooManyLitePeople);
 			assert!(LitePeople::<Test>::contains_key(10));
 			assert!(LitePeople::<Test>::contains_key(11));
-			assert_eq!(LitePeopleCount::<Test>::get(), 2);
+			assert_eq!(LitePeople::<Test>::count(), 2);
 		});
 	}
 
@@ -1947,7 +1944,7 @@ mod lite_people_cap {
 
 			MaxLitePeople::set(&1);
 			assert_ok!(try_register_with_fee(10, 1));
-			assert_eq!(LitePeopleCount::<Test>::get(), 1);
+			assert_eq!(LitePeople::<Test>::count(), 1);
 		});
 	}
 }

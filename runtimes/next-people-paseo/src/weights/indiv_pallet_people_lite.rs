@@ -195,7 +195,7 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 		//  Measured:  `354`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_661_360_000 picoseconds.
-		// Placeholder for the `LitePeopleCount` read and write. The benchmark bot regenerates this.
+		// Placeholder for the `LitePeople` counter read and write. The benchmark bot regenerates this.
 		Weight::from_parts(2_695_022_000, 0)
 			.saturating_add(Weight::from_parts(0, 12174))
 			.saturating_add(T::DbWeight::get().reads(11))

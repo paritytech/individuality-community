@@ -208,7 +208,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `354`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_649_503_000 picoseconds.
-		// Placeholder for the `LitePeopleCount` read and write. The benchmark bot regenerates this.
+		// Placeholder for the `LitePeople` counter read and write. The benchmark bot regenerates this.
 		Weight::from_parts(2_703_335_000, 12174)
 			.saturating_add(T::DbWeight::get().reads(11_u64))
 			.saturating_add(T::DbWeight::get().writes(7_u64))
@@ -456,7 +456,7 @@ impl WeightInfo for () {
 		//  Measured:  `354`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_649_503_000 picoseconds.
-		// Placeholder for the `LitePeopleCount` read and write. The benchmark bot regenerates this.
+		// Placeholder for the `LitePeople` counter read and write. The benchmark bot regenerates this.
 		Weight::from_parts(2_703_335_000, 12174)
 			.saturating_add(RocksDbWeight::get().reads(11_u64))
 			.saturating_add(RocksDbWeight::get().writes(7_u64))
