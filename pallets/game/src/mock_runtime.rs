@@ -796,6 +796,7 @@ pub type AssetsWithHolder = indiv_support::fungibles::CombineAssetsWithHolder<As
 impl indiv_pallet_airdrop::Config for Test {
 	type WeightInfo = ();
 	type MemberService = MockAirdropMemberService;
+	type Suffix = NetworkSuffix;
 	type Fungibles = AssetsWithHolder;
 	type ManagerOrigin = EnsureRoot<AccountId32>;
 	type PalletId = AirdropPalletId;

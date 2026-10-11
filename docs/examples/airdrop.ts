@@ -12,7 +12,7 @@
  * step; here we scaffold it ourselves (create a test asset, mint, fund the pot)
  * so the example runs end to end.
  */
-import { AccountId, Enum, FixedSizeBinary } from "polkadot-api";
+import { AccountId, Binary, Enum, FixedSizeBinary } from "polkadot-api";
 import { XcmV5Junctions } from "@polkadot-api/descriptors";
 import { connectPeople, customSignedExtensions, devSigner } from "./lib/client";
 import { signedSubmitter, sudoSubmitter } from "./lib/submit";
@@ -63,6 +63,7 @@ async function main() {
     const scheduleTx = api.tx.Airdrop.schedule_event({
       event_id: eventId,
       info: {
+        product_name: Binary.fromText("my-product"), // bare dotNS label
         prize: {
           asset_id: STABLE_ASSET,
           asset_amount: ASSET_AMOUNT, // u128

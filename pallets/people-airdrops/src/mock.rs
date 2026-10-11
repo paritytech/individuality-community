@@ -248,6 +248,7 @@ parameter_types! {
 impl indiv_pallet_airdrop::Config for Test {
 	type WeightInfo = ();
 	type MemberService = MockMemberService;
+	type Suffix = NetworkSuffix;
 	type Fungibles = indiv_support::fungibles::CombineAssetsWithHolder<Assets, AssetsHolder>;
 	type ManagerOrigin = EnsureRoot<u64>;
 	type PalletId = AirdropPalletId;
@@ -376,6 +377,7 @@ impl crate::benchmarking::BenchmarkHelper<Test> for PeopleAirdropsBenchmarkHelpe
 				}
 				Assets::mint_into(asset_id, source, BENCH_PRIZE).expect("fund source");
 				crate::pallet::AirdropEventInfoOf::<Test> {
+					product_name: Default::default(),
 					prize: indiv_pallet_airdrop::types::AirdropPrize {
 						asset_id,
 						asset_amount: BENCH_PRIZE,
