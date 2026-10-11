@@ -147,7 +147,7 @@ pub mod pallet {
 		type MaxLitePeople: Get<u32>;
 
 		/// Clock that defines the paid registration periods.
-		type PaidRegistrationClock: UnixTime;
+		type Clock: UnixTime;
 
 		/// Number of lite people from which paid registrations are throttled.
 		type PaidRegistrationThreshold: Get<u32>;
@@ -801,9 +801,8 @@ pub mod pallet {
 			if LitePeopleCount::<T>::get() < T::PaidRegistrationThreshold::get() {
 				return Ok(());
 			}
-			let period = (T::PaidRegistrationClock::now().as_secs() /
-				u64::from(T::PaidRegistrationPeriod::get()))
-			.saturated_into::<u32>();
+			let period = (T::Clock::now().as_secs() / u64::from(T::PaidRegistrationPeriod::get()))
+				.saturated_into::<u32>();
 			let mut window = PaidRegistrations::<T>::get();
 			if window.period != period {
 				window = PaidRegistrationWindow { period, registrations: 0 };

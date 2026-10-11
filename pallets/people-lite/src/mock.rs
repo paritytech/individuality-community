@@ -139,7 +139,7 @@ impl crate::Config for Test {
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
 	type MaxLitePeople = MaxLitePeople;
-	type PaidRegistrationClock = TestClock;
+	type Clock = TestClock;
 	type PaidRegistrationThreshold = PaidRegistrationThreshold;
 	type PaidRegistrationPeriod = PaidRegistrationPeriod;
 	type PaidRegistrationsPerPeriod = PaidRegistrationsPerPeriod;

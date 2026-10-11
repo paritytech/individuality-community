@@ -1307,7 +1307,7 @@ impl indiv_pallet_people_lite::Config for Runtime {
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
 	type MaxLitePeople = MaxLitePeople;
-	type PaidRegistrationClock = RuntimeClock;
+	type Clock = RuntimeClock;
 	type PaidRegistrationThreshold = LitePaidRegistrationThreshold;
 	type PaidRegistrationPeriod = LitePaidRegistrationPeriod;
 	type PaidRegistrationsPerPeriod = LitePaidRegistrationsPerPeriod;
