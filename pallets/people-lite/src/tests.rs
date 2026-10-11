@@ -1676,7 +1676,7 @@ mod paid_registration_throttling {
 		types::PaidRegistrationWindow,
 		PaidRegistrations,
 	};
-	use frame_support::traits::{GetStorageVersion, Hooks, StorageVersion};
+	use frame_support::traits::{GetStorageVersion, StorageVersion};
 	use sp_runtime::DispatchResult;
 
 	const DAY: u64 = 24 * 60 * 60;
@@ -1818,11 +1818,20 @@ mod paid_registration_throttling {
 	}
 
 	#[test]
-	#[should_panic(expected = "PaidRegistrationPeriod must be non-zero")]
-	fn integrity_test_rejects_a_zero_period() {
+	fn a_zero_period_disables_the_throttling() {
 		new_test_ext().execute_with(|| {
+			set_up_throttle();
+			PaidRegistrationThreshold::set(&0);
+			PaidRegistrationsPerPeriod::set(&0);
+			assert_noop!(
+				try_register_with_fee(10, 1),
+				crate::Error::<Test>::PaidRegistrationLimitReached
+			);
+
 			PaidRegistrationPeriod::set(&0);
-			<PeopleLitePallet<Test> as Hooks<u64>>::integrity_test();
+			assert_ok!(try_register_with_fee(10, 1));
+			assert_ok!(try_register_with_fee(11, 2));
+			assert_eq!(PaidRegistrations::<Test>::get(), PaidRegistrationWindow::default());
 		});
 	}
 

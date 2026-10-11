@@ -217,9 +217,8 @@ pub type MaxLitePeople = dynamic_params::lite_personhood::MaxLitePeople;
 /// Lite people count from which paid registrations are throttled. Any value is valid.
 pub type LitePaidRegistrationThreshold = dynamic_params::lite_personhood::PaidRegistrationThreshold;
 
-/// Paid lite registration period, kept non-zero.
-pub type LitePaidRegistrationPeriod =
-	AtLeastOne<dynamic_params::lite_personhood::PaidRegistrationPeriod>;
+/// Paid lite registration period. Zero disables the paid registration throttling.
+pub type LitePaidRegistrationPeriod = dynamic_params::lite_personhood::PaidRegistrationPeriod;
 
 /// Paid lite registrations per period. Zero stops paid registrations beyond the threshold.
 pub type LitePaidRegistrationsPerPeriod =

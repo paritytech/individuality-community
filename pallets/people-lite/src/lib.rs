@@ -31,7 +31,7 @@
 //! From `PaidRegistrationThreshold` lite people on, the pallet accepts at most
 //! `PaidRegistrationsPerPeriod` paid registrations per `PaidRegistrationPeriod` seconds. Attested
 //! registrations count towards the threshold but are not throttled, since governance bounds them
-//! through attestation allowances.
+//! through attestation allowances. A zero `PaidRegistrationPeriod` disables the throttling.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::borrowed_box)]
@@ -111,10 +111,6 @@ pub mod pallet {
 				T::LiteOnboardingSize::get() <= T::LiteRingExponent::get().ring_capacity(),
 				"LiteOnboardingSize must not exceed the lite ring capacity"
 			);
-			assert!(
-				T::PaidRegistrationPeriod::get() > 0,
-				"PaidRegistrationPeriod must be non-zero"
-			);
 		}
 	}
 
@@ -154,8 +150,7 @@ pub mod pallet {
 
 		/// Length of a paid registration period in seconds.
 		///
-		/// Must be non-zero; clamp a dynamic value, since the integrity test sees only the default.
-		/// A change can reset the current period's count.
+		/// Zero disables the throttling. A change can reset the current period's count.
 		type PaidRegistrationPeriod: Get<u32>;
 
 		/// Number of paid registrations accepted per period once the threshold is reached.
@@ -796,11 +791,13 @@ pub mod pallet {
 		/// Fails with [`Error::PaidRegistrationLimitReached`] when the period has no registrations
 		/// left.
 		fn throttle_paid_registration() -> DispatchResult {
-			if LitePeople::<T>::count() < T::PaidRegistrationThreshold::get() {
+			let period_length = T::PaidRegistrationPeriod::get();
+			if period_length == 0 || LitePeople::<T>::count() < T::PaidRegistrationThreshold::get()
+			{
 				return Ok(());
 			}
-			let period = (T::Clock::now().as_secs() / u64::from(T::PaidRegistrationPeriod::get()))
-				.saturated_into::<u32>();
+			let period =
+				(T::Clock::now().as_secs() / u64::from(period_length)).saturated_into::<u32>();
 			let mut window = PaidRegistrations::<T>::get();
 			if window.period != period {
 				window = PaidRegistrationWindow { period, registrations: 0 };
