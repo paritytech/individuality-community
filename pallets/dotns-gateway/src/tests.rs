@@ -18,7 +18,9 @@
 
 use frame_support::{
 	assert_noop, assert_ok,
+	dispatch::GetDispatchInfo,
 	traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion},
+	weights::Weight,
 };
 
 use crate::{
@@ -614,6 +616,43 @@ mod reservation {
 			let overhead = <Test as crate::Config>::WeightInfo::reserve_name();
 			let expected = overhead.saturating_add(contract_weight);
 			assert_eq!(info.actual_weight, Some(expected));
+		});
+	}
+
+	#[test]
+	fn actual_weight_is_capped_at_max_contract_call_weight() {
+		new_test_ext().execute_with(|| {
+			// Contract caller reports more weight than the pre-charged budget.
+			set_attestation_allowance(ATTESTER, 1);
+			let budget = MockMaxContractCallWeight::get();
+			set_contract_call_weight(budget.saturating_add(Weight::from_parts(1, 1)));
+			let declared = crate::Call::<Test>::reserve_name {
+				candidate: ALICE,
+				candidate_signature: valid_candidate_signature(ALICE),
+				lite_label: base_name(ALICE_LITE),
+				chat_key: default_chat_key(),
+				reserved_base_label: None,
+				signed_at: SIGNED_AT_NOW,
+			}
+			.get_dispatch_info()
+			.call_weight;
+
+			let result = DotnsGateway::reserve_name(
+				RuntimeOrigin::signed(ATTESTER),
+				ALICE,
+				valid_candidate_signature(ALICE),
+				base_name(ALICE_LITE),
+				default_chat_key(),
+				None,
+				SIGNED_AT_NOW,
+			);
+
+			// Refunded weight is capped at the budget and stays within the declared weight.
+			assert_ok!(&result);
+			let actual = result.unwrap().actual_weight.unwrap();
+			let overhead = <Test as crate::Config>::WeightInfo::reserve_name();
+			assert_eq!(actual, overhead.saturating_add(budget));
+			assert!(actual.all_lte(declared));
 		});
 	}
 
@@ -1266,6 +1305,34 @@ mod registration {
 			let overhead = <Test as crate::Config>::WeightInfo::register_name();
 			let expected = overhead.saturating_add(contract_weight);
 			assert_eq!(info.actual_weight, Some(expected));
+		});
+	}
+
+	#[test]
+	fn actual_weight_is_capped_at_max_contract_call_weight() {
+		new_test_ext().execute_with(|| {
+			// Contract caller reports more weight than the pre-charged budget.
+			let budget = MockMaxContractCallWeight::get();
+			set_contract_call_weight(budget.saturating_add(Weight::from_parts(1, 1)));
+			let link = Link::None(default_chat_key());
+			let bn = base_name(ALICE_BASE);
+			let declared = crate::Call::<Test>::register_name {
+				who: ALICE,
+				label: bn.clone(),
+				link: link.clone(),
+			}
+			.get_dispatch_info()
+			.call_weight;
+
+			let result =
+				DotnsGateway::register_name(person_registration_origin(alias_a()), ALICE, bn, link);
+
+			// Refunded weight is capped at the budget and stays within the declared weight.
+			assert_ok!(&result);
+			let actual = result.unwrap().actual_weight.unwrap();
+			let overhead = <Test as crate::Config>::WeightInfo::register_name();
+			assert_eq!(actual, overhead.saturating_add(budget));
+			assert!(actual.all_lte(declared));
 		});
 	}
 
