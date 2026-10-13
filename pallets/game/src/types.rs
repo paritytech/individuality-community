@@ -48,8 +48,9 @@ pub type GameIdx = u32;
 /// 32-byte ordering key used as the second key of `ShuffleRecognized`/
 /// `ShuffleNotRecognized`.
 ///
-/// Computed as `blake2_256((parent_hash, player_id, round))` — randomises position within a round
-/// while remaining deterministic.
+/// Computed as `blake2_256((randomness, player_id, round))`, where `randomness` is the
+/// randomness captured for the shuffle. It randomises position within a round while remaining
+/// deterministic.
 pub type ShufflePositionKey = [u8; 32];
 
 /// The report made by one player about another player.
@@ -376,25 +377,32 @@ pub enum PlayerProcessStep<AccountId: Into<sp_statement_store::AccountId>> {
 /// The steps for the shuffle phase
 #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Debug, PartialEq)]
 pub enum ShuffleStep<AccountId: Into<sp_statement_store::AccountId>> {
-	/// Insertion of players into storage.
-	Step1Insert { last_iteration: Option<AccountOrPerson<AccountId>> },
+	/// Wait for the randomness source to rotate past `randomness_moment`, the moment recorded
+	/// when registration closed, then capture it once for the whole shuffle.
+	///
+	/// `randomness_moment` is a moment in the clock of
+	/// [`Config::Randomness`](crate::Config::Randomness).
+	Step1CaptureRandomness { randomness_moment: u32 },
+	/// Insertion of players into storage, positioned by `randomness` (the value captured by
+	/// [`Self::Step1CaptureRandomness`]).
+	Step2Insert { randomness: [u8; 32], last_iteration: Option<AccountOrPerson<AccountId>> },
 	/// Retrieval of player from storage to get their order.
 	/// First we index recognized players, then not recognized players; see
 	/// [`ShuffleRetrievePhase`].
-	Step2Retrieve { next_player_index: PlayerIndex, phase: ShuffleRetrievePhase },
+	Step3Retrieve { next_player_index: PlayerIndex, phase: ShuffleRetrievePhase },
 	/// Iterate over each registered player and compute their `expected_max_vote_weight`
-	/// from the actual group composition produced by [`Self::Step2Retrieve`].
+	/// from the actual group composition produced by [`Self::Step3Retrieve`].
 	///
 	/// `recognized_count` is the number of recognized players registered in the current game.
 	/// Because recognized players have the first indices, it is also the index boundary between
 	/// recognized and not-recognized players.
-	Step3ComputeWeights {
+	Step4ComputeWeights {
 		last_iteration: Option<AccountOrPerson<AccountId>>,
 		player_count: u32,
 		recognized_count: u32,
 	},
 	/// All players have been indexed. We now try to start the attendance report session.
-	Step4AwaitSession { player_count: u32 },
+	Step5AwaitSession { player_count: u32 },
 }
 
 /// Which population the shuffle retrieve step (`Pallet::shuffle_step_retrieve`) is currently
