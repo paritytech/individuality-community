@@ -48,10 +48,10 @@ use frame_system::offchain::{CreateAuthorizedTransaction, SubmitTransaction};
 use indiv_pallet_chunks_manager::ChunksApi;
 use indiv_support::{
 	traits::{
-		AppendOnlyMembers, AppendOnlyMembersWeightInfo, Context, ContextualAlias, FlexibleMembers,
-		MembershipMultiProver, MembershipProver, OnRingRootChange, PageIndex,
-		RevisedContextualAlias, RingExponent, RingIndex, RingMembersState, RingMembershipProof,
-		RingRootOp,
+		AppendOnlyMembers, AppendOnlyMembersWeightInfo, Context, ContextualAlias,
+		DeferMembershipProofs, FlexibleMembers, MembershipMultiProver, MembershipProver,
+		OnRingRootChange, PageIndex, RevisedContextualAlias, RingExponent, RingIndex,
+		RingMembersState, RingMembershipProof, RingRootOp, VerifyOrDeferError,
 	},
 	tx_priority,
 	weight_budget::OcwWeightBudget,
@@ -177,6 +177,12 @@ pub mod pallet {
 
 		/// The origin allowed to perform privileged management operations on this pallet.
 		type ManagerOrigin: EnsureOrigin<Self::RuntimeOrigin>;
+
+		/// Verifies the proofs of [`MembershipProver::verify_memberships_in_ring_or_defer`] at
+		/// once or defers them to a block-wide batch.
+		///
+		/// `()` verifies at once.
+		type ProofBatch: DeferMembershipProofs<Self::Crypto>;
 
 		/// Helper for benchmarks.
 		#[cfg(feature = "runtime-benchmarks")]
@@ -432,6 +438,8 @@ pub mod pallet {
 		NothingToBuild,
 		/// Only the rings of a flexible collection can be merged.
 		CollectionNotFlexible,
+		/// The transaction hash is not the hash of the ring and the proofs.
+		StaticHashMismatch,
 	}
 
 	/// Custom transaction validity errors for authorize closures.
@@ -2819,6 +2827,59 @@ pub mod pallet {
 			let alias = T::Crypto::validate(capacity, proof, &root, &context[..], msg)
 				.map_err(|_| Error::<T>::InvalidProof)?;
 			Ok(ContextualAlias { alias, context })
+		}
+
+		fn verify_memberships_in_ring_or_defer_max_weight(count: u32) -> Weight {
+			T::ProofBatch::verify_or_defer_max_weight(count)
+		}
+
+		/// Resolve the root like [`Self::verify_memberships_in_ring`] and forward the proofs to
+		/// [`Config::ProofBatch`].
+		///
+		/// `(identifier, ring_index, revision)` always resolves to the same configuration and root,
+		/// whenever it resolves:
+		///
+		/// - Every root change bumps the revision of the ring.
+		/// - A removed or merged ring loses its root for good. Members join only the current ring,
+		///   which neither call accepts, so the ring index is never built again and its revisions
+		///   never restart at zero.
+		/// - Identifiers of deleted collections are retired and never reused.
+		/// - `ring_size` is set only when the collection is created.
+		fn verify_memberships_in_ring_or_defer(
+			identifier: &Identifier,
+			ring_index: RingIndex,
+			revision: RevisionIndex,
+			items: &[RingMembershipProof<<T::Crypto as GenerateVerifiable>::Proof>],
+			tx_explicit_hash: [u8; 32],
+		) -> Result<Vec<ContextualAlias>, DispatchError> {
+			let collection_info =
+				Collections::<T>::get(identifier).ok_or(Error::<T>::CollectionNotFound)?;
+			let config: CapacityOf<T> = collection_info
+				.ring_size
+				.try_into()
+				.map_err(|_| Error::<T>::InvalidRingExponent)?;
+			let members = Self::get_root_at_revision(identifier, ring_index, revision)?;
+			// Reject a bad context before the proofs join the batch.
+			let contexts = items
+				.iter()
+				.map(|item| Context::try_from(item.context.as_slice()))
+				.collect::<Result<Vec<_>, _>>()
+				.map_err(|_| Error::<T>::InvalidProof)?;
+
+			let aliases =
+				T::ProofBatch::verify_or_defer(config, members, items.to_vec(), tx_explicit_hash)
+					.map_err(|error| match error {
+					VerifyOrDeferError::StaticHashMismatch => Error::<T>::StaticHashMismatch,
+					VerifyOrDeferError::InvalidProof(_) => Error::<T>::InvalidProof,
+				})?;
+			if aliases.len() != contexts.len() {
+				return Err(Error::<T>::InvalidProof.into());
+			}
+			Ok(aliases
+				.into_iter()
+				.zip(contexts)
+				.map(|(alias, context)| ContextualAlias { alias, context })
+				.collect())
 		}
 
 		fn verify_memberships_in_ring(

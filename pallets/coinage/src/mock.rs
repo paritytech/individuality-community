@@ -192,6 +192,7 @@ impl indiv_pallet_members::Config for Test {
 	type OnRingRootChange = ();
 	type OffchainWorkerInterval = ConstU64<1>;
 	type ManagerOrigin = frame_system::EnsureRoot<Self::AccountId>;
+	type ProofBatch = ();
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();
 }
@@ -548,6 +549,19 @@ impl ValidateProof for MembershipProof {
 		} else {
 			Err(())
 		}
+	}
+	fn validate_proof_or_defer_max_weight() -> frame_support::weights::Weight {
+		frame_support::weights::Weight::zero()
+	}
+
+	fn validate_proof_or_defer(
+		identifier: &indiv_support::traits::Identifier,
+		proof: &Self::Proof,
+		context: &indiv_support::traits::Context,
+		msg: &[u8],
+		_tx_explicit_hash: [u8; 32],
+	) -> Result<Alias, ()> {
+		Self::validate_proof(identifier, proof, context, msg)
 	}
 }
 

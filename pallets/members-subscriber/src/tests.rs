@@ -2653,7 +2653,9 @@ mod offchain_worker {
 mod proof_verification {
 	use super::*;
 	use crate::pallet::Error;
-	use indiv_support::traits::{MembershipMultiProver, MembershipProver, RingMembershipProof};
+	use indiv_support::traits::{
+		hash_ring_proofs, MembershipMultiProver, MembershipProver, RingMembershipProof,
+	};
 
 	const CTX: crate::types::Context = [9u8; 32];
 	const MSG: &[u8] = b"msg";
@@ -2866,6 +2868,38 @@ mod proof_verification {
 			assert_noop!(
 				Pallet::<Test>::verify_memberships_in_ring(&PEOPLE, RING, 99, &items),
 				Error::<Test>::RevisionNotFound,
+			);
+		});
+	}
+
+	#[test]
+	fn verify_memberships_in_ring_or_defer_checks_the_hash_of_the_revision_root() {
+		new_test_ext().execute_with(|| {
+			seed_single_root(PEOPLE, 1, 42);
+			push_revision(PEOPLE, 2, 99);
+			let items = vec![RingMembershipProof {
+				proof: proof_for(42),
+				context: CTX.to_vec(),
+				message: MSG.to_vec(),
+			}];
+			let verify = |tx_explicit_hash| {
+				Pallet::<Test>::verify_memberships_in_ring_or_defer(
+					&PEOPLE,
+					RING,
+					1,
+					&items,
+					tx_explicit_hash,
+				)
+			};
+
+			let out =
+				verify(hash_ring_proofs::<TestVerifiable>(&(), &root_for(&[42]), &items)).unwrap();
+			assert_eq!(out[0].alias, items[0].proof.alias());
+
+			// The hash of the revision 2 root does not match the revision 1 root.
+			assert_noop!(
+				verify(hash_ring_proofs::<TestVerifiable>(&(), &root_for(&[99]), &items)),
+				Error::<Test>::StaticHashMismatch,
 			);
 		});
 	}

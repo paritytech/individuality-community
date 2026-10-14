@@ -1313,6 +1313,8 @@ construct_runtime!(
 		Airdrop: indiv_pallet_airdrop = 70,
 		Honour: indiv_pallet_honour = 71,
 		PeopleAirdrops: indiv_pallet_people_airdrops = 72,
+		// Verifies the ring VRF proofs of a block in one batch.
+		ProofBatch: indiv_pallet_proof_batch = 75,
 
 		// Migrations pallet
 		MultiBlockMigrations: pallet_migrations = 98,
@@ -1363,6 +1365,7 @@ mod benches {
 		[indiv_pallet_resources, Resources]
 		[indiv_pallet_chunks_manager, ChunksManager]
 		[indiv_pallet_members, Members]
+		[indiv_pallet_proof_batch, ProofBatch]
 		[indiv_pallet_members_notifier, MembersNotifier]
 		[indiv_pallet_coinage, Coinage]
 		[indiv_pallet_airdrop, Airdrop]
@@ -1469,6 +1472,12 @@ impl_runtime_apis! {
 			tx: <Block as BlockT>::Extrinsic,
 			block_hash: <Block as BlockT>::Hash,
 		) -> TransactionValidity {
+			// DO NOT MERGE before polkadot-sdk#12651 is merged and polkadot-sdk is bumped. That PR
+			// sets `frame_system::Pallet::is_pool_transaction_validation()` in
+			// `Executive::validate_transaction`, which replaces this flag. Without the flag, the
+			// pool would defer every ring VRF proof and verify none. The validation state is
+			// discarded, so the flag is never committed.
+			ProofBatch::tmp_note_pool_transaction_validation();
 			Executive::validate_transaction(source, tx, block_hash)
 		}
 	}
