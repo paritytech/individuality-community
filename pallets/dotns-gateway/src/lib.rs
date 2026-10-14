@@ -62,6 +62,7 @@ use frame_support::traits::{OriginTrait, UnixTime};
 use indiv_support::{
 	context::{build_product_context, personhood},
 	traits::{Alias, MembershipProver, RevisionIndex, RingExponent, RingIndex},
+	utils::wrap_bytes,
 };
 use sp_runtime::traits::{IdentifyAccount, Verify};
 use verifiable::GenerateVerifiable;
@@ -319,11 +320,11 @@ pub mod pallet {
 		/// - `candidate`: the Lite Person's account for whom the label is being reserved. Also the
 		///   signer of `candidate_signature`.
 		/// - `candidate_signature`: signature over the bytes returned by
-		///   `Pallet::construct_reservation_message` — a SCALE-encoded tuple binding the attester,
-		///   candidate, the candidate's chosen *base* username, and chat key. The digit suffix of
-		///   `lite_label` is **not** part of the signed message (the digits are allocated
-		///   server-side after the candidate signs, so the candidate cannot commit to them at
-		///   signing time).
+		///   `Pallet::construct_reservation_message`, wrapped in `<Bytes>…</Bytes>`. The message is
+		///   a SCALE-encoded tuple binding the attester, candidate, the candidate's chosen *base*
+		///   username and chat key. The digit suffix of `lite_label` is **not** part of the signed
+		///   message (the digits are allocated server-side after the candidate signs, so the
+		///   candidate cannot commit to them at signing time).
 		/// - `lite_label`: the lite-person label. Must be `<dns-stem>.<2+ digits>` (e.g.
 		///   `alice.42`), matching `StringUtils.isLitePersonLabel` in the contracts. Only the
 		///   `<dns-stem>` portion enters the signed message; the digits ride along as an unsigned
@@ -375,7 +376,7 @@ pub mod pallet {
 				signed_at,
 			);
 			ensure!(
-				candidate_signature.verify(&msg[..], &candidate),
+				candidate_signature.verify(&wrap_bytes(&msg)[..], &candidate),
 				Error::<T>::InvalidAttestationSignature,
 			);
 

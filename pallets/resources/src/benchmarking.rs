@@ -31,7 +31,10 @@ use frame_support::{
 	BoundedVec,
 };
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin as SystemOrigin};
-use indiv_support::traits::{AppendOnlyMembers, MembershipProver, RingMode};
+use indiv_support::{
+	traits::{AppendOnlyMembers, MembershipProver, RingMode},
+	utils::wrap_bytes,
+};
 use sp_core::Get;
 use sp_runtime::{
 	traits::{
@@ -229,7 +232,7 @@ mod benches {
 		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &context) else {
 			panic!("origin was created with `try_successful_origin`; qed");
 		};
-		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&alias[..]);
+		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&wrap_bytes(&alias[..]));
 
 		#[extrinsic_call]
 		register_person(
@@ -281,7 +284,7 @@ mod benches {
 		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &context) else {
 			panic!("origin was created with `try_successful_origin`; qed");
 		};
-		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&alias[..]);
+		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&wrap_bytes(&alias[..]));
 
 		#[extrinsic_call]
 		register_person(
@@ -329,7 +332,7 @@ mod benches {
 		Consumers::<T>::insert(&account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&account);
 
-		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&alias[..]);
+		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&wrap_bytes(&alias[..]));
 		assert_ok!(Pallet::<T>::register_person(
 			origin.clone(),
 			account.clone(),

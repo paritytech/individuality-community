@@ -64,7 +64,7 @@ use indiv_support::{
 		Context, MembershipProver, RingExponent, Username,
 	},
 	tx_priority,
-	utils::BigEndianU32,
+	utils::{wrap_bytes, BigEndianU32},
 	weight_budget::OcwWeightBudget,
 };
 use sp_runtime::traits::{IdentifyAccount, Verify};
@@ -697,8 +697,8 @@ pub mod pallet {
 		///
 		/// The person must link a previously recognized lite identity, which will be upgraded to a
 		/// full person consumer. In order to prove they hold the lite identity they want to link,
-		/// users must provide a `lite_identity_proof` signature, created by signing the alias bytes
-		/// using their lite consumer account.
+		/// users must provide a `lite_identity_proof` signature. The lite consumer account signs
+		/// the alias bytes wrapped in `<Bytes>…</Bytes>`.
 		///
 		/// The consumer can choose if they want to have a new username or use an existing
 		/// reservation made in the name of the lite consumer who will be linked.
@@ -1438,7 +1438,7 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			// Verify proof of ownership of the linked lite person.
 			ensure!(
-				lite_identity_proof.verify(&alias[..], linked_lite_identity),
+				lite_identity_proof.verify(&wrap_bytes(&alias[..])[..], linked_lite_identity),
 				Error::<T>::InvalidProofOfOwnership,
 			);
 			// Ensure the linked lite person was not already linked to another full person.

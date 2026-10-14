@@ -349,10 +349,10 @@ fn game_sign_up_grants_player_allowance() {
 		// Proof of ownership for statement account
 		let score_alias = Crypto::alias_in_context(&person_secret, &score_context()[..]).unwrap();
 		let stmt_acc_proof: MultiSignature = stmt_acc_pair
-			.sign(
+			.sign(&wrap_bytes(
 				&(b"pop:game:stmt_account_for_alias:", score_alias)
-					.using_encoded(sp_io::hashing::blake2_256)[..],
-			)
+					.using_encoded(sp_io::hashing::blake2_256),
+			))
 			.into();
 
 		// There is a game scheduled

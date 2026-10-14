@@ -20,7 +20,10 @@ use super::*;
 use codec::Encode;
 use frame_benchmarking::v2::*;
 use frame_system::RawOrigin as SystemOrigin;
-use indiv_support::traits::{Identifier, RevisionIndex, RingIndex};
+use indiv_support::{
+	traits::{Identifier, RevisionIndex, RingIndex},
+	utils::wrap_bytes,
+};
 use sp_runtime::traits::{DispatchTransaction, TxBaseImplication};
 
 pub trait BenchmarkHelper<T: Config> {
@@ -93,7 +96,7 @@ mod benchmarks {
 			reserved_base_label.as_ref().map(crate::BaseLabel::as_slice),
 			signed_at,
 		);
-		let signature = T::BenchmarkHelper::sign(&msg);
+		let signature = T::BenchmarkHelper::sign(&wrap_bytes(&msg));
 
 		#[extrinsic_call]
 		_(

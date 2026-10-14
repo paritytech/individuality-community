@@ -269,6 +269,7 @@ use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
 	credit_trees::AwardCredits,
 	traits::{Alias, CommunicationIdentifier, Context},
+	utils::wrap_bytes,
 	weight_budget::OcwWeightBudget,
 };
 use sp_runtime::traits::{IdentifyAccount, Verify, Zero};
@@ -994,10 +995,10 @@ pub mod pallet {
 		/// Parameters:
 		/// - `statement_account`: the account id to use to interact with the statement store during
 		///   the game.
-		/// - `sig`: the proof of ownership of the account `statement_account` by an alias, it is
-		///   the signature of the message `"pop:game:stmt_account_for_alias:"` concatenated to the
-		///   alias, and then hashed with `blake2_256` (blake2 256bit output). The base of the
-		///   message can be found in the constant: `proof_of_ownership_msg_base`.
+		/// - `sig`: the proof of ownership of the account `statement_account` by an alias. The
+		///   message is the `blake2_256` hash of `"pop:game:stmt_account_for_alias:"` concatenated
+		///   to the alias. The base of the message is in `proof_of_ownership_msg_base`. The
+		///   statement account signs the hash wrapped in `<Bytes>…</Bytes>`.
 		/// - `airdrops`: optionally enters the player into the airdrop draws scheduled for this
 		///   game. Pass `None` to skip it; otherwise it holds exactly one VRF per scheduled airdrop
 		///   event (`airdrops_scheduled` in the `Game` storage), in airdrop-index order. Each entry
@@ -2184,7 +2185,8 @@ pub mod pallet {
 					let msg = (Self::proof_of_ownership_msg_base(), &who)
 						.using_encoded(sp_io::hashing::blake2_256);
 					ensure!(
-						statement_account_signature.verify(&msg[..], &statement_account),
+						statement_account_signature
+							.verify(&wrap_bytes(&msg)[..], &statement_account),
 						Error::<T>::InvalidStatementAccountSignature,
 					);
 

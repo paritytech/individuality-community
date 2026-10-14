@@ -38,10 +38,10 @@ fn alias_player_flow() {
 		// Create the alias in SCORE context and the required proof-of-ownership for the game
 		let amy_score_alias = Crypto::alias_in_context(&amy_secret, &score_context()[..]).unwrap();
 		let amy_stmt_acc_proof_of_ownership: MultiSignature = amy_stmt_acc_pair
-			.sign(
+			.sign(&wrap_bytes(
 				&(b"pop:game:stmt_account_for_alias:", amy_score_alias)
-					.using_encoded(sp_io::hashing::blake2_256)[..],
-			)
+					.using_encoded(sp_io::hashing::blake2_256),
+			))
 			.into();
 
 		// ─────────────────────────────────────
@@ -113,6 +113,32 @@ fn alias_player_flow() {
 		// registration phase is open.
 		// ─────────────────────────────────────
 		advance_until_time(GameTimes::<Runtime>::registration_start(&schedules[0]));
+
+		// Amy signs up with a statement account signature over the raw message.
+		let unwrapped_proof_of_ownership: MultiSignature = amy_stmt_acc_pair
+			.sign(
+				&(b"pop:game:stmt_account_for_alias:", amy_score_alias)
+					.using_encoded(sp_io::hashing::blake2_256),
+			)
+			.into();
+		let sign_up_alias = indiv_pallet_game::Call::<Runtime>::sign_up_with_alias {
+			identifier_key: [0u8; 65],
+			statement_account: amy_stmt_acc.clone(),
+			sig: unwrapped_proof_of_ownership,
+			airdrops: None,
+		};
+		let outcome = Executive::apply_extrinsic(build_signed_as_alias_with_account_ext(
+			&amy_alias_acc_pair,
+			sign_up_alias.into(),
+		))
+		.expect("transaction is valid");
+
+		// Sign-up fails on the statement account signature.
+		assert_eq!(
+			outcome,
+			Err(indiv_pallet_game::Error::<Runtime>::InvalidStatementAccountSignature.into())
+		);
+
 		let sign_up_alias = indiv_pallet_game::Call::<Runtime>::sign_up_with_alias {
 			identifier_key: [0u8; 65],
 			statement_account: amy_stmt_acc.clone(),

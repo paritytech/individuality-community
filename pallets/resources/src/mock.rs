@@ -202,7 +202,7 @@ pub fn set_time_sec(secs: u64) {
 	TestClock::set_time(Duration::from_secs(secs));
 }
 
-/// A signature type that is always successful for a given account
+/// An account signature that is valid for its own account over a `<Bytes>`-wrapped message.
 #[derive(
 	PartialEq,
 	Eq,
@@ -231,10 +231,13 @@ impl Verify for AccountAuthority {
 
 	fn verify<L: sp_runtime::traits::Lazy<[u8]>>(
 		&self,
-		_msg: L,
+		mut msg: L,
 		signer: &<Self::Signer as IdentifyAccount>::AccountId,
 	) -> bool {
-		self.0 == *signer
+		let msg = msg.get();
+		self.0 == *signer &&
+			msg.starts_with(indiv_support::utils::BYTES_PREFIX) &&
+			msg.ends_with(indiv_support::utils::BYTES_SUFFIX)
 	}
 }
 
