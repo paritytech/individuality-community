@@ -1421,8 +1421,9 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 			break;
 		}
 
-		// Execute previous block idle and offchain worker
+		// Execute previous block idle, the proof batch check and offchain worker
 		AllPalletsWithSystem::on_idle(current, Weight::MAX);
+		<ProofBatch as Hooks<_>>::on_finalize(current);
 		AllPalletsWithSystem::offchain_worker(current);
 
 		// Advance time by 2 seconds (2000 ms)

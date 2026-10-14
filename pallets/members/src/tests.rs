@@ -17,8 +17,8 @@
 use crate::{mock::*, *};
 use frame_support::{assert_noop, assert_ok};
 use indiv_support::traits::{
-	AppendOnlyMembers, FlexibleMembers, MembershipProver, RingExponent, RingMembershipProof,
-	RingRootsProvider, RingStatus,
+	AppendOnlyMembers, DeferMembershipProofs, FlexibleMembers, MembershipProver, RingExponent,
+	RingMembershipProof, RingRootsProvider, RingStatus,
 };
 use sp_runtime::transaction_validity::InvalidTransaction;
 use verifiable::GenerateVerifiable;
@@ -5207,6 +5207,116 @@ mod old_roots_tests {
 		MockCrypto::create(commitment, secret, &context, message).unwrap()
 	}
 
+	/// A ring membership item for `proof`, created with `context` and `message`.
+	fn ring_item(
+		proof: <MockCrypto as GenerateVerifiable>::Proof,
+		context: &[u8],
+		message: &[u8],
+	) -> RingMembershipProof<<MockCrypto as GenerateVerifiable>::Proof> {
+		RingMembershipProof { proof, context: context.to_vec(), message: message.to_vec() }
+	}
+
+	#[test]
+	fn verify_memberships_in_ring_or_defer_forwards_the_revision_root() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+			let members = setup_collection_and_build_ring(identifier, 5, 10);
+			let root_rev0 = Root::<Test>::get(identifier, 0).unwrap().root;
+			let [(first, first_secret), (second, second_secret)] = [&members[0], &members[1]];
+			let [first_context, second_context] = [[1u8; 32], [2u8; 32]];
+			let (first_proof, first_alias) = create_proof_for_member(
+				&identifier,
+				0,
+				first,
+				first_secret,
+				first_context,
+				b"rev0",
+			);
+			let (second_proof, second_alias) = create_proof_for_member(
+				&identifier,
+				0,
+				second,
+				second_secret,
+				second_context,
+				b"rev0",
+			);
+
+			// A new revision archives the root of revision 0.
+			generate_members_with_offset(identifier, 11, 15, 100);
+			assert_ok!(MembersPallet::onboard_members(&identifier, false));
+			let to_include = MembersPallet::should_build_ring(&identifier, 0, 255).unwrap();
+			assert_ok!(MembersPallet::build_ring(&identifier, 0, to_include));
+			assert_ne!(Root::<Test>::get(identifier, 0).unwrap().root, root_rev0);
+			take_deferred_rings();
+
+			let items = [
+				ring_item(first_proof, &first_context, b"rev0"),
+				ring_item(second_proof, &second_context, b"rev0"),
+			];
+			let contextual_aliases =
+				<MembersPallet as MembershipProver>::verify_memberships_in_ring_or_defer(
+					&identifier,
+					0,
+					0,
+					&items,
+				)
+				.unwrap();
+
+			assert_eq!(
+				contextual_aliases,
+				vec![
+					ContextualAlias { alias: first_alias, context: first_context },
+					ContextualAlias { alias: second_alias, context: second_context },
+				]
+			);
+			assert_eq!(take_deferred_rings(), vec![root_rev0]);
+			assert_eq!(
+				<MembersPallet as MembershipProver>::verify_memberships_in_ring_or_defer_max_weight(
+					2
+				),
+				MockProofBatch::verify_or_defer_max_weight(2)
+			);
+		});
+	}
+
+	#[test]
+	fn verify_memberships_in_ring_or_defer_rejects_before_forwarding() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+			let members = setup_collection_and_build_ring(identifier, 5, 10);
+			let (member, secret) = &members[0];
+			let context = [1u8; 32];
+			let (proof, _) = create_proof_for_member(&identifier, 0, member, secret, context, b"m");
+			let items = [ring_item(proof.clone(), &context, b"m")];
+			let verify = |identifier: &Identifier, revision, items: &[_]| {
+				<MembersPallet as MembershipProver>::verify_memberships_in_ring_or_defer(
+					identifier, 0, revision, items,
+				)
+			};
+			take_deferred_rings();
+
+			// An unknown revision resolves no root, so nothing reaches the batch.
+			assert_eq!(verify(&identifier, 1, &items), Err(Error::<Test>::NoRoot.into()));
+			assert_eq!(verify(&[9; 32], 0, &items), Err(Error::<Test>::CollectionNotFound.into()));
+			// A context that is not 32 bytes long never reaches the batch.
+			assert_eq!(
+				verify(
+					&identifier,
+					0,
+					&[items[0].clone(), ring_item(proof.clone(), &context[..31], b"m")]
+				),
+				Err(Error::<Test>::InvalidProof.into())
+			);
+			assert!(take_deferred_rings().is_empty());
+
+			// The batch rejects an invalid proof.
+			assert_eq!(
+				verify(&identifier, 0, &[ring_item(proof, &context, b"other message")]),
+				Err(Error::<Test>::InvalidProof.into())
+			);
+		});
+	}
+
 	// Test for:
 	// - `verify_membership` works for old revision
 	// - `verify_membership` works for the current revision
@@ -6336,6 +6446,107 @@ mod integrity_tests {
 	fn integrity_test_passes() {
 		new_test_ext().execute_with(|| {
 			<Pallet<Test> as Hooks<u64>>::integrity_test();
+		});
+	}
+}
+
+/// `(identifier, ring_index, revision)` always resolves to the same root, whenever it resolves.
+/// The proof batch relies on it to defer a proof that the transaction pool verified.
+mod ring_root_stability_tests {
+	use super::*;
+
+	fn build_all(identifier: Identifier, ring_index: RingIndex) {
+		while MembersPallet::onboard_members(&identifier, false) == Ok(true) {}
+		while let Some(to_include) = MembersPallet::should_build_ring(&identifier, ring_index, 255)
+		{
+			assert_ok!(MembersPallet::build_ring(&identifier, ring_index, to_include));
+		}
+	}
+
+	/// Nothing can build `ring_index` again, and none of its revisions resolve.
+	fn assert_never_built_again(identifier: Identifier, ring_index: RingIndex, revision: u32) {
+		// New members join the current ring only.
+		generate_members_with_offset(identifier, 1, 20, 0xE0);
+		build_all(identifier, CurrentRingIndex::<Test>::get(identifier));
+
+		assert_eq!(RingKeysStatus::<Test>::get(identifier, ring_index).total, 0);
+		assert!(MembersPallet::should_build_ring(&identifier, ring_index, 255).is_none());
+		assert!(MembersPallet::ensure_can_mark_ring_stale(&identifier, ring_index).is_err());
+		assert!(!Root::<Test>::contains_key(identifier, ring_index));
+		for revision in 0..=revision {
+			assert!(MembersPallet::get_root_at_revision(&identifier, ring_index, revision).is_err());
+		}
+	}
+
+	#[test]
+	fn a_removed_ring_index_is_never_built_again() {
+		TestExt::new().execute_with(|| {
+			setup_collection_with_built_ring(TEST_IDENTIFIER, 10);
+			let revision = Root::<Test>::get(TEST_IDENTIFIER, 0).unwrap().revision;
+			manually_advance_to_ring(&TEST_IDENTIFIER, 1);
+
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::remove_ring(&TEST_IDENTIFIER, 0));
+
+			assert_never_built_again(TEST_IDENTIFIER, 0, revision);
+		});
+	}
+
+	#[test]
+	fn a_merged_away_ring_index_is_never_built_again() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+			create_test_collection(identifier, 1);
+			// Ring 0 fills up, so ring 1 becomes the current ring.
+			let ring0_members = generate_members(identifier, 1, 255);
+			build_all(identifier, 0);
+			generate_members_with_offset(identifier, 1, 10, 0xAA);
+			build_all(identifier, 1);
+			manually_advance_to_ring(&identifier, 2);
+			// Shrink ring 0 below the merge threshold.
+			assert_ok!(<MembersPallet as FlexibleMembers>::start_removal_session(&identifier));
+			let removed = ring0_members.iter().take(130).map(|(m, _)| *m).collect::<Vec<_>>();
+			assert_ok!(<MembersPallet as FlexibleMembers>::remove_members(&identifier, &removed));
+			assert_ok!(<MembersPallet as FlexibleMembers>::end_removal_session(&identifier));
+			MembersPallet::remove_suspended_keys(&identifier, 0);
+			build_all(identifier, 0);
+			let revision = Root::<Test>::get(identifier, 1).unwrap().revision;
+
+			assert_ok!(MembersPallet::merge_rings(RuntimeOrigin::signed(1), identifier, 0, 1));
+
+			assert_never_built_again(identifier, 1, revision);
+		});
+	}
+
+	#[test]
+	fn a_revision_keeps_resolving_to_its_root() {
+		TestExt::new().execute_with(|| {
+			let identifier = TEST_IDENTIFIER;
+			let members = setup_collection_with_built_ring(identifier, 10);
+			let mut roots = vec![Root::<Test>::get(identifier, 0).unwrap()];
+			// A rebuild with more members.
+			generate_members_with_offset(identifier, 11, 15, 0xB0);
+			build_all(identifier, 0);
+			roots.push(Root::<Test>::get(identifier, 0).unwrap());
+			// A suspension resets the root to empty, then a rebuild.
+			assert_ok!(<MembersPallet as FlexibleMembers>::start_removal_session(&identifier));
+			assert_ok!(<MembersPallet as FlexibleMembers>::remove_members(
+				&identifier,
+				&[members[0].0]
+			));
+			assert_ok!(<MembersPallet as FlexibleMembers>::end_removal_session(&identifier));
+			MembersPallet::remove_suspended_keys(&identifier, 0);
+			roots.push(Root::<Test>::get(identifier, 0).unwrap());
+			build_all(identifier, 0);
+			roots.push(Root::<Test>::get(identifier, 0).unwrap());
+
+			let revisions = roots.iter().map(|root| root.revision).collect::<Vec<_>>();
+			assert!(revisions.windows(2).all(|pair| pair[0] < pair[1]), "{revisions:?}");
+			for root in &roots {
+				assert_eq!(
+					MembersPallet::get_root_at_revision(&identifier, 0, root.revision),
+					Ok(root.root.clone())
+				);
+			}
 		});
 	}
 }

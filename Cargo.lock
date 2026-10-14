@@ -5103,6 +5103,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "indiv-pallet-proof-batch"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support 48.1.0",
+ "frame-system 48.0.0",
+ "indiv-support",
+ "log",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-io 48.0.0",
+ "sp-runtime 48.0.0",
+ "verifiable",
+]
+
+[[package]]
 name = "indiv-pallet-proof-of-ink"
 version = "0.1.0"
 dependencies = [
@@ -6099,6 +6115,7 @@ dependencies = [
  "indiv-pallet-people",
  "indiv-pallet-people-airdrops",
  "indiv-pallet-people-lite",
+ "indiv-pallet-proof-batch",
  "indiv-pallet-proof-of-ink",
  "indiv-pallet-relay-randomness",
  "indiv-pallet-resources",
@@ -12224,8 +12241,6 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 [[package]]
 name = "verifiable"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61bcf1e43762a8701eb3c2e836633c9ff3b65814ff573772b3250c1ed6ff218d"
 dependencies = [
  "ark-scale 0.0.14",
  "ark-serialize 0.6.0",

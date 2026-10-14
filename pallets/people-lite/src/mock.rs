@@ -261,6 +261,21 @@ impl MembershipProver for MockMemberService {
 		Ok(ContextualAlias { alias, context })
 	}
 
+	fn verify_memberships_in_ring_or_defer_max_weight(
+		_count: u32,
+	) -> frame_support::weights::Weight {
+		frame_support::weights::Weight::zero()
+	}
+
+	fn verify_memberships_in_ring_or_defer(
+		identifier: &Identifier,
+		ring_index: RingIndex,
+		revision: RevisionIndex,
+		items: &[RingMembershipProof<<Self::Crypto as verifiable::GenerateVerifiable>::Proof>],
+	) -> Result<Vec<ContextualAlias>, DispatchError> {
+		Self::verify_memberships_in_ring(identifier, ring_index, revision, items)
+	}
+
 	fn verify_memberships_in_ring(
 		identifier: &Identifier,
 		_ring_index: RingIndex,

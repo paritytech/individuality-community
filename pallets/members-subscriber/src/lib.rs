@@ -1368,6 +1368,20 @@ pub mod pallet {
 			Ok(ContextualAlias { alias, context })
 		}
 
+		fn verify_memberships_in_ring_or_defer_max_weight(_count: u32) -> Weight {
+			Weight::zero()
+		}
+
+		/// Verifies at once: this service never defers.
+		fn verify_memberships_in_ring_or_defer(
+			identifier: &Identifier,
+			ring_index: RingIndex,
+			revision: RevisionIndex,
+			items: &[RingMembershipProof<<T::Crypto as GenerateVerifiable>::Proof>],
+		) -> Result<Vec<ContextualAlias>, DispatchError> {
+			Self::verify_memberships_in_ring(identifier, ring_index, revision, items)
+		}
+
 		fn verify_memberships_in_ring(
 			identifier: &Identifier,
 			ring_index: RingIndex,

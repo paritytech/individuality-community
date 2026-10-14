@@ -241,6 +241,7 @@ impl indiv_pallet_members::Config for Test {
 	type OnRingRootChange = ();
 	type OffchainWorkerInterval = ConstU64<1>;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
+	type ProofBatch = ();
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();
 }

@@ -25,10 +25,11 @@ use frame_support::{
 	dispatch::Pays,
 	pallet_prelude::Authorize,
 	traits::{Get, OnRuntimeUpgrade, UnixTime},
+	weights::Weight,
 	BoundedVec,
 };
 use indiv_pallet_members::RingMode;
-use indiv_support::traits::RingExponent;
+use indiv_support::traits::{RingExponent, ValidateProof};
 use sp_runtime::transaction_validity::{
 	InvalidTransaction::{self, BadSigner},
 	TransactionSource,
@@ -2432,4 +2433,58 @@ mod offchain_worker {
 			assert_eq!(state.read().transactions.len(), 0);
 		});
 	}
+}
+
+#[test]
+fn validate_proof_or_defer_forwards_to_the_member_service() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+		let alice_sec = MockCrypto::new_secret([1u8; 32]);
+		let alice_pub = MockCrypto::member_from_secret(&alice_sec);
+		let alice_index = PeoplePallet::reserve_new_id();
+		PeoplePallet::recognize_personhood(alice_index, Some(alice_pub)).unwrap();
+		Members::process_maintenance();
+
+		let commitment = MockCrypto::open((), &alice_pub, Some(alice_pub).into_iter()).unwrap();
+		let (proof, alias) =
+			MockCrypto::create(commitment, &alice_sec, &MOCK_CONTEXT, b"m").unwrap();
+		let proof = MembershipProof::<Test> { proof, ring: 0, revision: 0 };
+
+		assert_eq!(
+			PeoplePallet::validate_proof_or_defer(
+				PEOPLE_MEMBER_IDENTIFIER,
+				&proof,
+				&MOCK_CONTEXT,
+				b"m"
+			),
+			Ok(alias)
+		);
+		assert_eq!(
+			PeoplePallet::validate_proof_or_defer(
+				PEOPLE_MEMBER_IDENTIFIER,
+				&proof,
+				&MOCK_CONTEXT,
+				b"other"
+			),
+			Err(())
+		);
+		let stale = MembershipProof::<Test> { revision: 1, ..proof };
+		assert_eq!(
+			PeoplePallet::validate_proof_or_defer(
+				PEOPLE_MEMBER_IDENTIFIER,
+				&stale,
+				&MOCK_CONTEXT,
+				b"m"
+			),
+			Err(())
+		);
+		assert_eq!(PeoplePallet::validate_proof_or_defer_max_weight(), Weight::zero());
+	});
 }

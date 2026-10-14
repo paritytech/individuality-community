@@ -458,6 +458,69 @@ pub struct RingMembershipProof<Proof> {
 	pub message: Vec<u8>,
 }
 
+/// Verify membership proofs one by one in the transaction pool and together in one batch during
+/// block execution.
+pub trait DeferMembershipProofs<Crypto: GenerateVerifiable> {
+	/// The most weight [`Self::verify_or_defer`] registers for `on_finalize` for `count` proofs.
+	///
+	/// A transaction extension using [`Self::verify_or_defer`] declares it in
+	/// [`TransactionExtension::weight`](sp_runtime::traits::TransactionExtension::weight) and
+	/// refunds all of it after dispatch.
+	fn verify_or_defer_max_weight(count: u32) -> Weight;
+
+	/// Verify proofs at once during transaction validation in the pool, or batch them to verify
+	/// them all together at the end of the block.
+	///
+	/// `ring_config` and `ring_members` are the ring the proofs are checked against. Return one
+	/// alias per item, in input order.
+	///
+	/// # Warning
+	///
+	/// - [`Self::verify_or_defer`] must be called within a transaction extension validate phase
+	///   (`TransactionExtension::validate`).
+	/// - Given the transaction, for any state, it must always verify the same proofs against the
+	///   same ring for the same message. If the transaction in state A verifies the proofs against
+	///   ring A and in state B against ring B, then the runtime is vulnerable: the transaction may
+	///   be valid in the pool but, once batched, fail and make the whole block invalid, which stops
+	///   block production. For example, if the proven message contains the runtime spec version
+	///   then it must be explicitly commited in the transaction with a hash of the message.
+	/// - The transaction weight must always include [`Self::verify_or_defer_max_weight`] and refund
+	///   it after dispatch. The call registers extra weight for the execution in `on_finalize`.
+	///   Without this, the block may exceed its maximum weight.
+	/// - The refund also removes the verification from the transaction fee, so the sender does not
+	///   pay for it. Use this only for a call with another spam protection.
+	fn verify_or_defer(
+		ring_config: Crypto::Config,
+		ring_members: Crypto::Members,
+		items: Vec<RingMembershipProof<Crypto::Proof>>,
+	) -> Result<Vec<Alias>, verifiable::Error>;
+}
+
+// Naive implementation that just verifies the proofs at once.
+impl<Crypto: GenerateVerifiable> DeferMembershipProofs<Crypto> for () {
+	fn verify_or_defer_max_weight(_count: u32) -> Weight {
+		Weight::zero()
+	}
+
+	fn verify_or_defer(
+		ring_config: Crypto::Config,
+		ring_members: Crypto::Members,
+		items: Vec<RingMembershipProof<Crypto::Proof>>,
+	) -> Result<Vec<Alias>, verifiable::Error> {
+		let proofs = items
+			.into_iter()
+			.map(|item| verifiable::BatchProofItem {
+				proof: item.proof,
+				config: ring_config,
+				members: ring_members.clone(),
+				context: item.context,
+				message: item.message,
+			})
+			.collect::<Vec<_>>();
+		Crypto::batch_validate(&proofs)
+	}
+}
+
 /// An abstract interface defining the proof type and the validation method for a membership
 /// proof, bound to a collection identifier, a context, and a message, and resulting with the
 /// alias of the prover inside the context.
@@ -473,6 +536,39 @@ pub trait ValidateProof {
 	/// valid.
 	#[allow(clippy::result_unit_err)]
 	fn validate_proof(
+		identifier: &Identifier,
+		proof: &Self::Proof,
+		context: &Context,
+		msg: &[u8],
+	) -> Result<Alias, ()>;
+
+	/// The most weight [`Self::validate_proof_or_defer`] registers for `on_finalize`.
+	///
+	/// A transaction extension using [`Self::validate_proof_or_defer`] declares it in
+	/// [`TransactionExtension::weight`](sp_runtime::traits::TransactionExtension::weight) and
+	/// refunds all of it after dispatch.
+	fn validate_proof_or_defer_max_weight() -> Weight;
+
+	/// Validate the proof like [`Self::validate_proof`] during transaction validation in the pool,
+	/// or batch it to verify it with the other proofs of the block at the end of the block.
+	///
+	/// # Warning
+	///
+	/// - [`Self::validate_proof_or_defer`] must be called within a transaction extension validate
+	///   phase (`TransactionExtension::validate`).
+	/// - Given the transaction, for any state, it must always verify the same proof against the
+	///   same ring for the same message. If the transaction in state A verifies the proof against
+	///   ring A and in state B against ring B, then the runtime is vulnerable: the transaction may
+	///   be valid in the pool but, once batched, fail and make the whole block invalid, which stops
+	///   block production. For example, if the proven message contains the runtime spec version
+	///   then it must be explicitly commited in the transaction with a hash of the message.
+	/// - The transaction weight must always include [`Self::validate_proof_or_defer_max_weight`]
+	///   and refund it after dispatch. The call registers extra weight for the execution in
+	///   `on_finalize`. Without this, the block may exceed its maximum weight.
+	/// - The refund also removes the verification from the transaction fee, so the sender does not
+	///   pay for it. Use this only for a call with another spam protection.
+	#[allow(clippy::result_unit_err)]
+	fn validate_proof_or_defer(
 		identifier: &Identifier,
 		proof: &Self::Proof,
 		context: &Context,
@@ -509,6 +605,39 @@ pub trait MembershipProver {
 		context: Context,
 		msg: &[u8],
 	) -> Result<ContextualAlias, DispatchError>;
+	/// The most weight [`Self::verify_memberships_in_ring_or_defer`] registers for `on_finalize`
+	/// for `count` proofs.
+	///
+	/// A transaction extension using [`Self::verify_memberships_in_ring_or_defer`] declares it in
+	/// [`TransactionExtension::weight`](sp_runtime::traits::TransactionExtension::weight) and
+	/// refunds all of it after dispatch.
+	fn verify_memberships_in_ring_or_defer_max_weight(count: u32) -> Weight;
+	/// Verify the proofs like [`Self::verify_memberships_in_ring`] during transaction validation in
+	/// the pool, or batch them to verify them with the other proofs of the block at the end of the
+	/// block. Return one alias per item, in input order.
+	///
+	/// # Warning
+	///
+	/// - [`Self::verify_memberships_in_ring_or_defer`] must be called within a transaction
+	///   extension validate phase (`TransactionExtension::validate`).
+	/// - Given the transaction, for any state, it must always verify the same proofs against the
+	///   same ring for the same message. If the transaction in state A verifies the proofs against
+	///   ring A and in state B against ring B, then the runtime is vulnerable: the transaction may
+	///   be valid in the pool but, once batched, fail and make the whole block invalid, which stops
+	///   block production. For example, if the proven message contains the runtime spec version
+	///   then it must be explicitly commited in the transaction with a hash of the message.
+	/// - The transaction weight must always include
+	///   [`Self::verify_memberships_in_ring_or_defer_max_weight`] and refund it after dispatch. The
+	///   call registers extra weight for the execution in `on_finalize`. Without this, the block
+	///   may exceed its maximum weight.
+	/// - The refund also removes the verification from the transaction fee, so the sender does not
+	///   pay for it. Use this only for a call with another spam protection.
+	fn verify_memberships_in_ring_or_defer(
+		identifier: &Identifier,
+		ring_index: RingIndex,
+		revision: RevisionIndex,
+		items: &[RingMembershipProof<<Self::Crypto as GenerateVerifiable>::Proof>],
+	) -> Result<Vec<ContextualAlias>, DispatchError>;
 	/// Batch-verify multiple membership proofs against a specific revision of a ring's root.
 	///
 	/// Combines batch verification with revision-aware root lookup.

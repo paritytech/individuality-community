@@ -40,6 +40,35 @@ use sp_runtime::{
 };
 pub use verifiable::{mock::Mock, Alias, AliasVec, GenerateVerifiable};
 
+thread_local! {
+	/// The ring roots that [`MockProofBatch`] received, in order.
+	pub static DEFERRED_RINGS: RefCell<Vec<MembersOf<Test>>> =
+		const { RefCell::new(Vec::new()) };
+}
+
+/// Records each ring and verifies at once.
+pub struct MockProofBatch;
+
+impl DeferMembershipProofs<MockCrypto> for MockProofBatch {
+	fn verify_or_defer_max_weight(count: u32) -> Weight {
+		Weight::from_parts(100, 10).saturating_mul(count.into())
+	}
+
+	fn verify_or_defer(
+		ring_config: <MockCrypto as GenerateVerifiable>::Config,
+		ring_members: MembersOf<Test>,
+		items: Vec<RingMembershipProof<<MockCrypto as GenerateVerifiable>::Proof>>,
+	) -> Result<Vec<Alias>, verifiable::Error> {
+		DEFERRED_RINGS.with(|rings| rings.borrow_mut().push(ring_members.clone()));
+		<() as DeferMembershipProofs<MockCrypto>>::verify_or_defer(ring_config, ring_members, items)
+	}
+}
+
+/// The ring roots that [`MockProofBatch`] received since the last call.
+pub fn take_deferred_rings() -> Vec<MembersOf<Test>> {
+	DEFERRED_RINGS.with(|rings| core::mem::take(&mut *rings.borrow_mut()))
+}
+
 // Thread-local storage for mock time
 thread_local! {
 	static TIME: RefCell<Duration> = const { RefCell::new(Duration::from_secs(1_000_000)) };
@@ -415,6 +444,7 @@ impl crate::Config for Test {
 	type OnRingRootChange = ();
 	type OffchainWorkerInterval = ConstU64<1>;
 	type ManagerOrigin = frame_system::EnsureRoot<Self::AccountId>;
+	type ProofBatch = MockProofBatch;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = BenchHelper;
 }
