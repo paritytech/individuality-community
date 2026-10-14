@@ -20,7 +20,7 @@
 
 use super::*;
 use frame_support::pallet_prelude::*;
-use indiv_support::traits::ValidateProof;
+use indiv_support::traits::{RingMembershipProof, ValidateProof};
 
 pub type RevisionIndex = u32;
 pub type PageIndex = u32;
@@ -81,6 +81,37 @@ impl<T: Config> ValidateProof for Pallet<T> {
 		.inspect_err(|e| log::debug!("validate proof fail: verify membership: {e:?}"))
 		.map_err(|_| ())?;
 		Ok(contextual_alias.alias)
+	}
+
+	fn validate_proof_or_defer_max_weight() -> Weight {
+		T::MemberService::verify_memberships_in_ring_or_defer_max_weight(1)
+	}
+
+	fn validate_proof_or_defer(
+		identifier: &Identifier,
+		proof: &Self::Proof,
+		context: &Context,
+		msg: &[u8],
+		tx_explicit_hash: [u8; 32],
+	) -> Result<Alias, ()> {
+		let item = RingMembershipProof {
+			proof: proof.proof.clone(),
+			context: context.to_vec(),
+			message: msg.to_vec(),
+		};
+		let contextual_aliases = T::MemberService::verify_memberships_in_ring_or_defer(
+			identifier,
+			proof.ring,
+			proof.revision,
+			core::slice::from_ref(&item),
+			tx_explicit_hash,
+		)
+		.inspect_err(|e| log::debug!("validate proof fail: verify memberships: {e:?}"))
+		.map_err(|_| ())?;
+		match contextual_aliases[..] {
+			[ContextualAlias { alias, .. }] => Ok(alias),
+			_ => Err(()),
+		}
 	}
 }
 

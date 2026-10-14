@@ -25,10 +25,11 @@ use frame_support::{
 	dispatch::Pays,
 	pallet_prelude::Authorize,
 	traits::{Get, OnRuntimeUpgrade, UnixTime},
+	weights::Weight,
 	BoundedVec,
 };
 use indiv_pallet_members::RingMode;
-use indiv_support::traits::RingExponent;
+use indiv_support::traits::{hash_ring_proofs, RingExponent, RingMembershipProof, ValidateProof};
 use sp_runtime::transaction_validity::{
 	InvalidTransaction::{self, BadSigner},
 	TransactionSource,
@@ -2432,4 +2433,55 @@ mod offchain_worker {
 			assert_eq!(state.read().transactions.len(), 0);
 		});
 	}
+}
+
+#[test]
+fn validate_proof_or_defer_forwards_to_the_member_service() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+		let alice_sec = MockCrypto::new_secret([1u8; 32]);
+		let alice_pub = MockCrypto::member_from_secret(&alice_sec);
+		let alice_index = PeoplePallet::reserve_new_id();
+		PeoplePallet::recognize_personhood(alice_index, Some(alice_pub)).unwrap();
+		Members::process_maintenance();
+
+		let commitment = MockCrypto::open((), &alice_pub, Some(alice_pub).into_iter()).unwrap();
+		let (proof, alias) =
+			MockCrypto::create(commitment, &alice_sec, &MOCK_CONTEXT, b"m").unwrap();
+		let root = indiv_pallet_members::Root::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, 0)
+			.unwrap()
+			.root;
+		let hash = |message: &[u8]| {
+			let item = RingMembershipProof {
+				proof: proof.clone(),
+				context: MOCK_CONTEXT.to_vec(),
+				message: message.to_vec(),
+			};
+			hash_ring_proofs::<MockCrypto>(&(), &root, &[item])
+		};
+		let proof = MembershipProof::<Test> { proof: proof.clone(), ring: 0, revision: 0 };
+		let validate = |proof: &MembershipProof<Test>, message: &[u8], tx_explicit_hash| {
+			PeoplePallet::validate_proof_or_defer(
+				PEOPLE_MEMBER_IDENTIFIER,
+				proof,
+				&MOCK_CONTEXT,
+				message,
+				tx_explicit_hash,
+			)
+		};
+
+		assert_eq!(validate(&proof, b"m", hash(b"m")), Ok(alias));
+		assert_eq!(validate(&proof, b"other", hash(b"other")), Err(()));
+		assert_eq!(validate(&proof, b"m", hash(b"other")), Err(()));
+		let stale = MembershipProof::<Test> { revision: 1, ..proof };
+		assert_eq!(validate(&stale, b"m", hash(b"m")), Err(()));
+		assert_eq!(PeoplePallet::validate_proof_or_defer_max_weight(), Weight::zero());
+	});
 }

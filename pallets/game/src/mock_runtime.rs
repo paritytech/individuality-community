@@ -386,6 +386,7 @@ impl indiv_pallet_members::Config for Test {
 	type OnRingRootChange = ();
 	type OffchainWorkerInterval = ConstU64<1>;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
+	type ProofBatch = ();
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();
 }
@@ -734,6 +735,22 @@ impl indiv_support::traits::MembershipProver for MockAirdropMemberService {
 	) -> Result<indiv_support::traits::ContextualAlias, DispatchError> {
 		let alias = alias_from_message(msg);
 		Ok(indiv_support::traits::ContextualAlias { context, alias })
+	}
+
+	fn verify_memberships_in_ring_or_defer_max_weight(
+		_count: u32,
+	) -> frame_support::weights::Weight {
+		frame_support::weights::Weight::zero()
+	}
+
+	fn verify_memberships_in_ring_or_defer(
+		identifier: &indiv_support::traits::Identifier,
+		ring_index: indiv_support::traits::RingIndex,
+		revision: indiv_support::traits::RevisionIndex,
+		items: &[indiv_support::traits::RingMembershipProof<<Mock as GenerateVerifiable>::Proof>],
+		_tx_explicit_hash: [u8; 32],
+	) -> Result<Vec<indiv_support::traits::ContextualAlias>, DispatchError> {
+		Self::verify_memberships_in_ring(identifier, ring_index, revision, items)
 	}
 
 	fn verify_memberships_in_ring(

@@ -72,6 +72,7 @@ verifiable = { workspace = true }
 indiv-pallet-people = { workspace = true }
 indiv-pallet-people-airdrops = { workspace = true }
 indiv-pallet-people-lite = { workspace = true }
+indiv-pallet-proof-batch = { workspace = true }
 indiv-pallet-proof-of-ink = { workspace = true }
 indiv-pallet-relay-randomness = { workspace = true }
 indiv-pallet-mob-rule = { workspace = true }
@@ -161,6 +162,7 @@ std = [
 	"indiv-pallet-people-airdrops/std",
 	"indiv-pallet-people-lite/std",
 	"indiv-pallet-people/std",
+	"indiv-pallet-proof-batch/std",
 	"indiv-pallet-proof-of-ink/std",
 	"indiv-pallet-relay-randomness/std",
 	"indiv-pallet-resources/std",
@@ -252,6 +254,7 @@ runtime-benchmarks = [
 	"indiv-pallet-people-airdrops/runtime-benchmarks",
 	"indiv-pallet-people-lite/runtime-benchmarks",
 	"indiv-pallet-people/runtime-benchmarks",
+	"indiv-pallet-proof-batch/runtime-benchmarks",
 	"indiv-pallet-proof-of-ink/runtime-benchmarks",
 	"indiv-pallet-relay-randomness/runtime-benchmarks",
 	"indiv-pallet-resources/runtime-benchmarks",
@@ -331,6 +334,7 @@ try-runtime = [
 	"indiv-pallet-people-airdrops/try-runtime",
 	"indiv-pallet-people-lite/try-runtime",
 	"indiv-pallet-people/try-runtime",
+	"indiv-pallet-proof-batch/try-runtime",
 	"indiv-pallet-proof-of-ink/try-runtime",
 	"indiv-pallet-relay-randomness/try-runtime",
 	"indiv-pallet-resources/try-runtime",

@@ -69,8 +69,8 @@ pub mod pallet {
 	use indiv_support::{
 		offchain::{submit_authorized, TX_LONGEVITY},
 		traits::{
-			Context, ContextualAlias, MembershipMultiProver, MembershipProver, RingExponent,
-			RingMembershipProof,
+			ensure_ring_proofs_hash, Context, ContextualAlias, MembershipMultiProver,
+			MembershipProver, RingExponent, RingMembershipProof,
 		},
 		tx_priority,
 		weight_budget::OcwWeightBudget,
@@ -97,7 +97,7 @@ pub mod pallet {
 			Members: DecodeWithMemTracking + verifiable::DecodeUnchecked,
 			Proof: Send + Sync + DecodeWithMemTracking,
 			Signature: Send + Sync + DecodeWithMemTracking,
-			Config: TryFrom<RingExponent>,
+			Config: codec::Encode + TryFrom<RingExponent>,
 		>;
 
 		/// XCM sender for communicating with the notifier.
@@ -327,6 +327,8 @@ pub mod pallet {
 		RevisionExpired,
 		/// The notifier initialized more than `MaxCollections` collections.
 		TooManyCollections,
+		/// The transaction hash is not the hash of the ring and the proofs.
+		StaticHashMismatch,
 	}
 
 	/// Custom transaction-validity errors for authorized calls.
@@ -1366,6 +1368,25 @@ pub mod pallet {
 			let alias = T::Crypto::validate(capacity, proof, &record.root, &context[..], msg)
 				.map_err(|_| Error::<T>::InvalidProof)?;
 			Ok(ContextualAlias { alias, context })
+		}
+
+		fn verify_memberships_in_ring_or_defer_max_weight(_count: u32) -> Weight {
+			Weight::zero()
+		}
+
+		/// Verifies at once: this service never defers.
+		fn verify_memberships_in_ring_or_defer(
+			identifier: &Identifier,
+			ring_index: RingIndex,
+			revision: RevisionIndex,
+			items: &[RingMembershipProof<<T::Crypto as GenerateVerifiable>::Proof>],
+			tx_explicit_hash: [u8; 32],
+		) -> Result<Vec<ContextualAlias>, DispatchError> {
+			let (capacity, roots) = Self::ring_proving_information(identifier, ring_index)?;
+			let record = Self::find_retained_record(&roots, revision)?;
+			ensure_ring_proofs_hash::<T::Crypto>(&capacity, &record.root, items, tx_explicit_hash)
+				.map_err(|_| Error::<T>::StaticHashMismatch)?;
+			Self::verify_memberships_in_ring(identifier, ring_index, revision, items)
 		}
 
 		fn verify_memberships_in_ring(

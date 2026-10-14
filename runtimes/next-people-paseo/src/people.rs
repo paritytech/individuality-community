@@ -191,8 +191,31 @@ impl indiv_pallet_members::Config for Runtime {
 	type OnRingRootChange = MembersNotifier;
 	type OffchainWorkerInterval = ConstU32<1>;
 	type ManagerOrigin = EnsureRoot<AccountId>;
+	type ProofBatch = ProofBatch;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = benchmark_utils::MembersBenchHelper;
+}
+
+/// The domain size of the largest ring a collection can have, which the proof batch benchmarks
+/// use.
+#[cfg(feature = "runtime-benchmarks")]
+pub struct LargestRingDomain;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl Get<verifiable::ring::RingDomainSize> for LargestRingDomain {
+	fn get() -> verifiable::ring::RingDomainSize {
+		indiv_support::traits::RingExponent::max_ring_exponent()
+			.try_into()
+			.expect("every ring exponent has a domain size")
+	}
+}
+
+impl indiv_pallet_proof_batch::Config for Runtime {
+	type Crypto = BandersnatchVrfVerifiable;
+	// Placeholder weights: generate `weights::indiv_pallet_proof_batch` with the benchmarks.
+	type WeightInfo = indiv_pallet_proof_batch::weights::SubstrateWeight<Runtime>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = indiv_pallet_proof_batch::BandersnatchBenchmarkHelper<LargestRingDomain>;
 }
 
 parameter_types! {
