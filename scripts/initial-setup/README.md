@@ -42,7 +42,7 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 | **01b-c** | HRMP channel setup (People<->AssetHub, People<->Bulletin) |
 | **01d** | Funds sudo, attestation, attestation proxy, faucet, and asset owner accounts on AssetHub by teleporting native PAS from People |
 | **02** | Adds sudo proxy delegation on People |
-| **03a-g** | XTRNL: create, AssetHub pool, AssetHub metadata, People metadata, conversion rate, Coinage instance, People pool |
+| **03a-g** | dotUSD: create, AssetHub pool, AssetHub metadata, People metadata, conversion rate, Coinage instance, People pool |
 | **04a-b** | USDT/USDC: create on AssetHub with metadata, pool, and liquidity; create as foreign assets on People with metadata |
 | **05a-c** | Stablecoin faucet: acquire USDT/USDC for the owner on AssetHub, fund the People faucet with USDT/USDC via XCM, fund the AssetHub faucet with USDT/USDC by swapping PAS |
 | **06a-b** | PGAS: create, alias fee |
