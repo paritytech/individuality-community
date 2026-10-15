@@ -2477,13 +2477,13 @@ pub mod pallet {
 			alias_count: usize,
 			output_count: u32,
 		) -> Weight {
-			let groups = output_count.min(Self::denomination_count());
+			let max_denomination_count = output_count.min(Self::denomination_count());
 			let from_output = Self::unload_recycler_into_external_asset_from_output_weight(
 				alias_count,
 			)
 			.max(Self::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
 				alias_count,
-				groups,
+				max_denomination_count,
 				output_count,
 			))
 			.max(Self::unload_recycler_into_coins_from_output_weight(alias_count, output_count));
@@ -2494,7 +2494,7 @@ pub mod pallet {
 					.max(Self::unload_recycler_into_external_asset_prepaid_weight(alias_count))
 					.max(Self::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
 						alias_count,
-						groups,
+						max_denomination_count,
 						output_count,
 					))
 					.max(Self::unload_recycler_into_coins_prepaid_weight(alias_count, output_count))
