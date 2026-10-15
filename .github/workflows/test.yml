@@ -146,6 +146,8 @@ jobs:
       - name: Run runtime upgrade Chopsticks suite
         uses: ./.github/actions/test-runtime-upgrade
   benchmark-runtime:
+    # Keep the check name required by the branch ruleset. The default name lists every matrix value.
+    name: benchmark-runtime (${{ matrix.runtime.name }}, ${{ matrix.runtime.package }})
     runs-on: parity-large
     timeout-minutes: 60
     if: github.event.pull_request.draft == false || github.event_name != 'pull_request'
