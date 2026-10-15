@@ -36,6 +36,7 @@ use frame_support::{
 	PalletId,
 };
 use indiv_support::{
+	context::{personhood, signing_payload},
 	traits::{
 		Alias, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar, Context,
 		ContextualAlias, CountedMembers, Identifier, MembershipProver, RevisedContextualAlias,
@@ -335,10 +336,9 @@ pub mod pallet {
 		/// - one created using their ring-vrf key attesting to the ownership of the `ring_vrf_key`
 		///   key.
 		///
-		/// The message to be signed by both keys from which the signatures are generated is created
-		/// by concatenating the bytes "pop:people-lite:register using" with the encoded bytes of
-		/// the user's account (`candidate`), and the encoded bytes of the ring VRF key
-		/// (`ring_vrf_key`).
+		/// The registration message concatenates the bytes "pop:people-lite:register using", the
+		/// encoded `candidate` account and the encoded `ring_vrf_key`. The ring VRF key signs this
+		/// message. The account key signs [`Pallet::account_signing_payload`] of this message.
 		///
 		/// On success, this call:
 		/// - stores lite registration data in `LitePeople`,
@@ -349,17 +349,17 @@ pub mod pallet {
 		/// [`Call::create_lite_people_collection`]).
 		///
 		/// - `candidate`: The candidate to be recognized as a lite person.
-		/// - `candidate_signature`: The signature, provided by the candidate, to allow the attester
-		///   to complete the registration process on their behalf.
+		/// - `candidate_signature`: The candidate's account signature over the registration message
+		///   in the personhood signing context. It allows the attester to register the candidate.
 		/// - `ring_vrf_key`: The ring VRF key to be associated with the lite person.
 		/// - `ring_vrf_key_signature`: The ring VRF signature, provided by the candidate, to allow
 		///   the attester to complete the registration process. This also prove the ownership of
 		///   the ring VRF key by the candidate.
 		/// - consumer_registration: Optional parameter which can contain the necessary information
 		///   to forward a consumer registration request to the `LiteConsumerRegistrar` service. If
-		///   present, it also contains a signature created by the user in order to validate the
-		///   intent. More information on the signing payload generation available in
-		///   [types::LiteConsumerRegistrationParams::signing_payload].
+		///   present, it also contains the user's signature over the payload from
+		///   [types::LiteConsumerRegistrationParams::signing_payload] in the personhood signing
+		///   context.
 		#[pallet::call_index(2)]
 		#[pallet::weight({ if consumer_registration.is_some() {
 			<T as Config>::WeightInfo::attest().saturating_add(<T as Config>::WeightInfo::register_lite_consumer())
@@ -393,7 +393,7 @@ pub mod pallet {
 				Error::<T>::InvalidProofOfOwnership,
 			);
 			ensure!(
-				candidate_signature.verify(&msg[..], &candidate),
+				candidate_signature.verify(&Self::account_signing_payload(&msg)[..], &candidate),
 				Error::<T>::InvalidAttestationSignature,
 			);
 
@@ -443,8 +443,9 @@ pub mod pallet {
 		/// - `ring_vrf_key`: The ring VRF key to be associated with the lite person.
 		/// - `proof_of_ownership`: The ring VRF signature proving ownership of `ring_vrf_key`.
 		/// - `consumer_registration`: Optional parameters to register the candidate as a lite
-		///   consumer. The request must contain a signature over the usual consumer payload with
-		///   the signed candidate account in both the account and verifier positions.
+		///   consumer. The request must contain a signature over the consumer payload in the
+		///   personhood signing context, with the signed candidate account in both the account and
+		///   verifier positions.
 		#[pallet::call_index(3)]
 		#[pallet::weight(if consumer_registration.is_some() {
 			<T as Config>::WeightInfo::register_with_fee()
@@ -632,6 +633,12 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			signing_payload(personhood::PRODUCT_NAME, &T::Suffix::get(), msg)
+		}
+
 		/// Creates the message a candidate signs to prove ownership of a ring VRF key.
 		pub(crate) fn registration_message(
 			candidate: &T::AccountId,
@@ -664,23 +671,18 @@ pub mod pallet {
 		/// Register a lite person as a consumer by calling into the `LiteConsumerRegistrar`
 		/// service.
 		///
-		/// This action requires user consent, provided through a signature verified in this
-		/// function. The signing payload is constructed by encoding, in order, the tuple of:
-		/// - the user's account
-		/// - the verifier's account
-		/// - the user's identifier_key
-		/// - the user's chosen username, without the `.` separator and any following digits
-		/// - the user's chosen reserved_username, as an `Option`
-		///
-		/// For more information about the signing payload, check
-		/// [types::LiteConsumerRegistrationParams::signing_payload].
+		/// This action requires user consent. The user signs [`Pallet::account_signing_payload`]
+		/// of the payload from [types::LiteConsumerRegistrationParams::signing_payload].
 		pub fn register_lite_consumer(
 			params: LiteConsumerRegistrationParamsOf<T>,
 			verifier: &T::AccountId,
 		) -> DispatchResult {
 			// Verify the candidate's signature for the consumer registration.
 			ensure!(
-				params.signature.verify(&params.signing_payload(verifier)[..], &params.account),
+				params.signature.verify(
+					&Self::account_signing_payload(&params.signing_payload(verifier))[..],
+					&params.account
+				),
 				Error::<T>::InvalidAttestationSignature,
 			);
 			let account = params.account.clone();

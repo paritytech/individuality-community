@@ -366,7 +366,8 @@ mod benches {
 		let msg =
 			(&account, &attester, &identifier_key, &username[..separator_idx], &reserved_username)
 				.encode();
-		let (_, signature) = T::BenchmarkHelper::sign_message(&msg[..]);
+		let (_, signature) =
+			T::BenchmarkHelper::sign_message(&Pallet::<T>::account_signing_payload(&msg));
 
 		let registered_account = account.clone();
 		let params = crate::types::LiteConsumerRegistrationParams {
@@ -400,7 +401,8 @@ mod benches {
 
 		let msg = Pallet::<T>::registration_message(&att, &pk);
 
-		let (_, att_sig) = T::BenchmarkHelper::sign_message(&msg[..]);
+		let (_, att_sig) =
+			T::BenchmarkHelper::sign_message(&Pallet::<T>::account_signing_payload(&msg));
 		let proof_of_ownership = CryptoOf::<T>::sign(&sk, &msg[..]).unwrap();
 
 		// Allowance > 1 forcing the `AttestationAllowance::insert(&verifier, available)` branch.
