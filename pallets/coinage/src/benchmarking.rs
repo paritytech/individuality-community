@@ -204,11 +204,7 @@ fn funded_held_tier<T: Config>(
 }
 
 /// Derives an onboarding-queue filler member from its page index and denomination group.
-///
-/// The bytes are not a validated public key. Deriving and validating a real key costs a curve
-/// multiplication per filler, and a setup fills up to a full page per group. The measured call
-/// only decodes and re-encodes queued members, so the filler needs the size of a member, not its
-/// validity.
+/// The bytes are not a valid public key, which is much faster and sufficient for queue filling.
 fn filler_member<T: Config>(i: u32, group: u32) -> MemberOf<T> {
 	let bytes = sp_crypto_hashing::blake2_256(&(i, group).encode());
 	codec::DecodeAll::decode_all(&mut bytes.as_slice()).expect("a member encodes to 32 bytes; qed")
