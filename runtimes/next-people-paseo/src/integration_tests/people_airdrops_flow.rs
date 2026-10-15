@@ -108,6 +108,7 @@ fn schedule_one_draw() -> [u8; 32] {
 	PeopleAirdrops::schedule_draws(
 		RuntimeOrigin::root(),
 		vec![EventInfo {
+			product_name: Default::default(),
 			prize: airdrop_prize_for(MAX_WINNERS),
 			registration_starts,
 			draw_time,

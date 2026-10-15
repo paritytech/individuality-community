@@ -34,7 +34,6 @@ use frame_support::{
 	weights::{Weight, WeightMeter},
 };
 use indiv_pallet_airdrop::{
-	context_for_event,
 	types::{AirdropPrize, RegistrationEntry, Status},
 	vrf::transcript_for_event,
 };
@@ -1786,7 +1785,13 @@ fn build_alias_airdrop_vrfs(
 				members.into_iter(),
 			)
 			.expect("opening the ring commitment for the alias signer must succeed");
-			let context = context_for_event(event_id);
+			// The proof is scoped to the product the scheduler stored with the event.
+			let product_name = indiv_pallet_airdrop::Events::<Runtime>::get(event_id)
+				.expect("the airdrop event must have been scheduled")
+				.info
+				.product_name;
+			let context =
+				indiv_pallet_airdrop::Pallet::<Runtime>::context_for_event(&product_name, event_id);
 			Crypto::create(commitment, who_secret, &context[..], &msg[..])
 				.expect("creating the alias airdrop proof must succeed")
 				.0
