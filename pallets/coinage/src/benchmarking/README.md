@@ -110,7 +110,8 @@ stable toolchain pinned in `rust-toolchain.toml`), runs `frame-omni-bencher`,
 deduplicates and sorts the captured `CACHE_ENTRY:` lines, and splices the
 result into `CACHE_ENTRIES_R2E10` in `proof_cache.rs`. Existing matching proofs
 are reused, but missing proofs are generated and can make a harvest slow.
-The harvest uses CI's `--all` selection and XCM pallet exclusions without `--extra`.
+The harvest runs only the `indiv_pallet_coinage` benchmarks, without `--extra`. Only
+Coinage benchmarks create alias proofs.
 
 Flags:
 
@@ -179,12 +180,12 @@ cargo build --release -p next-people-paseo-runtime \
 
 RUNTIME_LOG=error frame-omni-bencher v1 benchmark pallet \
   --runtime ./target/release/wbuild/next-people-paseo-runtime/next_people_paseo_runtime.compact.compressed.wasm \
-  --all \
+  --pallet indiv_pallet_coinage \
+  --extrinsic '*' \
   --steps 2 \
   --repeat 1 \
   --min-duration 0 \
   --genesis-builder runtime \
-  --exclude-pallets pallet_xcm_benchmarks::fungible,pallet_xcm_benchmarks::generic,pallet_xcm \
   --quiet 2>&1 \
   | tee /tmp/coinage-paseo-proof-cache.log
 ```

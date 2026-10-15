@@ -222,12 +222,21 @@ jobs:
           # run benchmarking
           echo "Running benchmarking for RUNTIME_BLOB_PATH=$RUNTIME_BLOB_PATH"
           set -o pipefail
-          if ! ./frame-omni-bencher v1 benchmark pallet --runtime $RUNTIME_BLOB_PATH --all --steps 2 --repeat 1 --min-duration 0 --genesis-builder runtime --exclude-pallets=pallet_xcm_benchmarks::fungible,pallet_xcm_benchmarks::generic,pallet_xcm --quiet 2>&1 | tee benchmark-runtime.log; then
-            if grep -q 'alias proof cache miss' benchmark-runtime.log; then
-              echo '::error::Coinage alias proof cache miss. Run python3 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py, commit pallets/coinage/src/benchmarking/proof_cache.rs, and see pallets/coinage/src/benchmarking/README.md.'
-            fi
-            exit 1
+          EXCLUDED_PALLETS=pallet_xcm_benchmarks::fungible,pallet_xcm_benchmarks::generic,pallet_xcm
+          BENCHMARK_LOG=benchmark-runtime.log
+          bench_status=0
+          ./frame-omni-bencher v1 benchmark pallet \
+            --runtime "$RUNTIME_BLOB_PATH" \
+            --all \
+            --steps 2 --repeat 1 --min-duration 0 \
+            --genesis-builder runtime \
+            --exclude-pallets="$EXCLUDED_PALLETS" \
+            --quiet 2>&1 | tee "$BENCHMARK_LOG" || bench_status=$?
+
+          if [ "$bench_status" -ne 0 ] && grep -q 'alias proof cache miss' "$BENCHMARK_LOG"; then
+            echo '::error::Coinage alias proof cache miss. Run python3 pallets/coinage/src/benchmarking/scripts/regen_proof_cache.py, commit pallets/coinage/src/benchmarking/proof_cache.rs and see pallets/coinage/src/benchmarking/README.md.'
           fi
+          exit "$bench_status"
         env:
           RUSTFLAGS: "-C debug-assertions -D warnings"
           RUNTIME_LOG: error

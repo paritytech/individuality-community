@@ -54,8 +54,8 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 PROOF_CACHE = REPO_ROOT / "pallets" / "coinage" / "src" / "benchmarking" / "proof_cache.rs"
 
 RUNTIME = "next-people-paseo"
+PALLET = "indiv_pallet_coinage"
 BENCHER = "frame-omni-bencher"
-EXCLUDED_PALLETS = "pallet_xcm_benchmarks::fungible,pallet_xcm_benchmarks::generic,pallet_xcm"
 
 CACHE_ENTRY_RE = re.compile(r"CACHE_ENTRY:\s*(\(.*\),)\s*$")
 
@@ -135,12 +135,12 @@ def harvest(runtime: str, profile: str) -> set[str]:
         [
             BENCHER, "v1", "benchmark", "pallet",
             "--runtime", str(wasm),
-            "--all",
+            "--pallet", PALLET,
+            "--extrinsic", "*",
             "--steps", "2",
             "--repeat", "1",
             "--min-duration", "0",
             "--genesis-builder", "runtime",
-            "--exclude-pallets", EXCLUDED_PALLETS,
             "--quiet",
         ],
         env=env,
