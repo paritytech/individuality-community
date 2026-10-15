@@ -27,8 +27,7 @@ SCRIPT_NAMES=(
   "05b-fund-faucet-stablecoins-people.sh"
   "05c-fund-faucet-stablecoins-ah.sh"
   "06a-setup-pgas.sh"
-  "06b-setup-pgas-pool.sh"
-  "06c-setup-alias-fee.sh"
+  "06b-setup-alias-fee.sh"
   "07-add-zk-chunks.sh"
   "08a-setup-people-collection.sh"
   "08b-setup-lite-people-collection.sh"
@@ -39,6 +38,7 @@ SCRIPT_NAMES=(
   "12b-setup-attestation-allowances.sh"
   "12c-setup-attestation-proxy.sh"
   "13-setup-dotns-dispatcher-address.sh"
+  # "14-setup-attestation-nft-collection.sh"
 )
 
 if [ "${#SCRIPT_NAMES[@]}" -eq 0 ]; then
