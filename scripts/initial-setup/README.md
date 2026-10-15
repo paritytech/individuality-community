@@ -37,7 +37,7 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 
 | Script | What it does |
 |--------|-------------|
-| **00** | Installs `dot` CLI and `jq`, imports signer accounts |
+| **00** | Installs `dot` CLI, `jq` and `bc`, imports signer accounts |
 | **01a** | Funds attestation, attestation proxy, faucet, and asset owner accounts on People; bootstraps the People sovereign on the Relay |
 | **01b-c** | HRMP channel setup (People<->AssetHub, People<->Bulletin) |
 | **01d** | Funds sudo, attestation, attestation proxy, faucet, and asset owner accounts on AssetHub by teleporting native PAS from People |
@@ -87,10 +87,20 @@ poi-design-families.json         # Proof of Ink design family data
 | `PEOPLE_SUDO_MNEMONIC` | `next`, `preview` envs | People sudo signer mnemonic |
 | `AH_SUDO_MNEMONIC` | `next`, `preview` envs | AssetHub sudo signer mnemonic |
 | `ATTESTATION_MNEMONIC` | `next`, `preview` envs | Attestation signer mnemonic |
-| `STABLECOIN_OWNER_MNEMONIC` | `next`, `preview` envs | Stablecoin owner signer mnemonic |
+| `ASSET_OWNER_MNEMONIC` | `next`, `preview` envs | Asset owner signer mnemonic |
 | `ENV` | Always (defaults to `local`) | Target environment |
 
 On `local`, the People sudo, AssetHub sudo, attestation, and asset owner signers are all built-in dev accounts, so no mnemonics are required.
+
+## GitHub Actions
+
+The `Initial setup` workflow (`.github/workflows/initial-setup.yml`) runs `start.sh` against `preview` or `next`. Start it from the Actions tab or with:
+
+```bash
+gh workflow run initial-setup.yml -f environment=preview
+```
+
+The job runs in the GitHub Environment `previewnet` for `preview` and `paseo-next-v2` for `next`. Each environment holds the four signer mnemonics as secrets: `PEOPLE_SUDO_MNEMONIC`, `AH_SUDO_MNEMONIC`, `ATTESTATION_MNEMONIC` and `ASSET_OWNER_MNEMONIC`. The workflow passes them as inputs to the composite action `.github/actions/initial-setup`, which installs Node.js and then runs `start.sh`. Its first script, `00-requirements.sh`, installs the `dot` CLI, `jq` and `bc`.
 
 ## Adding a New Script
 

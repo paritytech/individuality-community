@@ -1,0 +1,50 @@
+name: Run initial setup
+description: Run scripts/initial-setup against PreviewNet or Paseo Next v2.
+
+inputs:
+  environment:
+    description: Target environment of scripts/initial-setup, `preview` (PreviewNet) or `next` (Paseo Next v2).
+    required: true
+  people-sudo-mnemonic:
+    description: Mnemonic of the People sudo signer.
+    required: true
+  ah-sudo-mnemonic:
+    description: Mnemonic of the AssetHub sudo signer.
+    required: true
+  attestation-mnemonic:
+    description: Mnemonic of the attestation signer.
+    required: true
+  asset-owner-mnemonic:
+    description: Mnemonic of the asset owner signer.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check environment
+      shell: bash
+      env:
+        TARGET_ENV: ${{ inputs.environment }}
+      run: |
+        if [[ ! "$TARGET_ENV" =~ ^(preview|next)$ ]]; then
+          echo "::error::environment must be 'preview' or 'next', got '$TARGET_ENV'"
+          exit 1
+        fi
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version-file: e2e/.nvmrc
+
+    - name: Run initial setup
+      shell: bash
+      env:
+        TARGET_ENV: ${{ inputs.environment }}
+        PEOPLE_SUDO_MNEMONIC: ${{ inputs.people-sudo-mnemonic }}
+        AH_SUDO_MNEMONIC: ${{ inputs.ah-sudo-mnemonic }}
+        ATTESTATION_MNEMONIC: ${{ inputs.attestation-mnemonic }}
+        ASSET_OWNER_MNEMONIC: ${{ inputs.asset-owner-mnemonic }}
+        HOME: ${{ runner.temp }}/initial-setup-home
+      run: |
+        mkdir -p "$HOME"
+        scripts/initial-setup/start.sh "$TARGET_ENV"
