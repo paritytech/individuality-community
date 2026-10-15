@@ -267,9 +267,9 @@ use indiv_pallet_airdrop::types::{
 };
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
+	context::signing_payload,
 	credit_trees::AwardCredits,
 	traits::{Alias, CommunicationIdentifier, Context},
-	utils::wrap_bytes,
 	weight_budget::OcwWeightBudget,
 };
 use sp_runtime::traits::{IdentifyAccount, Verify, Zero};
@@ -998,7 +998,7 @@ pub mod pallet {
 		/// - `sig`: the proof of ownership of the account `statement_account` by an alias. The
 		///   message is the `blake2_256` hash of `"pop:game:stmt_account_for_alias:"` concatenated
 		///   to the alias. The base of the message is in `proof_of_ownership_msg_base`. The
-		///   statement account signs the hash wrapped in `<Bytes>…</Bytes>`.
+		///   statement account signs [`Pallet::account_signing_payload`] of the hash.
 		/// - `airdrops`: optionally enters the player into the airdrop draws scheduled for this
 		///   game. Pass `None` to skip it; otherwise it holds exactly one VRF per scheduled airdrop
 		///   event (`airdrops_scheduled` in the `Game` storage), in airdrop-index order. Each entry
@@ -1873,6 +1873,12 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the game's signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			signing_payload(PRODUCT_NAME, &<T as indiv_pallet_score::Config>::Suffix::get(), msg)
+		}
+
 		/// Check the count and the variant of the airdrop VRF entries against the player's
 		/// `recognized` state.
 		///
@@ -2186,7 +2192,7 @@ pub mod pallet {
 						.using_encoded(sp_io::hashing::blake2_256);
 					ensure!(
 						statement_account_signature
-							.verify(&wrap_bytes(&msg)[..], &statement_account),
+							.verify(&Self::account_signing_payload(&msg)[..], &statement_account),
 						Error::<T>::InvalidStatementAccountSignature,
 					);
 

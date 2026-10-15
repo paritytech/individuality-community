@@ -36,10 +36,7 @@ use frame_support::{
 	traits::{fungible::InspectHold, Currency, EnsureOriginWithArg, OnRuntimeUpgrade},
 };
 use frame_system::Pallet;
-use indiv_support::{
-	traits::{AppendOnlyMembers, Context, ContextualAlias, RevisedContextualAlias},
-	utils::wrap_bytes,
-};
+use indiv_support::traits::{AppendOnlyMembers, Context, ContextualAlias, RevisedContextualAlias};
 use sp_runtime::{traits::Verify, transaction_validity::InvalidTransaction, DispatchError};
 use verifiable::GenerateVerifiable;
 
@@ -841,9 +838,12 @@ mod register_with_fee_tests {
 			let secret = secret_from_seed(26);
 			let params = consumer_registration_params(consumer);
 
-			assert!(params
-				.signature
-				.verify(&wrap_bytes(&params.signing_payload(&candidate))[..], &params.account));
+			assert!(params.signature.verify(
+				&PeopleLitePallet::<Test>::account_signing_payload(
+					&params.signing_payload(&candidate)
+				)[..],
+				&params.account
+			));
 			assert_noop!(
 				PeopleLitePallet::<Test>::register_with_fee(
 					Some(candidate).into(),

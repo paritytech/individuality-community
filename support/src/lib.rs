@@ -273,21 +273,6 @@ pub mod utils {
 		u32::from_le_bytes([seed[0], seed[1], seed[2], seed[3]])
 	}
 
-	/// The prefix needed to add to a message before signing raw bytes.
-	pub const BYTES_PREFIX: &[u8] = b"<Bytes>";
-
-	/// The suffix needed to add to a message before signing raw bytes.
-	pub const BYTES_SUFFIX: &[u8] = b"</Bytes>";
-
-	/// Wraps `msg` in `<Bytes>…</Bytes>`.
-	///
-	/// The wrapping stops a signature over an off-chain message from also being valid for a
-	/// transaction payload. An account signature over a message that is not a transaction must
-	/// be checked against the wrapped message.
-	pub fn wrap_bytes(msg: &[u8]) -> Vec<u8> {
-		[BYTES_PREFIX, msg, BYTES_SUFFIX].concat()
-	}
-
 	#[cfg(test)]
 	mod tests {
 		use super::*;
@@ -440,15 +425,6 @@ pub mod utils {
 		#[test]
 		fn big_endian_u256_max_encoded_len() {
 			assert_eq!(BigEndianU256::max_encoded_len(), 32);
-		}
-
-		#[test]
-		fn wrap_bytes_matches_wallet_format() {
-			// Message wrapped.
-			let wrapped = wrap_bytes(&[0x01, 0x02]);
-
-			// Bytes match what a wallet signs for a raw-bytes request.
-			assert_eq!(wrapped, b"<Bytes>\x01\x02</Bytes>".to_vec());
 		}
 	}
 }

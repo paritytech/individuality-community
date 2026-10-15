@@ -45,7 +45,6 @@ use indiv_support::{
 		Alias, AppendOnlyMembers as _, Callback, Context, Judgement, JudgementContext,
 		RevisionIndex, RingIndex, Statement, StatementOracle, Truth,
 	},
-	utils::wrap_bytes,
 };
 use sp_core::{sr25519, Pair as _};
 use sp_io::TestExternalities;
@@ -179,7 +178,9 @@ fn register_lite_person_for_integration(
 			})
 		});
 
-		let candidate_signature = MultiSignature::from(pair.sign(&wrap_bytes(&msg)));
+		let candidate_signature = MultiSignature::from(
+			pair.sign(&indiv_pallet_people_lite::Pallet::<Runtime>::account_signing_payload(&msg)),
+		);
 		let proof = Crypto::sign(&ring_secret, &msg)
 			.expect("ring key can sign the lite attestation payload");
 

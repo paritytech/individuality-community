@@ -138,8 +138,8 @@ impl Verify for AccountAuthority {
 	}
 }
 
-/// A statement account signature that is valid for its own account over a `<Bytes>`-wrapped
-/// message.
+/// A statement account signature that is valid for its own account over a message in the game's
+/// signing context.
 #[derive(
 	PartialEq, Eq, Clone, Encode, Decode, DecodeWithMemTracking, Debug, MaxEncodedLen, TypeInfo,
 )]
@@ -161,9 +161,12 @@ impl Verify for StatementSignature {
 		signer: &<Self::Signer as IdentifyAccount>::AccountId,
 	) -> bool {
 		let msg = msg.get();
-		self.0 == *signer &&
-			msg.starts_with(indiv_support::utils::BYTES_PREFIX) &&
-			msg.ends_with(indiv_support::utils::BYTES_SUFFIX)
+		let context = indiv_support::context::build_product_context(
+			indiv_pallet_game::PRODUCT_NAME,
+			&NetworkSuffix::get(),
+			indiv_support::context::SIGNING,
+		);
+		self.0 == *signer && msg.starts_with(&context)
 	}
 }
 

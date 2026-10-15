@@ -202,7 +202,8 @@ pub fn set_time_sec(secs: u64) {
 	TestClock::set_time(Duration::from_secs(secs));
 }
 
-/// An account signature that is valid for its own account over a `<Bytes>`-wrapped message.
+/// An account signature that is valid for its own account over a message in the personhood
+/// signing context.
 #[derive(
 	PartialEq,
 	Eq,
@@ -235,9 +236,12 @@ impl Verify for AccountAuthority {
 		signer: &<Self::Signer as IdentifyAccount>::AccountId,
 	) -> bool {
 		let msg = msg.get();
-		self.0 == *signer &&
-			msg.starts_with(indiv_support::utils::BYTES_PREFIX) &&
-			msg.ends_with(indiv_support::utils::BYTES_SUFFIX)
+		let context = indiv_support::context::build_product_context(
+			indiv_support::context::personhood::PRODUCT_NAME,
+			&NetworkSuffix::get(),
+			indiv_support::context::SIGNING,
+		);
+		self.0 == *signer && msg.starts_with(&context)
 	}
 }
 

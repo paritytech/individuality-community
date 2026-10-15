@@ -50,8 +50,11 @@ fn consumer_registration_params(
 			.expect("valid username"),
 		reserved_username: None,
 	};
-	params.signature =
-		MultiSignature::from(lite_pair.sign(&wrap_bytes(&params.signing_payload(verifier))));
+	params.signature = MultiSignature::from(lite_pair.sign(&indiv_pallet_people_lite::Pallet::<
+		Runtime,
+	>::account_signing_payload(
+		&params.signing_payload(verifier)
+	)));
 	params
 }
 
@@ -69,7 +72,9 @@ fn register_lite_person(
 		})
 	});
 
-	let candidate_signature = MultiSignature::from(lite_pair.sign(&wrap_bytes(&msg)));
+	let candidate_signature = MultiSignature::from(
+		lite_pair.sign(&indiv_pallet_people_lite::Pallet::<Runtime>::account_signing_payload(&msg)),
+	);
 	let proof =
 		Crypto::sign(&ring_secret, &msg).expect("ring key can sign the attestation payload");
 
@@ -213,7 +218,7 @@ fn fee_registration_rejects_consumer_signature_for_a_different_verifier() {
 }
 
 #[test]
-fn attest_rejects_unwrapped_candidate_signature() {
+fn attest_rejects_candidate_signature_without_signing_context() {
 	new_test_ext().execute_with(|| {
 		// Attester given an allowance and candidate signed the raw registration message.
 		let attester = Sr25519Keyring::Bob.to_account_id();
@@ -254,7 +259,7 @@ fn attest_rejects_unwrapped_candidate_signature() {
 }
 
 #[test]
-fn fee_registration_rejects_unwrapped_consumer_signature() {
+fn fee_registration_rejects_consumer_signature_without_signing_context() {
 	new_test_ext().execute_with(|| {
 		// Candidate funded and signed the raw consumer registration payload.
 		let lite_pair = sr25519::Pair::from_seed(&[84u8; 32]);

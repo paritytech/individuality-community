@@ -57,14 +57,14 @@ use frame_support::{
 };
 use frame_system::offchain::{CreateAuthorizedTransaction, SubmitTransaction};
 use indiv_support::{
-	context::{build_product_context, personhood, ProductContextSuffix},
+	context::{build_product_context, personhood, signing_payload, ProductContextSuffix},
 	labels::is_lite_person_label,
 	traits::{
 		Alias, AllocateStorage, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar,
 		Context, MembershipProver, RingExponent, Username,
 	},
 	tx_priority,
-	utils::{wrap_bytes, BigEndianU32},
+	utils::BigEndianU32,
 	weight_budget::OcwWeightBudget,
 };
 use sp_runtime::traits::{IdentifyAccount, Verify};
@@ -85,6 +85,9 @@ pub mod pallet {
 
 	const LOG_TARGET: &str = "runtime::indiv-pallet-resources";
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
+
+	/// The prefix of the message a lite consumer account signs in [`Call::register_person`].
+	pub const REGISTER_PERSON_MSG_PREFIX: &[u8] = b"pop:resources:register_person";
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -698,7 +701,7 @@ pub mod pallet {
 		/// The person must link a previously recognized lite identity, which will be upgraded to a
 		/// full person consumer. In order to prove they hold the lite identity they want to link,
 		/// users must provide a `lite_identity_proof` signature. The lite consumer account signs
-		/// the alias bytes wrapped in `<Bytes>…</Bytes>`.
+		/// [`Pallet::account_signing_payload`] of [`Pallet::register_person_message`].
 		///
 		/// The consumer can choose if they want to have a new username or use an existing
 		/// reservation made in the name of the lite consumer who will be linked.
@@ -1438,7 +1441,10 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			// Verify proof of ownership of the linked lite person.
 			ensure!(
-				lite_identity_proof.verify(&wrap_bytes(&alias[..])[..], linked_lite_identity),
+				lite_identity_proof.verify(
+					&Self::account_signing_payload(&Self::register_person_message(&alias))[..],
+					linked_lite_identity
+				),
 				Error::<T>::InvalidProofOfOwnership,
 			);
 			// Ensure the linked lite person was not already linked to another full person.
@@ -1498,6 +1504,18 @@ pub mod pallet {
 
 		pub fn resources_context() -> Context {
 			Self::build_context(personhood::RESOURCES)
+		}
+
+		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			signing_payload(personhood::PRODUCT_NAME, &T::Suffix::get(), msg)
+		}
+
+		/// Returns the message a lite consumer account signs to link itself to `alias` in
+		/// [`Call::register_person`].
+		pub fn register_person_message(alias: &Alias) -> Vec<u8> {
+			[REGISTER_PERSON_MSG_PREFIX, &alias[..]].concat()
 		}
 
 		pub fn notification_context(reference: NotificationReference) -> Context {

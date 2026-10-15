@@ -449,8 +449,8 @@ impl crate::benchmarking::BenchmarkHelper<Test> for () {
 	}
 
 	fn sign(message: &[u8]) -> MockSignature {
-		let form = if message.starts_with(indiv_support::utils::BYTES_PREFIX) {
-			SignedForm::Wrapped
+		let form = if message.starts_with(&signing_context()) {
+			SignedForm::InContext
 		} else {
 			SignedForm::Raw
 		};
@@ -537,8 +537,16 @@ pub fn invalid_proof() -> MockProof {
 pub enum SignedForm {
 	/// The message as the pallet builds it.
 	Raw,
-	/// The message wrapped in `<Bytes>…</Bytes>`.
-	Wrapped,
+	/// The message in the personhood signing context.
+	InContext,
+}
+
+fn signing_context() -> indiv_support::traits::Context {
+	indiv_support::context::build_product_context(
+		indiv_support::context::personhood::PRODUCT_NAME,
+		&NetworkSuffix::get(),
+		indiv_support::context::SIGNING,
+	)
 }
 
 /// An account signature that is valid for its own account over a message in its form.
@@ -559,22 +567,21 @@ impl Verify for MockSignature {
 
 	fn verify<L: Lazy<[u8]>>(&self, mut msg: L, signer: &u64) -> bool {
 		let msg = msg.get();
-		let wrapped = msg.starts_with(indiv_support::utils::BYTES_PREFIX) &&
-			msg.ends_with(indiv_support::utils::BYTES_SUFFIX);
+		let in_context = msg.starts_with(&signing_context());
 		let form_matches = match self.1 {
-			SignedForm::Raw => !wrapped,
-			SignedForm::Wrapped => wrapped,
+			SignedForm::Raw => !in_context,
+			SignedForm::InContext => in_context,
 		};
 		self.0 == *signer && form_matches
 	}
 }
 
 pub fn valid_candidate_signature(candidate: u64) -> MockSignature {
-	MockSignature(candidate, SignedForm::Wrapped)
+	MockSignature(candidate, SignedForm::InContext)
 }
 
 pub fn invalid_candidate_signature() -> MockSignature {
-	MockSignature(u64::MAX, SignedForm::Wrapped)
+	MockSignature(u64::MAX, SignedForm::InContext)
 }
 
 pub fn set_attestation_allowance(attester: u64, count: u32) {

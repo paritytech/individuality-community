@@ -142,7 +142,7 @@ fn deposit_player_flow() {
 		let zoe_stmt_acc_pair = sr25519::Pair::from_seed(&[2u8; 32]);
 		let zoe_stmt_acc = pair_to_account_id(&zoe_stmt_acc_pair);
 		let zoe_stmt_acc_proof_of_ownership: MultiSignature = zoe_stmt_acc_pair
-			.sign(&wrap_bytes(
+			.sign(&indiv_pallet_game::Pallet::<Runtime>::account_signing_payload(
 				&(b"pop:game:stmt_account_for_alias:", zoe_score_alias)
 					.using_encoded(sp_io::hashing::blake2_256),
 			))

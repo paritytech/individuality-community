@@ -60,9 +60,8 @@ pub use weights::WeightInfo;
 
 use frame_support::traits::{OriginTrait, UnixTime};
 use indiv_support::{
-	context::{build_product_context, personhood},
+	context::{build_product_context, personhood, signing_payload},
 	traits::{Alias, MembershipProver, RevisionIndex, RingExponent, RingIndex},
-	utils::wrap_bytes,
 };
 use sp_runtime::traits::{IdentifyAccount, Verify};
 use verifiable::GenerateVerifiable;
@@ -320,11 +319,12 @@ pub mod pallet {
 		/// - `candidate`: the Lite Person's account for whom the label is being reserved. Also the
 		///   signer of `candidate_signature`.
 		/// - `candidate_signature`: signature over the bytes returned by
-		///   `Pallet::construct_reservation_message`, wrapped in `<Bytes>…</Bytes>`. The message is
-		///   a SCALE-encoded tuple binding the attester, candidate, the candidate's chosen *base*
-		///   username and chat key. The digit suffix of `lite_label` is **not** part of the signed
-		///   message (the digits are allocated server-side after the candidate signs, so the
-		///   candidate cannot commit to them at signing time).
+		///   `Pallet::construct_reservation_message` in the personhood signing context (see
+		///   [`Pallet::account_signing_payload`]). The message is a SCALE-encoded tuple binding the
+		///   attester, candidate, the candidate's chosen *base* username and chat key. The digit
+		///   suffix of `lite_label` is **not** part of the signed message (the digits are allocated
+		///   server-side after the candidate signs, so the candidate cannot commit to them at
+		///   signing time).
 		/// - `lite_label`: the lite-person label. Must be `<dns-stem>.<2+ digits>` (e.g.
 		///   `alice.42`), matching `StringUtils.isLitePersonLabel` in the contracts. Only the
 		///   `<dns-stem>` portion enters the signed message; the digits ride along as an unsigned
@@ -376,7 +376,7 @@ pub mod pallet {
 				signed_at,
 			);
 			ensure!(
-				candidate_signature.verify(&wrap_bytes(&msg)[..], &candidate),
+				candidate_signature.verify(&Self::account_signing_payload(&msg)[..], &candidate),
 				Error::<T>::InvalidAttestationSignature,
 			);
 
@@ -599,6 +599,12 @@ pub mod pallet {
 				identifier, proof, ring_index, revision, context, message,
 			)?;
 			Ok(validated.alias)
+		}
+
+		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			signing_payload(personhood::PRODUCT_NAME, &T::Suffix::get(), msg)
 		}
 
 		pub fn proof_context() -> indiv_support::traits::Context {

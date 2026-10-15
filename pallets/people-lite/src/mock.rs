@@ -113,7 +113,8 @@ impl pallet_balances::Config for Test {
 
 impl alias_target::Config for Test {}
 
-/// An account signature that is valid for its own account over a `<Bytes>`-wrapped message.
+/// An account signature that is valid for its own account over a message in the personhood
+/// signing context.
 #[derive(
 	Encode,
 	codec::Decode,
@@ -139,9 +140,12 @@ impl Verify for MockSignature {
 
 	fn verify<L: Lazy<[u8]>>(&self, mut msg: L, signer: &u64) -> bool {
 		let msg = msg.get();
-		self.0 == *signer &&
-			msg.starts_with(indiv_support::utils::BYTES_PREFIX) &&
-			msg.ends_with(indiv_support::utils::BYTES_SUFFIX)
+		let context = indiv_support::context::build_product_context(
+			indiv_support::context::personhood::PRODUCT_NAME,
+			&NetworkSuffix::get(),
+			indiv_support::context::SIGNING,
+		);
+		self.0 == *signer && msg.starts_with(&context)
 	}
 }
 

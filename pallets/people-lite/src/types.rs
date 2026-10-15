@@ -60,7 +60,7 @@ pub type LitePersonInfoOf<T> =
 	Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
 )]
 pub struct LiteConsumerRegistrationParams<AccountId, Signature> {
-	/// The user's signature over [Self::signing_payload] wrapped in `<Bytes>…</Bytes>`.
+	/// The user's signature over [Self::signing_payload] in the personhood signing context.
 	pub signature: Signature,
 	/// The account ID of the user.
 	pub account: AccountId,
@@ -73,7 +73,8 @@ pub struct LiteConsumerRegistrationParams<AccountId, Signature> {
 }
 
 impl<AccountId: Encode, Signature: Encode> LiteConsumerRegistrationParams<AccountId, Signature> {
-	/// Creates the consumer registration payload. The user signs it wrapped in `<Bytes>…</Bytes>`.
+	/// Creates the consumer registration payload. The user signs it in the personhood signing
+	/// context.
 	///
 	/// The payload encodes the account, the verifier, the identifier key, the username without
 	/// the `.` separator and the following digits, and the reserved username. The attester can
