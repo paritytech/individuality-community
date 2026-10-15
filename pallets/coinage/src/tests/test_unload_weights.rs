@@ -91,6 +91,10 @@ fn sample_bounds_follow_the_mock_config() {
 		assert_eq!(Pallet::<Test>::max_aliases_per_unload(), MAX_ALIASES);
 		assert_eq!(Pallet::<Test>::max_aliases_per_coin_unload(), MAX_ALIASES);
 		assert_eq!(Pallet::<Test>::denomination_count(), DENOMINATION_COUNT);
+		assert_eq!(
+			DENOMINATION_COUNT,
+			(MaximumExponent::get() - MinimumExponent::get() + 1) as u32
+		);
 	});
 }
 
