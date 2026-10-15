@@ -1042,6 +1042,7 @@ mod benches {
 		if external_units < mixed_output_external_reserve::<T>(mode)? {
 			return Err("external output does not cover the fee reserve".into());
 		}
+		assert!(external_units > 0, "external output must be non-zero");
 		let loaded_coins = offsets
 			.into_iter()
 			.enumerate()
