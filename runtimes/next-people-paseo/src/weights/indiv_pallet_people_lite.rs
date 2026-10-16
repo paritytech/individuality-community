@@ -195,10 +195,11 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 		//  Measured:  `354`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_661_360_000 picoseconds.
+		// Placeholder for the `LitePeople` counter read and write. The benchmark bot regenerates this.
 		Weight::from_parts(2_695_022_000, 0)
-			.saturating_add(Weight::from_parts(0, 11671))
-			.saturating_add(T::DbWeight::get().reads(10))
-			.saturating_add(T::DbWeight::get().writes(6))
+			.saturating_add(Weight::from_parts(0, 12174))
+			.saturating_add(T::DbWeight::get().reads(11))
+			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	/// Storage: `PeopleLite::LitePeople` (r:1 w:1)
 	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
@@ -225,10 +226,11 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 		//  Measured:  `280`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_605_787_000 picoseconds.
+		// Placeholder for the throttle and cap storage. The benchmark bot regenerates this.
 		Weight::from_parts(2_636_677_000, 0)
-			.saturating_add(Weight::from_parts(0, 11671))
-			.saturating_add(T::DbWeight::get().reads(10))
-			.saturating_add(T::DbWeight::get().writes(5))
+			.saturating_add(Weight::from_parts(0, 13180))
+			.saturating_add(T::DbWeight::get().reads(13))
+			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	fn dispatch_as_signer() -> Weight {
 		// Proof Size summary in bytes:
@@ -308,5 +310,16 @@ impl<T: frame_system::Config> indiv_pallet_people_lite::WeightInfo for WeightInf
 		Weight::from_parts(2_374_000, 0)
 			.saturating_add(Weight::from_parts(0, 1486))
 			.saturating_add(T::DbWeight::get().reads(1))
+	}
+	/// Storage: `PeopleLite::LitePeople` (r:1 w:0)
+	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
+	/// Storage: `PeopleLite::CounterForLitePeople` (r:1 w:1)
+	/// Proof: `PeopleLite::CounterForLitePeople` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	fn migrate_v1_step() -> Weight {
+		// Placeholder for the migration step. The benchmark bot regenerates this.
+		Weight::from_parts(10_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3578))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 }

@@ -68,6 +68,7 @@ pub trait WeightInfo {
 	fn unset_alias_account() -> Weight;
 	fn create_lite_people_collection() -> Weight;
 	fn authorize_create_lite_people_collection() -> Weight;
+	fn migrate_v1_step() -> Weight;
 }
 
 /// Weights for `indiv_pallet_people_lite` using the Substrate node and recommended hardware.
@@ -208,9 +209,10 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `354`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_649_503_000 picoseconds.
-		Weight::from_parts(2_703_335_000, 11671)
-			.saturating_add(T::DbWeight::get().reads(10_u64))
-			.saturating_add(T::DbWeight::get().writes(6_u64))
+		// Placeholder for the `LitePeople` counter read and write. The benchmark bot regenerates this.
+		Weight::from_parts(2_703_335_000, 12174)
+			.saturating_add(T::DbWeight::get().reads(11_u64))
+			.saturating_add(T::DbWeight::get().writes(7_u64))
 	}
 	/// Storage: `PeopleLite::LitePeople` (r:1 w:1)
 	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
@@ -237,9 +239,10 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `280`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_604_299_000 picoseconds.
-		Weight::from_parts(2_646_694_000, 11671)
-			.saturating_add(T::DbWeight::get().reads(10_u64))
-			.saturating_add(T::DbWeight::get().writes(5_u64))
+		// Placeholder for the throttle and cap storage. The benchmark bot regenerates this.
+		Weight::from_parts(2_646_694_000, 13180)
+			.saturating_add(T::DbWeight::get().reads(13_u64))
+			.saturating_add(T::DbWeight::get().writes(7_u64))
 	}
 	fn dispatch_as_signer() -> Weight {
 		// Proof Size summary in bytes:
@@ -314,6 +317,16 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		// Minimum execution time: 2_077_000 picoseconds.
 		Weight::from_parts(2_333_000, 1486)
 			.saturating_add(T::DbWeight::get().reads(1_u64))
+	}
+	/// Storage: `PeopleLite::LitePeople` (r:1 w:0)
+	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
+	/// Storage: `PeopleLite::CounterForLitePeople` (r:1 w:1)
+	/// Proof: `PeopleLite::CounterForLitePeople` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	fn migrate_v1_step() -> Weight {
+		// Placeholder for the migration step. The benchmark bot regenerates this.
+		Weight::from_parts(10_000_000, 3578)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
 }
 
@@ -454,9 +467,10 @@ impl WeightInfo for () {
 		//  Measured:  `354`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_649_503_000 picoseconds.
-		Weight::from_parts(2_703_335_000, 11671)
-			.saturating_add(RocksDbWeight::get().reads(10_u64))
-			.saturating_add(RocksDbWeight::get().writes(6_u64))
+		// Placeholder for the `LitePeople` counter read and write. The benchmark bot regenerates this.
+		Weight::from_parts(2_703_335_000, 12174)
+			.saturating_add(RocksDbWeight::get().reads(11_u64))
+			.saturating_add(RocksDbWeight::get().writes(7_u64))
 	}
 	/// Storage: `PeopleLite::LitePeople` (r:1 w:1)
 	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
@@ -483,9 +497,10 @@ impl WeightInfo for () {
 		//  Measured:  `280`
 		//  Estimated: `11671`
 		// Minimum execution time: 2_604_299_000 picoseconds.
-		Weight::from_parts(2_646_694_000, 11671)
-			.saturating_add(RocksDbWeight::get().reads(10_u64))
-			.saturating_add(RocksDbWeight::get().writes(5_u64))
+		// Placeholder for the throttle and cap storage. The benchmark bot regenerates this.
+		Weight::from_parts(2_646_694_000, 13180)
+			.saturating_add(RocksDbWeight::get().reads(13_u64))
+			.saturating_add(RocksDbWeight::get().writes(7_u64))
 	}
 	fn dispatch_as_signer() -> Weight {
 		// Proof Size summary in bytes:
@@ -560,5 +575,15 @@ impl WeightInfo for () {
 		// Minimum execution time: 2_077_000 picoseconds.
 		Weight::from_parts(2_333_000, 1486)
 			.saturating_add(RocksDbWeight::get().reads(1_u64))
+	}
+	/// Storage: `PeopleLite::LitePeople` (r:1 w:0)
+	/// Proof: `PeopleLite::LitePeople` (`max_values`: None, `max_size`: Some(113), added: 2588, mode: `MaxEncodedLen`)
+	/// Storage: `PeopleLite::CounterForLitePeople` (r:1 w:1)
+	/// Proof: `PeopleLite::CounterForLitePeople` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	fn migrate_v1_step() -> Weight {
+		// Placeholder for the migration step. The benchmark bot regenerates this.
+		Weight::from_parts(10_000_000, 3578)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 }
