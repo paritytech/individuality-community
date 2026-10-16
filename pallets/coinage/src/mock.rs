@@ -33,10 +33,7 @@ use frame_support::{
 		AsEnsureOriginWithArg, ConstU32, ConstU64, ConstantStoragePrice, Currency, OffchainWorker,
 		UnixTime,
 	},
-	weights::{
-		constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
-		Weight,
-	},
+	weights::{constants::WEIGHT_REF_TIME_PER_SECOND, Weight},
 	BoundedVec,
 };
 use frame_system::{
@@ -114,7 +111,6 @@ parameter_types! {
 impl frame_system::Config for Test {
 	type Block = Block;
 	type BlockWeights = MockBlockWeights;
-	type DbWeight = RocksDbWeight;
 	type AccountData = pallet_balances::AccountData<u64>;
 }
 
@@ -191,7 +187,6 @@ impl
 
 parameter_types! {
 	pub const FlexibleRingExp: RingExponent = RingExponent::R2e9;
-	pub storage OnboardingQueuePageSize: u32 = 40;
 }
 
 impl indiv_pallet_members::Config for Test {
@@ -201,7 +196,7 @@ impl indiv_pallet_members::Config for Test {
 	type ChunksManager = ChunksManager;
 	type Clock = MockTime;
 	type MaxCollections = ConstU32<20>;
-	type OnboardingQueuePageSize = OnboardingQueuePageSize;
+	type OnboardingQueuePageSize = ConstU32<40>;
 	type MaxFlexibleRingExponent = FlexibleRingExp;
 	type RingBuildingMemberLimit = ConstU32<100>;
 	type OldRootRetentionDuration = ConstU64<600>;

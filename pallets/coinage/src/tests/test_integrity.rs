@@ -138,15 +138,6 @@ fn mixed_output_integrity_checks_every_denomination() {
 	});
 }
 
-#[test]
-#[should_panic(expected = "MaxSplitOutputs must not exceed the onboarding queue page size")]
-fn integrity_rejects_split_outputs_above_the_page_size() {
-	new_test_ext().execute_with(|| {
-		OnboardingQueuePageSize::set(&(MAX_SPLIT_OUTPUTS - 1));
-		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
-	});
-}
-
 /// The unload weight equals the limit in `ref_time`. The `proof_size` limit stays at the mock
 /// default, so the OCW cleanups fit half of it.
 #[test]

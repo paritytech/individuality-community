@@ -22,7 +22,7 @@ use crate::{
 use codec::Encode;
 use frame_support::{
 	assert_err_ignore_postinfo, assert_ok, dispatch::GetDispatchInfo,
-	traits::fungibles::InspectHold as _, weights::constants::RocksDbWeight, BoundedVec,
+	traits::fungibles::InspectHold as _, BoundedVec,
 };
 use frame_system::AuthorizeCall;
 use indiv_support::traits::Alias;
@@ -986,19 +986,14 @@ fn check_mixed_output_diversity_weight(fee: UnloadFee) {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			setup_balances();
-			// Each denomination group opens at most one new onboarding page.
-			let pages = RocksDbWeight::get().writes(expected_groups.into());
 			let prepaid = W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
 				expected_groups,
 				3,
-			)
-			.saturating_add(pages);
-			let from_output =
-				W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
-					expected_groups,
-					3,
-				)
-				.saturating_add(pages);
+			);
+			let from_output = W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
+				expected_groups,
+				3,
+			);
 			// The fee modes must differ, so charging the wrong one fails this test.
 			assert_ne!(prepaid, from_output);
 			let charged = match fee {

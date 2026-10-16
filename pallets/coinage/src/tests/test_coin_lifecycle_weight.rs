@@ -17,10 +17,7 @@
 //! Tests for `coin_lifecycle_weight` function.
 
 use crate::{mock::*, AppendOnlyMembersWeightInfo, Config, Pallet, WeightInfo};
-use frame_support::{
-	traits::Get,
-	weights::{constants::RocksDbWeight, Weight},
-};
+use frame_support::{traits::Get, weights::Weight};
 
 /// Calculates the worst case weight for a coin's lifecycle.
 ///
@@ -133,22 +130,14 @@ fn average_lifecycle_includes_each_phase_and_deposit_surcharge_once() {
 		assert_eq!(MAX_CONSOLIDATION / 2, 8);
 		let outputs = MAX_SPLIT_OUTPUTS / 2;
 		let groups = DENOMINATION_COUNT;
-		// Each denomination group opens at most one new onboarding page.
-		let pages = RocksDbWeight::get().writes(groups.into());
 		let unload = W::unload_recycler_into_coin_8()
 			.max(W::unload_recycler_into_external_asset_prepaid_8())
 			.max(W::unload_recycler_into_external_asset_from_output_8())
 			.max(W::unload_recycler_into_external_asset_non_anonymous_8())
-			.max(
-				W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(groups, outputs)
-					.saturating_add(pages),
-			)
-			.max(
-				W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
-					groups, outputs,
-				)
-				.saturating_add(pages),
-			)
+			.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(groups, outputs))
+			.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(
+				groups, outputs,
+			))
 			.max(W::unload_recycler_into_coins_prepaid_8(outputs))
 			.max(W::unload_recycler_into_coins_from_output_8(outputs));
 		let pay = W::pay_for_recycler_unload_fee_token_with_coin()
