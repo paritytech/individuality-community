@@ -1983,8 +1983,8 @@ pub mod pallet {
 				"the unload benchmarks need MaxConsolidation and the recycler ring capacity to be \
 				at least 8",
 			);
-			// The mixed-output weights charge each denomination group for at most two onboarding
-			// pages. A group holds at most `MaxSplitOutputs` coins.
+			// The mixed-output weights charge each denomination group for one new onboarding page.
+			// A group holds at most `MaxSplitOutputs` coins.
 			let page_size = T::MemberService::onboarding_queue_page_size();
 			assert!(
 				T::MaxSplitOutputs::get() <= page_size,
@@ -2237,6 +2237,14 @@ pub mod pallet {
 			denominations.iter().map(|bits| bits.count_ones()).sum::<u32>()
 		}
 
+		/// Weight of opening one onboarding queue page per denomination group.
+		/// The mixed-output benchmarks load into tails with free space and do not measure this
+		/// write. `integrity_test` keeps a group within one page, so a group opens at most one
+		/// new page.
+		pub(crate) fn onboarding_page_rollover_weight(denomination_count: u32) -> Weight {
+			T::DbWeight::get().writes(denomination_count.into())
+		}
+
 		/// Weight of the `Prepaid` fee path of
 		/// [`Call::unload_recycler_into_external_asset_and_loaded_coins`].
 		pub(crate) fn unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
@@ -2278,6 +2286,7 @@ pub mod pallet {
 					),
 				],
 			)
+			.saturating_add(Self::onboarding_page_rollover_weight(denomination_count))
 		}
 
 		/// Weight of the `FromOutput` fee path of [`Call::unload_recycler_into_external_asset`].
@@ -2319,6 +2328,7 @@ pub mod pallet {
 					T::WeightInfo::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(denomination_count, loaded_coin_count),
 				],
 			)
+			.saturating_add(Self::onboarding_page_rollover_weight(denomination_count))
 		}
 
 		/// Worst-case weight of [`Call::unload_recycler_into_external_asset`] over its fee modes.

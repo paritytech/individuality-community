@@ -20,7 +20,7 @@
 //! helper wires the right `WeightInfo` function to each sampled count.
 
 use crate::{mock::*, Config, Pallet, UnloadWeightScope, WeightInfo};
-use frame_support::weights::Weight;
+use frame_support::weights::{constants::RocksDbWeight, Weight};
 
 type W = <Test as Config>::WeightInfo;
 
@@ -33,17 +33,24 @@ fn unload_scope_selects_the_requested_fee_modes_without_deposit_surcharges() {
 	new_test_ext().execute_with(|| {
 		for outputs in [1, D, MAX_SPLIT_OUTPUTS] {
 			let groups = outputs.min(DENOMINATION_COUNT);
+			let pages = RocksDbWeight::get().writes(groups.into());
 			let from_output = W::unload_recycler_into_external_asset_from_output_1()
-				.max(W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
-					groups, outputs,
-				))
+				.max(
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
+						groups, outputs,
+					)
+					.saturating_add(pages),
+				)
 				.max(W::unload_recycler_into_coins_from_output_1(outputs));
 			let any_mode = from_output
 				.max(W::unload_recycler_into_coin_1())
 				.max(W::unload_recycler_into_external_asset_prepaid_1())
-				.max(W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
-					groups, outputs,
-				))
+				.max(
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
+						groups, outputs,
+					)
+					.saturating_add(pages),
+				)
 				.max(W::unload_recycler_into_coins_prepaid_1(outputs))
 				.max(W::unload_recycler_into_external_asset_non_anonymous_1());
 			// The fixture must distinguish the scopes, so swapping them fails this test.
@@ -168,6 +175,8 @@ fn single_recycler_unloads_charge_their_sample() {
 #[test]
 fn unloads_with_outputs_charge_their_sample() {
 	new_test_ext().execute_with(|| {
+		// Two denominations open up to two onboarding pages.
+		let rollover = RocksDbWeight::get().writes(2);
 		assert_samples(
 			|a| {
 				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
@@ -175,21 +184,40 @@ fn unloads_with_outputs_charge_their_sample() {
 				)
 			},
 			[
-				(1, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(2, D)),
-				(2, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(2, D)),
-				(4, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(2, D)),
-				(8, W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(2, D)),
+				(
+					1,
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(2, D)
+						.saturating_add(rollover),
+				),
+				(
+					2,
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_2(2, D)
+						.saturating_add(rollover),
+				),
+				(
+					4,
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_4(2, D)
+						.saturating_add(rollover),
+				),
+				(
+					8,
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_8(2, D)
+						.saturating_add(rollover),
+				),
 				(
 					16.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(2, D),
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_16(2, D)
+						.saturating_add(rollover),
 				),
 				(
 					32.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(2, D),
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_32(2, D)
+						.saturating_add(rollover),
 				),
 				(
 					MAX_ALIASES,
-					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(2, D),
+					W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_max(2, D)
+						.saturating_add(rollover),
 				),
 			],
 		);
@@ -200,21 +228,40 @@ fn unloads_with_outputs_charge_their_sample() {
 				)
 			},
 			[
-				(1, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(2, D)),
-				(2, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(2, D)),
-				(4, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(2, D)),
-				(8, W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(2, D)),
+				(
+					1,
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(2, D)
+						.saturating_add(rollover),
+				),
+				(
+					2,
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_2(2, D)
+						.saturating_add(rollover),
+				),
+				(
+					4,
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_4(2, D)
+						.saturating_add(rollover),
+				),
+				(
+					8,
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_8(2, D)
+						.saturating_add(rollover),
+				),
 				(
 					16.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(2, D),
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_16(2, D)
+						.saturating_add(rollover),
 				),
 				(
 					32.min(MAX_ALIASES),
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(2, D),
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_32(2, D)
+						.saturating_add(rollover),
 				),
 				(
 					MAX_ALIASES,
-					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(2, D),
+					W::unload_recycler_into_external_asset_and_loaded_coins_from_output_max(2, D)
+						.saturating_add(rollover),
 				),
 			],
 		);
@@ -242,6 +289,34 @@ fn unloads_with_outputs_charge_their_sample() {
 				(MAX_ALIASES, W::unload_recycler_into_coins_from_output_max(D)),
 			],
 		);
+	});
+}
+
+#[test]
+fn mixed_output_unloads_charge_one_new_onboarding_page_per_denomination() {
+	new_test_ext().execute_with(|| {
+		let outputs = MAX_SPLIT_OUTPUTS;
+		for groups in [1, D, DENOMINATION_COUNT] {
+			let pages = RocksDbWeight::get().writes(groups.into());
+			assert!(pages.ref_time() > 0);
+			assert_eq!(Pallet::<Test>::onboarding_page_rollover_weight(groups), pages);
+			assert_eq!(
+				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
+					1, groups, outputs,
+				),
+				W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(groups, outputs)
+					.saturating_add(pages)
+			);
+			assert_eq!(
+				Pallet::<Test>::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
+					1, groups, outputs,
+				),
+				W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
+					groups, outputs
+				)
+				.saturating_add(pages)
+			);
+		}
 	});
 }
 

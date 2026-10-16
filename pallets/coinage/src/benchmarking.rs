@@ -203,13 +203,6 @@ fn funded_held_tier<T: Config>(
 	tier
 }
 
-/// Derives an onboarding-queue filler member from its page index and denomination group.
-/// The bytes are not a valid public key, which is much faster and sufficient for queue filling.
-fn filler_member<T: Config>(i: u32, group: u32) -> MemberOf<T> {
-	let bytes = sp_crypto_hashing::blake2_256(&(i, group).encode());
-	codec::DecodeAll::decode_all(&mut bytes.as_slice()).expect("a member encodes to 32 bytes; qed")
-}
-
 /// Create a new secret key and public key from indices.
 fn new_member_from<T: Config>(i: u32, seed: u32) -> (SecretOf<T>, MemberOf<T>) {
 	let mut entropy = &(i, seed).encode()[..];
@@ -1097,29 +1090,6 @@ mod benches {
 			setup_mixed_output_validation::<T>(a, g, n, mode)?;
 
 		let (index, revision, members) = setup_built_unload_recycler::<T>(input_value, 60_000);
-		// Fill each tail after sealing the source ring so the cached proof inputs stay fixed.
-		let mut group_sizes = alloc::collections::BTreeMap::<Denomination, u32>::new();
-		for (value, _) in &loaded_coins {
-			*group_sizes.entry(*value).or_default() += 1;
-		}
-		for (group, (value, group_size)) in group_sizes.into_iter().enumerate() {
-			let identifier = Pallet::<T>::recycler_collection_identifier(INSTANCE_ID, value);
-			let free = T::MemberService::onboarding_queue_tail_free_slots(&identifier);
-			// Each coin of a group decodes and re-encodes the tail page. With one slot fewer than
-			// the group size free, every push handles a nearly full page and the last push opens
-			// a new page.
-			let remaining = group_size - 1;
-			let fill =
-				free.checked_sub(remaining).ok_or("onboarding tail cannot hold the group")?;
-			let pending =
-				(0..fill).map(|i| filler_member::<T>(i, group as u32)).collect::<Vec<_>>();
-			for member in &pending {
-				RecyclersCoinToRecycler::<T>::insert(member, (INSTANCE_ID, value));
-			}
-			T::MemberService::fill_onboarding_queue_tail(&identifier, pending)
-				.expect("target onboarding page must fill");
-			assert_eq!(T::MemberService::onboarding_queue_tail_free_slots(&identifier), remaining);
-		}
 		let asset_amount =
 			Pallet::<T>::denomination_to_asset_amount(asset_unit::<T>(), input_value)
 				.expect("denomination should be in range");
@@ -4992,10 +4962,8 @@ mod benches {
 	mod mixed_output_setup_tests {
 		use super::*;
 		use crate::mock::{new_test_ext_bench, MockPaidUnloadTokenFeeOverride, Test};
-		use alloc::collections::{BTreeMap, BTreeSet};
+		use alloc::collections::BTreeSet;
 		use frame_benchmarking::{BenchmarkParameter, BenchmarkingSetup};
-		use indiv_pallet_members::QueuePageIndices;
-		use indiv_support::traits::RingPosition;
 
 		#[test]
 		fn group_bound_is_the_largest_funded_diversity() {
@@ -5079,55 +5047,6 @@ mod benches {
 								}
 							}
 						}
-					}
-				});
-			}
-		}
-
-		#[test]
-		fn repeats_fill_the_tail_and_the_last_coin_of_a_group_opens_a_new_page() {
-			for mode in [UnloadFeeBenchMode::Prepaid, UnloadFeeBenchMode::FromOutput] {
-				new_test_ext_bench().execute_with(|| {
-					let (call, expectation) =
-						prepare_unload_recycler_into_external_asset_and_loaded_coins::<Test>(
-							8, 10, 20, mode,
-						)
-						.unwrap();
-					let mut groups = BTreeMap::<Denomination, Vec<MemberOf<Test>>>::new();
-					for (value, member) in &expectation.loaded_coins {
-						groups.entry(*value).or_default().push(*member);
-					}
-					// The minimum denomination holds every repeat.
-					assert_eq!(
-						groups.values().map(Vec::len).collect::<Vec<_>>(),
-						[vec![11], vec![1; 9]].concat()
-					);
-					let identifier =
-						|value| Pallet::<Test>::recycler_collection_identifier(INSTANCE_ID, value);
-					let old_tails = groups
-						.keys()
-						.map(|value| QueuePageIndices::<Test>::get(identifier(*value)).1)
-						.collect::<Vec<_>>();
-					call().unwrap();
-					expectation.assert_unloaded(mode);
-					for ((value, members), old_tail) in groups.iter().zip(old_tails) {
-						let identifier = identifier(*value);
-						let pages =
-							members
-								.iter()
-								.map(|member| match <Test as Config>::MemberService::member_status(
-									&identifier,
-									member,
-								) {
-									Some(RingPosition::Onboarding { queue_page, .. }) => queue_page,
-									_ => panic!("new output must be queued"),
-								})
-								.collect::<Vec<_>>();
-						// Every coin but the last fits the old tail.
-						assert_eq!(
-							pages,
-							[vec![old_tail; members.len() - 1], vec![old_tail + 1]].concat()
-						);
 					}
 				});
 			}

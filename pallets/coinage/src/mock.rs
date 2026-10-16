@@ -33,7 +33,10 @@ use frame_support::{
 		AsEnsureOriginWithArg, ConstU32, ConstU64, ConstantStoragePrice, Currency, OffchainWorker,
 		UnixTime,
 	},
-	weights::{constants::WEIGHT_REF_TIME_PER_SECOND, Weight},
+	weights::{
+		constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
+		Weight,
+	},
 	BoundedVec,
 };
 use frame_system::{
@@ -111,6 +114,7 @@ parameter_types! {
 impl frame_system::Config for Test {
 	type Block = Block;
 	type BlockWeights = MockBlockWeights;
+	type DbWeight = RocksDbWeight;
 	type AccountData = pallet_balances::AccountData<u64>;
 }
 
