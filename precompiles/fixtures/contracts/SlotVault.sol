@@ -35,7 +35,8 @@ import "../../scarcity/sol/IScarcityCollection.sol";
 /// - The vault never ejects junk itself. A player whose push was blocked reserves another slot, and
 ///   the reserver of a slot may take whatever sits in it while it holds no live stake.
 /// - A player never loses custody of a token they pushed into their own reserved slot. If the stake
-///   cannot be confirmed, because the round is full or has closed, `withdraw` gives the token back.
+///   cannot be confirmed, because the round is full or has closed or the collection was not
+///   accepted, `withdraw` gives the token back.
 ///
 /// A winner claims one token per call into an empty key, because a purse key holds one token. A
 /// failing destination only blocks that one claim, refund or withdrawal. The contract also derives
@@ -150,7 +151,8 @@ contract SlotVault {
     /// slot by someone else. It goes to the key the player named, whoever pushed it. It does not ask
     /// whether the collection is accepted, because custody of what a player pushed must not depend
     /// on the owner's list. That is safe here: only the slot's reserver can call it, it writes no
-    /// state, and the only call it makes is the move out of the caller's own slot.
+    /// state, and the only call it makes goes to the address the caller names, asking it to move a
+    /// token out of the caller's own slot, which gives that address no authority over the vault.
     /// @param collection The address of the token's collection.
     /// @param index The slot the caller reserved.
     /// @param tokenId The token to take back.
