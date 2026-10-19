@@ -117,6 +117,8 @@ where
 			IScarcityCollectionCalls::forceTransfer(call) =>
 				Self::force_transfer(collection, call, env),
 			IScarcityCollectionCalls::forceBurn(call) => Self::force_burn(collection, call, env),
+			// Contract slots
+			IScarcityCollectionCalls::slotAddress(call) => Self::slot_address(call, env),
 			IScarcityCollectionCalls::setCollectionMetadata(call) => {
 				let value = bounded_value::<T>(&call.value)?;
 				Self::set_collection_metadata(collection, &call.key, Some(value), env)
@@ -252,7 +254,8 @@ pub(crate) fn is_mutating(input: &IScarcityCollectionCalls) -> bool {
 		IScarcityCollectionCalls::instanceMetadata(_) |
 		IScarcityCollectionCalls::hasCollectionMetadata(_) |
 		IScarcityCollectionCalls::hasItemMetadata(_) |
-		IScarcityCollectionCalls::hasInstanceMetadata(_) => false,
+		IScarcityCollectionCalls::hasInstanceMetadata(_) |
+		IScarcityCollectionCalls::slotAddress(_) => false,
 	}
 }
 
@@ -705,6 +708,20 @@ where
 			},
 		)?;
 		Ok(Vec::new())
+	}
+
+	/// The address of one of a vault's slots.
+	///
+	/// A pure derivation, so the only charge is the hash. It answers for any `(vault, index)`,
+	/// including an EOA, because naming a slot grants nothing: authority over it is checked where a
+	/// token leaves it.
+	fn slot_address(
+		call: &IScarcityCollection::slotAddressCall,
+		env: &mut impl Ext<T = T>,
+	) -> Result<Vec<u8>, Error> {
+		charge_slot_hash::<T>(env)?;
+		let slot = slot_address(&call.vault, &call.index);
+		Ok(IScarcityCollection::slotAddressCall::abi_encode_returns(&slot))
 	}
 
 	/// Announce a metadata write that changes what a standard read returns.

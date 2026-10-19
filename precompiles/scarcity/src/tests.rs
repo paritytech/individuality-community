@@ -2345,6 +2345,10 @@ fn all_collection_calls(
 			to: empty,
 		}),
 		IScarcityCollectionCalls::forceBurn(IScarcityCollection::forceBurnCall { tokenId: token }),
+		IScarcityCollectionCalls::slotAddress(IScarcityCollection::slotAddressCall {
+			vault: held,
+			index: U256::ZERO,
+		}),
 		IScarcityCollectionCalls::collectionOwner(IScarcityCollection::collectionOwnerCall {}),
 		IScarcityCollectionCalls::owner(IScarcityCollection::ownerCall {}),
 		IScarcityCollectionCalls::itemSupply(IScarcityCollection::itemSupplyCall { item }),
@@ -3622,6 +3626,123 @@ fn royalty_basis_points_reject_a_value_that_is_not_exactly_u128() {
 			assert_eq!(quoted.receiver, Address::ZERO, "over-long value must not quote");
 			assert_eq!(quoted.royaltyAmount, U256::ZERO);
 		}
+	});
+}
+
+/// Several vaults and indices for the slot tests, including indices that differ only in a high
+/// byte, which a little-endian encoding of the index would not tell apart from a low one.
+fn slot_vaults_and_indices() -> Vec<(Address, U256)> {
+	let vaults = [Address::repeat_byte(0x01), Address::repeat_byte(0x02), Address::ZERO];
+	let indices = [U256::ZERO, U256::from(1u64), U256::from(256u64), U256::MAX];
+	vaults
+		.iter()
+		.flat_map(|vault| indices.iter().map(move |index| (*vault, *index)))
+		.collect()
+}
+
+/// A slot is the low 20 bytes of `keccak256("scarcity/slot" ++ vault ++ index)` with the index as
+/// 32 big-endian bytes, which is what `abi.encodePacked("scarcity/slot", vault, index)` produces.
+/// The preimage is built here by a different route than the derivation, so a change to the layout
+/// fails this rather than passing both.
+#[test]
+fn slot_address_follows_the_documented_layout() {
+	for (vault, index) in slot_vaults_and_indices() {
+		let mut index_word = [0u8; 32];
+		index_word.copy_from_slice(&index.to_be_bytes::<32>());
+		let preimage =
+			[b"scarcity/slot".as_slice(), vault.as_slice(), index_word.as_slice()].concat();
+		assert_eq!(preimage.len(), 13 + 20 + 32);
+		let hash = pallet_revive::precompiles::alloy::primitives::keccak256(&preimage);
+		assert_eq!(slot_address(&vault, &index), Address::from_slice(&hash[12..]));
+	}
+}
+
+/// Every `(vault, index)` pair names its own slot: two vaults never share one, and a vault's
+/// indices never collide.
+#[test]
+fn slot_addresses_are_distinct_per_vault_and_index() {
+	let pairs = slot_vaults_and_indices();
+	let slots = pairs
+		.iter()
+		.map(|(vault, index)| slot_address(vault, index))
+		.collect::<Vec<_>>();
+	for (i, slot) in slots.iter().enumerate() {
+		assert!(!slots[i + 1..].contains(slot), "pair {i} collides with a later one");
+	}
+	// The vault itself is not a slot of itself.
+	for (vault, index) in pairs {
+		assert_ne!(slot_address(&vault, &index), vault);
+	}
+}
+
+/// `slotAddress` answers the pure derivation to anyone, an EOA included: naming a slot grants
+/// nothing, because authority is checked where a token leaves one.
+#[test]
+fn slot_address_call_serves_the_derivation() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let target = collection_address(collection);
+
+		for (vault, index) in slot_vaults_and_indices() {
+			let data = call_ok(
+				&alice,
+				target,
+				IScarcityCollection::slotAddressCall { vault, index }.abi_encode(),
+			);
+			let slot = IScarcityCollection::slotAddressCall::abi_decode_returns(&data).unwrap();
+			assert_eq!(slot, slot_address(&vault, &index));
+		}
+	});
+}
+
+/// The design depends on a slot's fallback account naming itself: the slot address maps to an
+/// account that maps back to the same address, so `ownerOf` and `balanceOf` can answer for it. That
+/// holds because the account ends in the `0xEE` suffix, which also makes it mapped from the start,
+/// so `MapPurseKey` has nothing to register when a token lands on it.
+#[test]
+fn a_slot_names_itself_through_owner_of_and_balance_of() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let target = collection_address(collection);
+
+		let (vault, index) = (Address::repeat_byte(0x07), U256::from(3u64));
+		let slot = slot_address(&vault, &index);
+		let slot_account = <Test as pallet_revive::Config>::AddressMapper::to_fallback_account_id(
+			&H160(slot.into_array()),
+		);
+		assert_eq!(address_of::<Test>(&slot_account), slot);
+		assert!(<Test as pallet_revive::Config>::AddressMapper::is_mapped(&slot_account));
+
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
+			alice.clone(),
+			collection,
+			item,
+			slot_account.clone(),
+			alloc::vec![],
+		)
+		.unwrap();
+
+		let owner_data = call_ok(
+			&alice,
+			target,
+			IScarcityCollection::ownerOfCall { tokenId: U256::from(instance) }.abi_encode(),
+		);
+		assert_eq!(
+			IScarcityCollection::ownerOfCall::abi_decode_returns(&owner_data).unwrap(),
+			slot
+		);
+		let balance_data = call_ok(
+			&alice,
+			target,
+			IScarcityCollection::balanceOfCall { owner: slot }.abi_encode(),
+		);
+		assert_eq!(
+			IScarcityCollection::balanceOfCall::abi_decode_returns(&balance_data).unwrap(),
+			U256::ONE
+		);
 	});
 }
 

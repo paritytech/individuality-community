@@ -145,7 +145,7 @@ use pallet_revive::{
 	precompiles::{
 		alloy::{
 			self,
-			primitives::{Address, IntoLogData, U256},
+			primitives::{keccak256, Address, IntoLogData, U256},
 			sol_types::SolCall,
 		},
 		AddressMapper, AddressMatcher, Error, Ext, RuntimeCosts, H160, H256,
@@ -352,6 +352,36 @@ fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error 
 
 fn account_of<T: pallet_revive::Config>(address: &Address) -> T::AccountId {
 	<T as pallet_revive::Config>::AddressMapper::to_account_id(&H160(address.into_array()))
+}
+
+/// Domain separator hashed ahead of a vault and index to derive one of its slots.
+const SLOT_DOMAIN: &[u8] = b"scarcity/slot";
+
+/// Length of the preimage [`slot_address`] hashes: the domain, a 20-byte vault and a 32-byte index.
+const SLOT_PREIMAGE_LEN: usize = SLOT_DOMAIN.len() + 20 + 32;
+
+/// The address of slot `index` of `vault`.
+///
+/// The low 20 bytes of `keccak256(SLOT_DOMAIN ++ vault ++ index)`, with `index` as 32 big-endian
+/// bytes. This is `abi.encodePacked("scarcity/slot", vault, index)`, so a contract derives the same
+/// address on its own. The result is an H160, so its fallback account round-trips through
+/// `AddressMapper::to_address` and `ownerOf` can name it.
+///
+/// The caller charges for the hash first, through [`charge_slot_hash`].
+pub(crate) fn slot_address(vault: &Address, index: &U256) -> Address {
+	let mut preimage = Vec::with_capacity(SLOT_PREIMAGE_LEN);
+	preimage.extend_from_slice(SLOT_DOMAIN);
+	preimage.extend_from_slice(vault.as_slice());
+	preimage.extend_from_slice(&index.to_be_bytes::<32>());
+	let hash = keccak256(&preimage);
+	Address::from_slice(&hash[12..])
+}
+
+/// Charge for hashing one slot preimage, before [`slot_address`] runs.
+fn charge_slot_hash<T: pallet_revive::Config>(env: &mut impl Ext<T = T>) -> Result<(), Error> {
+	env.frame_meter_mut()
+		.charge_weight_token(RuntimeCosts::HashKeccak256(SLOT_PREIMAGE_LEN as u32))?;
+	Ok(())
 }
 
 /// Ref time charged per metadata byte a policy validation scans.

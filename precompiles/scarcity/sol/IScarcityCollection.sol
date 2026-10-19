@@ -370,6 +370,21 @@ interface IScarcityCollection {
     /// @custom:emits Transfer
     function forceBurn(uint256 tokenId) external;
 
+    /// @notice The address of slot number `index` of `vault`.
+    /// @dev This precompile's own function, not part of any ERC standard. A slot is an empty purse
+    /// key that only `vault` can act for, which lets a contract hold more than one token by
+    /// holding one in each of several slots. The address is the low 20 bytes of
+    /// `keccak256(abi.encodePacked("scarcity/slot", vault, index))`. Nothing is stored: any
+    /// `(vault, index)` pair names a slot, and the contract tracks which indices it has used.
+    /// Anyone can push a token into any slot, because a purse key gives no destination consent. A
+    /// contract must therefore check `ownerOf(tokenId) == slotAddress(address(this), index)` for
+    /// each token it acts on, attribute a stake through its own record and not through who pushed,
+    /// and abandon a slot that someone else occupied instead of looping over slots.
+    /// @param vault The contract the slot belongs to.
+    /// @param index The slot number, chosen by the contract.
+    /// @return slot The address of the slot.
+    function slotAddress(address vault, uint256 index) external view returns (address slot);
+
     /// @notice Set or overwrite the collection-scope metadata default under `key`.
     /// @dev This precompile's own function, not part of any ERC standard. Only the collection owner
     /// may call this. On runtimes wiring the ERC-721 metadata policy, when `key` is `name`,
