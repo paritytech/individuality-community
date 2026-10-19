@@ -371,15 +371,25 @@ interface IScarcityCollection {
     function forceBurn(uint256 tokenId) external;
 
     /// @notice The address of slot number `index` of `vault`.
-    /// @dev This precompile's own function, not part of any ERC standard. A slot is an empty purse
-    /// key that only `vault` can act for, which lets a contract hold more than one token by
-    /// holding one in each of several slots. The address is the low 20 bytes of
-    /// `keccak256(abi.encodePacked("scarcity/slot", vault, index))`. Nothing is stored: any
-    /// `(vault, index)` pair names a slot, and the contract tracks which indices it has used.
-    /// Anyone can push a token into any slot, because a purse key gives no destination consent. A
-    /// contract must therefore check `ownerOf(tokenId) == slotAddress(address(this), index)` for
-    /// each token it acts on, attribute a stake through its own record and not through who pushed,
-    /// and abandon a slot that someone else occupied instead of looping over slots.
+    /// @dev This precompile's own function, not part of any ERC standard. A slot is a purse key
+    /// that no holder can sign for and that only `vault` can move a token out of on the holder's
+    /// authority, which lets a contract hold more than one token by holding one in each of
+    /// several slots. The collection owner keeps its force powers: `forceTransfer` and
+    /// `forceBurn` reach a token in a slot as they reach one anywhere. The address is the low 20
+    /// bytes of `keccak256(abi.encodePacked("scarcity/slot", vault, index))`. Nothing is stored:
+    /// any `(vault, index)` pair names a slot, and the contract tracks which indices it has used.
+    ///
+    /// Anyone can push a token into any slot, because a purse key gives no destination consent.
+    /// A contract that holds tokens in slots must therefore:
+    /// - keep its own custody record, written by its own functions, and attribute a stake through
+    ///   that record and never through who pushed;
+    /// - check each token it acts on in constant time with
+    ///   `ownerOf(tokenId) == slotAddress(address(this), index)`;
+    /// - never use `balanceOf` or `tokenOfOwnerByIndex` for its logic;
+    /// - keep every loop bounded, for example by a player cap per round;
+    /// - ignore a token it did not expect instead of reverting on it;
+    /// - abandon a slot that someone else occupied and use another index, instead of trying to
+    ///   eject what is there or looping over slots to find one that is free.
     /// @param vault The contract the slot belongs to.
     /// @param index The slot number, chosen by the contract.
     /// @return slot The address of the slot.

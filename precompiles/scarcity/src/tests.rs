@@ -20,7 +20,7 @@ use crate::mock::*;
 use frame_support::{assert_ok, traits::Currency};
 use pallet_revive::{
 	precompiles::alloy::{
-		primitives::Bytes,
+		primitives::{address, Bytes},
 		sol_types::{Revert, SolCall, SolError, SolInterface},
 	},
 	sp_runtime::Weight,
@@ -3629,8 +3629,8 @@ fn royalty_basis_points_reject_a_value_that_is_not_exactly_u128() {
 	});
 }
 
-/// Several vaults and indices for the slot tests, including indices that differ only in a high
-/// byte, which a little-endian encoding of the index would not tell apart from a low one.
+/// Several vaults and indices for the slot tests, including indices that differ only above the low
+/// byte, which an index truncated to its low byte would not tell apart.
 fn slot_vaults_and_indices() -> Vec<(Address, U256)> {
 	let vaults = [Address::repeat_byte(0x01), Address::repeat_byte(0x02), Address::ZERO];
 	let indices = [U256::ZERO, U256::from(1u64), U256::from(256u64), U256::MAX];
@@ -3640,21 +3640,74 @@ fn slot_vaults_and_indices() -> Vec<(Address, U256)> {
 		.collect()
 }
 
-/// A slot is the low 20 bytes of `keccak256("scarcity/slot" ++ vault ++ index)` with the index as
-/// 32 big-endian bytes, which is what `abi.encodePacked("scarcity/slot", vault, index)` produces.
-/// The preimage is built here by a different route than the derivation, so a change to the layout
-/// fails this rather than passing both.
+/// Known answers for the derivation, computed outside this crate.
+///
+/// Each digest is `cast keccak` (Foundry) over the packed bytes of `"scarcity/slot" ++ vault ++
+/// index`, with the index as 32 big-endian bytes, and the slot is its low 20 bytes. That is the
+/// layout `abi.encodePacked("scarcity/slot", vault, index)` produces, which the interface tells
+/// contract authors to derive on their own, so a change to the preimage, the domain, the index
+/// width or its byte order fails here instead of silently moving every vault's slots.
+///
+/// The indices 3 and 256 tell a big-endian index from a little-endian one and from one cut to its
+/// low byte; `U256::MAX` uses every byte.
 #[test]
-fn slot_address_follows_the_documented_layout() {
-	for (vault, index) in slot_vaults_and_indices() {
-		let mut index_word = [0u8; 32];
-		index_word.copy_from_slice(&index.to_be_bytes::<32>());
-		let preimage =
-			[b"scarcity/slot".as_slice(), vault.as_slice(), index_word.as_slice()].concat();
-		assert_eq!(preimage.len(), 13 + 20 + 32);
-		let hash = pallet_revive::precompiles::alloy::primitives::keccak256(&preimage);
-		assert_eq!(slot_address(&vault, &index), Address::from_slice(&hash[12..]));
+fn slot_address_matches_known_answers() {
+	let cases: [(Address, U256, Address); 4] = [
+		(
+			Address::repeat_byte(0x01),
+			U256::ZERO,
+			address!("7228488fca8c872ff6eafc4ae50b0f3dbd53874f"),
+		),
+		(
+			Address::repeat_byte(0x02),
+			U256::from(256u64),
+			address!("7df54687b34eea5fa4574c348784e90b3eccca97"),
+		),
+		(
+			Address::repeat_byte(0x07),
+			U256::from(3u64),
+			address!("fa4875fdf79a268ffba47e273e34df92af7c7a0b"),
+		),
+		(Address::ZERO, U256::MAX, address!("69b3290684bf9d2c08289f74fc02ce5fb924a8cd")),
+	];
+	for (vault, index, expected) in cases {
+		assert_eq!(slot_address(&vault, &index), expected, "vault {vault}, index {index}");
 	}
+}
+
+/// `slotAddress` pays for its hash.
+///
+/// The same call to a collection that does not exist reverts right after the collection check every
+/// selector gets, so what the served call adds over it is the hash. Removing or reordering the
+/// charge leaves nothing for the difference to hold.
+#[test]
+fn slot_address_charges_for_its_hash() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let input = IScarcityCollection::slotAddressCall {
+			vault: Address::repeat_byte(0x01),
+			index: U256::ZERO,
+		}
+		.abi_encode();
+
+		let served = call_full(&alice, collection_address(collection), input.clone());
+		assert!(!served.result.expect("call executes").did_revert());
+		let unknown = call_full(&alice, collection_address(collection + 1), input);
+		assert!(unknown.result.expect("call executes").did_revert());
+
+		let hash = <() as pallet_revive::weights::WeightInfo>::seal_hash_keccak_256(
+			SLOT_PREIMAGE_LEN as u32,
+		);
+		assert!(hash.ref_time() > 0, "the mock must price the hash for this test to mean anything");
+		assert!(
+			served.weight_consumed.ref_time() >=
+				unknown.weight_consumed.ref_time().saturating_add(hash.ref_time()),
+			"slotAddress must charge its hash: served {:?}, unknown collection {:?}, hash {hash:?}",
+			served.weight_consumed,
+			unknown.weight_consumed
+		);
+	});
 }
 
 /// Every `(vault, index)` pair names its own slot: two vaults never share one, and a vault's

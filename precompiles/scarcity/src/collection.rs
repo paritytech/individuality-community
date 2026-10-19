@@ -712,9 +712,9 @@ where
 
 	/// The address of one of a vault's slots.
 	///
-	/// A pure derivation, so the only charge is the hash. It answers for any `(vault, index)`,
-	/// including an EOA, because naming a slot grants nothing: authority over it is checked where a
-	/// token leaves it.
+	/// A pure derivation: past the collection check every selector gets, the only charge is the
+	/// hash and nothing else is read. It answers for any `(vault, index)`, including an EOA,
+	/// because naming a slot grants nothing: authority over it is checked where a token leaves it.
 	fn slot_address(
 		call: &IScarcityCollection::slotAddressCall,
 		env: &mut impl Ext<T = T>,
