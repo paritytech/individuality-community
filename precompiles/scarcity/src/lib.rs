@@ -23,8 +23,8 @@
 //!   lives at `0x00000007000000000000000000000000_0520_0000`. It serves the ERC-721 core and
 //!   metadata read surface with the exact standard selectors, the collection owner's admin surface
 //!   (define, mint, force-transfer, force-burn, metadata mutation at all three scopes, ownership
-//!   handover, deletion) and Scarcity-specific reads (supply, instance info, raw metadata and its
-//!   presence, pending owner, aggregate deposit).
+//!   handover, deletion), the contract slots described below, and Scarcity-specific reads (supply,
+//!   instance info, raw metadata and its presence, pending owner, aggregate deposit).
 //! - [`ScarcityFactory`] answers at one fixed address and creates collections. Creation cannot live
 //!   on the per-collection addresses because the collection id does not exist until creation
 //!   allocates it.
@@ -126,7 +126,79 @@
 //! Weights: state-changing calls charge the corresponding `indiv-pallet-scarcity` benchmark
 //! weights. Read calls charge one database read per worst-case storage access, which
 //! over-charges pure computation but never under-charges; a crate benchmark can refine this
-//! later.
+//! later. The slot calls add no benchmark: `transferFromSlot` charges what `transferFrom`
+//! charges plus the keccak that derives the slot, and `slotAddress` charges only that hash.
+//!
+//! # Contract slots
+//!
+//! A purse key holds one token, and a contract cannot sign for a purse key, so a contract holds
+//! many tokens by holding one in each of several slots. A slot is a purse key derived from the
+//! contract: `slotAddress(vault, index)` is the low 20 bytes of
+//! `keccak256(abi.encodePacked("scarcity/slot", vault, index))`, which a contract derives on its
+//! own with the same expression. Nothing is stored. Any `(vault, index)` names a slot, and the
+//! contract tracks the indices it has used.
+//!
+//! The slot's account is the fallback account of that address, never what
+//! `AddressMapper::to_account_id` returns, which reads `OriginalAccount` first. The fallback
+//! account ends in the `0xEE` suffix, so it is mapped from the start: `ownerOf` and `balanceOf`
+//! name it, and [`MapPurseKey`] has nothing to register when a token lands on it. Acting for it in
+//! a transaction would take a secp256k1 key whose address is the slot, which is a hash output.
+//!
+//! `transferFromSlot(index, tokenId, to)` moves a token out of slot `index` of the caller. It
+//! derives the slot from the caller, requires the slot to hold the token, and moves it through
+//! `do_transfer_by_holder`. The destination must be empty, a soulbound token cannot move, and the
+//! move refills the token's fee-less moves and advances its state nonce, as `transferFrom` does. It
+//! does not ask who staked the token: that is the calling contract's record to keep. The collection
+//! owner keeps `forceTransfer` and `forceBurn` over a token wherever it sits, slots included, so a
+//! contract should accept stakes only from collections whose owner it trusts.
+//!
+//! Anyone can push a token into any slot: a purse key gives no destination consent, and a fee-less
+//! native push has no callback and emits no EVM `Transfer`. A contract therefore cannot learn who
+//! pushed. It credits a stake to what it recorded itself, such as the account that reserved the
+//! slot, and checks each token in constant time with
+//! `ownerOf(tokenId) == slotAddress(address(this), index)`. Once a slot holds someone else's token
+//! it refuses a player's own push, and the pool refuses a fee-less one at validation. An attacker
+//! with a token can occupy a slot as soon as its address is known, so a contract abandons an
+//! occupied slot for another index rather than ejecting what is in it, and lets the player who
+//! reserved a slot take back anything in it that holds no live stake. `SlotVault`, under
+//! `precompiles/fixtures/contracts`, is the reference for that flow.
+//!
+//! `balanceOf` and `tokenOfOwnerByIndex` stay 0 or 1 per key, so each slot answers for itself and
+//! there is no per-holder counter or index. A contract must not use either for its logic.
+//!
+//! A contract that terminates strands the tokens in its slots, because only the vault address can
+//! move a token out on the holder's authority. Only the collection owner's force powers can move
+//! them after that.
+//!
+//! # Frame guards
+//!
+//! `ScarcityCollection::call` applies these to every selector, in this order, before any charge
+//! or state read of its own:
+//!
+//! - A delegate call reverts. Under a delegate call the precompile runs with the delegator's
+//!   address and storage and `env.caller()` is the delegator's own caller, so both the collection
+//!   id in the address and the caller `transferFromSlot` derives a slot from are under the
+//!   delegating contract's control. No selector is served.
+//! - Attached value reverts. This address has no owner, no code and no withdrawal path, so value
+//!   sent here is unrecoverable.
+//! - A mutating selector is refused in a read-only frame, with `pallet-revive`'s own
+//!   `StateChangeDenied`. The guard is per selector, through `is_mutating`, because the views must
+//!   stay callable from a `STATICCALL`. `is_mutating` is exhaustive, so a selector added to the
+//!   interface has to be classified before the crate compiles. The factory denies a read-only frame
+//!   outright, because every one of its selectors mutates.
+//!
+//! The delegate and value guards revert, so the caller keeps the gas it forwarded, which a trap
+//! would consume instead.
+//!
+//! `transferFromSlot` adds a guard of its own, after those three and ahead of its own charges and
+//! reads: it reverts when the caller is the transaction's origin, an account that signs. The test
+//! is `caller_is_origin(false)` on the frame, not a look at code size, so a delegated account does
+//! not pass for a contract. It is a fence, not a boundary: an account can deploy a contract that
+//! forwards the call, and that contract then holds as many tokens as it has slots. Every key
+//! still holds one token. The guard only keeps a plain wallet from being a vault.
+//!
+//! No other selector is contract-only. `transferFrom` and `safeTransferFrom` need the caller to be
+//! the holder, and accounts are holders. `slotAddress` is a pure derivation that grants nothing.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 

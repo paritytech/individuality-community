@@ -34,14 +34,20 @@ pragma solidity ^0.8.30;
 /// A holder moves a token on its own authority: the caller must be the current holder.
 /// Approvals are not supported, so @custom:function approve and @custom:function setApprovalForAll revert, @custom:function getApproved
 /// returns the zero address and @custom:function isApprovedForAll returns false.
+///
+/// A purse key holds one token. A contract holds more than one by holding one in each of several
+/// slots, which are purse keys derived from the contract (@custom:function slotAddress) and that
+/// only the contract can move a token out of (@custom:function transferFromSlot). Anyone can push
+/// a token into any slot, so read the rules under @custom:function slotAddress before holding other
+/// people's tokens.
 /// @custom:reverts "unknown collection"
 /// @custom:reverts "this precompile does not accept value"
 /// @custom:reverts "illegal to call this pre-compile via delegate call"
 /// @custom:security-contact admin@parity.io
 interface IScarcityCollection {
     /// @notice ERC-721 standard event. Emitted by @custom:function mint, @custom:function transferFrom, @custom:function safeTransferFrom,
-    /// @custom:function forceTransfer and @custom:function forceBurn when `tokenId` moves between purse keys, including mints
-    /// (from the zero address) and burns (to the zero address).
+    /// @custom:function transferFromSlot, @custom:function forceTransfer and @custom:function forceBurn when `tokenId` moves
+    /// between purse keys, including mints (from the zero address) and burns (to the zero address).
     /// @param from The purse key the instance left, or the zero address on a mint.
     /// @param to The purse key the instance arrived at, or the zero address on a burn.
     /// @param tokenId The permanent instance identifier that moved.
