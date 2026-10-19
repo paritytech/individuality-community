@@ -119,6 +119,8 @@ where
 			IScarcityCollectionCalls::forceBurn(call) => Self::force_burn(collection, call, env),
 			// Contract slots
 			IScarcityCollectionCalls::slotAddress(call) => Self::slot_address(call, env),
+			IScarcityCollectionCalls::transferFromSlot(call) =>
+				Self::transfer_from_slot(collection, call, env),
 			IScarcityCollectionCalls::setCollectionMetadata(call) => {
 				let value = bounded_value::<T>(&call.value)?;
 				Self::set_collection_metadata(collection, &call.key, Some(value), env)
@@ -220,6 +222,7 @@ pub(crate) fn is_mutating(input: &IScarcityCollectionCalls) -> bool {
 		IScarcityCollectionCalls::mint(_) |
 		IScarcityCollectionCalls::forceTransfer(_) |
 		IScarcityCollectionCalls::forceBurn(_) |
+		IScarcityCollectionCalls::transferFromSlot(_) |
 		IScarcityCollectionCalls::setCollectionMetadata(_) |
 		IScarcityCollectionCalls::removeCollectionMetadata(_) |
 		IScarcityCollectionCalls::setItemMetadata(_) |
@@ -722,6 +725,61 @@ where
 		charge_slot_hash::<T>(env)?;
 		let slot = slot_address(&call.vault, &call.index);
 		Ok(IScarcityCollection::slotAddressCall::abi_encode_returns(&slot))
+	}
+
+	/// Move a token out of one of the calling vault's slots on the slot's holder authority.
+	///
+	/// The slot is derived from the caller, so a caller can only reach slots that are its own, and
+	/// the slot account has no key, so this is the only way the token leaves on holder authority.
+	/// Who staked the token is the calling contract's record to keep; nothing here asks.
+	///
+	/// Only a contract may call. `caller_is_origin(false)` is true exactly when the caller is the
+	/// transaction's origin, an account that signs. It looks at the frame rather than at code, so a
+	/// delegated account cannot pass for a contract. A forwarding contract still passes, so this is
+	/// a fence and not a boundary. It runs before any charge or read, like the crate's frame
+	/// guards.
+	fn transfer_from_slot(
+		collection: CollectionId,
+		call: &IScarcityCollection::transferFromSlotCall,
+		env: &mut impl Ext<T = T>,
+	) -> Result<Vec<u8>, Error> {
+		if env.caller_is_origin(false) {
+			return Err(revert(ERR_NOT_CONTRACT));
+		}
+		// See `mint` on why the zero address is rejected.
+		if call.to == Address::ZERO {
+			return Err(revert(ERR_ZERO_DESTINATION));
+		}
+		// What `transfer_from` charges, so the slot path never costs less than the holder path it
+		// stands beside, plus the hash that derives the slot. The destination registers like any
+		// other, which `WeightInfo::transfer_by_holder` does not cover.
+		charge_reads(env, 4)?;
+		charge_slot_hash::<T>(env)?;
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
+		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+			T::AccountId,
+		>>::on_purse_occupied_weight())?;
+
+		let vault = address_of::<T>(&caller_account::<T>(env)?);
+		let slot = slot_address(&vault, &call.index);
+		let slot_account = slot_account::<T>(&slot);
+		let (holder, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		if holder != slot_account {
+			return Err(revert(ERR_NOT_IN_SLOT));
+		}
+		// The pallet compares accounts and this call carries an address, so name the slot itself
+		// here as `transfer_from` does for the holder.
+		if call.to == slot {
+			return Err(revert(ERR_SELF_TRANSFER));
+		}
+		let to = account_of::<T>(&call.to);
+		Scarcity::<T>::do_transfer_by_holder(&slot_account, nft.instance, to)
+			.map_err(revert_scarcity::<T>)?;
+		deposit_event(
+			env,
+			IScarcityCollection::Transfer { from: slot, to: call.to, tokenId: call.tokenId },
+		)?;
+		Ok(Vec::new())
 	}
 
 	/// Announce a metadata write that changes what a standard read returns.

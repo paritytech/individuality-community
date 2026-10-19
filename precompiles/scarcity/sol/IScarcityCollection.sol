@@ -395,6 +395,29 @@ interface IScarcityCollection {
     /// @return slot The address of the slot.
     function slotAddress(address vault, uint256 index) external view returns (address slot);
 
+    /// @notice Move `tokenId` out of slot number `index` of the caller to the empty purse key `to`.
+    /// @dev This precompile's own function, not part of any ERC standard. Only a contract may call
+    /// this: the slot is derived from the caller as in @custom:function slotAddress, so the caller
+    /// is the vault and a call from an externally owned account is refused. That check is a fence,
+    /// not a boundary, since an account can deploy a contract that forwards the call. The move is
+    /// a holder transfer, so it refills the token's fee-less moves and it fails for a soulbound
+    /// token, as @custom:function transferFrom does. It does not check who staked the token: the
+    /// calling contract decides that from its own record.
+    /// @param index The slot number the token sits in.
+    /// @param tokenId The instance to move.
+    /// @param to The empty purse key to move the instance to.
+    /// @custom:reverts "slots are for contracts: call from a contract"
+    /// @custom:reverts "invalid caller"
+    /// @custom:reverts "destination is the zero address"
+    /// @custom:reverts "unknown token"
+    /// @custom:reverts "token is not in this slot"
+    /// @custom:reverts "destination already holds this instance"
+    /// @custom:reverts "destination purse already holds an instance"
+    /// @custom:reverts "token is soulbound to its purse key"
+    /// @custom:reverts "instance state nonce exhausted"
+    /// @custom:emits Transfer
+    function transferFromSlot(uint256 index, uint256 tokenId, address to) external;
+
     /// @notice Set or overwrite the collection-scope metadata default under `key`.
     /// @dev This precompile's own function, not part of any ERC standard. Only the collection owner
     /// may call this. On runtimes wiring the ERC-721 metadata policy, when `key` is `name`,

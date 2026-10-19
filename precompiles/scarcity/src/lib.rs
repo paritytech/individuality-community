@@ -245,6 +245,10 @@ pub const ERR_KEY_VALUE_MISMATCH: &str = "metadata keys and values differ in len
 pub const ERR_UNKNOWN_COLLECTION: &str = "unknown collection";
 /// Revert reason when an item index names no definition.
 pub const ERR_UNKNOWN_ITEM: &str = "unknown item";
+/// Revert reason when an externally owned account calls a function that only a contract may call.
+pub const ERR_NOT_CONTRACT: &str = "slots are for contracts: call from a contract";
+/// Revert reason when `transferFromSlot` names a slot that does not hold the token.
+pub const ERR_NOT_IN_SLOT: &str = "token is not in this slot";
 /// Revert reason when a royalty amount exceeds the representable range.
 pub const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range";
 /// Revert reason when a reserved metadata value is not valid UTF-8.
@@ -375,6 +379,17 @@ pub(crate) fn slot_address(vault: &Address, index: &U256) -> Address {
 	preimage.extend_from_slice(&index.to_be_bytes::<32>());
 	let hash = keccak256(&preimage);
 	Address::from_slice(&hash[12..])
+}
+
+/// The account a slot address stands for.
+///
+/// The fallback account, never `to_account_id`: that reads `OriginalAccount` first, so a mapped
+/// key whose address equals the slot would take the slot over. The fallback form skips the read.
+/// It ends in the `0xEE` suffix, so `to_address` strips it back to the slot address. Acting for it
+/// in a transaction would take a secp256k1 key whose address is the slot, a hash output nobody
+/// holds a preimage key for.
+fn slot_account<T: pallet_revive::Config>(slot: &Address) -> T::AccountId {
+	<T as pallet_revive::Config>::AddressMapper::to_fallback_account_id(&H160(slot.into_array()))
 }
 
 /// Charge for hashing one slot preimage, before [`slot_address`] runs.

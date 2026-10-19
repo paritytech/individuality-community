@@ -2349,6 +2349,11 @@ fn all_collection_calls(
 			vault: held,
 			index: U256::ZERO,
 		}),
+		IScarcityCollectionCalls::transferFromSlot(IScarcityCollection::transferFromSlotCall {
+			index: U256::ZERO,
+			tokenId: token,
+			to: empty,
+		}),
 		IScarcityCollectionCalls::collectionOwner(IScarcityCollection::collectionOwnerCall {}),
 		IScarcityCollectionCalls::owner(IScarcityCollection::ownerCall {}),
 		IScarcityCollectionCalls::itemSupply(IScarcityCollection::itemSupplyCall { item }),
@@ -3678,8 +3683,9 @@ fn slot_address_matches_known_answers() {
 /// `slotAddress` pays for its hash.
 ///
 /// The same call to a collection that does not exist reverts right after the collection check every
-/// selector gets, so what the served call adds over it is the hash. Removing or reordering the
-/// charge leaves nothing for the difference to hold.
+/// selector gets, so what the served call adds over it is the hash. Removing the charge leaves
+/// nothing for the difference to hold. Charging after the hash costs the same total, so the order
+/// of the two is for review to hold, not this test.
 #[test]
 fn slot_address_charges_for_its_hash() {
 	new_test_ext().execute_with(|| {
@@ -3796,6 +3802,41 @@ fn a_slot_names_itself_through_owner_of_and_balance_of() {
 			IScarcityCollection::balanceOfCall::abi_decode_returns(&balance_data).unwrap(),
 			U256::ONE
 		);
+	});
+}
+
+/// An externally owned account cannot move a token out of a slot, not even one derived from its
+/// own address: slots are for contracts. The refusal comes before anything is read, so the token
+/// stays where it was.
+#[test]
+fn an_account_cannot_use_slots() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let slot = slot_address(&address_of::<Test>(&alice), &U256::ZERO);
+		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
+			alice.clone(),
+			collection,
+			item,
+			slot_account::<Test>(&slot),
+			alloc::vec![],
+		)
+		.unwrap();
+		let (destination, _) = purse(0xAB);
+
+		call_reverted_with(
+			&alice,
+			collection_address(collection),
+			IScarcityCollection::transferFromSlotCall {
+				index: U256::ZERO,
+				tokenId: U256::from(instance),
+				to: destination.0.into(),
+			}
+			.abi_encode(),
+			ERR_NOT_CONTRACT,
+		);
+		assert_eq!(Instances::<Test>::get(instance), Some(slot_account::<Test>(&slot)));
 	});
 }
 
@@ -3930,7 +3971,7 @@ mod guards {
 			// A tripwire, not a safety net: `all_collection_calls` already pins that every selector
 			// is driven, and a new mutator classified as a read leaves this count untouched. That
 			// one is caught by review or not at all.
-			assert_eq!(mutating, 20, "mutating arm count changed; update this test deliberately");
+			assert_eq!(mutating, 21, "mutating arm count changed; update this test deliberately");
 
 			let factory = run_precompile::<ScarcityFactory<Test, FACTORY_INDEX>, _>(
 				&mut ext,
@@ -3995,6 +4036,11 @@ mod evm_fixture {
 
 		interface ICollectionOwnerLogic {
 			function bootstrap(address factory, uint16 prefix) external returns (uint32 collection);
+		}
+
+		interface ISlotVault {
+			function slotOf(uint256 index) external view returns (address slot);
+			function release(address collection, uint256 index, uint256 tokenId, address to) external;
 		}
 
 		interface IInterfaceIds {
@@ -4418,6 +4464,362 @@ mod evm_fixture {
 				IScarcityCollection::collectionOwnerCall::abi_decode_returns(&owner_data).unwrap();
 			assert_eq!(owner, alloy_address(proxy));
 		});
+	}
+
+	#[test]
+	fn slot_derivation_matches_solidity_under_both_compilers() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let alice = id_to_account(1);
+				let collection = setup_collection(&alice);
+				let vault = deploy(&alice, code);
+				let vault_address = alloy_address(vault);
+
+				for index in [U256::ZERO, U256::from(1u64), U256::from(256u64), U256::MAX] {
+					let data =
+						call_ok(&alice, vault, ISlotVault::slotOfCall { index }.abi_encode());
+					let solidity = ISlotVault::slotOfCall::abi_decode_returns(&data).unwrap();
+					let data = call_ok(
+						&alice,
+						collection_address(collection),
+						IScarcityCollection::slotAddressCall { vault: vault_address, index }
+							.abi_encode(),
+					);
+					let precompile =
+						IScarcityCollection::slotAddressCall::abi_decode_returns(&data).unwrap();
+
+					// Three derivations of one address: the contract's own, the crate's, and the
+					// precompile's answer, which is what a contract author would ask for instead.
+					assert_eq!(
+						solidity,
+						slot_address(&vault_address, &index),
+						"{compiler}: Solidity against Rust, index {index}"
+					);
+					assert_eq!(
+						precompile, solidity,
+						"{compiler}: precompile against Solidity, index {index}"
+					);
+				}
+			});
+		}
+	}
+
+	/// The vault compiled both ways, so a result holds for solc's EVM bytecode and resolc's PolkaVM
+	/// bytecode alike, as `evm_contract_call_reads_collection_owner` and its PolkaVM twin do.
+	fn slot_vault_codes() -> Vec<(&'static str, Vec<u8>)> {
+		alloc::vec![("solc", fixture_code("SlotVault")), ("resolc", resolc_code("SlotVault"))]
+	}
+
+	/// A collection with one item and a deployed vault, for moving tokens out of its slots.
+	///
+	/// Built inside `execute_with`, because it writes pallet state.
+	struct VaultWorld {
+		alice: AccountId32,
+		collection: CollectionId,
+		item: indiv_pallet_scarcity::ItemIndex,
+		vault: H160,
+	}
+
+	impl VaultWorld {
+		fn new(code: Vec<u8>) -> Self {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let vault = deploy(&alice, code);
+			Self { alice, collection, item, vault }
+		}
+
+		fn slot(&self, index: u64) -> Address {
+			slot_address(&alloy_address(self.vault), &U256::from(index))
+		}
+
+		fn slot_account(&self, index: u64) -> AccountId32 {
+			slot_account::<Test>(&self.slot(index))
+		}
+
+		/// Mint an instance of the world's item into `holder`.
+		fn mint_into(&self, holder: AccountId32) -> InstanceId {
+			indiv_pallet_scarcity::Pallet::<Test>::do_mint(
+				self.alice.clone(),
+				self.collection,
+				self.item,
+				holder,
+				alloc::vec![],
+			)
+			.unwrap()
+		}
+
+		/// Ask the vault to release `token` from slot `index` of `collection` to `to`.
+		fn release_input(
+			&self,
+			collection: CollectionId,
+			index: u64,
+			token: U256,
+			to: Address,
+		) -> Vec<u8> {
+			ISlotVault::releaseCall {
+				collection: alloy_address(collection_address(collection)),
+				index: U256::from(index),
+				tokenId: token,
+				to,
+			}
+			.abi_encode()
+		}
+
+		/// Assert the vault's call reverts with a reason containing `reason`, naming `context` if
+		/// not.
+		fn release_reverts(&self, context: &str, input: Vec<u8>, reason: &str) {
+			let output = call_precompile(&self.alice, self.vault, input);
+			assert!(output.did_revert(), "{context}: expected a revert, got success: {output:?}");
+			let decoded =
+				Revert::abi_decode(&output.data).expect("revert data decodes as Error(string)");
+			assert!(
+				decoded.reason.contains(reason),
+				"{context}: revert reason {:?} does not contain {reason:?}",
+				decoded.reason
+			);
+		}
+	}
+
+	#[test]
+	fn a_vault_moves_a_token_out_of_its_slot() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let (destination_address, destination) = purse(0xAB);
+				let slot = world.slot(0);
+				let slot_account = world.slot_account(0);
+				let instance = world.mint_into(slot_account.clone());
+				// Spend some of the token's fee-less moves, so the refill is visible.
+				NftsByOwner::<Test>::mutate(&slot_account, |nft| nft.as_mut().unwrap().moves = 5);
+				let before = NftsByOwner::<Test>::get(&slot_account).unwrap();
+
+				call_ok(
+					&world.alice,
+					world.vault,
+					world.release_input(
+						world.collection,
+						0,
+						U256::from(instance),
+						alloy_address(destination_address),
+					),
+				);
+
+				assert!(
+					NftsByOwner::<Test>::get(&slot_account).is_none(),
+					"{compiler}: still in slot"
+				);
+				let moved = NftsByOwner::<Test>::get(&destination).expect("destination holds it");
+				assert_eq!(moved.instance, instance, "{compiler}");
+				assert_eq!(moved.state_nonce, before.state_nonce + 1, "{compiler}");
+				assert_eq!(moved.moves, 0, "{compiler}: a holder move refills the fee-less moves");
+				assert_eq!(Instances::<Test>::get(instance), Some(destination), "{compiler}");
+				assert_only_contract_event(
+					collection_address(world.collection),
+					IScarcityCollection::Transfer {
+						from: slot,
+						to: alloy_address(destination_address),
+						tokenId: U256::from(instance),
+					},
+				);
+			});
+		}
+	}
+
+	/// Every way a vault can fail to move a token, each leaving the token where it was.
+	#[test]
+	fn a_vault_cannot_move_what_is_not_in_its_slot() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let (empty_address, _) = purse(0xAB);
+				let empty = alloy_address(empty_address);
+				let (_, stranger) = purse(0xCD);
+
+				// Held by the vault's slot 1, but asked for as slot 0.
+				let in_slot_one = world.mint_into(world.slot_account(1));
+				// Held by a plain purse.
+				let with_stranger = world.mint_into(stranger.clone());
+				// Held by a slot of some other vault.
+				let other_vault = Address::repeat_byte(0x55);
+				let in_other_vault =
+					world.mint_into(slot_account::<Test>(&slot_address(&other_vault, &U256::ZERO)));
+				// Held by slot 2 of the vault, but of another collection.
+				let other_collection = setup_collection(&world.alice);
+				let other_item = setup_item(&world.alice, other_collection);
+				let in_other_collection = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
+					world.alice.clone(),
+					other_collection,
+					other_item,
+					world.slot_account(2),
+					alloc::vec![],
+				)
+				.unwrap();
+				// Held by slot 0 correctly, for the destination failures.
+				let in_slot_zero = world.mint_into(world.slot_account(0));
+
+				let reverts: [(&str, Vec<u8>, &str); 8] = [
+					(
+						"another slot of the vault",
+						world.release_input(world.collection, 0, U256::from(in_slot_one), empty),
+						ERR_NOT_IN_SLOT,
+					),
+					(
+						"a plain purse",
+						world.release_input(world.collection, 0, U256::from(with_stranger), empty),
+						ERR_NOT_IN_SLOT,
+					),
+					(
+						"a slot of another vault",
+						world.release_input(world.collection, 0, U256::from(in_other_vault), empty),
+						ERR_NOT_IN_SLOT,
+					),
+					(
+						"a token that does not exist",
+						world.release_input(world.collection, 0, U256::from(u64::MAX), empty),
+						ERR_UNKNOWN_TOKEN,
+					),
+					(
+						"a token of another collection",
+						world.release_input(
+							world.collection,
+							2,
+							U256::from(in_other_collection),
+							empty,
+						),
+						ERR_UNKNOWN_TOKEN,
+					),
+					(
+						"the zero address",
+						world.release_input(
+							world.collection,
+							0,
+							U256::from(in_slot_zero),
+							Address::ZERO,
+						),
+						ERR_ZERO_DESTINATION,
+					),
+					(
+						"a destination that holds a token",
+						world.release_input(
+							world.collection,
+							0,
+							U256::from(in_slot_zero),
+							address_of::<Test>(&stranger),
+						),
+						"destination purse already holds an instance",
+					),
+					(
+						"the slot itself",
+						world.release_input(
+							world.collection,
+							0,
+							U256::from(in_slot_zero),
+							world.slot(0),
+						),
+						ERR_SELF_TRANSFER,
+					),
+				];
+				for (case, input, reason) in reverts {
+					world.release_reverts(&alloc::format!("{compiler}: {case}"), input, reason);
+				}
+
+				// Nothing moved.
+				let holders = [
+					(in_slot_one, world.slot_account(1)),
+					(with_stranger, stranger),
+					(
+						in_other_vault,
+						slot_account::<Test>(&slot_address(&other_vault, &U256::ZERO)),
+					),
+					(in_other_collection, world.slot_account(2)),
+					(in_slot_zero, world.slot_account(0)),
+				];
+				for (instance, holder) in holders {
+					assert_eq!(Instances::<Test>::get(instance), Some(holder), "{compiler}");
+				}
+			});
+		}
+	}
+
+	/// A zero destination is refused before anything is charged, so what a served move adds over it
+	/// is the charges: the holder transfer, the hash that derives the slot, and the reads. Dropping
+	/// the holder transfer or the hash leaves the difference short of their weights.
+	#[test]
+	fn transfer_from_slot_pays_for_the_move() {
+		new_test_ext().execute_with(|| {
+			let world = VaultWorld::new(fixture_code("SlotVault"));
+			let instance = world.mint_into(world.slot_account(0));
+			let (destination, _) = purse(0xAB);
+
+			let refused = call_full(
+				&world.alice,
+				world.vault,
+				world.release_input(world.collection, 0, U256::from(instance), Address::ZERO),
+			);
+			assert!(refused.result.expect("call executes").did_revert());
+			let served = call_full(
+				&world.alice,
+				world.vault,
+				world.release_input(
+					world.collection,
+					0,
+					U256::from(instance),
+					alloy_address(destination),
+				),
+			);
+			assert!(!served.result.expect("call executes").did_revert());
+
+			let hash = <() as pallet_revive::weights::WeightInfo>::seal_hash_keccak_256(
+				SLOT_PREIMAGE_LEN as u32,
+			);
+			let transfer = <() as indiv_pallet_scarcity::weights::WeightInfo>::transfer_by_holder();
+			let floor = hash.ref_time() + transfer.ref_time();
+			assert!(floor > 0, "the mock must price the move for this test to mean anything");
+			assert!(
+				served.weight_consumed.ref_time() >=
+					refused.weight_consumed.ref_time().saturating_add(floor),
+				"served {:?}, refused {:?}, floor {floor}",
+				served.weight_consumed,
+				refused.weight_consumed
+			);
+		});
+	}
+
+	#[test]
+	fn a_soulbound_token_cannot_leave_a_slot() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let soulbound =
+					setup_item_as(&world.alice, world.collection, Transferability::Soulbound);
+				let (empty_address, _) = purse(0xAB);
+				let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
+					world.alice.clone(),
+					world.collection,
+					soulbound,
+					world.slot_account(0),
+					alloc::vec![],
+				)
+				.unwrap();
+
+				world.release_reverts(
+					compiler,
+					world.release_input(
+						world.collection,
+						0,
+						U256::from(instance),
+						alloy_address(empty_address),
+					),
+					"token is soulbound to its purse key",
+				);
+				assert_eq!(
+					Instances::<Test>::get(instance),
+					Some(world.slot_account(0)),
+					"{compiler}"
+				);
+			});
+		}
 	}
 
 	#[test]
