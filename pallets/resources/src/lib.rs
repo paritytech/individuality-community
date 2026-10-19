@@ -1181,7 +1181,7 @@ pub mod pallet {
 			let Some((first_period, actual_first)) =
 				StatementStoreAllowances::<T>::iter_keys().next()
 			else {
-				return Err(crate::extension::CustomValidity::InvalidExpiredStmtStoreCleanup.into());
+				return Err(crate::extension::CustomValidity::InvalidExpiredStmtStoreCleanup.into())
 			};
 			if first_period.0 != *period {
 				return Err(crate::extension::CustomValidity::InvalidExpiredStmtStoreCleanup.into());

@@ -42,6 +42,7 @@ use sp_runtime::{
 };
 use sp_statement_store::{
 	decrease_allowance_by, get_allowance, increase_allowance_by, StatementAllowance,
+	STATEMENT_ALLOWANCE_PREFIX,
 };
 use verifiable::GenerateVerifiable;
 
@@ -585,12 +586,7 @@ mod benches {
 		let past_period = Pallet::<T>::stmt_store_period_from_timestamp(100);
 		let past_period_key = indiv_support::utils::BigEndianU32::from(past_period);
 
-		// Workaround for an issue with statement store benchmarking.
-		// The weight writer fits each storage key on the samples that touch it. Each account has
-		// its own `:statement_allowance:` key, so a key touched only at `n = max` has one sample
-		// and the fit fails (polkadot-sdk #12075). The last two entries share an account to
-		// avoid this.
-		let max_account = T::StmtStoreCleanupLimit::get().saturating_sub(2);
+		let shared_account_bytes = 32 - STATEMENT_ALLOWANCE_PREFIX.len();
 
 		// Set up `n` entries by calling the extrinsic with fabricated origins.
 		for i in 0..n {
@@ -599,7 +595,10 @@ mod benches {
 			let origin = <T as frame_system::Config>::RuntimeOrigin::from(
 				crate::Origin::StmtStoreAlias(alias),
 			);
-			let acc: T::AccountId = account("stmt-store", i.min(max_account), 0);
+			let mut raw_account = [0u8; 32];
+			raw_account[shared_account_bytes..shared_account_bytes + 4]
+				.copy_from_slice(&i.to_le_bytes());
+			let acc = T::AccountId::from(raw_account);
 			// Should work because the period checks happen when setting the origin, which we skip
 			assert_ok!(Pallet::<T>::set_statement_store_account(origin, past_period, i, acc));
 		}

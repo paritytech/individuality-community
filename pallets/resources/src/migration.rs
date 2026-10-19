@@ -105,8 +105,9 @@ pub enum Cursor<AccountId> {
 /// Translates every [`Consumers`] record to the shape without username fields, then clears the
 /// four username storage items that no longer exist in the pallet and bumps the storage version
 /// to 1. Each step does as much work as the weight meter allows. Consumers are translated one at
-/// a time. Every `ReservationOf` item also charges the two writes of the final step, which kills
-/// the reservation duration and bumps the storage version.
+/// a time. Every `ReservationOf` item charges two extra entry units for the final step, which kills
+/// the reservation duration and bumps the storage version. An entry unit carries a measured proof
+/// size, while `DbWeight::writes` carries none.
 ///
 /// Single use: remove from the runtime once the upgrade carrying it is live.
 pub struct MigrateV0ToV1<T>(PhantomData<T>);
@@ -171,8 +172,8 @@ impl<T: Config> MigrateV0ToV1<T> {
 			Cursor::Consumers(_) => T::WeightInfo::migrate_v1_translate_consumer(),
 			Cursor::UsernameOwnerOf | Cursor::UsernameReservationQueue =>
 				T::WeightInfo::migrate_v1_clear_username_entry(),
-			Cursor::ReservationOf => T::WeightInfo::migrate_v1_clear_username_entry()
-				.saturating_add(<T as frame_system::Config>::DbWeight::get().writes(2)),
+			Cursor::ReservationOf =>
+				T::WeightInfo::migrate_v1_clear_username_entry().saturating_mul(3),
 		}
 	}
 }

@@ -28,7 +28,31 @@ Later workflow runs read a release's spec version from its attached `*_srtool_ou
 falling back to the plain `Spec version: <n>` line in the release notes. Do not edit or remove
 either.
 
-## Pre-release checks
+## Cutting a release
+
+```bash
+gh workflow run release.yml -f spec-version=3001000 -f release-version=0.3.1
+```
+
+(or use the Actions tab). By convention the release version mirrors the spec version: `3_000_000` is
+`0.3.0`, `3_001_000` is `0.3.1`, `4_000_000` is `0.4.0`. The workflow then:
+
+1. Validates the inputs before building: the spec version is a number ending in `000` and above
+   every released spec version, the release version looks like `0.3.1`, is above the previous
+   release's version and its tag `v<release-version>` is free. Neither number has to increase by
+   exactly one; it has to go up.
+2. Builds both runtimes with srtool, with the spec version stamped in.
+3. Publishes the release under the tag `v<release-version>` with the wasm blobs and srtool digests
+   attached. The notes carry the runtime info, the Polkadot SDK version the release is compatible
+   with, the previous and current spec versions and the list of pull requests since the previous
+   release with their audit (`D<n>-`) and compatibility (`C<n>-`) labels.
+4. Commits the released spec version back to `main`. The branch ruleset rejects a direct push, so
+   this opens a pull request instead; close and reopen it to trigger CI, then merge it. Granting the
+   repository's GitHub Actions a bypass on the `main` ruleset makes this step fully automatic.
+
+There are no release candidates; nightlies fill that role.
+
+## Next release checks
 
 The release that removes usernames from the `Resources` pallet on People Chain (carrying
 `indiv_pallet_resources::migration::MigrateV0ToV1`) deletes the People Chain copy of every username.
@@ -56,28 +80,5 @@ proof, enacted by governance as a batch built from the script's rows. Those call
 names live only in the dotNS contract and cannot be compared from storage; the script lists them for
 manual follow-up.
 
-This section and the script are removed once the release carrying `MigrateV0ToV1` is live.
-
-## Cutting a release
-
-```bash
-gh workflow run release.yml -f spec-version=3001000 -f release-version=0.3.1
-```
-
-(or use the Actions tab). By convention the release version mirrors the spec version: `3_000_000` is
-`0.3.0`, `3_001_000` is `0.3.1`, `4_000_000` is `0.4.0`. The workflow then:
-
-1. Validates the inputs before building: the spec version is a number ending in `000` and above
-   every released spec version, the release version looks like `0.3.1`, is above the previous
-   release's version and its tag `v<release-version>` is free. Neither number has to increase by
-   exactly one; it has to go up.
-2. Builds both runtimes with srtool, with the spec version stamped in.
-3. Publishes the release under the tag `v<release-version>` with the wasm blobs and srtool digests
-   attached. The notes carry the runtime info, the Polkadot SDK version the release is compatible
-   with, the previous and current spec versions and the list of pull requests since the previous
-   release with their audit (`D<n>-`) and compatibility (`C<n>-`) labels.
-4. Commits the released spec version back to `main`. The branch ruleset rejects a direct push, so
-   this opens a pull request instead; close and reopen it to trigger CI, then merge it. Granting the
-   repository's GitHub Actions a bypass on the `main` ruleset makes this step fully automatic.
-
-There are no release candidates; nightlies fill that role.
+This section is renamed to `v<release-version> release checks` when the release is cut. The section
+and the script are deleted once that release is live.

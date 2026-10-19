@@ -634,7 +634,7 @@ mod migration {
 	use crate::migration::{v0, Cursor};
 	use frame_support::{
 		migrations::{SteppedMigration, SteppedMigrationError},
-		weights::{RuntimeDbWeight, Weight, WeightMeter},
+		weights::{Weight, WeightMeter},
 	};
 
 	fn old_username(s: &[u8]) -> v0::Username {
@@ -793,15 +793,10 @@ mod migration {
 
 			assert_eq!(cursor, None);
 			assert_username_storage_empty();
-			// One transition per stage, plus the two writes of the final step.
+			// One transition per stage; the `ReservationOf` stage charges three entry units.
 			assert_eq!(
 				meter.consumed(),
-				translate_weight()
-					.saturating_add(clear_weight().saturating_mul(3))
-					.saturating_add(
-						<<Test as frame_system::Config>::DbWeight as Get<RuntimeDbWeight>>::get()
-							.writes(2)
-					)
+				translate_weight().saturating_add(clear_weight().saturating_mul(5))
 			);
 		});
 	}
