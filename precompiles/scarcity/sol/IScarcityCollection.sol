@@ -407,7 +407,6 @@ interface IScarcityCollection {
     /// @param tokenId The instance to move.
     /// @param to The empty purse key to move the instance to.
     /// @custom:reverts "slots are for contracts: call from a contract"
-    /// @custom:reverts "invalid caller"
     /// @custom:reverts "destination is the zero address"
     /// @custom:reverts "unknown token"
     /// @custom:reverts "token is not in this slot"

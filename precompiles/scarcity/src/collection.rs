@@ -736,8 +736,8 @@ where
 	/// Only a contract may call. `caller_is_origin(false)` is true exactly when the caller is the
 	/// transaction's origin, an account that signs. It looks at the frame rather than at code, so a
 	/// delegated account cannot pass for a contract. A forwarding contract still passes, so this is
-	/// a fence and not a boundary. It runs before any charge or read, like the crate's frame
-	/// guards.
+	/// a fence and not a boundary. It runs ahead of this call's own charges and reads, like the
+	/// crate's frame guards; `call` has already charged for and done the collection check.
 	fn transfer_from_slot(
 		collection: CollectionId,
 		call: &IScarcityCollection::transferFromSlotCall,
@@ -767,8 +767,9 @@ where
 		if holder != slot_account {
 			return Err(revert(ERR_NOT_IN_SLOT));
 		}
-		// The pallet compares accounts and this call carries an address, so name the slot itself
-		// here as `transfer_from` does for the holder.
+		// The pallet compares accounts and this call carries an address, as `force_transfer` notes
+		// for its own check. Naming the slot itself here keeps the refusal from depending on how
+		// the pallet compares them; today both give the same message.
 		if call.to == slot {
 			return Err(revert(ERR_SELF_TRANSFER));
 		}

@@ -3806,8 +3806,8 @@ fn a_slot_names_itself_through_owner_of_and_balance_of() {
 }
 
 /// An externally owned account cannot move a token out of a slot, not even one derived from its
-/// own address: slots are for contracts. The refusal comes before anything is read, so the token
-/// stays where it was.
+/// own address: slots are for contracts. The refusal comes ahead of the call's own reads and
+/// charges, and the token stays where it was.
 #[test]
 fn an_account_cannot_use_slots() {
 	new_test_ext().execute_with(|| {
@@ -4742,46 +4742,54 @@ mod evm_fixture {
 		}
 	}
 
-	/// A zero destination is refused before anything is charged, so what a served move adds over it
-	/// is the charges: the holder transfer, the hash that derives the slot, and the reads. Dropping
-	/// the holder transfer or the hash leaves the difference short of their weights.
+	/// `transferFromSlot` charges for the move before it looks at the token.
+	///
+	/// Two reverts of the same token, both from inside the precompile: a zero destination is
+	/// refused ahead of every charge, and a slot that does not hold the token is refused after all
+	/// of them and before the pallet runs. What the second adds over the first is exactly the
+	/// charges: the hash that derives the slot, the holder transfer, and the reads and the
+	/// destination registration, which the mock prices only in proof size because its database
+	/// weight is zero. Dropping any one of them leaves the difference short.
 	#[test]
-	fn transfer_from_slot_pays_for_the_move() {
+	fn transfer_from_slot_charges_before_it_looks_at_the_token() {
 		new_test_ext().execute_with(|| {
 			let world = VaultWorld::new(fixture_code("SlotVault"));
 			let instance = world.mint_into(world.slot_account(0));
-			let (destination, _) = purse(0xAB);
+			let token = U256::from(instance);
 
-			let refused = call_full(
+			let before_charges = call_full(
 				&world.alice,
 				world.vault,
-				world.release_input(world.collection, 0, U256::from(instance), Address::ZERO),
+				world.release_input(world.collection, 0, token, Address::ZERO),
 			);
-			assert!(refused.result.expect("call executes").did_revert());
-			let served = call_full(
+			assert!(before_charges.result.expect("call executes").did_revert());
+			let (empty, _) = purse(0xAB);
+			let after_charges = call_full(
 				&world.alice,
 				world.vault,
-				world.release_input(
-					world.collection,
-					0,
-					U256::from(instance),
-					alloy_address(destination),
-				),
+				// The token sits in slot 0, so slot 1 refuses it once the charges are paid.
+				world.release_input(world.collection, 1, token, alloy_address(empty)),
 			);
-			assert!(!served.result.expect("call executes").did_revert());
+			assert!(after_charges.result.expect("call executes").did_revert());
 
 			let hash = <() as pallet_revive::weights::WeightInfo>::seal_hash_keccak_256(
 				SLOT_PREIMAGE_LEN as u32,
 			);
 			let transfer = <() as indiv_pallet_scarcity::weights::WeightInfo>::transfer_by_holder();
-			let floor = hash.ref_time() + transfer.ref_time();
-			assert!(floor > 0, "the mock must price the move for this test to mean anything");
+			// Four reads charged up front, and the registration of the destination, which is priced
+			// as two reads of proof.
+			let proof_floor = 6 * PROOF_SIZE_PER_READ + transfer.proof_size();
+			let time_floor = hash.ref_time() + transfer.ref_time();
+			assert!(time_floor > 0, "the mock must price the move for this test to mean anything");
+
+			let (before, after) = (before_charges.weight_consumed, after_charges.weight_consumed);
 			assert!(
-				served.weight_consumed.ref_time() >=
-					refused.weight_consumed.ref_time().saturating_add(floor),
-				"served {:?}, refused {:?}, floor {floor}",
-				served.weight_consumed,
-				refused.weight_consumed
+				after.ref_time() >= before.ref_time().saturating_add(time_floor),
+				"ref time: after the charges {after:?}, before them {before:?}, floor {time_floor}"
+			);
+			assert!(
+				after.proof_size() >= before.proof_size().saturating_add(proof_floor),
+				"proof size: after the charges {after:?}, before them {before:?}, floor {proof_floor}"
 			);
 		});
 	}
