@@ -37,7 +37,8 @@ pragma solidity ^0.8.30;
 ///
 /// A purse key holds one token. A contract holds more than one by holding one in each of several
 /// slots, which are purse keys derived from the contract (@custom:function slotAddress) and that
-/// only the contract can move a token out of (@custom:function transferFromSlot). Anyone can push
+/// only the contract can move a token out of on the holder's authority (@custom:function
+/// transferFromSlot), the collection owner's force powers aside. Anyone can push
 /// a token into any slot, so read the rules under @custom:function slotAddress before holding other
 /// people's tokens.
 /// @custom:reverts "unknown collection"

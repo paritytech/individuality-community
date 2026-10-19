@@ -55,7 +55,8 @@
 //! nothing besides.
 //!
 //! An item definition may be declared soulbound, binding every instance minted from it to the
-//! purse key it lands in. Both holder paths then revert, `locked()` answers true and ERC-5192
+//! purse key it lands in. Every holder path then reverts, `transferFromSlot` included, `locked()`
+//! answers true and ERC-5192
 //! is claimed. The collection owner's `forceTransfer` and `forceBurn` are a separate authority and
 //! ignore the flag, so a misdirected mint still has a remedy and a locked token can still be
 //! destroyed. Soulbound binds the holder, not the issuer; EIP-5192 reads `locked` as
@@ -127,7 +128,8 @@
 //! weights. Read calls charge one database read per worst-case storage access, which
 //! over-charges pure computation but never under-charges; a crate benchmark can refine this
 //! later. The slot calls add no benchmark: `transferFromSlot` charges what `transferFrom`
-//! charges plus the keccak that derives the slot, and `slotAddress` charges only that hash.
+//! charges plus the keccak that derives the slot, and `slotAddress` charges only that hash, beyond
+//! the collection check every selector pays.
 //!
 //! # Contract slots
 //!
@@ -146,8 +148,10 @@
 //!
 //! `transferFromSlot(index, tokenId, to)` moves a token out of slot `index` of the caller. It
 //! derives the slot from the caller, requires the slot to hold the token, and moves it through
-//! `do_transfer_by_holder`. The destination must be empty, a soulbound token cannot move, and the
-//! move refills the token's fee-less moves and advances its state nonce, as `transferFrom` does. It
+//! `do_transfer_by_holder`. The destination must be empty, and the move refills the token's
+//! fee-less moves and advances its state nonce, as `transferFrom` does. A soulbound token cannot be
+//! moved this way, nor pushed into a slot by its holder, so one the collection owner mints straight
+//! into a slot stays there except through the owner's force powers. It
 //! does not ask who staked the token: that is the calling contract's record to keep. The collection
 //! owner keeps `forceTransfer` and `forceBurn` over a token wherever it sits, slots included, so a
 //! contract should accept stakes only from collections whose owner it trusts.
@@ -166,9 +170,13 @@
 //! `balanceOf` and `tokenOfOwnerByIndex` stay 0 or 1 per key, so each slot answers for itself and
 //! there is no per-holder counter or index. A contract must not use either for its logic.
 //!
-//! A contract that terminates strands the tokens in its slots, because only the vault address can
-//! move a token out on the holder's authority. Only the collection owner's force powers can move
-//! them after that.
+//! Authority over a slot follows the vault's address, not its code. When a contract terminates, its
+//! tokens stay in their slots, and nothing can move one out on the holder's authority until a
+//! contract exists at that address again. The collection owner's force powers do not depend on one.
+//! A CREATE2 address depends only on the deployer, code, input and salt, so a redeployment with the
+//! same ones aims at the same address, and a contract that lands there holds every slot's authority
+//! again, whatever logic it carries. Whoever stakes into a vault should check that it cannot be
+//! redeployed with other code.
 //!
 //! # Frame guards
 //!
