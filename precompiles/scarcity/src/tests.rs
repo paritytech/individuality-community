@@ -4103,12 +4103,17 @@ mod evm_fixture {
 			function bootstrap(address factory, uint16 prefix) external returns (uint32 collection);
 		}
 
-		interface ISlotVault {
+		interface ISlotReleaser {
 			function slotOf(uint256 index) external view returns (address slot);
 			function release(address collection, uint256 index, uint256 tokenId, address to) external;
+		}
+
+		interface ISlotVault {
+			function slotOf(uint256 index) external view returns (address slot);
 			function accept(address collection) external;
 			function reserve(address refundTo) external returns (uint256 index);
 			function confirm(address collection, uint256 index, uint256 tokenId) external;
+			function withdraw(address collection, uint256 index, uint256 tokenId) external;
 			function settle(address winner) external;
 			function claim(uint256 index, address to) external;
 			function refund(uint256 index) external;
@@ -4547,7 +4552,7 @@ mod evm_fixture {
 
 	#[test]
 	fn slot_derivation_matches_solidity_under_both_compilers() {
-		for (compiler, code) in slot_vault_codes() {
+		for (compiler, code) in slot_vault_codes().into_iter().chain(slot_releaser_codes()) {
 			new_test_ext().execute_with(|| {
 				let alice = id_to_account(1);
 				let collection = setup_collection(&alice);
@@ -4583,10 +4588,23 @@ mod evm_fixture {
 		}
 	}
 
-	/// The vault compiled both ways, so a result holds for solc's EVM bytecode and resolc's PolkaVM
-	/// bytecode alike, as `evm_contract_call_reads_collection_owner` and its PolkaVM twin do.
+	/// The reference vault compiled both ways, so a result holds for solc's EVM bytecode and
+	/// resolc's PolkaVM bytecode alike, as `evm_contract_call_reads_collection_owner` and its
+	/// PolkaVM twin do.
 	fn slot_vault_codes() -> Vec<(&'static str, Vec<u8>)> {
-		alloc::vec![("solc", fixture_code("SlotVault")), ("resolc", resolc_code("SlotVault"))]
+		alloc::vec![
+			("SlotVault/solc", fixture_code("SlotVault")),
+			("SlotVault/resolc", resolc_code("SlotVault"))
+		]
+	}
+
+	/// The test-only releaser compiled both ways, for the tests that need a contract to call
+	/// `transferFromSlot` without a staking round's rules in the way.
+	fn slot_releaser_codes() -> Vec<(&'static str, Vec<u8>)> {
+		alloc::vec![
+			("SlotReleaser/solc", fixture_code("SlotReleaser")),
+			("SlotReleaser/resolc", resolc_code("SlotReleaser"))
+		]
 	}
 
 	/// A funded account holding one token, which can call the vault and the collection.
@@ -4643,7 +4661,7 @@ mod evm_fixture {
 			token: U256,
 			to: Address,
 		) -> Vec<u8> {
-			ISlotVault::releaseCall {
+			ISlotReleaser::releaseCall {
 				collection: alloy_address(collection_address(collection)),
 				index: U256::from(index),
 				tokenId: token,
@@ -4714,7 +4732,7 @@ mod evm_fixture {
 
 	#[test]
 	fn a_vault_moves_a_token_out_of_its_slot() {
-		for (compiler, code) in slot_vault_codes() {
+		for (compiler, code) in slot_releaser_codes() {
 			new_test_ext().execute_with(|| {
 				let world = VaultWorld::new(code);
 				let (destination_address, destination) = purse(0xAB);
@@ -4760,7 +4778,7 @@ mod evm_fixture {
 	/// Every way a vault can fail to move a token, each leaving the token where it was.
 	#[test]
 	fn a_vault_cannot_move_what_is_not_in_its_slot() {
-		for (compiler, code) in slot_vault_codes() {
+		for (compiler, code) in slot_releaser_codes() {
 			new_test_ext().execute_with(|| {
 				let world = VaultWorld::new(code);
 				let (empty_address, _) = purse(0xAB);
@@ -4884,7 +4902,7 @@ mod evm_fixture {
 	#[test]
 	fn transfer_from_slot_charges_before_it_looks_at_the_token() {
 		new_test_ext().execute_with(|| {
-			let world = VaultWorld::new(fixture_code("SlotVault"));
+			let world = VaultWorld::new(fixture_code("SlotReleaser"));
 			let instance = world.mint_into(world.slot_account(0));
 			let token = U256::from(instance);
 
@@ -4927,7 +4945,7 @@ mod evm_fixture {
 
 	#[test]
 	fn a_soulbound_token_cannot_leave_a_slot() {
-		for (compiler, code) in slot_vault_codes() {
+		for (compiler, code) in slot_releaser_codes() {
 			new_test_ext().execute_with(|| {
 				let world = VaultWorld::new(code);
 				let soulbound =
@@ -4996,6 +5014,32 @@ mod evm_fixture {
 					ISlotVault::RoundClosed {},
 				);
 
+				// Before settlement nothing is won, so a staker cannot claim their own stake back.
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: claiming before settlement"),
+					&players[0].account,
+					ISlotVault::claimCall { index: U256::from(0u64), to: players[0].address },
+					ISlotVault::NotReleasable {},
+				);
+				let withdraw = |index: u64, token: InstanceId| ISlotVault::withdrawCall {
+					collection,
+					index: U256::from(index),
+					tokenId: U256::from(token),
+				};
+				// A live stake cannot be withdrawn, and only the reserver may withdraw from a slot.
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: withdrawing a live stake"),
+					&players[1].account,
+					withdraw(1, players[1].token),
+					ISlotVault::NotReserved {},
+				);
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: withdrawing from another player's slot"),
+					&players[0].account,
+					withdraw(2, players[2].token),
+					ISlotVault::NotReserved {},
+				);
+
 				// Only the owner settles, and only once.
 				let settle = ISlotVault::settleCall { winner: players[0].address };
 				world.vault_reverts_with(
@@ -5047,11 +5091,24 @@ mod evm_fixture {
 
 				assert_eq!(world.holder_of(players[0].token), Some(players[0].account.clone()));
 				assert_eq!(world.holder_of(players[1].token), Some(empty), "{compiler}");
-				// The turned-away token is not the vault's stake, and nothing here touched it.
+				// The turned-away player was never a stake, and takes the token back from the slot
+				// they reserved, to their own key. Nobody can reserve once the round is settled.
 				assert_eq!(
 					world.holder_of(players[2].token),
 					Some(world.slot_account(2)),
 					"{compiler}"
+				);
+				world.vault_ok(&players[2].account, withdraw(2, players[2].token));
+				assert_eq!(
+					world.holder_of(players[2].token),
+					Some(players[2].account.clone()),
+					"{compiler}"
+				);
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: reserving after settlement"),
+					&players[2].account,
+					ISlotVault::reserveCall { refundTo: players[2].address },
+					ISlotVault::RoundClosed {},
 				);
 				assert!(NftsByOwner::<Test>::get(world.slot_account(0)).is_none(), "{compiler}");
 				assert!(NftsByOwner::<Test>::get(world.slot_account(1)).is_none(), "{compiler}");
@@ -5059,38 +5116,52 @@ mod evm_fixture {
 		}
 	}
 
+	/// A refund returns a stake before settlement and frees the capacity it used, and a slot can be
+	/// staked and refunded again. A token that was pushed but not confirmed, because the round was
+	/// full or already settled, is taken back by the player who reserved the slot. After settlement
+	/// the way out of a stake is the winner's claim.
 	#[test]
-	fn a_vault_refunds_a_round_that_is_called_off() {
+	fn a_vault_refunds_a_stake_before_settlement() {
 		for (compiler, code) in slot_vault_codes() {
 			new_test_ext().execute_with(|| {
 				let world = VaultWorld::new(code);
 				let collection = alloy_address(collection_address(world.collection));
 				world.vault_ok(&world.alice, ISlotVault::acceptCall { collection });
-				let (first, second) = (world.player(0xB1), world.player(0xB2));
-				for (i, player) in [&first, &second].into_iter().enumerate() {
-					world.vault_ok(
+				let [a, b, c, d] = [0xB1u8, 0xB2, 0xB3, 0xB4].map(|byte| world.player(byte));
+				let (empty_address, empty) = purse(0xE2);
+				let confirm = |player: &Player, index: u64| ISlotVault::confirmCall {
+					collection,
+					index: U256::from(index),
+					tokenId: U256::from(player.token),
+				};
+				let withdraw = |player: &Player, index: u64| ISlotVault::withdrawCall {
+					collection,
+					index: U256::from(index),
+					tokenId: U256::from(player.token),
+				};
+				let reserve = |player: &Player, index: u64| {
+					let reserved = world.vault_ok(
 						&player.account,
 						ISlotVault::reserveCall { refundTo: player.address },
 					);
-					world.push(player, i as u64);
-					world.vault_ok(
-						&player.account,
-						ISlotVault::confirmCall {
-							collection,
-							index: U256::from(i),
-							tokenId: U256::from(player.token),
-						},
-					);
+					assert_eq!(reserved, U256::from(index), "{compiler}");
+				};
+
+				// Two stakes fill the round.
+				for (index, player) in [(0u64, &a), (1, &b)] {
+					reserve(player, index);
+					world.push(player, index);
+					world.vault_ok(&player.account, confirm(player, index));
 				}
 
 				world.vault_reverts_with(
 					&alloc::format!("{compiler}: a player refunding"),
-					&first.account,
+					&a.account,
 					ISlotVault::refundCall { index: U256::from(0u64) },
 					ISlotVault::NotOwner {},
 				);
 				world.vault_ok(&world.alice, ISlotVault::refundCall { index: U256::from(0u64) });
-				assert_eq!(world.holder_of(first.token), Some(first.account.clone()), "{compiler}");
+				assert_eq!(world.holder_of(a.token), Some(a.account.clone()), "{compiler}");
 				world.vault_reverts_with(
 					&alloc::format!("{compiler}: refunding twice"),
 					&world.alice,
@@ -5098,19 +5169,54 @@ mod evm_fixture {
 					ISlotVault::NotReleasable {},
 				);
 
-				// Once the round settles, a refund is no longer the way out: the winner claims.
-				world.vault_ok(&world.alice, ISlotVault::settleCall { winner: second.address });
+				// The refund freed its capacity, so the same player stakes the same slot again.
+				world.push(&a, 0);
+				world.vault_ok(&a.account, confirm(&a, 0));
+				// That makes two live stakes again and no more: a third is turned away, and takes
+				// the token back.
+				reserve(&c, 2);
+				world.push(&c, 2);
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: a full round"),
+					&c.account,
+					confirm(&c, 2),
+					ISlotVault::RoundClosed {},
+				);
+				world.vault_ok(&c.account, withdraw(&c, 2));
+				assert_eq!(world.holder_of(c.token), Some(c.account.clone()), "{compiler}");
+
+				// A second refund of the same slot works, and leaves room in the round.
+				world.vault_ok(&world.alice, ISlotVault::refundCall { index: U256::from(0u64) });
+				assert_eq!(world.holder_of(a.token), Some(a.account.clone()), "{compiler}");
+
+				// A player pushes a token and settlement comes before they confirm it.
+				reserve(&d, 3);
+				world.push(&d, 3);
+				world.vault_ok(&world.alice, ISlotVault::settleCall { winner: b.address });
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: confirming after settlement"),
+					&d.account,
+					confirm(&d, 3),
+					ISlotVault::RoundClosed {},
+				);
+				world.vault_ok(&d.account, withdraw(&d, 3));
+				assert_eq!(world.holder_of(d.token), Some(d.account.clone()), "{compiler}");
+
+				// A settled round is not refunded; the winner claims.
 				world.vault_reverts_with(
 					&alloc::format!("{compiler}: refunding a settled round"),
 					&world.alice,
 					ISlotVault::refundCall { index: U256::from(1u64) },
 					ISlotVault::NotReleasable {},
 				);
-				assert_eq!(
-					world.holder_of(second.token),
-					Some(world.slot_account(1)),
-					"{compiler}"
+				world.vault_ok(
+					&b.account,
+					ISlotVault::claimCall {
+						index: U256::from(1u64),
+						to: alloy_address(empty_address),
+					},
 				);
+				assert_eq!(world.holder_of(b.token), Some(empty), "{compiler}");
 			});
 		}
 	}
@@ -5186,11 +5292,12 @@ mod evm_fixture {
 		}
 	}
 
-	/// A purse key holds one token, so a vault passes `safeTransferFrom` into a slot, which carries
-	/// no code, and is refused at its own address, which does.
+	/// `safeTransferFrom` reaches a slot, which carries no code and so has nothing to acknowledge,
+	/// and is refused at the vault's own address, which carries code the precompile cannot yet
+	/// ask.
 	#[test]
 	fn safe_transfer_reaches_a_slot_but_not_the_vault() {
-		for (compiler, code) in slot_vault_codes() {
+		for (compiler, code) in slot_releaser_codes() {
 			new_test_ext().execute_with(|| {
 				let world = VaultWorld::new(code);
 				let (first, second) = (world.player(0xB1), world.player(0xB2));
@@ -5233,7 +5340,7 @@ mod evm_fixture {
 	/// moves the push spent.
 	#[test]
 	fn a_native_push_into_a_slot_is_released_by_the_vault() {
-		for (compiler, code) in slot_vault_codes() {
+		for (compiler, code) in slot_releaser_codes() {
 			new_test_ext().execute_with(|| {
 				let world = VaultWorld::new(code);
 				let (_, holder) = purse(0xA1);
@@ -5285,7 +5392,7 @@ mod evm_fixture {
 	/// slot. It does not trap the junk: the vault can still move it out, and then the slot is free.
 	#[test]
 	fn junk_in_a_slot_blocks_a_push_but_can_be_released() {
-		for (compiler, code) in slot_vault_codes() {
+		for (compiler, code) in slot_releaser_codes() {
 			new_test_ext().execute_with(|| {
 				let world = VaultWorld::new(code);
 				let player = world.player(0xB1);
