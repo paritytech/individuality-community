@@ -865,10 +865,8 @@ pub mod pallet {
 			round: RoundIndex,
 			attester_position: AttesterPosition,
 		) -> DispatchResult {
-			// The `testnet` feature is the only gate, unlike the calls above, which also read
-			// `Config::TESTNET`. That constant switches game logic (`acceptable_player_count`)
-			// as well, so it cannot be turned on in the mock, and a call behind it is untestable.
-			// A grant is root-only, and root can write the same award straight to storage.
+			// The `testnet` feature is the only gate. The call does not read `Config::TESTNET`,
+			// because a grant is root-only and root can write the same award straight to storage.
 			ensure_root(origin)?;
 
 			Self::do_grant_nft_claim_credit(

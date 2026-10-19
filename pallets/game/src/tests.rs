@@ -672,7 +672,7 @@ mod games_scheduling {
 					vec![GameSchedule::<u32, u128> {
 						game_play_time: 100,
 						rounds: 2,
-						max_group_size: 0, // max_group_size must be > 0
+						max_group_size: 0, // max_group_size must be at least MinGroupSize
 						..Default::default()
 					}]
 				),
@@ -694,6 +694,31 @@ mod games_scheduling {
 			System::assert_has_event(Event::<Test>::GamesScheduled { count: 1 }.into());
 
 			assert_eq!(GameSchedules::<Test>::get().len(), 1);
+		});
+	}
+
+	#[test]
+	fn schedule_games_requires_min_group_size() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			MinGroupSize::set(&2);
+
+			let schedule = GameSchedule::<u32, u128> {
+				game_play_time: 100,
+				rounds: 2,
+				max_group_size: 1,
+				..Default::default()
+			};
+			assert_noop!(Game::new_game(&schedule), Error::<Test>::InvalidGameSetup);
+			assert_noop!(
+				Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]),
+				Error::<Test>::InvalidGameSetup
+			);
+
+			assert_ok!(Game::schedule_games(
+				RuntimeOrigin::root(),
+				vec![GameSchedule { max_group_size: 2, ..schedule }]
+			));
 		});
 	}
 
@@ -2921,47 +2946,50 @@ fn offchain_worker_keeps_statements_without_removal_event() {
 	});
 }
 
+fn acceptable(max_per_group: u32, player_count: u32) -> bool {
+	GroupsSetting { max_per_group, player_count }.acceptable_player_count::<Test>()
+}
+
 // Verifies that GroupsSetting::acceptable_player_count()
 // returns the expected value for a variety of edge-cases.
 #[test]
 fn acceptable_player_count_cases() {
-	use crate::types::GroupsSetting;
+	new_test_ext().execute_with(|| {
+		assert!(!acceptable(1, 0));
+		assert!(!acceptable(5, 0));
+		assert!(acceptable(1, 10));
+		// One group of one player.
+		assert!(acceptable(5, 1));
+	});
+}
 
-	assert!(GroupsSetting { max_per_group: 0, player_count: 0 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 0, player_count: 1 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 0, player_count: 10 }.acceptable_player_count::<Test>());
+// No group holds fewer than `MinGroupSize` players.
+#[test]
+fn acceptable_player_count_enforces_min_group_size() {
+	new_test_ext().execute_with(|| {
+		MinGroupSize::set(&3);
 
-	assert!(GroupsSetting { max_per_group: 1, player_count: 0 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 1, player_count: 1 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 1, player_count: 10 }.acceptable_player_count::<Test>());
+		// One group of two players.
+		assert!(!acceptable(5, 2));
+		assert!(acceptable(5, 3));
+		// Groups of three and three players.
+		assert!(acceptable(5, 6));
+		// Groups of four, four and three players.
+		assert!(acceptable(5, 11));
 
-	assert!(!GroupsSetting { max_per_group: 2, player_count: 0 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 2, player_count: 1 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 2, player_count: 10 }.acceptable_player_count::<Test>());
+		// Groups of two and two players.
+		assert!(!acceptable(3, 4));
+		// Groups of three and two players.
+		assert!(!acceptable(3, 5));
+		assert!(acceptable(3, 6));
+		// Groups of three, two and two players.
+		assert!(!acceptable(3, 7));
 
-	assert!(!GroupsSetting { max_per_group: 3, player_count: 1 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 3, player_count: 2 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 3, player_count: 3 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 3, player_count: 4 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 3, player_count: 4 }.acceptable_player_count::<Test>());
-
-	assert!(!GroupsSetting { max_per_group: 4, player_count: 2 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 4, player_count: 3 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 4, player_count: 4 }.acceptable_player_count::<Test>());
-	assert!(!GroupsSetting { max_per_group: 4, player_count: 5 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 4, player_count: 6 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 4, player_count: 7 }.acceptable_player_count::<Test>());
-
-	assert!(!GroupsSetting { max_per_group: 5, player_count: 2 }.acceptable_player_count::<Test>());
-	assert!(!GroupsSetting { max_per_group: 5, player_count: 3 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 5, player_count: 4 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 5, player_count: 5 }.acceptable_player_count::<Test>());
-	for i in 6..12 {
-		assert!(
-			!GroupsSetting { max_per_group: 5, player_count: i }.acceptable_player_count::<Test>()
-		);
-	}
-	assert!(GroupsSetting { max_per_group: 5, player_count: 12 }.acceptable_player_count::<Test>());
+		// Groups of three and two players.
+		assert!(!acceptable(4, 5));
+		// Groups of four, three and three players.
+		assert!(acceptable(4, 10));
+	});
 }
 
 mod game_cancellation {
@@ -2970,6 +2998,8 @@ mod game_cancellation {
 	#[test]
 	fn game_cancelled_due_to_player_count_too_low() {
 		new_test_ext().execute_with(|| {
+			// Two players form one group, which is below the minimum.
+			MinGroupSize::set(&3);
 			// The game is initialised with an airdrop scheduled, so the cancellation should
 			// also cancel the airdrop event via `T::Airdrop::cancel`.
 			let schedule = GameSchedule::<u32, u128> {

@@ -356,14 +356,11 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxGroupSize: Get<u32>;
 
-		/// The minimum number of players in a group.
+		/// The minimum number of players in a group and the lower bound on a game's
+		/// `max_group_size`.
 		///
-		/// When scheduling a game the value for `max_group_size` must be at least this minimum + 1.
-		///
-		/// In order to have no single-player groups, this value must be at least 2.
-		///
-		/// Note: the actual minimum number of players in a group is configured per game, it is
-		/// `max_group_size - 1`.
+		/// Must be non-zero. A game is cancelled if a group would hold fewer players. Set it to at
+		/// least 2 to prevent single-player groups.
 		#[pallet::constant]
 		type MinGroupSize: Get<u32>;
 
@@ -821,6 +818,12 @@ pub mod pallet {
 			assert!(
 				indiv_support::context::is_product_name(PRODUCT_NAME),
 				"the game's airdrop product name must be a bare dotNS label"
+			);
+
+			assert!(T::MinGroupSize::get() > 0, "MinGroupSize must be non-zero");
+			assert!(
+				T::MinGroupSize::get() <= T::MaxGroupSize::get(),
+				"MinGroupSize must not exceed MaxGroupSize"
 			);
 
 			let max_votes = Self::max_received_votes();
@@ -1574,10 +1577,7 @@ pub mod pallet {
 				);
 
 				ensure!(
-					// Note: a game is cancelled if groups can't be filled with at least
-					// `max_group_size - 1`. So `>` is used here, ensuring the groups are at least
-					// the required minimum size.
-					schedule.max_group_size > T::MinGroupSize::get(),
+					schedule.max_group_size >= T::MinGroupSize::get(),
 					Error::<T>::InvalidGameSetup
 				);
 				ensure!(
