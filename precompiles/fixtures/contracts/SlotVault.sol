@@ -19,8 +19,9 @@ pragma solidity ^0.8.30;
 import "../../scarcity/sol/IScarcityCollection.sol";
 
 /// @title SlotVault
-/// @notice A staking round that holds the players' Scarcity tokens in slots of its own, pays them
-/// all to one winner, and refunds them if the round is called off.
+/// @notice A staking round that holds the players' Scarcity tokens in slots of its own and pays
+/// them to one winner, who claims them one by one. Before settlement the owner can refund a stake,
+/// and a player can take back a token that was never counted.
 /// @dev A slot is a purse key derived from this contract, so a contract holds many tokens by holding
 /// one in each of several slots. This is the reference for a contract author, and it follows the
 /// rules in the `slotAddress` documentation:

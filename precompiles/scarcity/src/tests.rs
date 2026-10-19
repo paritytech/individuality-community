@@ -94,16 +94,20 @@ fn call_ok(caller: &AccountId32, target: H160, input: Vec<u8>) -> Vec<u8> {
 	output.data
 }
 
-/// Call `target` with `input`, expecting a revert whose reason contains `reason`.
-fn call_reverted_with(caller: &AccountId32, target: H160, input: Vec<u8>, reason: &str) {
-	let output = call_precompile(caller, target, input);
-	assert!(output.did_revert(), "expected revert, got success: {output:?}");
+/// Assert `output` is a revert whose reason contains `reason`, naming `context` if it is not.
+fn assert_reverted_with(context: &str, output: &pallet_revive::ExecReturnValue, reason: &str) {
+	assert!(output.did_revert(), "{context}: expected revert, got success: {output:?}");
 	let decoded = Revert::abi_decode(&output.data).expect("revert data decodes as Error(string)");
 	assert!(
 		decoded.reason.contains(reason),
-		"revert reason {:?} does not contain {reason:?}",
+		"{context}: revert reason {:?} does not contain {reason:?}",
 		decoded.reason
 	);
+}
+
+/// Call `target` with `input`, expecting a revert whose reason contains `reason`.
+fn call_reverted_with(caller: &AccountId32, target: H160, input: Vec<u8>, reason: &str) {
+	assert_reverted_with("call", &call_precompile(caller, target, input), reason);
 }
 
 fn assert_contract_event(contract: H160, event: impl IntoLogData) {
@@ -2273,7 +2277,8 @@ fn assert_rejects_value(caller: &AccountId32, address: H160, input: Vec<u8>, met
 /// Asserts its own exhaustiveness against the generated selector set, so a method added to
 /// `IScarcityCollection.sol` fails every caller of this until it is listed here. Callers that need
 /// a call to reach its real path pass arguments that would otherwise succeed; callers testing a
-/// guard that short-circuits before argument handling can pass anything.
+/// guard that short-circuits before argument handling can pass anything. `transferFromSlot` is the
+/// exception: it only works from a contract, so no call made from an account reaches its real path.
 fn all_collection_calls(
 	token: U256,
 	item: indiv_pallet_scarcity::ItemIndex,
@@ -2445,7 +2450,8 @@ fn all_collection_calls(
 /// No function of either interface is payable, so every one of them must reject attached value.
 ///
 /// Arguments are the ones that would otherwise succeed, which is what makes each case prove the
-/// rejection wins over the real path rather than over some other revert.
+/// rejection wins over the real path rather than over some other revert. `transferFromSlot` cannot
+/// succeed from an account at all, so its case proves the value guard only by the exact reason.
 #[test]
 fn every_method_rejects_attached_value() {
 	new_test_ext().execute_with(|| {
@@ -3769,9 +3775,7 @@ fn a_slot_names_itself_through_owner_of_and_balance_of() {
 
 		let (vault, index) = (Address::repeat_byte(0x07), U256::from(3u64));
 		let slot = slot_address(&vault, &index);
-		let slot_account = <Test as pallet_revive::Config>::AddressMapper::to_fallback_account_id(
-			&H160(slot.into_array()),
-		);
+		let slot_account = slot_account::<Test>(&slot);
 		assert_eq!(address_of::<Test>(&slot_account), slot);
 		assert!(<Test as pallet_revive::Config>::AddressMapper::is_mapped(&slot_account));
 
@@ -3801,6 +3805,41 @@ fn a_slot_names_itself_through_owner_of_and_balance_of() {
 		assert_eq!(
 			IScarcityCollection::balanceOfCall::abi_decode_returns(&balance_data).unwrap(),
 			U256::ONE
+		);
+	});
+}
+
+/// A slot is the fallback account of its address even when a key is registered to that address.
+///
+/// `AddressMapper::to_account_id` reads the registry first, so a key mapped to the slot's address
+/// would take the slot over; the fallback form skips the registry. The registry's storage type is
+/// private to `pallet-revive`, so the entry is written under its raw key. The assertion before the
+/// one that matters proves the write took effect: `to_account_id` does follow the registered key,
+/// which is the takeover `slot_account` must not allow.
+#[test]
+fn a_slot_is_the_fallback_account_even_when_a_key_is_mapped_to_its_address() {
+	new_test_ext().execute_with(|| {
+		let slot = slot_address(&Address::repeat_byte(0x07), &U256::from(3u64));
+		let slot_h160 = H160(slot.into_array());
+		let usurper = id_to_account(7);
+
+		// `OriginalAccount` is a map keyed by the raw address, so its entry is the storage prefix
+		// followed by the 20 address bytes.
+		let mut key =
+			frame_support::storage::storage_prefix(b"Revive", b"OriginalAccount").to_vec();
+		key.extend_from_slice(slot.as_slice());
+		frame_support::storage::unhashed::put(&key, &usurper);
+		assert_eq!(
+			<Test as pallet_revive::Config>::AddressMapper::to_account_id(&slot_h160),
+			usurper,
+			"the registry must now name the usurper, or this test checks nothing"
+		);
+
+		let account = slot_account::<Test>(&slot);
+		assert_ne!(account, usurper);
+		assert_eq!(
+			account,
+			<Test as pallet_revive::Config>::AddressMapper::to_fallback_account_id(&slot_h160)
 		);
 	});
 }
@@ -4551,6 +4590,9 @@ mod evm_fixture {
 		});
 	}
 
+	/// Both fixture contracts derive slots with the same expression, so one check covers both. The
+	/// releaser's `slotOf` has the same selector as the vault's, which is why `ISlotVault` can
+	/// call either.
 	#[test]
 	fn slot_derivation_matches_solidity_under_both_compilers() {
 		for (compiler, code) in slot_vault_codes().into_iter().chain(slot_releaser_codes()) {
@@ -4719,15 +4761,7 @@ mod evm_fixture {
 		/// Assert the vault's call reverts with a reason containing `reason`, naming `context` if
 		/// not.
 		fn release_reverts(&self, context: &str, input: Vec<u8>, reason: &str) {
-			let output = call_precompile(&self.alice, self.vault, input);
-			assert!(output.did_revert(), "{context}: expected a revert, got success: {output:?}");
-			let decoded =
-				Revert::abi_decode(&output.data).expect("revert data decodes as Error(string)");
-			assert!(
-				decoded.reason.contains(reason),
-				"{context}: revert reason {:?} does not contain {reason:?}",
-				decoded.reason
-			);
+			assert_reverted_with(context, &call_precompile(&self.alice, self.vault, input), reason);
 		}
 	}
 
