@@ -476,7 +476,7 @@ mod benches {
 		let schedule = crate::types::GameScheduleOf::<T> {
 			game_play_time: 1000,
 			rounds,
-			max_group_size: T::MinGroupSize::get().max(2),
+			max_group_size: T::MinGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
@@ -555,7 +555,7 @@ mod benches {
 		let schedule = crate::types::GameScheduleOf::<T> {
 			game_play_time: 1000,
 			rounds,
-			max_group_size: T::MinGroupSize::get().max(2),
+			max_group_size: T::MinGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
@@ -667,7 +667,7 @@ mod benches {
 		// first, up to `max_group_size`, then rounds take over for the rest of the range. This way
 		// small games (a low product) are measured too, instead of only sweeping rounds at the
 		// maximum group size. The runtime charges the worst case, `rounds * max_group_size`.
-		let group_size = p.clamp(T::MinGroupSize::get().max(2), T::MaxGroupSize::get());
+		let group_size = p.clamp(T::MinGroupSize::get(), T::MaxGroupSize::get());
 		let rounds = (p / group_size).max(1) as u8;
 		let player_count = 2u32 * group_size;
 
