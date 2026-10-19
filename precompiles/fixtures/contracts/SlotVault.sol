@@ -32,8 +32,8 @@ import "../../scarcity/sol/IScarcityCollection.sol";
 /// - Its only loops, in `settle` and `refund`, are bounded by `MAX_STAKES`.
 /// - It counts only tokens of collections the owner accepted, and ignores anything else sitting in
 ///   a slot.
-/// - It does not eject what someone else put in a slot it reserved: a player whose push was
-///   blocked reserves another slot.
+/// - The vault never ejects junk itself. A player whose push was blocked reserves another slot, and
+///   the reserver of a slot may take whatever sits in it while it holds no live stake.
 /// - A player never loses custody of a token they pushed into their own reserved slot. If the stake
 ///   cannot be confirmed, because the round is full or has closed, `withdraw` gives the token back.
 ///
@@ -81,6 +81,9 @@ contract SlotVault {
     error NotInSlot();
     /// @notice Thrown when a slot cannot be claimed or refunded by this caller now.
     error NotReleasable();
+    /// @notice Thrown when a reservation names the zero address to send a token back to, which the
+    /// precompile refuses as a destination and which would strand the token.
+    error NoRefundKey();
 
     constructor() {
         owner = msg.sender;
@@ -114,6 +117,7 @@ contract SlotVault {
     /// @return index The slot to push a token into.
     function reserve(address refundTo) external returns (uint256 index) {
         require(!settled, RoundClosed());
+        require(refundTo != address(0), NoRefundKey());
         index = reservations++;
         stakes[index] = Stake({
             player: msg.sender,
@@ -143,12 +147,14 @@ contract SlotVault {
 
     /// @notice Take back a token from a reserved slot that holds no live stake.
     /// @dev This is how a player gets a token back that `confirm` turned away, or one pushed into the
-    /// slot by someone else. It goes to the key the player named, whoever pushed it.
+    /// slot by someone else. It goes to the key the player named, whoever pushed it. It does not ask
+    /// whether the collection is accepted, because custody of what a player pushed must not depend
+    /// on the owner's list. That is safe here: only the slot's reserver can call it, it writes no
+    /// state, and the only call it makes is the move out of the caller's own slot.
     /// @param collection The address of the token's collection.
     /// @param index The slot the caller reserved.
     /// @param tokenId The token to take back.
     function withdraw(address collection, uint256 index, uint256 tokenId) external {
-        require(accepted[collection], NotAccepted());
         Stake storage stake = stakes[index];
         require(stake.player == msg.sender && !stake.staked, NotReserved());
         IScarcityCollection(collection).transferFromSlot(index, tokenId, stake.refundTo);

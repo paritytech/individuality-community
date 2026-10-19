@@ -4125,6 +4125,7 @@ mod evm_fixture {
 			error RoundClosed();
 			error NotInSlot();
 			error NotReleasable();
+			error NoRefundKey();
 		}
 
 		interface IInterfaceIds {
@@ -5288,6 +5289,62 @@ mod evm_fixture {
 				// A refund goes where the reservation said, which is not the pusher.
 				world.vault_ok(&world.alice, ISlotVault::refundCall { index: U256::ZERO });
 				assert_eq!(world.holder_of(second.token), Some(purse(0xE2).1), "{compiler}");
+			});
+		}
+	}
+
+	/// A player gets back a token the vault would not count, whatever the reason. Here the
+	/// collection was never accepted, so `confirm` refuses it, and the reserver of the slot still
+	/// takes it back, to the key they named. A reservation with no such key is refused up front,
+	/// because the precompile would refuse the zero address as a destination later.
+	#[test]
+	fn a_player_gets_back_a_token_the_vault_would_not_count() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let collection = alloy_address(collection_address(world.collection));
+				let player = world.player(0xB1);
+
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: a reservation with no refund key"),
+					&player.account,
+					ISlotVault::reserveCall { refundTo: Address::ZERO },
+					ISlotVault::NoRefundKey {},
+				);
+				world.vault_ok(
+					&player.account,
+					ISlotVault::reserveCall { refundTo: player.address },
+				);
+				world.push(&player, 0);
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: a collection nobody accepted"),
+					&player.account,
+					ISlotVault::confirmCall {
+						collection,
+						index: U256::ZERO,
+						tokenId: U256::from(player.token),
+					},
+					ISlotVault::NotAccepted {},
+				);
+				assert_eq!(
+					world.holder_of(player.token),
+					Some(world.slot_account(0)),
+					"{compiler}"
+				);
+
+				world.vault_ok(
+					&player.account,
+					ISlotVault::withdrawCall {
+						collection,
+						index: U256::ZERO,
+						tokenId: U256::from(player.token),
+					},
+				);
+				assert_eq!(
+					world.holder_of(player.token),
+					Some(player.account.clone()),
+					"{compiler}"
+				);
 			});
 		}
 	}
