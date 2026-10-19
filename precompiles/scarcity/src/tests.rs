@@ -3805,6 +3805,71 @@ fn a_slot_names_itself_through_owner_of_and_balance_of() {
 	});
 }
 
+/// A vault holds as many tokens as it has slots, each in a key of its own, and each slot answers
+/// the ERC-721 reads for itself. The vault's own address is none of the slots and still holds at
+/// most one token, which is what the one-token-per-key rule keeps.
+#[test]
+fn a_vault_holds_many_tokens_one_per_slot() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let target = collection_address(collection);
+		let vault = Address::repeat_byte(0x77);
+		let mint = |holder: AccountId32| {
+			indiv_pallet_scarcity::Pallet::<Test>::do_mint(
+				alice.clone(),
+				collection,
+				item,
+				holder,
+				alloc::vec![],
+			)
+		};
+
+		let held = (0u64..5)
+			.map(|index| {
+				let slot = slot_address(&vault, &U256::from(index));
+				(slot, mint(slot_account::<Test>(&slot)).unwrap())
+			})
+			.collect::<Vec<_>>();
+		for (slot, instance) in &held {
+			let owner = call_ok(
+				&alice,
+				target,
+				IScarcityCollection::ownerOfCall { tokenId: U256::from(*instance) }.abi_encode(),
+			);
+			assert_eq!(
+				IScarcityCollection::ownerOfCall::abi_decode_returns(&owner).unwrap(),
+				*slot
+			);
+			let balance = call_ok(
+				&alice,
+				target,
+				IScarcityCollection::balanceOfCall { owner: *slot }.abi_encode(),
+			);
+			assert_eq!(
+				IScarcityCollection::balanceOfCall::abi_decode_returns(&balance).unwrap(),
+				U256::ONE
+			);
+		}
+
+		let vault_balance = call_ok(
+			&alice,
+			target,
+			IScarcityCollection::balanceOfCall { owner: vault }.abi_encode(),
+		);
+		assert_eq!(
+			IScarcityCollection::balanceOfCall::abi_decode_returns(&vault_balance).unwrap(),
+			U256::ZERO
+		);
+		assert_ok!(mint(account_of::<Test>(&vault)));
+		assert_eq!(
+			mint(account_of::<Test>(&vault)),
+			Err(DispatchError::from(ScarcityError::<Test>::AddressOccupied))
+		);
+	});
+}
+
 /// An externally owned account cannot move a token out of a slot, not even one derived from its
 /// own address: slots are for contracts. The refusal comes ahead of the call's own reads and
 /// charges, and the token stays where it was.
@@ -4041,6 +4106,20 @@ mod evm_fixture {
 		interface ISlotVault {
 			function slotOf(uint256 index) external view returns (address slot);
 			function release(address collection, uint256 index, uint256 tokenId, address to) external;
+			function accept(address collection) external;
+			function reserve(address refundTo) external returns (uint256 index);
+			function confirm(address collection, uint256 index, uint256 tokenId) external;
+			function settle(address winner) external;
+			function claim(uint256 index, address to) external;
+			function refund(uint256 index) external;
+			function playerOf(uint256 index) external view returns (address player);
+
+			error NotOwner();
+			error NotAccepted();
+			error NotReserved();
+			error RoundClosed();
+			error NotInSlot();
+			error NotReleasable();
 		}
 
 		interface IInterfaceIds {
@@ -4510,6 +4589,13 @@ mod evm_fixture {
 		alloc::vec![("solc", fixture_code("SlotVault")), ("resolc", resolc_code("SlotVault"))]
 	}
 
+	/// A funded account holding one token, which can call the vault and the collection.
+	struct Player {
+		address: Address,
+		account: AccountId32,
+		token: InstanceId,
+	}
+
 	/// A collection with one item and a deployed vault, for moving tokens out of its slots.
 	///
 	/// Built inside `execute_with`, because it writes pallet state.
@@ -4564,6 +4650,51 @@ mod evm_fixture {
 				to,
 			}
 			.abi_encode()
+		}
+
+		/// Call the vault as `caller`, expecting success, and decode what it returns.
+		fn vault_ok<C: SolCall>(&self, caller: &AccountId32, call: C) -> C::Return {
+			let data = call_ok(caller, self.vault, call.abi_encode());
+			C::abi_decode_returns(&data).expect("the return decodes")
+		}
+
+		/// Assert the vault's call reverts with exactly the custom error `error`.
+		fn vault_reverts_with<C: SolCall, E: SolError>(
+			&self,
+			context: &str,
+			caller: &AccountId32,
+			call: C,
+			error: E,
+		) {
+			let output = call_precompile(caller, self.vault, call.abi_encode());
+			assert!(output.did_revert(), "{context}: expected a revert, got success: {output:?}");
+			assert_eq!(output.data, error.abi_encode(), "{context}: wrong error");
+		}
+
+		/// A funded holder of one token of the world's item: an account that can make EVM calls.
+		fn player(&self, byte: u8) -> Player {
+			let (address, account, token) =
+				mint_to_funded_purse(&self.alice, self.collection, self.item, byte);
+			Player { address: alloy_address(address), account, token }
+		}
+
+		/// Move `player`'s token into slot `index`, as the player.
+		fn push(&self, player: &Player, index: u64) {
+			call_ok(
+				&player.account,
+				collection_address(self.collection),
+				IScarcityCollection::transferFromCall {
+					from: player.address,
+					to: self.slot(index),
+					tokenId: U256::from(player.token),
+				}
+				.abi_encode(),
+			);
+		}
+
+		/// Where the pallet says `token` is.
+		fn holder_of(&self, token: InstanceId) -> Option<AccountId32> {
+			Instances::<Test>::get(token)
 		}
 
 		/// Assert the vault's call reverts with a reason containing `reason`, naming `context` if
@@ -4823,6 +4954,376 @@ mod evm_fixture {
 				);
 				assert_eq!(
 					Instances::<Test>::get(instance),
+					Some(world.slot_account(0)),
+					"{compiler}"
+				);
+			});
+		}
+	}
+
+	#[test]
+	fn a_vault_runs_a_round_end_to_end() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let collection = alloy_address(collection_address(world.collection));
+				world.vault_ok(&world.alice, ISlotVault::acceptCall { collection });
+				let players = [world.player(0xB1), world.player(0xB2), world.player(0xB3)];
+				let (empty_address, empty) = purse(0xE2);
+				let empty_address = alloy_address(empty_address);
+
+				// Each player reserves a slot for a refund key of their own and pushes a token in.
+				for (i, player) in players.iter().enumerate() {
+					let index = world.vault_ok(
+						&player.account,
+						ISlotVault::reserveCall { refundTo: player.address },
+					);
+					assert_eq!(index, U256::from(i), "{compiler}");
+					world.push(player, i as u64);
+				}
+				let confirm = |player: &Player, index: u64| ISlotVault::confirmCall {
+					collection,
+					index: U256::from(index),
+					tokenId: U256::from(player.token),
+				};
+				world.vault_ok(&players[0].account, confirm(&players[0], 0));
+				world.vault_ok(&players[1].account, confirm(&players[1], 1));
+				// The round holds two, so a third is turned away and its token stays in its slot.
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: a full round"),
+					&players[2].account,
+					confirm(&players[2], 2),
+					ISlotVault::RoundClosed {},
+				);
+
+				// Only the owner settles, and only once.
+				let settle = ISlotVault::settleCall { winner: players[0].address };
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: a player settling"),
+					&players[1].account,
+					ISlotVault::settleCall { winner: players[1].address },
+					ISlotVault::NotOwner {},
+				);
+				world.vault_ok(&world.alice, settle.clone());
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: settling twice"),
+					&world.alice,
+					settle,
+					ISlotVault::RoundClosed {},
+				);
+
+				// Settling moved no token: both stakes still sit in their slots.
+				for (i, player) in players.iter().take(2).enumerate() {
+					assert_eq!(
+						world.holder_of(player.token),
+						Some(world.slot_account(i as u64)),
+						"{compiler}"
+					);
+				}
+				// The loser cannot claim the winner's stakes.
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: the loser claiming"),
+					&players[1].account,
+					ISlotVault::claimCall { index: U256::from(1u64), to: empty_address },
+					ISlotVault::NotReleasable {},
+				);
+
+				// The winner claims one token per call. Their own key is empty, because their token
+				// went into a slot, so it takes one back; the other goes to a fresh key.
+				world.vault_ok(
+					&players[0].account,
+					ISlotVault::claimCall { index: U256::from(0u64), to: players[0].address },
+				);
+				world.vault_ok(
+					&players[0].account,
+					ISlotVault::claimCall { index: U256::from(1u64), to: empty_address },
+				);
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: claiming a slot twice"),
+					&players[0].account,
+					ISlotVault::claimCall { index: U256::from(0u64), to: players[0].address },
+					ISlotVault::NotReleasable {},
+				);
+
+				assert_eq!(world.holder_of(players[0].token), Some(players[0].account.clone()));
+				assert_eq!(world.holder_of(players[1].token), Some(empty), "{compiler}");
+				// The turned-away token is not the vault's stake, and nothing here touched it.
+				assert_eq!(
+					world.holder_of(players[2].token),
+					Some(world.slot_account(2)),
+					"{compiler}"
+				);
+				assert!(NftsByOwner::<Test>::get(world.slot_account(0)).is_none(), "{compiler}");
+				assert!(NftsByOwner::<Test>::get(world.slot_account(1)).is_none(), "{compiler}");
+			});
+		}
+	}
+
+	#[test]
+	fn a_vault_refunds_a_round_that_is_called_off() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let collection = alloy_address(collection_address(world.collection));
+				world.vault_ok(&world.alice, ISlotVault::acceptCall { collection });
+				let (first, second) = (world.player(0xB1), world.player(0xB2));
+				for (i, player) in [&first, &second].into_iter().enumerate() {
+					world.vault_ok(
+						&player.account,
+						ISlotVault::reserveCall { refundTo: player.address },
+					);
+					world.push(player, i as u64);
+					world.vault_ok(
+						&player.account,
+						ISlotVault::confirmCall {
+							collection,
+							index: U256::from(i),
+							tokenId: U256::from(player.token),
+						},
+					);
+				}
+
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: a player refunding"),
+					&first.account,
+					ISlotVault::refundCall { index: U256::from(0u64) },
+					ISlotVault::NotOwner {},
+				);
+				world.vault_ok(&world.alice, ISlotVault::refundCall { index: U256::from(0u64) });
+				assert_eq!(world.holder_of(first.token), Some(first.account.clone()), "{compiler}");
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: refunding twice"),
+					&world.alice,
+					ISlotVault::refundCall { index: U256::from(0u64) },
+					ISlotVault::NotReleasable {},
+				);
+
+				// Once the round settles, a refund is no longer the way out: the winner claims.
+				world.vault_ok(&world.alice, ISlotVault::settleCall { winner: second.address });
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: refunding a settled round"),
+					&world.alice,
+					ISlotVault::refundCall { index: U256::from(1u64) },
+					ISlotVault::NotReleasable {},
+				);
+				assert_eq!(
+					world.holder_of(second.token),
+					Some(world.slot_account(1)),
+					"{compiler}"
+				);
+			});
+		}
+	}
+
+	/// A stake is credited to the account that reserved the slot, and only for a collection the
+	/// owner accepted and a token that is really in the slot. Who pushed the token does not
+	/// matter.
+	#[test]
+	fn a_vault_credits_a_stake_to_the_reservation() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let collection = alloy_address(collection_address(world.collection));
+				let (first, second) = (world.player(0xB1), world.player(0xB2));
+				let (empty_address, _) = purse(0xE2);
+				let empty_address = alloy_address(empty_address);
+				let confirm = |index: u64, token: InstanceId| ISlotVault::confirmCall {
+					collection,
+					index: U256::from(index),
+					tokenId: U256::from(token),
+				};
+
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: a collection nobody accepted"),
+					&first.account,
+					confirm(0, first.token),
+					ISlotVault::NotAccepted {},
+				);
+				world.vault_ok(&world.alice, ISlotVault::acceptCall { collection });
+
+				// The first player reserves slot 0, for a refund key that is not their own.
+				world.vault_ok(&first.account, ISlotVault::reserveCall { refundTo: empty_address });
+				assert_eq!(
+					world.vault_ok(&first.account, ISlotVault::playerOfCall { index: U256::ZERO }),
+					first.address,
+					"{compiler}"
+				);
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: a slot never reserved"),
+					&first.account,
+					confirm(9, first.token),
+					ISlotVault::NotReserved {},
+				);
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: a token that was never pushed"),
+					&first.account,
+					confirm(0, first.token),
+					ISlotVault::NotInSlot {},
+				);
+
+				// Someone else pushes their own token into the reserved slot. They cannot confirm
+				// it, because they did not reserve the slot ...
+				world.push(&second, 0);
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: the pusher confirming"),
+					&second.account,
+					confirm(0, second.token),
+					ISlotVault::NotReserved {},
+				);
+				// ... and the reserver can, so the vault credits the reservation, not the push.
+				world.vault_ok(&first.account, confirm(0, second.token));
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: confirming twice"),
+					&first.account,
+					confirm(0, second.token),
+					ISlotVault::NotReserved {},
+				);
+
+				// A refund goes where the reservation said, which is not the pusher.
+				world.vault_ok(&world.alice, ISlotVault::refundCall { index: U256::ZERO });
+				assert_eq!(world.holder_of(second.token), Some(purse(0xE2).1), "{compiler}");
+			});
+		}
+	}
+
+	/// A purse key holds one token, so a vault passes `safeTransferFrom` into a slot, which carries
+	/// no code, and is refused at its own address, which does.
+	#[test]
+	fn safe_transfer_reaches_a_slot_but_not_the_vault() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let (first, second) = (world.player(0xB1), world.player(0xB2));
+				let target = collection_address(world.collection);
+
+				call_ok(
+					&first.account,
+					target,
+					IScarcityCollection::safeTransferFrom_1Call {
+						from: first.address,
+						to: world.slot(0),
+						tokenId: U256::from(first.token),
+					}
+					.abi_encode(),
+				);
+				assert_eq!(world.holder_of(first.token), Some(world.slot_account(0)), "{compiler}");
+
+				call_reverted_with(
+					&second.account,
+					target,
+					IScarcityCollection::safeTransferFrom_1Call {
+						from: second.address,
+						to: alloy_address(world.vault),
+						tokenId: U256::from(second.token),
+					}
+					.abi_encode(),
+					ERR_CONTRACT_RECEIVER,
+				);
+				assert_eq!(
+					world.holder_of(second.token),
+					Some(second.account.clone()),
+					"{compiler}"
+				);
+			});
+		}
+	}
+
+	/// A fee-less native push puts a token in a slot without any EVM log, the slot's `ownerOf`
+	/// names it, and the vault moves it out on the holder authority, which refills the fee-less
+	/// moves the push spent.
+	#[test]
+	fn a_native_push_into_a_slot_is_released_by_the_vault() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let (_, holder) = purse(0xA1);
+				let (empty_address, empty) = purse(0xAB);
+				let instance = world.mint_into(holder.clone());
+				let slot_account = world.slot_account(0);
+
+				// `AsScarcity` takes the NFT out of the purse key before it dispatches a fee-less
+				// move.
+				let nft = NftsByOwner::<Test>::take(&holder).unwrap();
+				let origin = RuntimeOrigin::from(indiv_pallet_scarcity::Origin::<Test>::Nft {
+					owner: holder,
+					nft,
+				});
+				assert_ok!(Scarcity::transfer(origin, slot_account.clone()));
+				assert_no_contract_event();
+				assert_eq!(NftsByOwner::<Test>::get(&slot_account).unwrap().moves, 1, "{compiler}");
+
+				let data = call_ok(
+					&world.alice,
+					collection_address(world.collection),
+					IScarcityCollection::ownerOfCall { tokenId: U256::from(instance) }.abi_encode(),
+				);
+				assert_eq!(
+					IScarcityCollection::ownerOfCall::abi_decode_returns(&data).unwrap(),
+					world.slot(0),
+					"{compiler}"
+				);
+
+				call_ok(
+					&world.alice,
+					world.vault,
+					world.release_input(
+						world.collection,
+						0,
+						U256::from(instance),
+						alloy_address(empty_address),
+					),
+				);
+				let released = NftsByOwner::<Test>::get(&empty).expect("the key holds it");
+				assert_eq!(released.instance, instance, "{compiler}");
+				assert_eq!(released.moves, 0, "{compiler}");
+				assert!(NftsByOwner::<Test>::get(&slot_account).is_none(), "{compiler}");
+			});
+		}
+	}
+
+	/// Someone else's token in a slot blocks a push into it, which is why a vault abandons such a
+	/// slot. It does not trap the junk: the vault can still move it out, and then the slot is free.
+	#[test]
+	fn junk_in_a_slot_blocks_a_push_but_can_be_released() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let player = world.player(0xB1);
+				let junk = world.mint_into(world.slot_account(0));
+				let (empty_address, empty) = purse(0xAB);
+
+				call_reverted_with(
+					&player.account,
+					collection_address(world.collection),
+					IScarcityCollection::transferFromCall {
+						from: player.address,
+						to: world.slot(0),
+						tokenId: U256::from(player.token),
+					}
+					.abi_encode(),
+					"destination purse already holds an instance",
+				);
+				assert_eq!(
+					world.holder_of(player.token),
+					Some(player.account.clone()),
+					"{compiler}"
+				);
+
+				call_ok(
+					&world.alice,
+					world.vault,
+					world.release_input(
+						world.collection,
+						0,
+						U256::from(junk),
+						alloy_address(empty_address),
+					),
+				);
+				assert_eq!(world.holder_of(junk), Some(empty), "{compiler}");
+
+				world.push(&player, 0);
+				assert_eq!(
+					world.holder_of(player.token),
 					Some(world.slot_account(0)),
 					"{compiler}"
 				);
