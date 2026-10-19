@@ -56,13 +56,12 @@
 //!
 //! An item definition may be declared soulbound, binding every instance minted from it to the
 //! purse key it lands in. Every holder path then reverts, `transferFromSlot` included, `locked()`
-//! answers true and ERC-5192
-//! is claimed. The collection owner's `forceTransfer` and `forceBurn` are a separate authority and
-//! ignore the flag, so a misdirected mint still has a remedy and a locked token can still be
-//! destroyed. Soulbound binds the holder, not the issuer; EIP-5192 reads `locked` as
-//! non-transferable outright, and this is the documented deviation from it. A mint announces the
-//! status it settled on, `Locked` or `Unlocked`, which is the only point either can be emitted
-//! because the flag is fixed when the item is defined.
+//! answers true and ERC-5192 is claimed. The collection owner's `forceTransfer` and `forceBurn` are
+//! a separate authority and ignore the flag, so a misdirected mint still has a remedy and a locked
+//! token can still be destroyed. Soulbound binds the holder, not the issuer; EIP-5192 reads
+//! `locked` as non-transferable outright, and this is the documented deviation from it. A mint
+//! announces the status it settled on, `Locked` or `Unlocked`, which is the only point either can
+//! be emitted because the flag is fixed when the item is defined.
 //!
 //! `name()`, `symbol()`, `tokenURI()`, ERC-7572 `contractURI()` and ERC-2981 `royaltyInfo()`
 //! read reserved metadata keys rather than dedicated pallet fields, so a collection opts into
@@ -151,10 +150,10 @@
 //! `do_transfer_by_holder`. The destination must be empty, and the move refills the token's
 //! fee-less moves and advances its state nonce, as `transferFrom` does. A soulbound token cannot be
 //! moved this way, nor pushed into a slot by its holder, so one the collection owner mints straight
-//! into a slot stays there except through the owner's force powers. It
-//! does not ask who staked the token: that is the calling contract's record to keep. The collection
-//! owner keeps `forceTransfer` and `forceBurn` over a token wherever it sits, slots included, so a
-//! contract should accept stakes only from collections whose owner it trusts.
+//! into a slot stays there except through the owner's force powers. The call does not ask who
+//! staked the token: that is the calling contract's record to keep. The collection owner keeps
+//! `forceTransfer` and `forceBurn` over a token wherever it sits, slots included, so a contract
+//! should accept stakes only from collections whose owner it trusts.
 //!
 //! Anyone can push a token into any slot: a purse key gives no destination consent, and a fee-less
 //! native push has no callback and emits no EVM `Transfer`. A contract therefore cannot learn who
@@ -174,9 +173,10 @@
 //! tokens stay in their slots, and nothing can move one out on the holder's authority until a
 //! contract exists at that address again. The collection owner's force powers do not depend on one.
 //! A CREATE2 address depends only on the deployer, code, input and salt, so a redeployment with the
-//! same ones aims at the same address, and a contract that lands there holds every slot's authority
-//! again, whatever logic it carries. Whoever stakes into a vault should check that it cannot be
-//! redeployed with other code.
+//! same ones lands on the same address once the previous occupant's deposits are cleaned up
+//! (`pallet-revive` refuses the address until then, and while it is still a contract), and the new
+//! contract holds every slot's authority, whatever logic it carries. Whoever stakes into a vault
+//! should check that it cannot be redeployed with other code.
 //!
 //! # Frame guards
 //!
