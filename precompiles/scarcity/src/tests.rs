@@ -4169,6 +4169,11 @@ mod evm_fixture {
 			error StillInSlot();
 		}
 
+		interface IOwnerOfStub {
+			function setHolder(address newHolder) external;
+			function setMode(uint8 newMode) external;
+		}
+
 		interface IInterfaceIds {
 			function erc165InterfaceId() external pure returns (bytes4);
 			function erc721InterfaceId() external pure returns (bytes4);
@@ -5523,6 +5528,71 @@ mod evm_fixture {
 					&alloc::format!("{compiler}: claiming a voided stake"),
 					&a.account,
 					ISlotVault::claimCall { index: U256::ZERO, to: empty_address },
+					ISlotVault::NotReleasable {},
+				);
+			});
+		}
+	}
+
+	/// `void` takes only the collection's own "unknown token" refusal as proof that a stake is
+	/// gone. A call that fails any other way proves nothing and leaves the stake live.
+	///
+	/// On the EVM backend a call that could not run, for instance because the call stack was full,
+	/// fails with no return data and no trap, so an empty `catch` would let anyone void a live
+	/// stake and its player withdraw the token before settlement. A stub collection produces each
+	/// failure on demand; the precompile's real refusal for a burned token is covered by
+	/// `a_vault_recovers_a_slot_whose_stake_the_collection_owner_removed`.
+	#[test]
+	fn a_void_needs_the_collections_own_refusal() {
+		for (compiler, code) in slot_vault_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let stub = deploy(&world.alice, fixture_code("OwnerOfStub"));
+				let stub_address = alloy_address(stub);
+				let player = world.player(0xB1);
+				world.vault_ok(&world.alice, ISlotVault::acceptCall { collection: stub_address });
+				world.vault_ok(&player.account, ISlotVault::reserveCall {});
+				call_ok(
+					&world.alice,
+					stub,
+					IOwnerOfStub::setHolderCall { newHolder: world.slot(0) }.abi_encode(),
+				);
+				world.vault_ok(
+					&player.account,
+					ISlotVault::confirmCall {
+						collection: stub_address,
+						index: U256::ZERO,
+						tokenId: U256::from(player.token),
+					},
+				);
+				let void = ISlotVault::voidCall { index: U256::ZERO };
+				let set_mode = |mode: u8| {
+					call_ok(
+						&world.alice,
+						stub,
+						IOwnerOfStub::setModeCall { newMode: mode }.abi_encode(),
+					)
+				};
+
+				// Modes of `OwnerOfStub.Mode`: 1 reverts with no data, 3 with another reason.
+				for (mode, case) in
+					[(1u8, "a call that failed with no data"), (3, "another reason")]
+				{
+					set_mode(mode);
+					world.vault_reverts_with(
+						&alloc::format!("{compiler}: {case}"),
+						&player.account,
+						void.clone(),
+						ISlotVault::StillInSlot {},
+					);
+				}
+				// Mode 2 is the precompile's own refusal for a burned token.
+				set_mode(2);
+				world.vault_ok(&player.account, void);
+				world.vault_reverts_with(
+					&alloc::format!("{compiler}: voiding twice"),
+					&player.account,
+					ISlotVault::voidCall { index: U256::ZERO },
 					ISlotVault::NotReleasable {},
 				);
 			});

@@ -34,7 +34,8 @@ import "../../scarcity/sol/IScarcityCollection.sol";
 /// - It counts only tokens of collections the owner accepted, and ignores anything else sitting in
 ///   a slot.
 /// - The vault never ejects junk itself. A player whose push was blocked reserves another slot, and
-///   the reserver of a slot may take whatever sits in it while it holds no live stake.
+///   the reserver of a slot may take whatever sits in it while it holds no live stake, except a
+///   soulbound token, which only its collection's owner can move.
 /// - Every exit names its destination when it is made: `claim` and `withdraw` take the key as an
 ///   argument. A key named in advance, at reservation, would be public from then on, and anyone
 ///   holding one token could push it there and block the exit, because a purse key holds one token.
@@ -116,7 +117,8 @@ contract SlotVault {
     error NotReleasable();
     /// @notice Thrown when settlement names the zero address, which no claim could ever come from.
     error NoWinner();
-    /// @notice Thrown when a stake is still in its slot, so there is nothing to void.
+    /// @notice Thrown when a stake is still in its slot, or the collection could not say that it
+    /// has left it, so there is nothing to void.
     error StillInSlot();
 
     constructor() {
@@ -176,14 +178,16 @@ contract SlotVault {
 
     /// @notice Take back a token from a reserved slot that holds no live stake, to a key named now.
     /// @dev This is how a player gets a token back that `confirm` turned away, that the owner
-    /// cancelled, or that someone else pushed into the slot. The destination is an argument rather
-    /// than something fixed at reservation, so an occupied key only fails this call, not every later
-    /// one. It does not ask whether the collection is accepted, because custody of what a player
-    /// pushed must not depend on the owner's list. That is safe here: only the slot's reserver can
-    /// call it, it writes no state before the call, and the only call it makes goes to the address
-    /// the caller names, asking it to move a token out of the caller's own slot, which gives that
-    /// address no authority over the vault. A contract that holds other roles should not copy this
-    /// as it stands: restrict `collection` to the precompile address shape or to a known list.
+    /// cancelled, or that someone else pushed into the slot. A soulbound token is the exception:
+    /// the precompile refuses to move it, so only its collection's owner can clear the slot, and
+    /// the player reserves another. The destination is an argument rather than something fixed at
+    /// reservation, so an occupied key only fails this call, not every later one. It does not ask
+    /// whether the collection is accepted, because custody of what a player pushed must not depend
+    /// on the owner's list. That is safe here: only the slot's reserver can call it, it writes no
+    /// state before the call, and the only call it makes goes to the address the caller names,
+    /// asking it to move a token out of the caller's own slot, which gives that address no
+    /// authority over the vault. A contract that holds other roles should not copy this as it
+    /// stands: restrict `collection` to the precompile address shape or to a known list.
     /// @param collection The address of the token's collection.
     /// @param index The slot the caller reserved.
     /// @param tokenId The token to take back.
@@ -237,14 +241,21 @@ contract SlotVault {
     /// Until this runs, `claim` and `cancel` on that slot fail, `withdraw` refuses a live stake, and
     /// the stake still counts toward `MAX_STAKES`. Anyone can call it, because it only records what
     /// the collection already says: it does nothing while the token is still in the slot. A burned
-    /// token makes `ownerOf` revert, which counts as gone.
+    /// token makes `ownerOf` revert with "unknown token", which counts as gone. No other failure of
+    /// that call does: a call that could not run, for example because the call stack was full,
+    /// fails with no return data on the EVM backend, and taking that as gone would let anyone drop
+    /// a live stake while its token is still in the slot.
     /// @param index The slot to check.
     function void(uint256 index) external {
         Stake storage stake = stakes[index];
         require(stake.staked, NotReleasable());
         try IScarcityCollection(stake.collection).ownerOf(stake.tokenId) returns (address holder) {
             require(holder != slotOf(index), StillInSlot());
-        } catch {}
+        } catch (bytes memory reason) {
+            // The precompile's refusal for a token that no longer exists, as `Error(string)`.
+            bytes memory gone = abi.encodeWithSignature("Error(string)", "unknown token");
+            require(keccak256(reason) == keccak256(gone), StillInSlot());
+        }
         stake.staked = false;
         _removeLive(index);
         emit Voided(index);

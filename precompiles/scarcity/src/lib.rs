@@ -143,7 +143,11 @@
 //! `AddressMapper::to_account_id` returns, which reads `OriginalAccount` first. The fallback
 //! account ends in the `0xEE` suffix, so it is mapped from the start: `ownerOf` and `balanceOf`
 //! name it, and [`MapPurseKey`] has nothing to register when a token lands on it. Acting for it in
-//! a transaction would take a secp256k1 key whose address is the slot, which is a hash output.
+//! a transaction would take a secp256k1 key whose address is the slot. No such key is known. The
+//! slot is a 160-bit hash output in the same address space as every key and contract, so finding
+//! one for a given slot is a second preimage, while a vault's deployer, who chooses the vault's
+//! address through its CREATE2 salt, could search salts and keys together for a match at about
+//! 2^80 work, the bound every CREATE2 address shares. Such a key would leave no trace on chain.
 //!
 //! `transferFromSlot(index, tokenId, to)` moves a token out of slot `index` of the caller. It
 //! derives the slot from the caller, requires the slot to hold the token, and moves it through
@@ -163,7 +167,8 @@
 //! it refuses a player's own push, and the pool refuses a fee-less one at validation. An attacker
 //! with a token can occupy a slot as soon as its address is known, so a contract abandons an
 //! occupied slot for another index rather than ejecting what is in it, and lets the player who
-//! reserved a slot take back anything in it that holds no live stake. `SlotVault`, under
+//! reserved a slot take back anything in it that holds no live stake, except a soulbound token,
+//! which only its collection's owner can move out of the slot. `SlotVault`, under
 //! `precompiles/fixtures/contracts`, is the reference for that flow.
 //!
 //! `balanceOf` and `tokenOfOwnerByIndex` stay 0 or 1 per key, so each slot answers for itself and
@@ -471,8 +476,8 @@ pub(crate) fn slot_address(vault: &Address, index: &U256) -> Address {
 /// The fallback account, never `to_account_id`: that reads `OriginalAccount` first, so a mapped
 /// key whose address equals the slot would take the slot over. The fallback form skips the read.
 /// It ends in the `0xEE` suffix, so `to_address` strips it back to the slot address. Acting for it
-/// in a transaction would take a secp256k1 key whose address is the slot, a hash output nobody
-/// holds a preimage key for.
+/// in a transaction would take a secp256k1 key whose address is the slot. None is known; the
+/// crate documentation gives the cost of finding one.
 fn slot_account<T: pallet_revive::Config>(slot: &Address) -> T::AccountId {
 	<T as pallet_revive::Config>::AddressMapper::to_fallback_account_id(&H160(slot.into_array()))
 }

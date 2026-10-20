@@ -381,7 +381,7 @@ interface IScarcityCollection {
 
     /// @notice The address of slot number `index` of `vault`.
     /// @dev This precompile's own function, not part of any ERC standard. A slot is a purse key
-    /// that no holder can sign for and that only `vault` can move a token out of on the holder's
+    /// that no known key can sign for and that only `vault` can move a token out of on the holder's
     /// authority, which lets a contract hold more than one token by holding one in each of
     /// several slots. The collection owner keeps its force powers: `forceTransfer` and
     /// `forceBurn` reach a token in a slot as they reach one anywhere. The address is the low 20
