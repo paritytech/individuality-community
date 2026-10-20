@@ -65,7 +65,8 @@ pub trait WeightInfo {
 	fn sweep_expired_awards(n: u32, ) -> Weight;
 	fn authorize_sweep_expired_awards() -> Weight;
 	fn set_tenure_thresholds() -> Weight;
-	fn claim_tenure_credits(n: u32, ) -> Weight;
+	fn check_in(n: u32, ) -> Weight;
+	fn settle_check_in(n: u32, ) -> Weight;
 }
 
 /// Weights for `indiv_pallet_nft_credits` using the Substrate node and recommended hardware.
@@ -291,8 +292,35 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(2105), added: 4580, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::NftClaimCreditBlocks` (r:1 w:1)
 	/// Proof: `NftCredits::NftClaimCreditBlocks` (`max_values`: None, `max_size`: Some(1075), added: 3550, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CheckIns` (r:1 w:1)
+	/// Proof: `NftCredits::CheckIns` (`max_values`: None, `max_size`: Some(74), added: 2549, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 16]`.
-	fn claim_tenure_credits(n: u32, ) -> Weight {
+	fn check_in(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `3935`
+		//  Estimated: `11792 + n * (82 ±32)`
+		// Minimum execution time: 45_000_000 picoseconds.
+		Weight::from_parts(37_002_611, 11792)
+			// Standard Error: 6_128
+			.saturating_add(Weight::from_parts(10_934_337, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(13_u64))
+			.saturating_add(T::DbWeight::get().writes(7_u64))
+			.saturating_add(Weight::from_parts(0, 82).saturating_mul(n.into()))
+	}
+	/// Storage: `NftCredits::CheckIns` (r:1 w:1)
+	/// Proof: `NftCredits::CheckIns` (`max_values`: None, `max_size`: Some(74), added: 2549, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::AwardedNftClaimCredits` (r:1 w:1)
+	/// Proof: `NftCredits::AwardedNftClaimCredits` (`max_values`: None, `max_size`: Some(77), added: 2552, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBufferCursor` (r:1 w:1)
+	/// Proof: `NftCredits::CreditBufferCursor` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBuffers` (r:1 w:2)
+	/// Proof: `NftCredits::CreditBuffers` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwards` (r:2 w:2)
+	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(2105), added: 4580, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditBlocks` (r:1 w:1)
+	/// Proof: `NftCredits::NftClaimCreditBlocks` (`max_values`: None, `max_size`: Some(1075), added: 3550, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[1, 16]`.
+	fn settle_check_in(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `3935`
 		//  Estimated: `9243 + n * (82 ±32)`
@@ -300,8 +328,8 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(37_002_611, 9243)
 			// Standard Error: 6_128
 			.saturating_add(Weight::from_parts(10_934_337, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(12_u64))
-			.saturating_add(T::DbWeight::get().writes(6_u64))
+			.saturating_add(T::DbWeight::get().reads(7_u64))
+			.saturating_add(T::DbWeight::get().writes(8_u64))
 			.saturating_add(Weight::from_parts(0, 82).saturating_mul(n.into()))
 	}
 }
@@ -528,8 +556,35 @@ impl WeightInfo for () {
 	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(2105), added: 4580, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::NftClaimCreditBlocks` (r:1 w:1)
 	/// Proof: `NftCredits::NftClaimCreditBlocks` (`max_values`: None, `max_size`: Some(1075), added: 3550, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CheckIns` (r:1 w:1)
+	/// Proof: `NftCredits::CheckIns` (`max_values`: None, `max_size`: Some(74), added: 2549, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 16]`.
-	fn claim_tenure_credits(n: u32, ) -> Weight {
+	fn check_in(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `3935`
+		//  Estimated: `11792 + n * (82 ±32)`
+		// Minimum execution time: 45_000_000 picoseconds.
+		Weight::from_parts(37_002_611, 11792)
+			// Standard Error: 6_128
+			.saturating_add(Weight::from_parts(10_934_337, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(13_u64))
+			.saturating_add(RocksDbWeight::get().writes(7_u64))
+			.saturating_add(Weight::from_parts(0, 82).saturating_mul(n.into()))
+	}
+	/// Storage: `NftCredits::CheckIns` (r:1 w:1)
+	/// Proof: `NftCredits::CheckIns` (`max_values`: None, `max_size`: Some(74), added: 2549, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::AwardedNftClaimCredits` (r:1 w:1)
+	/// Proof: `NftCredits::AwardedNftClaimCredits` (`max_values`: None, `max_size`: Some(77), added: 2552, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBufferCursor` (r:1 w:1)
+	/// Proof: `NftCredits::CreditBufferCursor` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBuffers` (r:1 w:2)
+	/// Proof: `NftCredits::CreditBuffers` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwards` (r:2 w:2)
+	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(2105), added: 4580, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditBlocks` (r:1 w:1)
+	/// Proof: `NftCredits::NftClaimCreditBlocks` (`max_values`: None, `max_size`: Some(1075), added: 3550, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[1, 16]`.
+	fn settle_check_in(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `3935`
 		//  Estimated: `9243 + n * (82 ±32)`
@@ -537,8 +592,8 @@ impl WeightInfo for () {
 		Weight::from_parts(37_002_611, 9243)
 			// Standard Error: 6_128
 			.saturating_add(Weight::from_parts(10_934_337, 0).saturating_mul(n.into()))
-			.saturating_add(RocksDbWeight::get().reads(12_u64))
-			.saturating_add(RocksDbWeight::get().writes(6_u64))
+			.saturating_add(RocksDbWeight::get().reads(7_u64))
+			.saturating_add(RocksDbWeight::get().writes(8_u64))
 			.saturating_add(Weight::from_parts(0, 82).saturating_mul(n.into()))
 	}
 }

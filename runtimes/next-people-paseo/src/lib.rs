@@ -1671,8 +1671,10 @@ impl_runtime_apis! {
 			NftCredits::nft_claim_credit_proof_from_awards(tree_block, awards, leaf_index)
 		}
 
-		fn claimable_tenure_credits(account: AccountId) -> Result<u32, sp_runtime::DispatchError> {
-			NftCredits::claimable_tenure_credits(account)
+		fn check_in_credits(
+			player: indiv_support::identity::AccountOrPerson<AccountId>,
+		) -> Result<u32, sp_runtime::DispatchError> {
+			NftCredits::check_in_credits(player)
 		}
 	}
 

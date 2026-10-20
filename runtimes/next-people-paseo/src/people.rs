@@ -743,8 +743,8 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	type ReplayCooldownSeconds = ConstU64<60>;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
 	// Entries are the tree blocks that hold a claimant's credits, so the bound counts games rather
-	// than time. A game puts a claimant's credits in at most 21 blocks: 15 for reports, one for the
-	// attendance backfill and up to 5 for tenure claims. At one game a week `AwardRetentionTtl`
+	// than time. A game puts a claimant's credits in at most 22 blocks: 15 for reports, one for the
+	// attendance backfill and up to 6 for check-ins. At one game a week `AwardRetentionTtl`
 	// spans about 13 games, so the worst case slightly exceeds this bound, but reports cluster and
 	// a game usually takes a few blocks. A block the ring drops stays mintable through the events.
 	// The list costs 1 KB at this bound.
@@ -754,9 +754,9 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	type MaxCreditBlocksPerClaimant = ConstU32<256>;
 	// The claims chain's own deadline, which is what the two have to agree on. What it costs this
 	// chain follows participation rather than a constant: a player earns at most
-	// `(MaxGroupSize - 1) * MaxRounds = 15` report credits and one tenure credit per
-	// `DefaultTenureThresholds` entry a game, so at one game a week 90 days is about 260 credits,
-	// or 17 KB at 65 bytes an award. Retaining personhood needs one game per
+	// `(MaxGroupSize - 1) * MaxRounds = 15` report credits and one check-in credit per
+	// `DefaultTenureThresholds` entry a game, so at one game a week 90 days is about 273 credits,
+	// or 18 KB at 65 bytes an award. Retaining personhood needs one game per
 	// `NonPlayingKickoutTime` and costs a fraction of that.
 	type AwardRetentionTtl = ClaimsChainTreeTtl;
 	type EnsureClaimsChainOrigin = EnsureClaimsChainSibling;
@@ -787,13 +787,14 @@ parameter_types! {
 	/// roots for less time than the claims chain gives a claimant, which strands credits inside their
 	/// deadline. A value above it keeps roots after the last credit has expired.
 	pub const ClaimsChainTreeTtl: u64 = 90 * 24 * 60 * 60;
-	/// The tenure credits a player earns in one game at most. Each takes a credit slot after the
+	/// The check-in credits a player earns in one game at most. Each takes a credit slot after the
 	/// game's 18 report slots, out of the 128 a claimant has per game.
 	pub const MaxTenureThresholds: u32 = 16;
-	/// Thresholds at 1, 2, 4, 8 and 13 weeks of recognition. A person earns one tenure credit per
-	/// game for each threshold their tenure reaches, so 5 credits a game from 13 weeks on.
+	/// Thresholds at 0, 1, 2, 4, 8 and 13 weeks of recognition. A player earns one check-in credit
+	/// per game for each threshold their tenure reaches. Every player reaches the first, and a
+	/// person earns 6 credits a game from 13 weeks on.
 	pub DefaultTenureThresholds: BoundedVec<u64, MaxTenureThresholds> = BoundedVec::truncate_from(
-		[1, 2, 4, 8, 13].into_iter().map(|weeks| weeks * WEEK_IN_SECONDS).collect::<Vec<_>>()
+		[0, 1, 2, 4, 8, 13].into_iter().map(|weeks| weeks * WEEK_IN_SECONDS).collect::<Vec<_>>()
 	);
 }
 

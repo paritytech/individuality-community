@@ -28,7 +28,7 @@
 //! One earning has three names here, one per stage:
 //!
 //! - A *credit* ([`indiv_support::credit_trees::NftClaimCredit`]) is the hash of one successful
-//!   report or of one tenure threshold. A player earns credits and capacity is counted in them.
+//!   report or of one check-in threshold. A player earns credits and capacity is counted in them.
 //! - An *award* ([`NftClaimCreditAward`]) is a credit paired with its claimant. Storage holds
 //!   awards, so chunk and buffer sizes count them.
 //! - A *leaf* ([`indiv_support::credit_trees::NftClaimCreditLeaf`]) is the hash of an award, at a
@@ -52,25 +52,29 @@
 //! the buffer of the block that commits it in [`NftClaimCreditAwards`] and emitted as
 //! `NftClaimCreditAwarded`, in leaf order.
 //!
-//! ## Tenure credits
+//! ## Check-in credits
 //!
-//! A person earns credits for their tenure too, which is the time they have been recognised. The
-//! [`TenureThresholds`] list the tenures at which a person earns one more credit per game. Before a
-//! game, a player that signed up for it with a recognised account calls
-//! [`Pallet::claim_tenure_credits`] once its `tenure_claim_opens` time is reached, and claims stay
-//! open until the game starts. A player earns no tenure credit if their tenure is below the first
-//! threshold at the time of the claim. A tenure credit takes a slot of [`AwardedNftClaimCredits`]
-//! after the last report slot, so a player earns each tenure credit at most once per game. A player
-//! can claim again in the same window, and the claim awards only the thresholds reached since the
-//! last claim.
+//! A player that signed up for a game earns credits by checking in before it. [`Pallet::check_in`]
+//! is open from the game's `check_in_opens` time until the game starts. [`CheckIns`] records the
+//! credits each player is owed, and the attendance backfill settles them. A check-in credit takes
+//! an [`AwardedNftClaimCredits`] slot after the report slots, so a player earns it at most once
+//! per game.
 //!
-//! A claim needs a sign-up, not attendance. A player keeps the tenure credits they claimed if they
-//! then do not attend or the game is cancelled. The next game has a new index, so the player can
-//! claim for it again.
+//! A check-in is owed one credit for each of the [`TenureThresholds`] the player's tenure reaches.
+//! Tenure is the time a person has been recognised, from the people pallet's recognition history.
+//! A player that is not recognised by indiv-pallet-score has a tenure of zero, including a
+//! suspended or alias player, so a first threshold of zero gives every player one credit. A later
+//! check-in in the same window adds the thresholds reached since.
 //!
-//! Tenure comes from the people pallet's recognition history, which is keyed by personal id. A
-//! player that signed up with an alias has no personal id on this chain, so only an account player
-//! claims tenure credits.
+//! [`CheckInPayout`] decides when the credits are paid:
+//!
+//! - [`CheckInPayout::Always`]: for a person, who is unique. That is a player recognised by
+//!   indiv-pallet-score, suspended or recognised by another DIM. The credits are paid at check-in
+//!   if the credit buffers have room, otherwise by the attendance backfill.
+//! - [`CheckInPayout::IfAttended`]: for an account that is not a person, of which one party can
+//!   control any number. The attendance backfill pays the credits if the player attends.
+//!
+//! A cancelled game drops its check-ins. Credits paid at check-in stay paid.
 //!
 //! ## Committing
 //!
@@ -177,9 +181,10 @@ use indiv_pallet_score::{Participants, Recognition};
 use indiv_pallet_game::WeightInfo as GameWeightInfo;
 use indiv_support::{
 	credit_trees::{
-		authorize_expiry_sweep, drain_due_expiries, expiry_deadline, oldest_expiry, AwardCredits,
-		CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpirySweepTx, ExpiryTimestamp,
-		NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence, ROOT_TTL_GRACE,
+		authorize_expiry_sweep, drain_due_expiries, expiry_deadline, oldest_expiry, Attendance,
+		AwardCredits, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpirySweepTx,
+		ExpiryTimestamp, NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
+		ROOT_TTL_GRACE,
 	},
 	identity::AccountOrPerson,
 	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
@@ -244,10 +249,10 @@ pub const MAX_PENDING_CREDIT_TREES: u32 = 8;
 /// A fixed-size array encodes without a length prefix, so the preimage starts with these bytes.
 pub const REPORT_CREDIT_PREFIX: [u8; 17] = *b"polkadot-pop-game";
 
-/// The prefix of the preimage of a tenure credit, see [`Pallet::compute_tenure_credit`].
+/// The prefix of the preimage of a check-in credit, see [`Pallet::compute_check_in_credit`].
 ///
-/// It differs from [`REPORT_CREDIT_PREFIX`], so a tenure credit never equals a report credit.
-pub const TENURE_CREDIT_PREFIX: [u8; 19] = *b"polkadot-pop-tenure";
+/// It differs from [`REPORT_CREDIT_PREFIX`], so a check-in credit never equals a report credit.
+pub const CHECK_IN_CREDIT_PREFIX: [u8; 21] = *b"polkadot-pop-check-in";
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-credits";
 
@@ -392,7 +397,7 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxAwardBlocksPerSweep: Get<u32>;
 
-		/// The maximum number of [`TenureThresholds`], which is the most tenure credits a player
+		/// The maximum number of [`TenureThresholds`], which is the most check-in credits a player
 		/// earns in one game.
 		///
 		/// Each threshold takes a credit slot above the report slots. The `integrity_test` holds
@@ -410,7 +415,7 @@ pub mod pallet {
 	pub type CreditTreeBatch<T> =
 		indiv_support::credit_trees::CreditTreeBatch<<T as Config>::MaxCreditTreesPerMessage>;
 
-	/// The tenures, in seconds, at which a person earns one more tenure credit per game.
+	/// The tenures, in seconds, at which a player earns one more check-in credit per game.
 	pub type TenureThresholdsOf<T> = BoundedVec<u64, <T as Config>::MaxTenureThresholds>;
 
 	/// The calls of indiv-pallet-nft-claims that this pallet dispatches over XCM.
@@ -596,13 +601,29 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type NextCreditTreeSequence<T: Config> = StorageValue<_, TreeSequence, ValueQuery>;
 
-	/// The tenures, in seconds of recognition, at which a person earns one more tenure credit per
+	/// The tenures, in seconds of recognition, at which a player earns one more check-in credit per
 	/// game, in strictly ascending order.
 	///
-	/// A person whose tenure reaches the first `n` thresholds earns `n` tenure credits per game.
+	/// A player whose tenure reaches the first `n` thresholds earns `n` check-in credits per game.
+	/// A player not recognised by indiv-pallet-score has a tenure of zero, so a first threshold of
+	/// zero gives every player one credit.
 	#[pallet::storage]
 	pub type TenureThresholds<T: Config> =
 		StorageValue<_, TenureThresholdsOf<T>, ValueQuery, T::DefaultTenureThresholds>;
+
+	/// The check-in of each player for a game, stored as the number of check-in credits it earns.
+	///
+	/// The number includes the credits paid at check-in. [`AwardedNftClaimCredits`] records which
+	/// credits are paid. The attendance backfill or the game's cancellation removes every entry.
+	#[pallet::storage]
+	pub type CheckIns<T: Config> = StorageDoubleMap<
+		_,
+		Twox64Concat,
+		GameIdx,
+		Blake2_128Concat,
+		AccountOrPerson<T::AccountId>,
+		u32,
+	>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -679,14 +700,11 @@ pub mod pallet {
 		CreditAwardsExpired { count: u32 },
 		/// The [`TenureThresholds`] were set.
 		TenureThresholdsSet { thresholds: TenureThresholdsOf<T> },
-		/// `claimant` claimed `count` tenure credits for the game `game_index`.
+		/// `player` checked in for the game `game_index` and is owed `credits` check-in credits.
 		///
-		/// Each credit also emits `NftClaimCreditAwarded`, which names its tree block.
-		TenureCreditsClaimed {
-			claimant: AccountOrPerson<T::AccountId>,
-			game_index: GameIdx,
-			count: u32,
-		},
+		/// Each credit emits `NftClaimCreditAwarded` when it is awarded, which names its tree
+		/// block.
+		CheckedIn { player: AccountOrPerson<T::AccountId>, game_index: GameIdx, credits: u32 },
 	}
 
 	#[pallet::error]
@@ -709,16 +727,15 @@ pub mod pallet {
 		UnsortedTenureThresholds,
 		/// There is no current game.
 		NoGame,
-		/// The game is not in its tenure claim window, or it is being cancelled.
-		TenureClaimClosed,
+		/// The game is not in its check-in window, or it is being cancelled.
+		CheckInClosed,
 		/// The caller did not sign up for the game.
 		NotRegistered,
-		/// The caller is not a person recognised by indiv-pallet-score.
-		NotRecognized,
-		/// The caller already holds every tenure credit their tenure earns for the game.
-		NoTenureCredit,
-		/// The credit buffers do not have room for the tenure credits. A later block has room.
-		CreditCapacityExhausted,
+		/// The caller's tenure reaches none of the [`TenureThresholds`], so a check-in earns
+		/// nothing.
+		NoCheckInCredit,
+		/// The caller checked in for the game already and has reached no threshold since.
+		AlreadyCheckedIn,
 		/// The round is not below `MaxRounds`, or the attester slot is not below `MaxGroupSize`,
 		/// so the two name a credit slot no game can use.
 		#[cfg(feature = "testnet")]
@@ -919,7 +936,7 @@ pub mod pallet {
 		///
 		/// ## Parameters
 		/// - `thresholds`: The tenures in seconds, in strictly ascending order. An empty list
-		///   awards no tenure credits.
+		///   awards no check-in credits.
 		#[pallet::call_index(23)]
 		#[pallet::weight(<T as Config>::WeightInfo::set_tenure_thresholds())]
 		pub fn set_tenure_thresholds(
@@ -935,41 +952,39 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Claims the caller's tenure credits for the current game.
+		/// Checks the caller in for the current game.
 		///
-		/// The caller earns one credit for each of the [`TenureThresholds`] their tenure reaches.
-		/// A credit the caller already holds for the game is not awarded again.
+		/// The caller is owed one credit for each of the [`TenureThresholds`] their tenure reaches.
+		/// A later check-in in the same window adds the thresholds reached since. [`CheckInPayout`]
+		/// decides when the credits are paid.
 		///
-		/// The game must be in its tenure claim window, from its `tenure_claim_opens` time until
-		/// it starts, and must not be cancelling. The caller must be signed up for it.
-		///
-		/// On success the call pays no fee.
+		/// The game must be in its check-in window, from `check_in_opens` until it starts, and must
+		/// not be cancelling. The caller must be signed up for it. On success the call pays no fee.
 		///
 		/// ## Origin
-		/// Signed by an account recognised as a person by indiv-pallet-score, or signed with the
-		/// `ScoreAsParticipant` extension.
+		/// Signed by an account, an alias, or signed with the `ScoreAsParticipant` extension.
 		#[pallet::call_index(24)]
-		#[pallet::weight(
-			<T as Config>::WeightInfo::claim_tenure_credits(T::MaxTenureThresholds::get())
-		)]
-		pub fn claim_tenure_credits(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
+		#[pallet::weight(<T as Config>::WeightInfo::check_in(T::MaxTenureThresholds::get()))]
+		pub fn check_in(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
 			// Every error occurs before the first award, so it costs at most the weight of one
 			// award. A bare `?` charges the full pre-dispatch weight instead.
 			let failed = |error: DispatchError| DispatchErrorWithPostInfo {
 				post_info: PostDispatchInfo {
-					actual_weight: Some(<T as Config>::WeightInfo::claim_tenure_credits(1)),
+					actual_weight: Some(<T as Config>::WeightInfo::check_in(1)),
 					pays_fee: Pays::Yes,
 				},
 				error,
 			};
-			let who = indiv_pallet_score::Pallet::<T>::ensure_signed_or_participant(origin)
-				.map_err(failed)?;
+			let player =
+				indiv_pallet_score::Pallet::<T>::ensure_signed_or_participant_or_person(origin)
+					.map_err(failed)?;
 
-			let count =
-				Self::do_claim_tenure_credits(AccountOrPerson::Account(who)).map_err(failed)?;
+			let awarded = Self::do_check_in(player).map_err(failed)?;
 
+			// The benchmark awards at least one credit, so a check-in that awards none is charged
+			// as one that awards one.
 			Ok(PostDispatchInfo {
-				actual_weight: Some(<T as Config>::WeightInfo::claim_tenure_credits(count)),
+				actual_weight: Some(<T as Config>::WeightInfo::check_in(awarded.max(1))),
 				pays_fee: Pays::No,
 			})
 		}
@@ -1025,6 +1040,16 @@ pub mod pallet {
 	}
 }
 
+/// A check-in that [`Pallet::check_in`] accepts.
+struct NewCheckIn {
+	game_index: GameIdx,
+	/// The credits the player is owed with this check-in.
+	credits: u32,
+	/// The credits this check-in adds to the player's earlier check-in for the game. Never zero.
+	added: u32,
+	payout: CheckInPayout,
+}
+
 impl<T: Config> Pallet<T> {
 	/// The [`AwardedNftClaimCredits`] slot of the credit the co-player at `attester_position`
 	/// of a group awards in `round`.
@@ -1049,16 +1074,16 @@ impl<T: Config> Pallet<T> {
 	}
 
 	/// The number of credit slots any game of this runtime can use, the report slots followed by
-	/// the tenure slots.
+	/// the check-in slots.
 	pub(crate) fn max_credit_slots() -> u32 {
 		Self::max_report_credit_slots().saturating_add(T::MaxTenureThresholds::get())
 	}
 
-	/// The [`AwardedNftClaimCredits`] slot of the tenure credit for the threshold at `index` of
+	/// The [`AwardedNftClaimCredits`] slot of the check-in credit for the threshold at `index` of
 	/// [`TenureThresholds`].
 	///
-	/// Tenure slots start after the last report slot, so the two kinds never share a slot.
-	pub fn tenure_credit_slot(index: u32) -> CreditSlot {
+	/// Check-in slots start after the last report slot, so the two kinds never share a slot.
+	pub fn check_in_credit_slot(index: u32) -> CreditSlot {
 		Self::max_report_credit_slots().saturating_add(index)
 	}
 
@@ -1066,16 +1091,16 @@ impl<T: Config> Pallet<T> {
 	///
 	/// Blake2 256 hash of
 	/// ```txt
-	/// "polkadot-pop-tenure" ++ game index ++ threshold index ++ claimant
+	/// "polkadot-pop-check-in" ++ game index ++ threshold index ++ claimant
 	/// ```
 	/// - `game_index` and `index`: unsigned 32bit.
 	/// - `claimant`: 0 ++ account id, or 1 ++ person id.
-	pub fn compute_tenure_credit(
+	pub fn compute_check_in_credit(
 		game_index: GameIdx,
 		index: u32,
 		claimant: &AccountOrPerson<T::AccountId>,
 	) -> NftClaimCredit {
-		(TENURE_CREDIT_PREFIX, game_index, index, claimant)
+		(CHECK_IN_CREDIT_PREFIX, game_index, index, claimant)
 			.using_encoded(sp_io::hashing::blake2_256)
 	}
 
@@ -1087,27 +1112,23 @@ impl<T: Config> Pallet<T> {
 			.count() as u32
 	}
 
-	/// The number of tenure credits `account` can claim now with [`Pallet::claim_tenure_credits`].
+	/// The number of credits that [`Pallet::check_in`] by `player` adds now to their earlier
+	/// check-in for the game.
 	///
-	/// Fails with the error the claim fails with. A claim submitted later can still fail, because
-	/// the state can change before it is included.
-	pub fn claimable_tenure_credits(account: T::AccountId) -> Result<u32, DispatchError> {
-		Self::claimable_tenure_thresholds(&AccountOrPerson::Account(account))
-			.map(|(_, indices)| indices.len() as u32)
+	/// Fails with the error the check-in fails with. A check-in submitted later can still fail,
+	/// because the state can change before it is included.
+	pub fn check_in_credits(player: AccountOrPerson<T::AccountId>) -> Result<u32, DispatchError> {
+		Self::new_check_in(&player).map(|check_in| check_in.added)
 	}
 
-	/// The current game's index and the indices of the [`TenureThresholds`] whose credits
-	/// `claimant` can claim now.
+	/// The check-in `player` makes now for the current game.
 	///
-	/// Holds every check of [`Pallet::claim_tenure_credits`] after its origin check. Returns at
-	/// least one index.
-	fn claimable_tenure_thresholds(
-		claimant: &AccountOrPerson<T::AccountId>,
-	) -> Result<(GameIdx, Vec<u32>), DispatchError> {
+	/// Holds every check of [`Pallet::check_in`] after its origin check.
+	fn new_check_in(player: &AccountOrPerson<T::AccountId>) -> Result<NewCheckIn, DispatchError> {
 		let game = indiv_pallet_game::Game::<T>::get().ok_or(Error::<T>::NoGame)?;
 		let now = T::UnixTime::now().as_secs();
 		// A cancelling game is never played. `PlayerProcess` starts after `game_date`, so the
-		// time check refuses a claim in that state.
+		// time check refuses a check-in in that state.
 		let state_open = match game.state {
 			GameState::Registration { .. } |
 			GameState::Shuffle { .. } |
@@ -1116,68 +1137,140 @@ impl<T: Config> Pallet<T> {
 			GameState::Cancelling { .. } => false,
 		};
 		ensure!(
-			state_open &&
-				u64::from(game.tenure_claim_opens) <= now &&
-				now < u64::from(game.game_date),
-			Error::<T>::TenureClaimClosed
+			state_open && u64::from(game.check_in_opens) <= now && now < u64::from(game.game_date),
+			Error::<T>::CheckInClosed
 		);
 		ensure!(
-			Players::<T>::get(claimant).is_some_and(|player| player.registered),
+			Players::<T>::get(player).is_some_and(|player| player.registered),
 			Error::<T>::NotRegistered
 		);
-		let Some(Recognition::Recognized(personal_id)) =
-			Participants::<T>::get(claimant).map(|participant| participant.recognition)
-		else {
-			return Err(Error::<T>::NotRecognized.into());
-		};
-		let Some(history) =
-			<T as indiv_pallet_score::Config>::People::recognition_history(personal_id)
-		else {
-			// indiv-pallet-score records `Recognized` only after the people pallet holds the
-			// person's record, and the people pallet never removes a record.
-			defensive!("indiv-pallet-nft-credits: a recognised participant must have a history");
-			return Err(Error::<T>::NotRecognized.into());
+
+		let recognition = Participants::<T>::get(player).map(|p| p.recognition);
+		let tenure = match recognition {
+			Some(Recognition::Recognized(personal_id)) => {
+				let history =
+					<T as indiv_pallet_score::Config>::People::recognition_history(personal_id);
+				// indiv-pallet-score records `Recognized` only after the people pallet holds the
+				// person's record, and the people pallet never removes a record.
+				history
+					.defensive_proof("indiv-pallet-nft-credits: a recognised person has a history")
+					.map_or(0, |history| history.tenure(now))
+			},
+			// This chain does not count the tenure of a suspended or externally recognised person.
+			_ => 0,
 		};
 
-		let awarded = AwardedNftClaimCredits::<T>::get(game.index, claimant);
-		let pending = (0..Self::tenure_credit_count(history.tenure(now)))
-			.filter(|&index| !awarded.contains(Self::tenure_credit_slot(index)))
-			.collect::<Vec<_>>();
-		ensure!(!pending.is_empty(), Error::<T>::NoTenureCredit);
-		ensure!(
-			Self::remaining_credit_capacity(game.index) >= pending.len() as u32,
-			Error::<T>::CreditCapacityExhausted
-		);
+		let credits = Self::tenure_credit_count(tenure);
+		let previous = match CheckIns::<T>::get(game.index, player) {
+			Some(earlier) => {
+				ensure!(credits > earlier, Error::<T>::AlreadyCheckedIn);
+				earlier
+			},
+			None => {
+				ensure!(credits > 0, Error::<T>::NoCheckInCredit);
+				0
+			},
+		};
 
-		Ok((game.index, pending))
+		Ok(NewCheckIn {
+			game_index: game.index,
+			credits,
+			added: credits.saturating_sub(previous),
+			payout: Self::check_in_payout(recognition.as_ref()),
+		})
 	}
 
-	/// Awards `claimant` the tenure credits of the current game that they do not hold yet, as
-	/// [`Pallet::claim_tenure_credits`] does once its origin is checked.
+	/// When the check-in credits of a player with `recognition` in indiv-pallet-score are paid.
 	///
-	/// Returns the number of credits it tries to award, which is at least one. The weight scales
-	/// with this number. A dropped credit costs the same work but is not counted in the event.
-	pub(crate) fn do_claim_tenure_credits(
-		claimant: AccountOrPerson<T::AccountId>,
-	) -> Result<u32, DispatchError> {
-		let (game_index, pending) = Self::claimable_tenure_thresholds(&claimant)?;
-		let attempted = pending.len() as u32;
-
-		let award_time = T::UnixTime::now().as_secs() as u32;
-		let mut count = 0u32;
-		for index in pending {
-			let credit = Self::compute_tenure_credit(game_index, index, &claimant);
-			count.saturating_accrue(Self::award_nft_claim_credit(
-				game_index,
-				&claimant,
-				credit,
-				Self::tenure_credit_slot(index),
-				award_time,
-			));
+	/// Recognition only moves from not recognised to recognised to suspended, so a payout decided
+	/// later is never stricter than the one at check-in.
+	fn check_in_payout(recognition: Option<&Recognition>) -> CheckInPayout {
+		match recognition {
+			Some(
+				Recognition::Recognized(_) |
+				Recognition::Suspended(_) |
+				Recognition::ExternallyRecognized,
+			) => CheckInPayout::Always,
+			// One party can control any number of accounts that are not persons, so attendance is
+			// what an account pays for its credits with.
+			Some(Recognition::NotRecognized) | None => CheckInPayout::IfAttended,
 		}
-		Self::deposit_event(Event::<T>::TenureCreditsClaimed { claimant, game_index, count });
+	}
 
-		Ok(attempted)
+	/// Checks `player` in for the current game, as [`Pallet::check_in`] does once its origin is
+	/// checked.
+	///
+	/// Returns the number of credits it awards now. The weight scales with this number.
+	pub(crate) fn do_check_in(player: AccountOrPerson<T::AccountId>) -> Result<u32, DispatchError> {
+		let NewCheckIn { game_index, credits, payout, .. } = Self::new_check_in(&player)?;
+
+		let awarded = match payout {
+			// The attendance backfill awards the credits that do not fit the buffers now.
+			CheckInPayout::Always => Self::award_check_in_credits(
+				game_index,
+				&player,
+				credits,
+				Self::remaining_credit_capacity(game_index),
+				T::UnixTime::now().as_secs() as u32,
+			),
+			CheckInPayout::IfAttended => 0,
+		};
+
+		CheckIns::<T>::insert(game_index, &player, credits);
+		Self::deposit_event(Event::<T>::CheckedIn { player, game_index, credits });
+
+		Ok(awarded)
+	}
+
+	/// Awards the credits of `player`'s check-in for `game_index` that [`CheckInPayout`] grants
+	/// given `attendance`, and removes the check-in.
+	///
+	/// The payout follows the player's recognition now, not at check-in, so a candidate that
+	/// became a person since is paid whether or not they attend.
+	///
+	/// Returns the number of credits awarded. The caller reserves room for
+	/// [`Config::MaxTenureThresholds`] credits first.
+	pub(crate) fn settle_check_in(
+		game_index: GameIdx,
+		player: &AccountOrPerson<T::AccountId>,
+		attendance: Attendance,
+		award_time: u32,
+	) -> u32 {
+		let Some(credits) = CheckIns::<T>::take(game_index, player) else { return 0 };
+		let recognition = Participants::<T>::get(player).map(|p| p.recognition);
+		if Self::check_in_payout(recognition.as_ref()) == CheckInPayout::IfAttended &&
+			attendance == Attendance::Absent
+		{
+			return 0;
+		}
+		Self::award_check_in_credits(game_index, player, credits, u32::MAX, award_time)
+	}
+
+	/// Awards `player` up to `limit` of the first `credits` check-in credits of `game_index` that
+	/// they do not hold yet.
+	///
+	/// Returns the number of credits awarded.
+	fn award_check_in_credits(
+		game_index: GameIdx,
+		player: &AccountOrPerson<T::AccountId>,
+		credits: u32,
+		limit: u32,
+		award_time: u32,
+	) -> u32 {
+		let awarded = AwardedNftClaimCredits::<T>::get(game_index, player);
+		(0..credits)
+			.filter(|&index| !awarded.contains(Self::check_in_credit_slot(index)))
+			.take(limit as usize)
+			.map(|index| {
+				Self::award_nft_claim_credit(
+					game_index,
+					player,
+					Self::compute_check_in_credit(game_index, index, player),
+					Self::check_in_credit_slot(index),
+					award_time,
+				)
+			})
+			.sum()
 	}
 
 	/// Compute the NFT claim credit for a successful report.
@@ -1245,7 +1338,7 @@ impl<T: Config> Pallet<T> {
 		award_time: u32,
 	) -> u32 {
 		if !AwardedCredits::within_capacity(credit_slot) {
-			// `credit_slot` is a report or tenure slot, and the `integrity_test` holds both
+			// `credit_slot` is a report or check-in slot, and the `integrity_test` holds both
 			// kinds to the mask's capacity, so this cannot be reached.
 			defensive!("indiv-pallet-nft-credits: credit slot must fit the awarded credit mask");
 			return 0;
@@ -2257,7 +2350,7 @@ impl<T: Config> Pallet<T> {
 	pub(crate) fn integrity_test_credits() {
 		// Every credit a claimant can earn in a game needs its own slot in
 		// `AwardedNftClaimCredits`, otherwise the overflowing ones would be awarded twice,
-		// once by `report` and once by the attendance backfill. Tenure slots come after the
+		// once by `report` and once by the attendance backfill. Check-in slots come after the
 		// report slots.
 		let slots = Self::max_credit_slots();
 		assert!(
@@ -2280,6 +2373,15 @@ impl<T: Config> Pallet<T> {
 			e_max <= buffered,
 			"one `report` awards up to {e_max} credits, more than the {buffered} the credit \
 		buffers hold",
+		);
+
+		// The attendance backfill processes a player only while the buffers hold their report
+		// credits and their check-in credits. Below that, the game never ends.
+		let per_player = e_max.saturating_add(T::MaxTenureThresholds::get());
+		assert!(
+			per_player <= buffered,
+			"the attendance backfill awards one player up to {per_player} credits, more than the \
+		{buffered} the credit buffers hold",
 		);
 
 		// Empty buffers must also absorb a whole block of such reports, which is the state an idle
@@ -2347,11 +2449,11 @@ impl<T: Config> Pallet<T> {
 			<T as Config>::WeightInfo::send_credit_trees(max_trees)
 				.saturating_add(<T as Config>::WeightInfo::authorize_send_credit_trees()),
 		);
-		// A claim worst case above the per-extrinsic limit cannot be included, so no player could
-		// claim tenure credits.
+		// A check-in worst case above the per-extrinsic limit cannot be included, so no player
+		// could check in.
 		budget.assert_fits(
-			"claim_tenure_credits",
-			<T as Config>::WeightInfo::claim_tenure_credits(T::MaxTenureThresholds::get()),
+			"check_in",
+			<T as Config>::WeightInfo::check_in(T::MaxTenureThresholds::get()),
 		);
 		budget.assert_fits(
 			"replay_credit_trees",
@@ -2438,22 +2540,33 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 		)
 	}
 
-	fn award_attendance_credits(
+	fn settle_attendance_credits(
 		game_index: GameIdx,
 		rounds: RoundIndex,
 		max_group_size: u32,
 		player_count: u32,
-		attendee: &AccountOrPerson<T::AccountId>,
+		player: &AccountOrPerson<T::AccountId>,
+		attendance: Attendance,
 		award_time: u32,
 	) -> u32 {
-		Self::award_attendance_credits(
-			game_index,
-			rounds,
-			max_group_size,
-			player_count,
-			attendee,
-			award_time,
-		)
+		let report_credits = match attendance {
+			Attendance::Attended => Self::award_attendance_credits(
+				game_index,
+				rounds,
+				max_group_size,
+				player_count,
+				player,
+				award_time,
+			),
+			Attendance::Absent => 0,
+		};
+		report_credits
+			.saturating_add(Self::settle_check_in(game_index, player, attendance, award_time))
+	}
+
+	fn check_in_worst_case() -> (u32, Weight) {
+		let max = T::MaxTenureThresholds::get();
+		(max, <T as Config>::WeightInfo::settle_check_in(max))
 	}
 
 	fn remaining_capacity(game_index: GameIdx) -> u32 {
@@ -2470,6 +2583,7 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 
 	fn forget_player_credits(game_index: GameIdx, player: &AccountOrPerson<T::AccountId>) {
 		AwardedNftClaimCredits::<T>::remove(game_index, player);
+		CheckIns::<T>::remove(game_index, player);
 	}
 
 	#[cfg(feature = "runtime-benchmarks")]

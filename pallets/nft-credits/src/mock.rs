@@ -148,10 +148,13 @@ impl CreditsWeightInfo for MockWeightInfo {
 	fn set_tenure_thresholds() -> Weight {
 		Weight::from_parts(80, 0)
 	}
-	/// Non-zero and scales with `n`, so a claim that awards fewer credits than
+	/// Non-zero and scales with `n`, so a check-in that awards fewer credits than
 	/// `MaxTenureThresholds` refunds a measurable amount.
-	fn claim_tenure_credits(n: u32) -> Weight {
+	fn check_in(n: u32) -> Weight {
 		Weight::from_parts(600 + 10 * n as u64, 60 + n as u64)
+	}
+	fn settle_check_in(n: u32) -> Weight {
+		Weight::from_parts(700 + 10 * n as u64, 70 + n as u64)
 	}
 }
 
@@ -175,9 +178,9 @@ parameter_types! {
 	/// Below `root_ttl`, as the `integrity_test` requires.
 	pub storage AwardRetentionTtl: u64 = 24 * 60 * 60;
 	pub const MaxTenureThresholds: u32 = 4;
-	/// One and two weeks.
+	/// Zero, one and two weeks.
 	pub DefaultTenureThresholds: crate::TenureThresholdsOf<Test> =
-		frame_support::BoundedVec::truncate_from(vec![WEEK, 2 * WEEK]);
+		frame_support::BoundedVec::truncate_from(vec![0, WEEK, 2 * WEEK]);
 }
 
 /// A week in seconds.

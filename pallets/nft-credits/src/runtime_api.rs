@@ -80,12 +80,12 @@ sp_api::decl_runtime_apis! {
 			leaf_index: u32,
 		) -> Result<NftClaimCreditProof, NftClaimCreditProofError>;
 
-		/// Returns the number of tenure credits `account` can claim now with
-		/// `claim_tenure_credits`, or the error that call fails with.
+		/// Returns the number of credits a `check_in` by `player` adds now to their earlier
+		/// check-in for the current game, or the error that call fails with.
 		///
-		/// A refused claim pays a fee, so a wallet checks this before it submits one. A claim
-		/// included later can still fail, because the state can change in between.
+		/// A refused check-in pays a fee, so a wallet checks this before it submits one. A
+		/// check-in included later can still fail, because the state can change in between.
 		#[api_version(2)]
-		fn claimable_tenure_credits(account: AccountId) -> Result<u32, DispatchError>;
+		fn check_in_credits(player: AccountOrPerson<AccountId>) -> Result<u32, DispatchError>;
 	}
 }

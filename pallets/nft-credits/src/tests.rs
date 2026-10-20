@@ -184,31 +184,32 @@ fn nft_claim_credit_spec() {
 }
 
 #[test]
-fn tenure_credit_spec() {
+fn check_in_credit_spec() {
 	let calculated =
-		NftCredits::compute_tenure_credit(32, 0, &AccountOrPerson::Account([1u8; 32].into()));
-	let expected = (b"polkadot-pop-tenure", 32u32, 0u32, 0u8, [1u8; 32])
+		NftCredits::compute_check_in_credit(32, 0, &AccountOrPerson::Account([1u8; 32].into()));
+	let expected = (b"polkadot-pop-check-in", 32u32, 0u32, 0u8, [1u8; 32])
 		.using_encoded(sp_io::hashing::blake2_256);
 
 	assert_eq!(calculated, expected);
 	assert_eq!(
 		calculated,
 		[
-			255, 13, 217, 141, 172, 246, 84, 208, 236, 29, 227, 96, 146, 143, 14, 71, 2, 203, 176,
-			213, 140, 4, 151, 198, 63, 193, 73, 3, 23, 222, 246, 79
+			132, 182, 3, 137, 69, 50, 101, 40, 220, 231, 95, 30, 85, 29, 153, 198, 202, 109, 178,
+			230, 83, 173, 122, 174, 92, 179, 168, 204, 20, 68, 51, 46
 		]
 	);
 
-	let calculated = NftCredits::compute_tenure_credit(35, 2, &AccountOrPerson::Person([3u8; 32]));
-	let expected = (b"polkadot-pop-tenure", 35u32, 2u32, 1u8, [3u8; 32])
+	let calculated =
+		NftCredits::compute_check_in_credit(35, 2, &AccountOrPerson::Person([3u8; 32]));
+	let expected = (b"polkadot-pop-check-in", 35u32, 2u32, 1u8, [3u8; 32])
 		.using_encoded(sp_io::hashing::blake2_256);
 
 	assert_eq!(calculated, expected);
 	assert_eq!(
 		calculated,
 		[
-			241, 155, 168, 115, 201, 224, 243, 79, 254, 16, 202, 214, 233, 200, 19, 98, 4, 130,
-			129, 2, 42, 47, 223, 38, 181, 87, 206, 167, 52, 66, 225, 53
+			100, 148, 79, 4, 166, 139, 4, 247, 131, 44, 138, 101, 74, 197, 18, 242, 251, 255, 208,
+			43, 35, 232, 52, 146, 89, 141, 194, 241, 37, 136, 103, 7
 		]
 	);
 }
@@ -2693,9 +2694,10 @@ fn player_process_step1_defers_players_that_do_not_fit_the_block_awards() {
 				Duration::from_secs(GameTimes::<Test>::reporting_end(&schedule) as u64 + 1)
 		});
 
-		// One attendee's worst case is `rounds * (max_group_size - 1)` credits, so a buffer with
-		// room for exactly that fits one player and defers the rest. The buffer window slides with
-		// the block number, so the filler is topped up per block until step1 runs against it.
+		// One attendee's worst case is `rounds * (max_group_size - 1)` report credits plus
+		// `MaxTenureThresholds` check-in credits, so a buffer with room for exactly that fits one
+		// player and defers the rest. The buffer window slides with the block number, so the
+		// filler is topped up per block until step1 runs against it.
 		let game = GameStore::<Test>::get().expect("the game is reporting").index;
 		let mut filler = 0;
 		let deferred = |state| {
@@ -2707,7 +2709,11 @@ fn player_process_step1_defers_players_that_do_not_fit_the_block_awards() {
 			)
 		};
 		for _ in 0..4 {
-			filler += fill_credit_buffer(game, System::block_number() + 1, 3);
+			filler += fill_credit_buffer(
+				game,
+				System::block_number() + 1,
+				3 + MaxTenureThresholds::get(),
+			);
 			advance_process();
 			if GameStore::<Test>::get().is_some_and(|game| deferred(game.state)) {
 				break;
@@ -3507,16 +3513,18 @@ mod migration {
 	}
 }
 
-mod tenure_credits {
+mod check_in {
 	use super::*;
 	use frame_support::{assert_err_ignore_postinfo, dispatch::GetDispatchInfo};
 	use indiv_pallet_game::CancellingStep;
 	use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
 	use indiv_pallet_score::{Participants, Recognition};
-	use indiv_support::traits::{AddOnlyPeopleTrait, AppendOnlyMembers, RingExponent, RingMode};
+	use indiv_support::traits::{
+		AddOnlyPeopleTrait, AppendOnlyMembers, PersonalId, RingExponent, RingMode,
+	};
 	use sp_runtime::DispatchError;
 
-	/// The game's play time. The claim window opens `WINDOW` seconds before it.
+	/// The game's play time. The check-in window opens `WINDOW` seconds before it.
 	const PLAY: u32 = 1_000;
 	const WINDOW: u32 = 900;
 	const OPENS: u64 = (PLAY - WINDOW) as u64;
@@ -3530,7 +3538,7 @@ mod tenure_credits {
 			game_play_time: PLAY,
 			rounds: 1,
 			max_group_size: 4,
-			tenure_claim_window: WINDOW,
+			check_in_window: WINDOW,
 			..Default::default()
 		}
 	}
@@ -3542,19 +3550,36 @@ mod tenure_credits {
 		));
 	}
 
-	/// Signs `who` up for the game, then recognises them as a person at the current time.
-	fn sign_up_recognised(who: &AccountId32) {
+	fn sign_up(who: &AccountId32) {
 		assert_ok!(Game::sign_up_with_account(
 			RuntimeOrigin::signed(who.clone()),
 			DEFAULT_IDENTIFIER_KEY,
 			None,
 		));
+	}
+
+	/// Signs `who` up for the game, then recognises them as a person at the current time.
+	///
+	/// Returns their personal id.
+	fn sign_up_recognised(who: &AccountId32) -> PersonalId {
+		sign_up(who);
+		recognise(who)
+	}
+
+	/// Recognises `who`, a participant, as a person at the current time.
+	///
+	/// Returns their personal id.
+	fn recognise(who: &AccountId32) -> PersonalId {
 		let id = People::reserve_new_id();
 		let (key, _) = mock_key(id);
 		assert_ok!(People::recognize_personhood(id, Some(key)));
+		set_recognition(who, Recognition::Recognized(id));
+		id
+	}
+
+	fn set_recognition(who: &AccountId32, recognition: Recognition) {
 		Participants::<Test>::mutate(AccountOrPerson::Account(who.clone()), |participant| {
-			participant.as_mut().expect("sign-up onboards the account").recognition =
-				Recognition::Recognized(id);
+			participant.as_mut().expect("sign-up onboards the account").recognition = recognition;
 		});
 	}
 
@@ -3573,242 +3598,225 @@ mod tenure_credits {
 		GameStore::<Test>::get().expect("the game is registering").index
 	}
 
-	fn claim(who: &AccountId32) -> DispatchResultWithPostInfo {
-		NftCredits::claim_tenure_credits(RuntimeOrigin::signed(who.clone()))
+	/// Starts the game at time zero and signs ALICE up as a recognised person and BOB, CHARLIE and
+	/// DAVE as accounts that are not persons.
+	fn set_up_full_group() -> GameIdx {
+		let game = set_up_alice();
+		for who in [BOB, CHARLIE, DAVE] {
+			sign_up(&who);
+		}
+		game
 	}
 
-	fn alice_slots(game: GameIdx) -> AwardedCredits {
-		AwardedNftClaimCredits::<Test>::get(game, AccountOrPerson::Account(ALICE))
+	/// Plays the game to its end. Each of `reporters` reports every co-player as a person, so
+	/// they attend and the players that do not report do not.
+	fn play_to_end(reporters: &[AccountId32]) {
+		advance_to_reporting_phase(&schedule());
+		for who in reporters {
+			let player = AccountOrPerson::Account(who.clone());
+			assert_ok!(Game::report(
+				RuntimeOrigin::signed(who.clone()),
+				build_report_with_opinion(&player, |_| Report::Person),
+			));
+		}
+		set_time(GameTimes::<Test>::reporting_end(&schedule()) as u64 + 1);
+		while GameStore::<Test>::get().is_some() {
+			advance_process();
+		}
+	}
+
+	fn check_in(who: &AccountId32) -> DispatchResultWithPostInfo {
+		NftCredits::check_in(RuntimeOrigin::signed(who.clone()))
+	}
+
+	fn slots(game: GameIdx, who: &AccountId32) -> AwardedCredits {
+		AwardedNftClaimCredits::<Test>::get(game, AccountOrPerson::Account(who.clone()))
+	}
+
+	fn check_in_of(game: GameIdx, who: &AccountId32) -> Option<u32> {
+		CheckIns::<Test>::get(game, AccountOrPerson::Account(who.clone()))
+	}
+
+	/// The check-in credits of `game` awarded to `who` so far, by threshold index.
+	fn awarded_check_in_credits(game: GameIdx, who: &AccountId32) -> Vec<u32> {
+		let player = AccountOrPerson::Account(who.clone());
+		let credits = awarded_credits(&player);
+		(0..MaxTenureThresholds::get())
+			.filter(|&index| {
+				credits.contains(&NftCredits::compute_check_in_credit(game, index, &player))
+			})
+			.collect::<Vec<_>>()
 	}
 
 	#[test]
-	fn a_new_game_opens_claims_its_window_before_play() {
+	fn a_new_game_opens_check_in_its_window_before_play() {
 		new_test_ext().execute_with(|| {
 			start_scheduled_game(&schedule());
-			assert_eq!(GameStore::<Test>::get().unwrap().tenure_claim_opens, PLAY - WINDOW);
+			assert_eq!(GameStore::<Test>::get().unwrap().check_in_opens, PLAY - WINDOW);
 		});
 	}
 
 	#[test]
-	fn a_claim_awards_one_credit_per_threshold_reached() {
+	fn a_person_is_awarded_one_credit_per_threshold_reached_at_check_in() {
 		new_test_ext().execute_with(|| {
-			set_thresholds(vec![100, 200, 5_000]);
+			set_thresholds(vec![0, 100, 200, 5_000]);
 			let game = set_up_alice();
 			set_time(250);
 
-			let post = claim(&ALICE).expect("ALICE claims");
+			let post = check_in(&ALICE).expect("ALICE checks in");
 
-			assert_eq!(alice_slots(game).count(), 2);
-			assert!(alice_slots(game).contains(NftCredits::tenure_credit_slot(0)));
-			assert!(alice_slots(game).contains(NftCredits::tenure_credit_slot(1)));
-			let alice = AccountOrPerson::Account(ALICE);
-			assert_eq!(
-				awarded_credits(&alice),
-				vec![
-					NftCredits::compute_tenure_credit(game, 0, &alice),
-					NftCredits::compute_tenure_credit(game, 1, &alice),
-				]
-			);
+			assert_eq!(slots(game, &ALICE).count(), 3);
+			assert_eq!(awarded_check_in_credits(game, &ALICE), vec![0, 1, 2]);
+			assert_eq!(check_in_of(game, &ALICE), Some(3));
 			System::assert_has_event(
-				Event::<Test>::TenureCreditsClaimed { claimant: alice, game_index: game, count: 2 }
-					.into(),
+				Event::<Test>::CheckedIn {
+					player: AccountOrPerson::Account(ALICE),
+					game_index: game,
+					credits: 3,
+				}
+				.into(),
 			);
 			assert_eq!(post.pays_fee, Pays::No);
 		});
 	}
 
 	#[test]
-	fn claimable_tenure_credits_counts_what_a_claim_awards() {
+	fn a_candidate_check_in_awards_nothing_before_the_game() {
 		new_test_ext().execute_with(|| {
-			set_thresholds(vec![100, 200, 5_000]);
-			set_up_alice();
+			let game = set_up_full_group();
+			set_time(OPENS);
+
+			let post = check_in(&BOB).expect("BOB checks in");
+
+			assert_eq!(check_in_of(game, &BOB), Some(1));
+			assert_eq!(slots(game, &BOB).count(), 0);
+			assert_eq!(awarded_credit_count(), 0);
+			// Charged as a check-in that awards one credit, which is what the benchmark measures.
+			assert_eq!(post.actual_weight, Some(<MockWeightInfo as WeightInfo>::check_in(1)));
+			assert_eq!(post.pays_fee, Pays::No);
+		});
+	}
+
+	#[test]
+	fn a_candidate_that_attends_is_awarded_their_check_in_credit() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(check_in(&BOB));
+
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_check_in_credits(game, &BOB), vec![0]);
+			assert_eq!(check_in_of(game, &BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_candidate_that_does_not_attend_forfeits_their_check_in_credit() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(check_in(&BOB));
+
+			play_to_end(&[ALICE, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_check_in_credits(game, &BOB), Vec::<u32>::new());
+			assert_eq!(check_in_of(game, &BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_candidate_recognised_after_check_in_is_paid_without_attending() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(check_in(&BOB));
+			recognise(&BOB);
+
+			play_to_end(&[ALICE, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_check_in_credits(game, &BOB), vec![0]);
+			assert_eq!(check_in_of(game, &BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_player_that_does_not_check_in_earns_no_check_in_credit() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			for who in [ALICE, BOB, CHARLIE, DAVE] {
+				assert_eq!(awarded_check_in_credits(game, &who), Vec::<u32>::new());
+			}
+		});
+	}
+
+	#[test]
+	fn a_person_whose_check_in_does_not_fit_the_buffers_is_awarded_after_the_game() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 0);
+
+			assert_ok!(check_in(&ALICE));
+			assert_eq!(slots(game, &ALICE).count(), 0);
+			assert_eq!(check_in_of(game, &ALICE), Some(2));
+
+			// ALICE does not attend, which a person's check-in does not depend on.
+			play_to_end(&[BOB, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_check_in_credits(game, &ALICE), vec![0, 1]);
+			assert_eq!(check_in_of(game, &ALICE), None);
+		});
+	}
+
+	#[test]
+	fn a_person_awarded_at_check_in_is_not_awarded_again_after_the_game() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 1);
+
+			// One credit fits the buffers now and the attendance backfill awards the other.
+			assert_ok!(check_in(&ALICE));
+			assert_eq!(awarded_check_in_credits(game, &ALICE), vec![0]);
+
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			let alice = AccountOrPerson::Account(ALICE);
+			let credits = awarded_credits(&alice);
+			for index in 0..2 {
+				let credit = NftCredits::compute_check_in_credit(game, index, &alice);
+				assert_eq!(credits.iter().filter(|&&c| c == credit).count(), 1);
+			}
+		});
+	}
+
+	#[test]
+	fn a_suspended_person_is_owed_one_credit_whatever_their_tenure() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 100]);
+			let game = set_up_alice();
+			let id = sign_up_recognised(&BOB);
+			set_recognition(&BOB, Recognition::Suspended(id));
 			set_time(250);
 
-			assert_eq!(NftCredits::claimable_tenure_credits(ALICE), Ok(2));
-			assert_ok!(claim(&ALICE));
-			System::assert_has_event(
-				Event::<Test>::TenureCreditsClaimed {
-					claimant: AccountOrPerson::Account(ALICE),
-					game_index: GameStore::<Test>::get().unwrap().index,
-					count: 2,
-				}
-				.into(),
-			);
+			assert_ok!(check_in(&BOB));
 
-			assert_eq!(
-				NftCredits::claimable_tenure_credits(ALICE),
-				Err(Error::<Test>::NoTenureCredit.into())
-			);
+			assert_eq!(check_in_of(game, &BOB), Some(1));
+			assert_eq!(awarded_check_in_credits(game, &BOB), vec![0]);
 		});
 	}
 
 	#[test]
-	fn claimable_tenure_credits_reports_why_a_claim_fails() {
+	fn an_alias_player_is_always_owed_one_credit() {
 		new_test_ext().execute_with(|| {
-			assert_eq!(
-				NftCredits::claimable_tenure_credits(ALICE),
-				Err(Error::<Test>::NoGame.into())
-			);
-
-			set_thresholds(vec![0]);
-			set_up_alice();
-			set_time(OPENS - 1);
-			assert_eq!(
-				NftCredits::claimable_tenure_credits(ALICE),
-				Err(Error::<Test>::TenureClaimClosed.into())
-			);
-
-			set_time(OPENS);
-			assert_eq!(
-				NftCredits::claimable_tenure_credits(BOB),
-				Err(Error::<Test>::NotRegistered.into())
-			);
-			assert_err_ignore_postinfo!(claim(&BOB), Error::<Test>::NotRegistered);
-		});
-	}
-
-	#[test]
-	fn a_claim_refunds_down_to_the_credits_it_awards() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![100]);
-			set_up_alice();
-			set_time(OPENS);
-
-			let post = claim(&ALICE).expect("ALICE claims");
-
-			let declared = Call::<Test>::claim_tenure_credits {}.get_dispatch_info().call_weight;
-			let actual = post.actual_weight.expect("the claim reports its weight");
-			assert_eq!(actual, <MockWeightInfo as WeightInfo>::claim_tenure_credits(1));
-			assert!(actual.all_lt(declared));
-		});
-	}
-
-	#[test]
-	fn a_later_claim_awards_only_the_thresholds_reached_since() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![150, 300]);
+			set_thresholds(vec![0, 100]);
 			let game = set_up_alice();
-			set_time(200);
-			assert_ok!(claim(&ALICE));
-			assert_eq!(alice_slots(game).count(), 1);
-
-			set_time(350);
-			assert_ok!(claim(&ALICE));
-
-			assert_eq!(alice_slots(game).count(), 2);
-			assert_eq!(awarded_credit_count(), 2);
-		});
-	}
-
-	#[test]
-	fn a_claim_with_nothing_new_is_refused_and_pays() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![100]);
-			set_up_alice();
-			set_time(OPENS);
-			assert_ok!(claim(&ALICE));
-
-			let refused = claim(&ALICE).expect_err("nothing is left to claim");
-
-			assert_eq!(refused.error, Error::<Test>::NoTenureCredit.into());
-			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
-			assert_eq!(awarded_credit_count(), 1);
-		});
-	}
-
-	#[test]
-	fn a_tenure_below_every_threshold_earns_nothing() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![PLAY.into()]);
-			set_up_alice();
-			set_time(OPENS);
-
-			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::NoTenureCredit);
-		});
-	}
-
-	#[test]
-	fn claims_open_at_the_window_and_close_at_play() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![0]);
-			set_up_alice();
-
-			set_time(OPENS - 1);
-			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::TenureClaimClosed);
-			set_time(PLAY.into());
-			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::TenureClaimClosed);
-
-			set_time(PLAY as u64 - 1);
-			assert_ok!(claim(&ALICE));
-		});
-	}
-
-	#[test]
-	fn a_game_without_a_window_takes_no_claim() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![0]);
-			start_scheduled_game(&GameSchedule { tenure_claim_window: 0, ..schedule() });
-			set_time(PLAY as u64 - 1);
-
-			// Claims open at play, which is also when they close.
-			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::TenureClaimClosed);
-		});
-	}
-
-	#[test]
-	fn a_cancelling_game_takes_no_claim() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![0]);
-			set_up_alice();
-			set_time(OPENS);
-			GameStore::<Test>::mutate(|game| {
-				game.as_mut().unwrap().state =
-					GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
-			});
-
-			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::TenureClaimClosed);
-		});
-	}
-
-	#[test]
-	fn a_claim_without_a_game_is_refused() {
-		new_test_ext().execute_with(|| {
-			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::NoGame);
-		});
-	}
-
-	#[test]
-	fn a_player_must_sign_up_to_claim() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![0]);
-			set_up_alice();
-			set_time(OPENS);
-
-			assert_err_ignore_postinfo!(claim(&BOB), Error::<Test>::NotRegistered);
-		});
-	}
-
-	#[test]
-	fn a_player_must_be_recognised_to_claim() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![0]);
-			set_up_alice();
-			assert_ok!(Game::sign_up_with_account(
-				RuntimeOrigin::signed(BOB),
-				DEFAULT_IDENTIFIER_KEY,
-				None,
-			));
-			set_time(OPENS);
-
-			assert_err_ignore_postinfo!(claim(&BOB), Error::<Test>::NotRecognized);
-		});
-	}
-
-	#[test]
-	fn an_alias_player_cannot_claim() {
-		new_test_ext().execute_with(|| {
-			set_thresholds(vec![0]);
-			set_up_alice();
 			let alias = [9u8; 32];
 			let statement_account = AccountId32::new(alias);
 			assert_ok!(Game::sign_up_with_alias(
@@ -3818,54 +3826,253 @@ mod tenure_credits {
 				AccountAuthority(statement_account),
 				None,
 			));
-			set_time(OPENS);
+			set_time(250);
 
-			let refused =
-				NftCredits::claim_tenure_credits(runtime_origin_for_alias(&alias)).unwrap_err();
+			assert_ok!(NftCredits::check_in(runtime_origin_for_alias(&alias)));
 
+			let player = AccountOrPerson::Person(alias);
+			assert_eq!(CheckIns::<Test>::get(game, &player), Some(1));
 			assert_eq!(
-				refused.error,
-				indiv_pallet_score::Error::<Test>::BadOriginNotSignedNotAccountParticipant.into()
+				awarded_credits(&player),
+				vec![NftCredits::compute_check_in_credit(game, 0, &player)]
 			);
-			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
 		});
 	}
 
 	#[test]
-	fn a_participant_origin_claims() {
+	fn a_participant_origin_checks_in() {
 		new_test_ext().execute_with(|| {
-			set_thresholds(vec![0]);
 			let game = set_up_alice();
 			set_time(OPENS);
 
-			assert_ok!(NftCredits::claim_tenure_credits(
+			assert_ok!(NftCredits::check_in(
 				indiv_pallet_score::Origin::<Test>::AccountParticipant(ALICE).into()
 			));
 
-			assert!(alice_slots(game).contains(NftCredits::tenure_credit_slot(0)));
+			assert!(slots(game, &ALICE).contains(NftCredits::check_in_credit_slot(0)));
 		});
 	}
 
 	#[test]
-	fn a_claim_that_does_not_fit_the_buffers_is_refused() {
+	fn check_in_credits_counts_what_a_check_in_adds() {
 		new_test_ext().execute_with(|| {
-			set_thresholds(vec![0, 1]);
-			let game = set_up_alice();
+			set_thresholds(vec![0, 200, 5_000]);
+			set_up_alice();
+			let alice = AccountOrPerson::Account(ALICE);
 			set_time(OPENS);
-			fill_credit_buffer(game, System::block_number(), 1);
+			assert_eq!(NftCredits::check_in_credits(alice.clone()), Ok(1));
+			assert_ok!(check_in(&ALICE));
 
-			assert_err_ignore_postinfo!(claim(&ALICE), Error::<Test>::CreditCapacityExhausted);
-			assert_eq!(alice_slots(game).count(), 0);
+			set_time(250);
+			assert_eq!(NftCredits::check_in_credits(alice.clone()), Ok(1));
+			assert_ok!(check_in(&ALICE));
+
+			assert_eq!(
+				NftCredits::check_in_credits(alice),
+				Err(Error::<Test>::AlreadyCheckedIn.into())
+			);
+		});
+	}
+
+	#[test]
+	fn check_in_credits_reports_why_a_check_in_fails() {
+		new_test_ext().execute_with(|| {
+			let alice = AccountOrPerson::Account(ALICE);
+			assert_eq!(
+				NftCredits::check_in_credits(alice.clone()),
+				Err(Error::<Test>::NoGame.into())
+			);
+
+			set_up_alice();
+			set_time(OPENS - 1);
+			assert_eq!(
+				NftCredits::check_in_credits(alice),
+				Err(Error::<Test>::CheckInClosed.into())
+			);
+
+			set_time(OPENS);
+			assert_eq!(
+				NftCredits::check_in_credits(AccountOrPerson::Account(BOB)),
+				Err(Error::<Test>::NotRegistered.into())
+			);
+		});
+	}
+
+	#[test]
+	fn a_check_in_refunds_down_to_the_credits_it_awards() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![100]);
+			set_up_alice();
+			set_time(OPENS);
+
+			let post = check_in(&ALICE).expect("ALICE checks in");
+
+			let declared = Call::<Test>::check_in {}.get_dispatch_info().call_weight;
+			let actual = post.actual_weight.expect("the check-in reports its weight");
+			assert_eq!(actual, <MockWeightInfo as WeightInfo>::check_in(1));
+			assert!(actual.all_lt(declared));
+		});
+	}
+
+	#[test]
+	fn a_later_check_in_adds_only_the_thresholds_reached_since() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![150, 300]);
+			let game = set_up_alice();
+			set_time(200);
+			assert_ok!(check_in(&ALICE));
+			assert_eq!(slots(game, &ALICE).count(), 1);
+
+			set_time(350);
+			assert_ok!(check_in(&ALICE));
+
+			assert_eq!(slots(game, &ALICE).count(), 2);
+			assert_eq!(awarded_credit_count(), 2);
+			assert_eq!(check_in_of(game, &ALICE), Some(2));
+		});
+	}
+
+	#[test]
+	fn a_check_in_with_nothing_new_is_refused_and_pays() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(check_in(&BOB));
+
+			let refused = check_in(&BOB).expect_err("nothing is left to check in for");
+
+			assert_eq!(refused.error, Error::<Test>::AlreadyCheckedIn.into());
+			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
+			assert_eq!(check_in_of(game, &BOB), Some(1));
+		});
+	}
+
+	#[test]
+	fn a_tenure_below_every_threshold_earns_nothing() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![PLAY.into()]);
+			let game = set_up_full_group();
+			set_time(OPENS);
+
+			assert_err_ignore_postinfo!(check_in(&ALICE), Error::<Test>::NoCheckInCredit);
+			// Without a threshold of zero, a candidate earns nothing.
+			assert_err_ignore_postinfo!(check_in(&BOB), Error::<Test>::NoCheckInCredit);
+			assert_eq!(check_in_of(game, &BOB), None);
+		});
+	}
+
+	#[test]
+	fn check_ins_open_at_the_window_and_close_at_play() {
+		new_test_ext().execute_with(|| {
+			set_up_alice();
+
+			set_time(OPENS - 1);
+			assert_err_ignore_postinfo!(check_in(&ALICE), Error::<Test>::CheckInClosed);
+			set_time(PLAY.into());
+			assert_err_ignore_postinfo!(check_in(&ALICE), Error::<Test>::CheckInClosed);
+
+			set_time(PLAY as u64 - 1);
+			assert_ok!(check_in(&ALICE));
+		});
+	}
+
+	#[test]
+	fn a_game_without_a_window_takes_no_check_in() {
+		new_test_ext().execute_with(|| {
+			start_scheduled_game(&GameSchedule { check_in_window: 0, ..schedule() });
+			set_time(PLAY as u64 - 1);
+
+			// Check-ins open at play, which is also when they close.
+			assert_err_ignore_postinfo!(check_in(&ALICE), Error::<Test>::CheckInClosed);
+		});
+	}
+
+	#[test]
+	fn a_cancelling_game_takes_no_check_in() {
+		new_test_ext().execute_with(|| {
+			set_up_alice();
+			set_time(OPENS);
+			GameStore::<Test>::mutate(|game| {
+				game.as_mut().unwrap().state =
+					GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
+			});
+
+			assert_err_ignore_postinfo!(check_in(&ALICE), Error::<Test>::CheckInClosed);
+		});
+	}
+
+	#[test]
+	fn a_cancelled_game_drops_its_check_ins() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(check_in(&ALICE));
+			assert_ok!(check_in(&BOB));
+
+			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
+			while GameStore::<Test>::get().is_some() {
+				advance_process();
+			}
+
+			assert_eq!(CheckIns::<Test>::iter_prefix(game).count(), 0);
+			// ALICE keeps the credit awarded at check-in, and BOB never receives his.
+			assert_eq!(awarded_check_in_credits(game, &ALICE), vec![0]);
+			assert_eq!(awarded_check_in_credits(game, &BOB), Vec::<u32>::new());
+		});
+	}
+
+	#[test]
+	fn a_check_in_without_a_game_is_refused() {
+		new_test_ext().execute_with(|| {
+			assert_err_ignore_postinfo!(check_in(&ALICE), Error::<Test>::NoGame);
+		});
+	}
+
+	#[test]
+	fn a_player_must_sign_up_to_check_in() {
+		new_test_ext().execute_with(|| {
+			set_up_alice();
+			set_time(OPENS);
+
+			assert_err_ignore_postinfo!(check_in(&BOB), Error::<Test>::NotRegistered);
+		});
+	}
+
+	#[test]
+	fn player_process_step1_reserves_room_for_check_in_credits() {
+		// The buffers hold a player's report credits but not their check-in credits too, so step1
+		// processes nobody.
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			advance_to_reporting_phase(&schedule());
+			set_time(GameTimes::<Test>::reporting_end(&schedule()) as u64 + 1);
+
+			for _ in 0..4 {
+				fill_credit_buffer(
+					game,
+					System::block_number() + 1,
+					3 + MaxTenureThresholds::get() - 1,
+				);
+				advance_process();
+			}
+
+			assert!(matches!(
+				GameStore::<Test>::get().map(|game| game.state),
+				Some(GameState::PlayerProcess {
+					step: PlayerProcessStep::Step1ProcessPlayers { last_iteration: None, .. },
+				})
+			));
 		});
 	}
 
 	#[test]
 	fn the_default_thresholds_apply_until_set() {
 		new_test_ext().execute_with(|| {
-			assert_eq!(TenureThresholds::<Test>::get().into_inner(), vec![WEEK, 2 * WEEK]);
-			assert_eq!(NftCredits::tenure_credit_count(WEEK - 1), 0);
-			assert_eq!(NftCredits::tenure_credit_count(WEEK), 1);
-			assert_eq!(NftCredits::tenure_credit_count(3 * WEEK), 2);
+			assert_eq!(TenureThresholds::<Test>::get().into_inner(), vec![0, WEEK, 2 * WEEK]);
+			assert_eq!(NftCredits::tenure_credit_count(0), 1);
+			assert_eq!(NftCredits::tenure_credit_count(WEEK - 1), 1);
+			assert_eq!(NftCredits::tenure_credit_count(WEEK), 2);
+			assert_eq!(NftCredits::tenure_credit_count(3 * WEEK), 3);
 		});
 	}
 
@@ -3909,15 +4116,15 @@ mod tenure_credits {
 	}
 
 	#[test]
-	fn tenure_slots_sit_above_the_report_slots() {
+	fn check_in_slots_sit_above_the_report_slots() {
 		new_test_ext().execute_with(|| {
-			assert_eq!(NftCredits::tenure_credit_slot(0), NftCredits::max_report_credit_slots());
+			assert_eq!(NftCredits::check_in_credit_slot(0), NftCredits::max_report_credit_slots());
 			let last_report_slot = NftCredits::credit_slot(
 				(<<Test as indiv_pallet_game::Config>::MaxRounds as Get<u32>>::get() - 1)
 					as RoundIndex,
 				<<Test as indiv_pallet_game::Config>::MaxGroupSize as Get<u32>>::get() - 1,
 			);
-			assert!(last_report_slot < NftCredits::tenure_credit_slot(0));
+			assert!(last_report_slot < NftCredits::check_in_credit_slot(0));
 		});
 	}
 }

@@ -29,18 +29,18 @@ use frame_support::{
 
 const LOG_TARGET: &str = "runtime::game::migration";
 
-/// The tenure claim window the migration gives every game that is already scheduled or running,
+/// The check-in window the migration gives every game that is already scheduled or running,
 /// in seconds before the game play time.
-pub const MIGRATED_TENURE_CLAIM_WINDOW: u32 = 30 * 60;
+pub const MIGRATED_CHECK_IN_WINDOW: u32 = 30 * 60;
 
-/// Adds a tenure claim window to every [`GameSchedule`] in [`GameSchedules`] and to the
+/// Adds a check-in window to every [`GameSchedule`] in [`GameSchedules`] and to the
 /// [`GameInfo`] in [`Game`].
 ///
-/// Each of them gets [`MIGRATED_TENURE_CLAIM_WINDOW`].
+/// Each of them gets [`MIGRATED_CHECK_IN_WINDOW`].
 pub type MigrateV0ToV1<T> = VersionedMigration<
 	0,
 	1,
-	v1::AddTenureClaimWindow<T>,
+	v1::AddCheckInWindow<T>,
 	Pallet<T>,
 	<T as frame_system::Config>::DbWeight,
 >;
@@ -48,7 +48,7 @@ pub type MigrateV0ToV1<T> = VersionedMigration<
 pub mod v0 {
 	use super::*;
 
-	/// A game schedule as stored before tenure claims.
+	/// A game schedule as stored before check-ins.
 	#[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, PartialEq, Debug)]
 	pub struct GameSchedule<AssetId, Balance> {
 		pub game_play_time: u32,
@@ -60,7 +60,7 @@ pub mod v0 {
 		>,
 	}
 
-	/// A game as stored before tenure claims.
+	/// A game as stored before check-ins.
 	#[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Debug)]
 	pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 		pub index: GameIdx,
@@ -96,9 +96,9 @@ pub mod v1 {
 	use super::*;
 
 	/// Use [`MigrateV0ToV1`] rather than this directly.
-	pub struct AddTenureClaimWindow<T>(PhantomData<T>);
+	pub struct AddCheckInWindow<T>(PhantomData<T>);
 
-	impl<T: Config> UncheckedOnRuntimeUpgrade for AddTenureClaimWindow<T> {
+	impl<T: Config> UncheckedOnRuntimeUpgrade for AddCheckInWindow<T> {
 		fn on_runtime_upgrade() -> Weight {
 			let schedules = GameSchedules::<T>::translate::<
 				BoundedVec<v0::GameScheduleOf<T>, T::MaxGameSchedules>,
@@ -112,7 +112,7 @@ pub mod v1 {
 						rounds: schedule.rounds,
 						max_group_size: schedule.max_group_size,
 						airdrops: schedule.airdrops,
-						tenure_claim_window: MIGRATED_TENURE_CLAIM_WINDOW,
+						check_in_window: MIGRATED_CHECK_IN_WINDOW,
 					})
 					.collect::<Vec<_>>();
 				Some(BoundedVec::truncate_from(new))
@@ -134,7 +134,7 @@ pub mod v1 {
 					rounds: game.rounds,
 					pending_attendance: game.pending_attendance,
 					airdrops_scheduled: game.airdrops_scheduled,
-					tenure_claim_opens: game.game_date.saturating_sub(MIGRATED_TENURE_CLAIM_WINDOW),
+					check_in_opens: game.game_date.saturating_sub(MIGRATED_CHECK_IN_WINDOW),
 				})
 			});
 			if game.is_err() {
@@ -144,7 +144,7 @@ pub mod v1 {
 				Game::<T>::kill();
 			}
 
-			log::info!(target: LOG_TARGET, "added the tenure claim window");
+			log::info!(target: LOG_TARGET, "added the check-in window");
 			T::DbWeight::get().reads_writes(2, 2)
 		}
 
@@ -164,7 +164,7 @@ pub mod v1 {
 			ensure!(
 				new_schedules
 					.iter()
-					.all(|schedule| schedule.tenure_claim_window == MIGRATED_TENURE_CLAIM_WINDOW),
+					.all(|schedule| schedule.check_in_window == MIGRATED_CHECK_IN_WINDOW),
 				"every schedule must have the migrated window"
 			);
 			ensure!(Game::<T>::get().map(|game| game.index) == game, "the game must not change");
