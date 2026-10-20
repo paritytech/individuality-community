@@ -356,11 +356,10 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxGroupSize: Get<u32>;
 
-		/// The minimum number of players in a group and the lower bound on a game's
-		/// `max_group_size`.
+		/// The lower bound on a game's minimum group size, which is `max_group_size - 1`.
 		///
-		/// Must be non-zero. A game is cancelled if a group would hold fewer players. Set it to at
-		/// least 2 to prevent single-player groups.
+		/// Must be non-zero. A game's `max_group_size` must be greater than this value. Set it to
+		/// at least 2 to prevent single-player groups.
 		#[pallet::constant]
 		type MinGroupSize: Get<u32>;
 
@@ -822,8 +821,8 @@ pub mod pallet {
 
 			assert!(T::MinGroupSize::get() > 0, "MinGroupSize must be non-zero");
 			assert!(
-				T::MinGroupSize::get() <= T::MaxGroupSize::get(),
-				"MinGroupSize must not exceed MaxGroupSize"
+				T::MinGroupSize::get() < T::MaxGroupSize::get(),
+				"MinGroupSize must be less than MaxGroupSize"
 			);
 
 			let max_votes = Self::max_received_votes();
@@ -1577,7 +1576,10 @@ pub mod pallet {
 				);
 
 				ensure!(
-					schedule.max_group_size >= T::MinGroupSize::get(),
+					// Note: a game is cancelled if groups can't be filled with at least
+					// `max_group_size - 1`. So `>` is used here, ensuring the groups are at least
+					// the required minimum size.
+					schedule.max_group_size > T::MinGroupSize::get(),
 					Error::<T>::InvalidGameSetup
 				);
 				ensure!(
@@ -2019,10 +2021,7 @@ pub mod pallet {
 				u32::from(schedule.rounds) <= T::MaxRounds::get(),
 				Error::<T>::InvalidGameSetup
 			);
-			ensure!(
-				schedule.max_group_size >= T::MinGroupSize::get(),
-				Error::<T>::InvalidGameSetup
-			);
+			ensure!(schedule.max_group_size > T::MinGroupSize::get(), Error::<T>::InvalidGameSetup);
 			ensure!(
 				schedule.max_group_size <= T::MaxGroupSize::get(),
 				Error::<T>::InvalidGameSetup

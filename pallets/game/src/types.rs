@@ -421,13 +421,25 @@ pub struct GroupsSetting {
 }
 
 impl GroupsSetting {
-	/// Whether there is at least one player and every group holds at least `MinGroupSize` players.
+	/// Whether there is at least one player and every group holds at least `max_per_group - 1`
+	/// players.
 	///
 	/// Players are dealt round-robin, so the smallest group holds `player_count / number_of_group`
-	/// players, rounded down.
+	/// players, rounded down. On a testnet any non-zero player count is acceptable.
 	pub fn acceptable_player_count<T: Config>(&self) -> bool {
-		self.player_count > 0 &&
-			self.player_count >= T::MinGroupSize::get().saturating_mul(self.number_of_group())
+		if self.player_count == 0 {
+			return false;
+		}
+
+		// A testnet game often has few players. This lets it start with a realistic
+		// `max_group_size`, which would otherwise require at least `max_group_size - 1` players.
+		#[cfg(feature = "testnet")]
+		if T::TESTNET {
+			return true;
+		}
+
+		let min_per_group = self.max_per_group.saturating_sub(1);
+		self.player_count >= min_per_group.saturating_mul(self.number_of_group())
 	}
 
 	/// Calculate the number of groups, it is the minimum number of groups that can contain all the
@@ -489,9 +501,9 @@ pub struct GameSchedule<AssetId, Balance> {
 	pub game_play_time: u32,
 	/// The number of rounds in the scheduled game.
 	pub rounds: u8,
-	/// The maximum number of players in one group. Must be at least `MinGroupSize`.
+	/// The maximum number of players in one group. Must be greater than `MinGroupSize`.
 	///
-	/// A game is cancelled if a group would hold fewer than `MinGroupSize` players.
+	/// A game is cancelled if a group would hold fewer than `max_group_size - 1` players.
 	pub max_group_size: u32,
 	/// The airdrop events to schedule for this game, each drawn at its own offset relative to
 	/// the game play time. Empty skips airdrop scheduling for this game.
