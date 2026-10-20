@@ -310,61 +310,17 @@ mod benches {
 		Ok(())
 	}
 
-	// A claim that awards `n` tenure credits. The thresholds are a full list, so the read of
-	// `TenureThresholds` is the largest it can be, and the caller's tenure reaches the first `n`.
+	// A check-in that awards `n` credits at once. The thresholds are a full list, so the read of
+	// `TenureThresholds` is the largest it can be, and the caller is a person whose tenure reaches
+	// the first `n`, so the check-in reads their recognition history.
 	//
-	// The block's buffer is one award short of full, so the claim fills the last chunk of one tree
-	// and spills into the next block's buffer. That reads the most keys a claim can.
+	// The block's buffer is one award short of full, so the check-in fills the last chunk of one
+	// tree and spills into the next block's buffer. That reads the most keys a check-in can.
 	#[benchmark]
-	fn claim_tenure_credits(
-		n: Linear<1, { T::MaxTenureThresholds::get() }>,
-	) -> Result<(), BenchmarkError> {
-		TenureThresholds::<T>::put(full_tenure_thresholds::<T>());
-		let recognised_at = 1_000_000u64;
-		<T as Config>::BenchmarkHelper::set_unix_time(recognised_at);
-
+	fn check_in(n: Linear<1, { T::MaxTenureThresholds::get() }>) -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
-		let claimant = AccountOrPerson::Account(caller.clone());
-		indiv_pallet_score::Pallet::<T>::onboard_for_recognition(&caller)?;
-		PeopleOf::<T>::initialize_people_collection();
-		let personal_id = PeopleOf::<T>::reserve_new_id();
-		let (key, _) = PeopleOf::<T>::mock_key(personal_id);
-		PeopleOf::<T>::recognize_personhood(personal_id, Some(key))?;
-		Participants::<T>::mutate(&claimant, |participant| {
-			participant.as_mut().expect("the caller is onboarded").recognition =
-				Recognition::Recognized(personal_id);
-		});
-		Players::<T>::insert(
-			&claimant,
-			Player {
-				first_game: 1,
-				registered: true,
-				sent_report: false,
-				early_attendance_enactment: None,
-				yes_person: 0,
-				no_not_person: 0,
-				expected_max_vote_weight: 0,
-				vote_weight: 0,
-				credibility: PlayerCredibility::Recognized,
-			},
-		);
-
-		let now = recognised_at + u64::from(n);
-		let game_date = (now + 1_000) as u32;
-		indiv_pallet_game::Game::<T>::put(GameInfo {
-			index: 1,
-			registration_ends: game_date - 100,
-			shuffle_deadline: game_date - 10,
-			game_date,
-			report_ends: game_date + 1_000,
-			state: GameState::Registration { next_player_index: 1 },
-			max_group_size: <T as indiv_pallet_game::Config>::MaxGroupSize::get(),
-			rounds: 1,
-			pending_attendance: 0,
-			airdrops_scheduled: 0,
-			tenure_claim_opens: recognised_at as u32,
-		});
-		<T as Config>::BenchmarkHelper::set_unix_time(now);
+		let player = AccountOrPerson::Account(caller.clone());
+		let now = set_up_recognised_player::<T>(&caller, n)?;
 		// Not the genesis block, whose buffer would count as built already.
 		frame_system::Pallet::<T>::set_block_number(10u32.into());
 		fill_buffer_but_one::<T>(1, 10u32.into(), now as u32);
@@ -372,7 +328,7 @@ mod benches {
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller));
 
-		assert_eq!(AwardedNftClaimCredits::<T>::get(1, &claimant).count(), n);
+		assert_eq!(AwardedNftClaimCredits::<T>::get(1, &player).count(), n);
 		assert_eq!(
 			CreditBuffers::<T>::get(BlockNumberFor::<T>::from(10u32)).map(|b| b.awards),
 			Some(AWARDS_PER_TREE)
@@ -381,9 +337,91 @@ mod benches {
 		Ok(())
 	}
 
+	// The attendance backfill paying out a check-in of `n` credits, none of them awarded at
+	// check-in. The player is a participant, so the payout reads their recognition. The buffer is
+	// one award short of full, as in `check_in`.
+	#[benchmark]
+	fn settle_check_in(
+		n: Linear<1, { T::MaxTenureThresholds::get() }>,
+	) -> Result<(), BenchmarkError> {
+		let caller: T::AccountId = whitelisted_caller();
+		indiv_pallet_score::Pallet::<T>::onboard_for_recognition(&caller)?;
+		let player = AccountOrPerson::Account(caller);
+		frame_system::Pallet::<T>::set_block_number(10u32.into());
+		fill_buffer_but_one::<T>(1, 10u32.into(), 1_000_000);
+		CheckIns::<T>::insert(1, &player, n);
+
+		#[block]
+		{
+			Pallet::<T>::settle_check_in(1, &player, Attendance::Attended, 1_000_000);
+		}
+
+		assert_eq!(AwardedNftClaimCredits::<T>::get(1, &player).count(), n);
+		assert!(!CheckIns::<T>::contains_key(1, &player));
+
+		Ok(())
+	}
+
 	// No `impl_benchmark_test_suite!`: a mock for this pallet is a mock of the whole game it sits
 	// on, which the game crate already has, so its tests are the ones that run these paths. The
 	// benchmarks themselves are exercised by `frame-omni-bencher` against the runtime.
+}
+
+/// Makes `caller` a person recognised for `n` seconds, signed up for game 1 and inside its
+/// check-in window, with a full list of thresholds that their tenure reaches the first `n` of.
+///
+/// Returns the current time.
+fn set_up_recognised_player<T: Config>(
+	caller: &T::AccountId,
+	n: u32,
+) -> Result<u64, BenchmarkError> {
+	TenureThresholds::<T>::put(full_tenure_thresholds::<T>());
+	let recognised_at = 1_000_000u64;
+	<T as Config>::BenchmarkHelper::set_unix_time(recognised_at);
+
+	let player = AccountOrPerson::Account(caller.clone());
+	indiv_pallet_score::Pallet::<T>::onboard_for_recognition(caller)?;
+	PeopleOf::<T>::initialize_people_collection();
+	let personal_id = PeopleOf::<T>::reserve_new_id();
+	let (key, _) = PeopleOf::<T>::mock_key(personal_id);
+	PeopleOf::<T>::recognize_personhood(personal_id, Some(key))?;
+	Participants::<T>::mutate(&player, |participant| {
+		participant.as_mut().expect("the caller is onboarded").recognition =
+			Recognition::Recognized(personal_id);
+	});
+	Players::<T>::insert(
+		&player,
+		Player {
+			first_game: 1,
+			registered: true,
+			sent_report: false,
+			early_attendance_enactment: None,
+			yes_person: 0,
+			no_not_person: 0,
+			expected_max_vote_weight: 0,
+			vote_weight: 0,
+			credibility: PlayerCredibility::Recognized,
+		},
+	);
+
+	let now = recognised_at + u64::from(n);
+	let game_date = (now + 1_000) as u32;
+	indiv_pallet_game::Game::<T>::put(GameInfo {
+		index: 1,
+		registration_ends: game_date - 100,
+		shuffle_deadline: game_date - 10,
+		game_date,
+		report_ends: game_date + 1_000,
+		state: GameState::Registration { next_player_index: 1 },
+		max_group_size: <T as indiv_pallet_game::Config>::MaxGroupSize::get(),
+		rounds: 1,
+		pending_attendance: 0,
+		airdrops_scheduled: 0,
+		check_in_opens: recognised_at as u32,
+	});
+	<T as Config>::BenchmarkHelper::set_unix_time(now);
+
+	Ok(now)
 }
 
 /// [`Config::MaxTenureThresholds`] thresholds one second apart, starting at one second.

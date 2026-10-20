@@ -2977,7 +2977,7 @@ mod game_cancellation {
 				rounds: 2,
 				max_group_size: 4,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -4745,7 +4745,7 @@ fn player_process_step2_uses_marginal_weight_for_follow_up_chunks() {
 			rounds,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
-			tenure_claim_opens: 0,
+			check_in_opens: 0,
 		});
 
 		let first_chunk_weight = <MockWeightInfo as WeightInfo>::player_process_step2();
@@ -5180,7 +5180,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_ok!(Game::sign_up_with_account(
@@ -5216,7 +5216,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = crate::GameIndex::<Test>::get();
@@ -5259,7 +5259,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&current));
 			assert_ok!(Game::sign_up_with_account(
@@ -5282,7 +5282,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![next.clone()]));
 			assert_eq!(GameSchedules::<Test>::get().len(), 1);
@@ -5322,7 +5322,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -5356,7 +5356,7 @@ mod cancel_game {
 			rounds: 2,
 			max_group_size: 3,
 			airdrops: Default::default(),
-			tenure_claim_window: 0,
+			check_in_window: 0,
 		};
 		assert_ok!(Game::new_game(&schedule));
 		assert_ok!(Game::sign_up_with_account(
@@ -5504,7 +5504,7 @@ mod set_game_phases {
 			rounds: 1,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
-			tenure_claim_opens: 0,
+			check_in_opens: 0,
 		});
 	}
 
@@ -5836,7 +5836,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			let now = <Test as crate::Config>::UnixTime::now().as_secs();
 			assert_ok!(Game::new_game(&schedule));
@@ -5864,7 +5864,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			// `now` is set strictly before the game's registration phase starts, so the two
 			// timestamps are distinct and the test can tell them apart.
@@ -5900,7 +5900,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert!(crate::Game::<Test>::exists());
@@ -5924,7 +5924,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -5950,7 +5950,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_noop!(
@@ -5974,7 +5974,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6023,7 +6023,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6057,7 +6057,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_noop!(
@@ -6079,7 +6079,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			// Pre-recognized account player: in `Participants` as `Recognized(_)` and in
@@ -6112,7 +6112,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6144,7 +6144,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -6191,7 +6191,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -6239,7 +6239,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6356,7 +6356,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6411,7 +6411,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6588,7 +6588,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 2,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6711,7 +6711,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6742,7 +6742,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			let now = <Test as crate::Config>::UnixTime::now().as_secs();
 			assert_ok!(Game::new_game(&schedule));
@@ -6776,7 +6776,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game = GameStorage::<Test>::get().expect("game exists");
@@ -6829,7 +6829,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6876,7 +6876,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6901,7 +6901,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6934,7 +6934,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6986,7 +6986,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7022,7 +7022,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7053,7 +7053,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7079,7 +7079,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			// Game 1: ALICE prepares a VRF for its airdrop event but never signs up; the game
 			// is cancelled and cleaned up.
@@ -7195,7 +7195,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_eq!(GameStorage::<Test>::get().expect("game exists").airdrops_scheduled, 0);
@@ -7231,7 +7231,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_eq!(GameStorage::<Test>::get().expect("game exists").airdrops_scheduled, 0);
@@ -7269,7 +7269,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -7301,7 +7301,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7343,7 +7343,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7382,7 +7382,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
-				tenure_claim_window: 0,
+				check_in_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -8201,7 +8201,7 @@ mod sign_up_with_account_lite_invite {
 
 mod migration_v1 {
 	use super::*;
-	use crate::migration::{v0, MigrateV0ToV1, MIGRATED_TENURE_CLAIM_WINDOW};
+	use crate::migration::{v0, MigrateV0ToV1, MIGRATED_CHECK_IN_WINDOW};
 	use frame_support::traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion};
 
 	fn v0_schedule(game_play_time: u32) -> v0::GameSchedule<u32, u128> {
@@ -8214,7 +8214,7 @@ mod migration_v1 {
 	}
 
 	#[test]
-	fn migration_adds_the_tenure_claim_window() {
+	fn migration_adds_the_check_in_window() {
 		new_test_ext().execute_with(|| {
 			StorageVersion::new(0).put::<crate::Pallet<Test>>();
 			v0::GameSchedules::<Test>::put(BoundedVec::truncate_from(vec![
@@ -8246,7 +8246,7 @@ mod migration_v1 {
 				vec![10_000, 20_000]
 			);
 			assert!(schedules.iter().all(|schedule| {
-				schedule.tenure_claim_window == MIGRATED_TENURE_CLAIM_WINDOW &&
+				schedule.check_in_window == MIGRATED_CHECK_IN_WINDOW &&
 					schedule.rounds == 2 &&
 					schedule.max_group_size == 4 &&
 					schedule.airdrops == test_airdrops(1)
@@ -8256,7 +8256,7 @@ mod migration_v1 {
 			assert_eq!(game.game_date, 5_000);
 			assert!(matches!(game.state, GameState::Registration { next_player_index: 2 }));
 			assert_eq!(game.airdrops_scheduled, 1);
-			assert_eq!(game.tenure_claim_opens, 5_000 - MIGRATED_TENURE_CLAIM_WINDOW);
+			assert_eq!(game.check_in_opens, 5_000 - MIGRATED_CHECK_IN_WINDOW);
 			assert_eq!(crate::Pallet::<Test>::on_chain_storage_version(), 1);
 		});
 	}
@@ -8296,7 +8296,7 @@ mod migration_v1 {
 				game_play_time: 10_000,
 				rounds: 1,
 				max_group_size: 3,
-				tenure_claim_window: 60,
+				check_in_window: 60,
 				..Default::default()
 			};
 			GameSchedules::<Test>::put(BoundedVec::truncate_from(vec![schedule.clone()]));
