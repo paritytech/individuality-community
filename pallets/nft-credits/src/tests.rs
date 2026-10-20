@@ -52,7 +52,7 @@ fn build_report_with_opinion(
 		GameState::Reporting { player_count } => player_count,
 		_ => panic!("game must be in Reporting state"),
 	};
-	let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+	let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 	let mut full = Vec::new();
 	for round in 0..game.rounds {
 		let reporter_idx = reporter_indices[round as usize];
@@ -1503,7 +1503,7 @@ fn group_position(player: &AccountOrPerson<AccountId32>, round: RoundIndex) -> A
 		_ => panic!("game must be in Reporting state"),
 	};
 	let index = PlayerToIndex::<Test>::get(player).expect("player has indices")[round as usize];
-	let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+	let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 	let group_index = groups.group_index_from_player_index(index);
 	groups
 		.group_members(group_index)

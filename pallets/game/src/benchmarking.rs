@@ -1589,7 +1589,7 @@ mod benches {
 		// `rounds * (MaxGroupSize - 1)` unique players. Rewrite the caller's indices
 		// and the other slots of the caller's group so each round exposes a disjoint
 		// set of co-players, pushing `reported_players.len()` to the max.
-		let num_groups = max_group_size; // player_count / max_per_group == MaxGroupSize
+		let num_groups = max_group_size; // player_count / full_group_size == MaxGroupSize
 
 		let caller_aop = AccountOrPerson::Account(caller.clone());
 		let caller_indices: BoundedVec<PlayerIndex, T::MaxRounds> =

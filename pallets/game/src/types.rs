@@ -414,14 +414,16 @@ pub enum ShuffleRetrievePhase {
 
 /// A setting for a distribution of players in groups.
 pub struct GroupsSetting {
-	/// The maximum number of players in a group.
-	pub max_per_group: u32,
+	/// The number of players in a full group, which is the game's `max_group_size`.
+	///
+	/// Every group holds this many players or one fewer, see [`Self::acceptable_player_count`].
+	pub full_group_size: u32,
 	/// The total number of players.
 	pub player_count: u32,
 }
 
 impl GroupsSetting {
-	/// Whether there is at least one player and every group holds at least `max_per_group - 1`
+	/// Whether there is at least one player and every group holds at least `full_group_size - 1`
 	/// players.
 	///
 	/// Players are dealt round-robin, so the smallest group holds `player_count / number_of_group`
@@ -438,15 +440,15 @@ impl GroupsSetting {
 			return true;
 		}
 
-		let min_per_group = self.max_per_group.saturating_sub(1);
-		self.player_count >= min_per_group.saturating_mul(self.number_of_group())
+		let min_group_size = self.full_group_size.saturating_sub(1);
+		self.player_count >= min_group_size.saturating_mul(self.number_of_group())
 	}
 
 	/// Calculate the number of groups, it is the minimum number of groups that can contain all the
 	/// players.
 	pub fn number_of_group(&self) -> u32 {
-		let div = self.player_count.checked_div(self.max_per_group).unwrap_or(self.player_count);
-		let remainder = self.player_count.checked_rem(self.max_per_group).unwrap_or(0);
+		let div = self.player_count.checked_div(self.full_group_size).unwrap_or(self.player_count);
+		let remainder = self.player_count.checked_rem(self.full_group_size).unwrap_or(0);
 		if remainder > 0 {
 			div.saturating_add(1)
 		} else {
@@ -462,9 +464,9 @@ impl GroupsSetting {
 	/// Calculate the members of a group, given its index.
 	pub fn group_members(&self, group_index: GroupIndex) -> impl Iterator<Item = PlayerIndex> {
 		let number_of_group = self.number_of_group();
-		let max_per_group = self.max_per_group;
+		let full_group_size = self.full_group_size;
 		let number_of_player = self.player_count;
-		(0..max_per_group)
+		(0..full_group_size)
 			.map(move |i| group_index.saturating_add(i.saturating_mul(number_of_group)))
 			.filter(move |&x| x < number_of_player)
 	}

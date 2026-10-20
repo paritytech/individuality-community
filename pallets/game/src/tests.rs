@@ -64,14 +64,14 @@ fn basic_game() {
 
 		run_game_scenario(schedule, &players, |player| {
 			let number_of_group: u32 = 2;
-			let max_per_group: u32 = 3;
+			let full_group_size: u32 = 3;
 			let rounds: usize = 2;
 
 			let mut full_report = Vec::new();
 			for round in 0..rounds {
 				let player_shuffled_position = PlayerToIndex::<Test>::get(player).unwrap()[round];
 				let player_group_index = player_shuffled_position % number_of_group;
-				let other_players = (0..max_per_group)
+				let other_players = (0..full_group_size)
 					.map(|x| player_group_index + x * number_of_group)
 					.filter(|&x| x < players.len() as u32)
 					.filter(|&x| x != player_shuffled_position);
@@ -2946,8 +2946,8 @@ fn offchain_worker_keeps_statements_without_removal_event() {
 	});
 }
 
-fn acceptable(max_per_group: u32, player_count: u32) -> bool {
-	GroupsSetting { max_per_group, player_count }.acceptable_player_count::<Test>()
+fn acceptable(full_group_size: u32, player_count: u32) -> bool {
+	GroupsSetting { full_group_size, player_count }.acceptable_player_count::<Test>()
 }
 
 // Verifies that GroupsSetting::acceptable_player_count()
@@ -2962,9 +2962,9 @@ fn acceptable_player_count_cases() {
 	assert!(acceptable(2, 10));
 }
 
-// Every group holds at least `max_per_group - 1` players.
+// Every group holds at least `full_group_size - 1` players.
 #[test]
-fn acceptable_player_count_enforces_max_per_group_minus_one() {
+fn acceptable_player_count_enforces_full_group_size_minus_one() {
 	// One group of one player.
 	assert!(!acceptable(3, 1));
 	assert!(acceptable(3, 2));
@@ -3219,7 +3219,7 @@ fn candidate_and_people_vote_weights_applied() {
 				_ => unreachable!("must be Reporting"),
 			};
 
-			let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+			let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 			let group_idx = groups.group_index_from_player_index(reporter_idx);
 
 			// Build the partial report in the deterministic `(round, player_index)` order.
@@ -3326,7 +3326,7 @@ fn recognised_people_are_evenly_distributed() {
 		}
 
 		// 4. Build the GroupsSetting helper
-		let (player_cnt, max_per_group) = {
+		let (player_cnt, full_group_size) = {
 			let game = crate::Game::<Test>::get().unwrap();
 			let player_count = match game.state {
 				GameState::Reporting { player_count } => player_count,
@@ -3334,7 +3334,7 @@ fn recognised_people_are_evenly_distributed() {
 			};
 			(player_count, game.max_group_size)
 		};
-		let groups = GroupsSetting { max_per_group, player_count: player_cnt };
+		let groups = GroupsSetting { full_group_size, player_count: player_cnt };
 		assert_eq!(groups.number_of_group(), 3, "should be exactly 3 groups for 9 players");
 
 		// 5. For each round ensure the 3 aliases occupy three distinct group indices {0,1,2}.
@@ -3429,7 +3429,7 @@ mod one_group_scenario {
 	fn groups_5_6_scenario() {
 		use crate::types::GroupsSetting;
 
-		let gs = GroupsSetting { max_per_group: 6, player_count: 5 };
+		let gs = GroupsSetting { full_group_size: 6, player_count: 5 };
 		assert_eq!(gs.number_of_group(), 1);
 
 		for idx in 0..5 {
@@ -3443,7 +3443,7 @@ mod one_group_scenario {
 	fn groups_6_6_scenario() {
 		use crate::types::GroupsSetting;
 
-		let gs = GroupsSetting { max_per_group: 6, player_count: 6 };
+		let gs = GroupsSetting { full_group_size: 6, player_count: 6 };
 		assert_eq!(gs.number_of_group(), 1);
 
 		for idx in 0..6 {
@@ -4484,7 +4484,7 @@ fn build_report_with_opinion(
 		GameState::Reporting { player_count } => player_count,
 		_ => panic!("game must be in Reporting state"),
 	};
-	let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+	let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 	let mut full = Vec::new();
 	for round in 0..game.rounds {
 		let reporter_idx = reporter_indices[round as usize];
@@ -4933,7 +4933,7 @@ fn expected_max_vote_weight_matches_per_member_oracle_multi_group() {
 		advance_to_reporting_phase(&schedule);
 
 		// The scenario must span more than one group, otherwise group membership is trivial.
-		let groups = GroupsSetting { max_per_group: max_group_size, player_count };
+		let groups = GroupsSetting { full_group_size: max_group_size, player_count };
 		assert!(groups.number_of_group() >= 2, "test must span multiple groups");
 
 		// Oracle: recompute every player's expected weight from the actual co-players, exactly as
