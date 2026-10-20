@@ -3468,3 +3468,171 @@ fn integrity_test_passes() {
 		<Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }
+
+mod migration {
+	use super::*;
+	use crate::migration::{v1::MigrateToAttendedGamesCounter, MigrateV0ToV1};
+	use frame_support::{
+		storage::unhashed,
+		traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion, UncheckedOnRuntimeUpgrade},
+	};
+
+	/// Writes a participant in the shape stored before the attended games counter existed.
+	fn put_old_participant(key: &AccountOrPerson<u64>, credit: u64) {
+		let old = (
+			7u8,
+			Streak::Attended(3),
+			AttendanceHistory::default(),
+			credit,
+			true,
+			true,
+			true,
+			Recognized(42),
+			Some(5u32),
+		);
+		unhashed::put_raw(&Participants::<Test>::hashed_key_for(key), &old.encode());
+	}
+
+	fn old_keys() -> [AccountOrPerson<u64>; 3] {
+		[
+			AccountOrPerson::Account(1),
+			AccountOrPerson::Account(2),
+			AccountOrPerson::Person([3u8; 32]),
+		]
+	}
+
+	#[test]
+	fn versioned_migration_translates_and_bumps_the_version() {
+		new_test_ext().execute_with(|| {
+			// Chain at version 0 holds one participant in the old shape.
+			StorageVersion::new(0).put::<PalletScore>();
+			let key = AccountOrPerson::Account(1);
+			put_old_participant(&key, 77);
+
+			// The wired migration runs.
+			let weight = <MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			// Every stored field survives and the counter starts at zero.
+			assert_eq!(
+				Participants::<Test>::get(&key),
+				Some(Participant {
+					score: 7,
+					streak: Streak::Attended(3),
+					attendance_history: AttendanceHistory::default(),
+					credit: 77,
+					cashed_out: true,
+					reached_personhood: true,
+					has_ever_reached_personhood: true,
+					recognition: Recognized(42),
+					last_attended_game: Some(5),
+					attended_games_while_recognized: 0,
+				})
+			);
+			assert_eq!(PalletScore::on_chain_storage_version(), 1, "the gate must close behind it");
+			// One read and write for the one participant, one more read for the end of the
+			// prefix iteration, and a read and write for the version the gate checks and stamps.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			assert_eq!(weight, db.reads_writes(3, 2), "the translation must charge what it did");
+		});
+	}
+
+	#[test]
+	fn translates_participants_written_before_the_counter() {
+		new_test_ext().execute_with(|| {
+			// An old-shaped participant is stored.
+			let key = AccountOrPerson::Account(1);
+			put_old_participant(&key, 77);
+			assert_eq!(Participants::<Test>::get(&key), None, "the old encoding must not decode");
+
+			// The inner migration runs.
+			MigrateToAttendedGamesCounter::<Test>::on_runtime_upgrade();
+
+			// The participant decodes again.
+			let participant = Participants::<Test>::get(&key).expect("the migration restored it");
+			assert_eq!(participant.credit, 77);
+			assert_eq!(participant.attended_games_while_recognized, 0);
+		});
+	}
+
+	#[test]
+	fn translates_every_participant() {
+		new_test_ext().execute_with(|| {
+			// Three old-shaped participants are stored.
+			for key in &old_keys() {
+				put_old_participant(key, 5);
+			}
+
+			// The inner migration runs.
+			MigrateToAttendedGamesCounter::<Test>::on_runtime_upgrade();
+
+			// All three decode.
+			assert_eq!(Participants::<Test>::iter().count(), 3);
+		});
+	}
+
+	#[test]
+	fn fresh_chain_skips_the_migration() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(
+				PalletScore::on_chain_storage_version(),
+				PalletScore::in_code_storage_version(),
+				"genesis must stamp the in-code version"
+			);
+			// A participant registered by the current code has a non-zero counter.
+			PalletScore::onboard_for_recognition(&1).unwrap();
+			let key = AccountOrPerson::Account(1);
+			Participants::<Test>::mutate(&key, |p| {
+				p.as_mut().unwrap().attended_games_while_recognized = 9
+			});
+
+			// The wired migration runs.
+			let weight = <MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			// The counter is untouched and only the version read is charged.
+			assert_eq!(
+				Participants::<Test>::get(&key).expect("exists").attended_games_while_recognized,
+				9,
+				"the gate must leave a current participant alone"
+			);
+			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));
+		});
+	}
+
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn try_runtime_checks_span_the_translation() {
+		new_test_ext().execute_with(|| {
+			// Three old-shaped participants are stored and none decodes.
+			for key in &old_keys() {
+				put_old_participant(key, 5);
+			}
+			assert_eq!(Participants::<Test>::iter().count(), 0, "nothing decodes before");
+
+			// Pre-upgrade state is captured and the migration runs.
+			let state = MigrateToAttendedGamesCounter::<Test>::pre_upgrade().expect("counts keys");
+			assert_eq!(u32::decode(&mut &state[..]).unwrap(), 3, "keys are counted, not entries");
+			MigrateToAttendedGamesCounter::<Test>::on_runtime_upgrade();
+
+			// Post-upgrade check passes.
+			assert_ok!(MigrateToAttendedGamesCounter::<Test>::post_upgrade(state));
+		});
+	}
+
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn post_upgrade_check_catches_a_lost_participant() {
+		new_test_ext().execute_with(|| {
+			// Pre-upgrade state counted one participant.
+			let key = AccountOrPerson::Account(1);
+			put_old_participant(&key, 5);
+			let state = MigrateToAttendedGamesCounter::<Test>::pre_upgrade().expect("counts keys");
+
+			// A value that decodes as neither shape is dropped by `translate_values`.
+			unhashed::put_raw(&Participants::<Test>::hashed_key_for(&key), &[0xffu8]);
+			MigrateToAttendedGamesCounter::<Test>::on_runtime_upgrade();
+
+			// Post-upgrade check reports the loss.
+			assert!(MigrateToAttendedGamesCounter::<Test>::post_upgrade(state).is_err());
+		});
+	}
+}

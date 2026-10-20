@@ -23,6 +23,7 @@ extern crate alloc;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 mod extension;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
@@ -94,7 +95,10 @@ pub mod pallet {
 	/// far in the future.
 	const CUSTOM_ERROR_FAR_FUTURE: u8 = 87;
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	/// Default personhood-threshold tiers, used as the storage default for
