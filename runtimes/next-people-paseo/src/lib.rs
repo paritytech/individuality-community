@@ -245,8 +245,6 @@ pub type Migrations = (
 	cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
-	// Single use! - remove once the upgrade carrying it is live.
-	indiv_pallet_people::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)
@@ -784,6 +782,8 @@ impl pallet_migrations::Config for Runtime {
 	#[cfg(not(feature = "runtime-benchmarks"))]
 	type Migrations = (
 		ForeignAssetsReservesMigration<Runtime, (), migrations::PeoplePaseoAssetsReservesProvider>,
+		// Single use! - remove once the upgrade carrying it is live.
+		indiv_pallet_people::migration::MigrateV0ToV1<Runtime>,
 	);
 	// Benchmarks need mocked migrations to guarantee that they succeed.
 	#[cfg(feature = "runtime-benchmarks")]

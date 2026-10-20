@@ -1749,7 +1749,11 @@ fn set_alias_account_fails_for_invalid_context_in_extension() {
 
 mod tenure {
 	use super::*;
-	use frame_support::traits::{GetStorageVersion, StorageVersion};
+	use frame_support::{
+		migrations::{SteppedMigration, SteppedMigrationError},
+		traits::{GetStorageVersion, StorageVersion},
+		weights::{Weight, WeightMeter},
+	};
 	use migration::{v0, MigrateV0ToV1};
 
 	fn create_collection() {
@@ -1772,6 +1776,38 @@ mod tenure {
 
 	fn history(id: PersonalId) -> RecognitionHistory {
 		PeoplePallet::recognition_history(id).expect("person exists")
+	}
+
+	/// Stores `ids` under the old record layout at storage version 0.
+	fn downgrade(ids: &[PersonalId]) {
+		for id in ids {
+			let record = People::<Test>::get(id).expect("person exists");
+			v0::People::<Test>::insert(
+				id,
+				v0::PersonRecord { key: record.key, account: record.account },
+			);
+		}
+		StorageVersion::new(0).put::<PeoplePallet>();
+	}
+
+	/// Runs the migration to completion with unlimited weight.
+	fn run_migration() {
+		let mut cursor = None;
+		loop {
+			cursor =
+				MigrateV0ToV1::<Test>::step(cursor, &mut WeightMeter::new()).expect("step passes");
+			if cursor.is_none() {
+				break;
+			}
+		}
+	}
+
+	/// Returns the weight the migration needs for one person.
+	fn weight_per_person() -> Weight {
+		match MigrateV0ToV1::<Test>::step(None, &mut WeightMeter::with_limit(Weight::zero())) {
+			Err(SteppedMigrationError::InsufficientWeight { required }) => required,
+			other => panic!("expected an insufficient weight error, got {other:?}"),
+		}
 	}
 
 	#[test]
@@ -1851,6 +1887,34 @@ mod tenure {
 			let (id, _, _) = generate_people_with_index(0, 0)[0];
 
 			assert_noop!(PeoplePallet::recognize_personhood(id, None), Error::<Test>::NotSuspended);
+		});
+	}
+
+	#[test]
+	fn suspension_fails_if_already_suspended() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			MockNow::set(&1_000);
+			let people = generate_people_with_index(0, 1);
+			let (recognized, suspended) = (people[0].0, people[1].0);
+			Members::process_maintenance();
+			MockNow::set(&1_500);
+			suspend(suspended);
+
+			// The batch fails as a whole, before the member service sees any key.
+			MockNow::set(&2_000);
+			assert_ok!(PeoplePallet::start_people_set_mutation_session());
+			assert_noop!(
+				PeoplePallet::suspend_personhood(&[recognized, suspended]),
+				Error::<Test>::Suspended
+			);
+			assert_ok!(PeoplePallet::end_people_set_mutation_session());
+
+			assert_eq!(history(recognized).recognized_since, Some(1_000));
+			assert_eq!(
+				history(suspended).periods.to_vec(),
+				vec![RecognitionPeriod { start: 1_000, end: 1_500 }]
+			);
 		});
 	}
 
@@ -1939,13 +2003,7 @@ mod tenure {
 			Members::process_maintenance();
 			suspend(suspended);
 			let (onboarding, _, _) = generate_people_with_index(2, 2)[0];
-			for id in [included, onboarding, suspended] {
-				let record = People::<Test>::get(id).expect("person exists");
-				v0::People::<Test>::insert(
-					id,
-					v0::PersonRecord { key: record.key, account: record.account },
-				);
-			}
+			downgrade(&[included, onboarding, suspended]);
 			// A person whose key the collection has never seen.
 			let unknown = 99;
 			let unknown_key = MockCrypto::member_from_secret(&MockCrypto::new_secret([77; 32]));
@@ -1953,13 +2011,12 @@ mod tenure {
 				unknown,
 				v0::PersonRecord { key: unknown_key, account: None },
 			);
-			StorageVersion::new(0).put::<PeoplePallet>();
 			MockNow::set(&5_000);
 
 			// The migration runs.
 			#[cfg(feature = "try-runtime")]
 			let state = MigrateV0ToV1::<Test>::pre_upgrade().expect("pre-upgrade passes");
-			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+			run_migration();
 			#[cfg(feature = "try-runtime")]
 			assert_ok!(MigrateV0ToV1::<Test>::post_upgrade(state));
 
@@ -1974,6 +2031,70 @@ mod tenure {
 				assert_eq!(record.history.settled, 0);
 			}
 			assert_eq!(PeoplePallet::on_chain_storage_version(), StorageVersion::new(1));
+		});
+	}
+
+	#[test]
+	fn migration_resumes_from_cursor() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			// Three people stored under the old layout.
+			let ids = generate_people_with_index(0, 2).iter().map(|p| p.0).collect::<Vec<_>>();
+			Members::process_maintenance();
+			downgrade(&ids);
+			MockNow::set(&5_000);
+
+			// Each step migrates exactly one person with the weight of one person.
+			let mut cursor = None;
+			for _ in 0..ids.len() {
+				let mut meter = WeightMeter::with_limit(weight_per_person());
+				cursor = MigrateV0ToV1::<Test>::step(cursor, &mut meter).expect("step passes");
+				let last = cursor.expect("migration continues");
+				assert_eq!(meter.remaining(), Weight::zero());
+				assert_eq!(history(last).recognized_since, Some(5_000));
+				assert_eq!(PeoplePallet::on_chain_storage_version(), StorageVersion::new(0));
+			}
+
+			// The final step finds no more people and sets the version.
+			let mut meter = WeightMeter::with_limit(weight_per_person());
+			assert_eq!(MigrateV0ToV1::<Test>::step(cursor, &mut meter), Ok(None));
+			for id in ids {
+				assert_eq!(history(id).recognized_since, Some(5_000));
+			}
+			assert_eq!(PeoplePallet::on_chain_storage_version(), StorageVersion::new(1));
+		});
+	}
+
+	#[test]
+	fn migration_skips_when_already_at_v1() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			MockNow::set(&1_000);
+			let (id, _, _) = generate_people_with_index(0, 0)[0];
+			MockNow::set(&5_000);
+
+			// The storage is already at version 1 and the record keeps its history.
+			let mut meter = WeightMeter::new();
+			assert_eq!(MigrateV0ToV1::<Test>::step(None, &mut meter), Ok(None));
+			assert_eq!(meter.consumed(), Weight::zero());
+			assert_eq!(history(id).recognized_since, Some(1_000));
+		});
+	}
+
+	#[test]
+	fn migration_fails_without_weight() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			let (id, _, _) = generate_people_with_index(0, 0)[0];
+			downgrade(&[id]);
+
+			// A meter with no weight cannot migrate anyone.
+			let mut meter = WeightMeter::with_limit(Weight::zero());
+			assert!(matches!(
+				MigrateV0ToV1::<Test>::step(None, &mut meter),
+				Err(SteppedMigrationError::InsufficientWeight { .. })
+			));
+			assert_eq!(PeoplePallet::on_chain_storage_version(), StorageVersion::new(0));
 		});
 	}
 }

@@ -920,17 +920,11 @@ pub mod pallet {
 				None => {
 					let mut record = People::<T>::get(who).ok_or(Error::<T>::NotPerson)?;
 					ensure!(Keys::<T>::get(&record.key) == Some(who), Error::<T>::NoKey);
-					ensure!(record.history.recognized_since.is_none(), Error::<T>::NotSuspended);
+					record.history.open(now).map_err(|_| Error::<T>::NotSuspended)?;
 					T::MemberService::add_members(
 						PEOPLE_MEMBER_IDENTIFIER,
 						vec![record.key.clone()],
 					)?;
-					if !record.history.open(now) {
-						log::error!(
-							target: LOG_TARGET,
-							"person {who} resumed with an open recognition period"
-						);
-					}
 					People::<T>::insert(who, &record);
 					Self::deposit_event(Event::<T>::PersonOnboarding { who, key: record.key });
 				},
@@ -996,7 +990,8 @@ pub mod pallet {
 			let now = T::Clock::now().as_secs();
 			let mut records = Vec::with_capacity(suspensions.len());
 			for personal_id in suspensions {
-				let record = People::<T>::get(personal_id).ok_or(Error::<T>::NotPerson)?;
+				let mut record = People::<T>::get(personal_id).ok_or(Error::<T>::NotPerson)?;
+				record.history.close(now).ok_or(Error::<T>::Suspended)?;
 				records.push((*personal_id, record));
 			}
 			let keys = records.iter().map(|(_, record)| record.key.clone()).collect::<Vec<_>>();
@@ -1005,12 +1000,6 @@ pub mod pallet {
 				if let Some(account) = record.account.take() {
 					AccountToPersonalId::<T>::remove(&account);
 					frame_system::Pallet::<T>::dec_sufficients(&account);
-				}
-				if !record.history.close(now) {
-					log::error!(
-						target: LOG_TARGET,
-						"person {personal_id} suspended without an open recognition period"
-					);
 				}
 				People::<T>::insert(personal_id, &record);
 			}

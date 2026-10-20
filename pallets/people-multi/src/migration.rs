@@ -23,30 +23,27 @@ use crate::{
 	PEOPLE_MEMBER_IDENTIFIER,
 };
 use frame_support::{
-	migrations::VersionedMigration,
+	migrations::{MigrationId, SteppedMigration, SteppedMigrationError},
 	pallet_prelude::*,
 	storage_alias,
-	traits::{OnRuntimeUpgrade, UncheckedOnRuntimeUpgrade, UnixTime},
+	traits::{GetStorageVersion, OnRuntimeUpgrade, UnixTime},
+	weights::WeightMeter,
 };
-use indiv_support::traits::{AppendOnlyMembers, RecognitionHistory};
+use indiv_support::traits::{AppendOnlyMembers, PersonalId, RecognitionHistory, RingPosition};
 use sp_runtime::Saturating;
 
 const LOG_TARGET: &str = "runtime::people::migration";
 
-/// Adds a [`RecognitionHistory`] to every [`PersonRecord`].
+/// Adds a [`RecognitionHistory`] to every [`PersonRecord`], one block's worth of people at a
+/// time, driven by `pallet_migrations`.
 ///
 /// The real recognition time of an existing person is unknown, so a recognized person gets a
-/// period open since the upgrade and tenure counts from there. A suspended person gets no open
+/// period open since the block that migrates their record. A suspended person gets no open
 /// period.
 ///
-/// Runs in one block, so the number of people must fit the block's proof size.
-pub type MigrateV0ToV1<T> = VersionedMigration<
-	0,
-	1,
-	v1::AddRecognitionHistory<T>,
-	Pallet<T>,
-	<T as frame_system::Config>::DbWeight,
->;
+/// A person whose key is an active member of the people collection is recognized. A key the
+/// collection reports as suspended, or does not know, leaves the person without an open period.
+pub struct MigrateV0ToV1<T>(PhantomData<T>);
 
 pub mod v0 {
 	use super::*;
@@ -63,70 +60,109 @@ pub mod v0 {
 	pub type People<T: Config> = StorageMap<
 		Pallet<T>,
 		Blake2_128Concat,
-		indiv_support::traits::PersonalId,
+		PersonalId,
 		PersonRecord<MemberOf<T>, <T as frame_system::Config>::AccountId>,
 	>;
 }
 
-pub mod v1 {
-	use super::*;
-
-	/// Use [`MigrateV0ToV1`] rather than this directly.
+impl<T: Config> MigrateV0ToV1<T> {
+	/// Returns the weight of migrating one person.
 	///
-	/// A person whose key is an active member of the people collection is recognized. A key the
-	/// collection reports as suspended, or does not know, leaves the person without an open period.
-	pub struct AddRecognitionHistory<T>(PhantomData<T>);
+	/// `DbWeight` carries no proof size, so the two reads add theirs explicitly.
+	fn weight_per_person() -> Weight {
+		let proof = v0::PersonRecord::<MemberOf<T>, T::AccountId>::max_encoded_len()
+			.saturating_add(RingPosition::max_encoded_len()) as u64;
+		T::DbWeight::get()
+			.reads_writes(2, 1)
+			.saturating_add(Weight::from_parts(0, proof))
+	}
 
-	impl<T: Config> UncheckedOnRuntimeUpgrade for AddRecognitionHistory<T> {
-		fn on_runtime_upgrade() -> Weight {
-			let now = T::Clock::now().as_secs();
-			let mut translated = 0u64;
-			People::<T>::translate::<v0::PersonRecord<MemberOf<T>, T::AccountId>, _>(|id, old| {
-				translated.saturating_inc();
-				let status = T::MemberService::member_status(PEOPLE_MEMBER_IDENTIFIER, &old.key);
-				let recognized = match status {
-					Some(position) => !position.suspended(),
-					None => {
-						log::error!(target: LOG_TARGET, "person {id} has no member status");
-						false
-					},
-				};
-				let history = if recognized {
-					RecognitionHistory::open_since(now)
-				} else {
-					RecognitionHistory::default()
-				};
-				Some(PersonRecord { key: old.key, account: old.account, history })
-			});
-			log::info!(target: LOG_TARGET, "added recognition history to {translated} people");
-			// Reading the record and the member status, then writing the record back.
-			T::DbWeight::get().reads_writes(translated.saturating_mul(2), translated)
-		}
+	/// Rewrites the record of `id` under the new layout.
+	fn migrate_person(id: PersonalId, now: u64) {
+		let Some(old) = v0::People::<T>::get(id) else {
+			log::error!(target: LOG_TARGET, "person {id} has no record to migrate");
+			return;
+		};
+		let status = T::MemberService::member_status(PEOPLE_MEMBER_IDENTIFIER, &old.key);
+		let recognized = match status {
+			Some(position) => !position.suspended(),
+			None => {
+				log::error!(target: LOG_TARGET, "person {id} has no member status");
+				false
+			},
+		};
+		let history = if recognized {
+			RecognitionHistory::open_since(now)
+		} else {
+			RecognitionHistory::default()
+		};
+		People::<T>::insert(id, PersonRecord { key: old.key, account: old.account, history });
+	}
+}
 
-		#[cfg(feature = "try-runtime")]
-		fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
-			Ok((v0::People::<T>::iter().count() as u64).encode())
-		}
+impl<T: Config> SteppedMigration for MigrateV0ToV1<T> {
+	type Cursor = PersonalId;
+	type Identifier = MigrationId<13>;
 
-		#[cfg(feature = "try-runtime")]
-		fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
-			let before = u64::decode(&mut &state[..]).map_err(|_| "people count must decode")?;
-			let mut after = 0u64;
-			for (_, record) in People::<T>::iter() {
-				after.saturating_inc();
-				let suspended =
-					T::MemberService::member_status(PEOPLE_MEMBER_IDENTIFIER, &record.key)
-						.is_none_or(|position| position.suspended());
-				ensure!(
-					record.history.recognized_since.is_none() == suspended,
-					"an open period must match an active member"
-				);
-				ensure!(record.history.periods.is_empty(), "no closed period is expected");
-				ensure!(record.history.settled == 0, "no settled tenure is expected");
-			}
-			ensure!(before == after, "the number of people must not change");
-			Ok(())
+	fn id() -> Self::Identifier {
+		MigrationId { pallet_id: *b"pallet-people", version_from: 0, version_to: 1 }
+	}
+
+	fn step(
+		mut cursor: Option<Self::Cursor>,
+		meter: &mut WeightMeter,
+	) -> Result<Option<Self::Cursor>, SteppedMigrationError> {
+		if cursor.is_none() && Pallet::<T>::on_chain_storage_version() != 0 {
+			log::info!(target: LOG_TARGET, "people are already at storage version 1; skipping.");
+			return Ok(None);
 		}
+		let required = Self::weight_per_person();
+		if !meter.can_consume(required) {
+			return Err(SteppedMigrationError::InsufficientWeight { required });
+		}
+		let now = T::Clock::now().as_secs();
+		let mut migrated = 0u64;
+		while meter.can_consume(required) {
+			let mut keys = match cursor {
+				Some(last) => People::<T>::iter_keys_from(People::<T>::hashed_key_for(last)),
+				None => People::<T>::iter_keys(),
+			};
+			let Some(id) = keys.next() else {
+				StorageVersion::new(1).put::<Pallet<T>>();
+				log::info!(target: LOG_TARGET, "added recognition history to all people");
+				return Ok(None);
+			};
+			Self::migrate_person(id, now);
+			meter.consume(required);
+			migrated.saturating_inc();
+			cursor = Some(id);
+		}
+		log::info!(target: LOG_TARGET, "added recognition history to {migrated} people");
+		Ok(cursor)
+	}
+
+	#[cfg(feature = "try-runtime")]
+	fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
+		Ok((v0::People::<T>::iter().count() as u64).encode())
+	}
+
+	#[cfg(feature = "try-runtime")]
+	fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+		let before = u64::decode(&mut &state[..]).map_err(|_| "people count must decode")?;
+		let mut after = 0u64;
+		for (_, record) in People::<T>::iter() {
+			after.saturating_inc();
+			let suspended = T::MemberService::member_status(PEOPLE_MEMBER_IDENTIFIER, &record.key)
+				.is_none_or(|position| position.suspended());
+			ensure!(
+				record.history.recognized_since.is_none() == suspended,
+				"an open period must match an active member"
+			);
+			ensure!(record.history.periods.is_empty(), "no closed period is expected");
+			ensure!(record.history.settled == 0, "no settled tenure is expected");
+		}
+		ensure!(before == after, "the number of people must not change");
+		Ok(())
 	}
 }
 
