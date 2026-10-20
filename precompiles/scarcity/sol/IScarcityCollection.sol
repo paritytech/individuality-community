@@ -155,7 +155,9 @@ interface IScarcityCollection {
     /// require a code-carrying `to` to acknowledge the token.
     /// @dev ERC-721 standard function. The caller must be the current holder. `data` is forwarded
     /// to the receiver callback, which this precompile cannot make yet, so a code-carrying `to`
-    /// always reverts. The acknowledgement runs after the move and unwinds it on failure.
+    /// always reverts. The acknowledgement runs after the move and unwinds it on failure. A slot
+    /// of @custom:function slotAddress carries no code, so a transfer into one succeeds with
+    /// nobody asked: the contract that owns the slot learns nothing from it.
     /// @param from The current holder.
     /// @param to The empty purse key to move the instance to.
     /// @param tokenId The instance to move.

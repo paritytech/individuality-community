@@ -174,9 +174,13 @@
 //! contract exists at that address again. The collection owner's force powers do not depend on one.
 //! A CREATE2 address depends only on the deployer, code, input and salt, so a redeployment with the
 //! same ones lands on the same address once the previous occupant's deposits are cleaned up
-//! (`pallet-revive` refuses the address until then, and while it is still a contract), and the new
-//! contract holds every slot's authority, whatever logic it carries. Whoever stakes into a vault
-//! should check that it cannot be redeployed with other code.
+//! (`pallet-revive` refuses the address until then, and while it is still a contract). It runs the
+//! same init code on empty storage, so a vault that keeps its records in storage has lost them
+//! while the new contract holds every slot's authority: `SlotVault` redeployed this way lets
+//! anyone reserve slot 0 again and withdraw what the old one held there. Other code reaches the
+//! same address only through CREATE, whose address depends on the deployer and its nonce alone, or
+//! through init code that picks its runtime code from state. Whoever stakes into a vault should
+//! check that it cannot be redeployed, or that a redeployment cannot reach its slots.
 //!
 //! # Frame guards
 //!
@@ -199,11 +203,12 @@
 //! would consume instead.
 //!
 //! `transferFromSlot` adds a guard of its own, after those three and ahead of its own charges and
-//! reads: it reverts when the caller is the transaction's origin, an account that signs. The test
-//! is `caller_is_origin(false)` on the frame, not a look at code size, so a delegated account does
-//! not pass for a contract. It is a fence, not a boundary: an account can deploy a contract that
-//! forwards the call, and that contract then holds as many tokens as it has slots. Every key
-//! still holds one token. The guard only keeps a plain wallet from being a vault.
+//! reads: it reverts when the caller is the transaction's origin, whoever signed the transaction
+//! or the root origin. The test is `caller_is_origin(false)` on the frame, not a look at code size,
+//! so it would keep working if accounts could ever carry code. It is a fence, not a boundary: an
+//! account can deploy a contract that forwards the call, and that contract then holds as many
+//! tokens as it has slots. Every key still holds one token. The guard only keeps a plain wallet
+//! from being a vault.
 //!
 //! No other selector is contract-only. `transferFrom` and `safeTransferFrom` need the caller to be
 //! the holder, and accounts are holders. `slotAddress` is a pure derivation that grants nothing.
