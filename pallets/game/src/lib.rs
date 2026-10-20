@@ -359,7 +359,8 @@ pub mod pallet {
 		/// The lower bound on a game's minimum group size, which is `max_group_size - 1`.
 		///
 		/// Must be non-zero. A game's `max_group_size` must be greater than this value. Set it to
-		/// at least 2 to prevent single-player groups.
+		/// at least 2 to prevent single-player groups. A testnet does not enforce the minimum
+		/// group size when a game starts.
 		#[pallet::constant]
 		type MinGroupSize: Get<u32>;
 

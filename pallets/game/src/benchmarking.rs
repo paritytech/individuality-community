@@ -658,7 +658,7 @@ mod benches {
 		// `f(group_size, rounds)` weight cannot model, so we sweep a single component over the
 		// whole product range and derive the two dimensions from it below. (The benchmark macro
 		// requires single-letter parameter names, hence `p` rather than a spelled-out name.)
-		p: Linear<2, { T::MaxRounds::get() * T::MaxGroupSize::get() }>,
+		p: Linear<{ T::MinGroupSize::get() + 1 }, { T::MaxRounds::get() * T::MaxGroupSize::get() }>,
 	) -> Result<(), BenchmarkError> {
 		<T as Config>::BenchmarkHelper::set_valid_time();
 		bench_setup_airdrop_funds::<T>();
@@ -667,8 +667,8 @@ mod benches {
 		// first, up to `max_group_size`, then rounds take over for the rest of the range. This way
 		// small games (a low product) are measured too, instead of only sweeping rounds at the
 		// maximum group size. The runtime charges the worst case, `rounds * max_group_size`.
-		let group_size = p.clamp(T::MinGroupSize::get() + 1, T::MaxGroupSize::get());
-		let rounds = (p / group_size).max(1) as u8;
+		let group_size = p.min(T::MaxGroupSize::get());
+		let rounds = (p / group_size) as u8;
 		let player_count = 2u32 * group_size;
 
 		// One game exists with `max_group_size = group_size`.
