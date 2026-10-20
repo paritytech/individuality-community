@@ -71,6 +71,12 @@ pub fn is_lite_person_label(bytes: &[u8]) -> bool {
 	bytes[suffix_start..].iter().all(|b| b.is_ascii_digit())
 }
 
+/// Returns whether `bytes` is a DNS label: non-empty, only `[a-z0-9-]`, no leading or trailing
+/// hyphen.
+pub fn is_dns_label(bytes: &[u8]) -> bool {
+	is_dns_label_range(bytes, 0, bytes.len())
+}
+
 /// Core DNS-label predicate over `bytes[start..end]`.
 ///
 /// Mirrors `StringUtils._isDnsLabel`: the range must be non-empty, contain
@@ -117,6 +123,28 @@ mod tests {
 		assert!(!is_person_label(b"alice.bob"));
 		assert!(!is_person_label(b"ali_ce"));
 		assert!(!is_person_label(b"ali ce"));
+	}
+
+	#[test]
+	fn dns_label_accepts_lowercase_digits_and_inner_hyphens() {
+		assert!(is_dns_label(b"a"));
+		assert!(is_dns_label(b"dim2"));
+		assert!(is_dns_label(b"my-product"));
+		assert!(is_dns_label(b"123"));
+		assert!(is_dns_label(b"a-b-c"));
+	}
+
+	#[test]
+	fn dns_label_rejects_empty_dots_case_and_edge_hyphens() {
+		assert!(!is_dns_label(b""));
+		assert!(!is_dns_label(b"-a"));
+		assert!(!is_dns_label(b"a-"));
+		assert!(!is_dns_label(b"-"));
+		assert!(!is_dns_label(b"a.b"));
+		assert!(!is_dns_label(b"Dim2"));
+		assert!(!is_dns_label(b"a_b"));
+		assert!(!is_dns_label(b"a b"));
+		assert!(!is_dns_label(b"dim2.dot"));
 	}
 
 	#[test]

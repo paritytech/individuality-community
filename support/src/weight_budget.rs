@@ -18,6 +18,17 @@
 
 use frame_support::{dispatch::DispatchClass, traits::Get, weights::Weight};
 
+/// Return the runtime's `Normal.max_extrinsic`.
+///
+/// Panics if the runtime does not configure it.
+pub fn normal_max_extrinsic<T: frame_system::Config>() -> Weight {
+	<T as frame_system::Config>::BlockWeights::get()
+		.per_class
+		.get(DispatchClass::Normal)
+		.max_extrinsic
+		.expect("Normal class must have max_extrinsic configured")
+}
+
 /// Weight budget for offchain-worker-submitted authorized transactions.
 ///
 /// An OCW-submitted authorized transaction whose worst-case weight exceeds
@@ -33,12 +44,7 @@ pub struct OcwWeightBudget {
 impl OcwWeightBudget {
 	/// Build the budget from the runtime's `Normal.max_extrinsic`.
 	pub fn from_normal_max<T: frame_system::Config>() -> Self {
-		let normal_max = <T as frame_system::Config>::BlockWeights::get()
-			.per_class
-			.get(DispatchClass::Normal)
-			.max_extrinsic
-			.expect("Normal class must have max_extrinsic configured");
-		Self { budget: normal_max.saturating_div(2) }
+		Self { budget: normal_max_extrinsic::<T>().saturating_div(2) }
 	}
 
 	/// Panic if `weight` does not fit the budget on both weight dimensions.

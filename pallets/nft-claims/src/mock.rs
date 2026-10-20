@@ -17,7 +17,8 @@
 //! Mock runtime for the nft-claims pallet tests.
 
 use crate::{
-	self as pallet_nft_claims, ClaimantKind, CollectionSelector, Event, Selection, SelectionError,
+	self as pallet_nft_claims, ClaimantKind, CollectionMinter, CollectionSelector, Event,
+	ItemSelection, Selection, SelectionError,
 };
 use codec::{Decode, Encode};
 use frame_support::{
@@ -172,6 +173,9 @@ parameter_types! {
 	pub storage SelectorCalls: Vec<(u64, H160, CollectionId, NftClaimCredit)> = Vec::new();
 	/// Whether the mock selector fails, standing in for a trapped or reverting contract.
 	pub storage SelectorFails: bool = false;
+	/// Whether the mock selector reports [`SELECTOR_OVERREPORTED_WEIGHT`], standing in for an
+	/// adapter that reports above its ceiling.
+	pub storage SelectorOverreports: bool = false;
 	/// A claim the selector submits from inside the selection, standing in for a minter
 	/// contract calling back into the runtime. Taken before dispatching so it runs once.
 	pub storage SelectorReentry: Option<ReentrantClaim> = None;
@@ -324,6 +328,16 @@ impl MintWithoutDeposit<u64> for MockNfts {
 /// claim's charge and refund assertions cannot pass tautologically.
 pub const MINT_HOOK_WEIGHT: Weight = Weight::from_parts(9_000, 300);
 
+impl MockNfts {
+	/// The next item index the mock backend holds for `collection`, if it exists.
+	fn next_item_index(collection: CollectionId) -> Option<ItemIndex> {
+		MockCollections::get()
+			.iter()
+			.find(|(existing, _, _)| *existing == collection)
+			.map(|(_, _, next_item_index)| *next_item_index)
+	}
+}
+
 impl InspectCollection<u64> for MockNfts {
 	fn collection_owner(collection: CollectionId) -> Option<u64> {
 		MockCollections::get()
@@ -332,11 +346,13 @@ impl InspectCollection<u64> for MockNfts {
 			.map(|(_, owner, _)| *owner)
 	}
 
-	fn next_item_index(collection: CollectionId) -> Option<ItemIndex> {
-		MockCollections::get()
+	fn item_draw_bounds(collection: CollectionId) -> Option<(ItemIndex, u32)> {
+		let next_item = Self::next_item_index(collection)?;
+		let missing = MissingItems::get()
 			.iter()
-			.find(|(existing, _, _)| *existing == collection)
-			.map(|(_, _, next_item_index)| *next_item_index)
+			.filter(|(existing, item)| *existing == collection && *item < next_item)
+			.count() as u32;
+		Some((next_item, next_item.saturating_sub(missing)))
 	}
 
 	fn item_exists(collection: CollectionId, item: ItemIndex) -> bool {
@@ -353,6 +369,9 @@ pub const SELECTOR_CONSUMED_WEIGHT: Weight = Weight::from_parts(400_000, 1_000);
 /// The weight the mock selector reports for a failed call, distinct from the successful
 /// consumption and from zero so error-refund assertions cannot pass tautologically.
 pub const SELECTOR_FAILED_WEIGHT: Weight = Weight::from_parts(250_000, 700);
+/// The weight the mock selector reports when [`SelectorOverreports`] is set, above
+/// [`SELECTOR_MAX_WEIGHT`] in both dimensions so clamp assertions cannot pass tautologically.
+pub const SELECTOR_OVERREPORTED_WEIGHT: Weight = Weight::from_parts(3_000_000, 20_000);
 
 /// The arguments of a claim the mock selector submits mid-selection through [`SelectorReentry`].
 #[derive(Clone, PartialEq, Eq, Debug, codec::Encode, codec::Decode)]
@@ -372,7 +391,15 @@ pub struct ReentrantClaim {
 /// selector dispatches it before returning, as a reentrant minter contract would.
 pub struct MockSelector;
 impl CollectionSelector<u64> for MockSelector {
-	fn max_weight() -> Weight {
+	fn max_weight(collection: CollectionId) -> Weight {
+		match crate::CollectionMinters::<Test>::get(collection) {
+			Some(CollectionMinter { selection: ItemSelection::Contract(_), .. }) =>
+				SELECTOR_MAX_WEIGHT,
+			_ => Weight::zero(),
+		}
+	}
+
+	fn contract_max_weight() -> Weight {
 		SELECTOR_MAX_WEIGHT
 	}
 
@@ -387,10 +414,10 @@ impl CollectionSelector<u64> for MockSelector {
 		owner: u64,
 		contract: H160,
 		collection: CollectionId,
-		entropy: NftClaimCredit,
+		credit: NftClaimCredit,
 	) -> Result<Selection, SelectionError> {
 		let mut calls = SelectorCalls::get();
-		calls.push((owner, contract, collection, entropy));
+		calls.push((owner, contract, collection, credit));
 		SelectorCalls::set(&calls);
 		if let Some(reentry) = SelectorReentry::get() {
 			SelectorReentry::set(&None);
@@ -411,7 +438,11 @@ impl CollectionSelector<u64> for MockSelector {
 		if SelectorFails::get() {
 			return Err(SelectionError {
 				error: DispatchError::Other("SelectorFailed"),
-				weight_consumed: SELECTOR_FAILED_WEIGHT,
+				weight_consumed: if SelectorOverreports::get() {
+					SELECTOR_OVERREPORTED_WEIGHT
+				} else {
+					SELECTOR_FAILED_WEIGHT
+				},
 			});
 		}
 		let item = if StatefulSelectorContract::get() == Some(contract) {
@@ -421,7 +452,12 @@ impl CollectionSelector<u64> for MockSelector {
 		} else {
 			SelectorItem::get()
 		};
-		Ok(Selection { item, weight_consumed: SELECTOR_CONSUMED_WEIGHT })
+		let weight_consumed = if SelectorOverreports::get() {
+			SELECTOR_OVERREPORTED_WEIGHT
+		} else {
+			SELECTOR_CONSUMED_WEIGHT
+		};
+		Ok(Selection { item, weight_consumed })
 	}
 }
 

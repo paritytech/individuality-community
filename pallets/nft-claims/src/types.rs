@@ -70,8 +70,9 @@ pub enum ItemSelection {
 	/// delete none: additions shift which item a credit maps to and a deleted index a credit
 	/// lands on fails.
 	Random,
-	/// The collection's minter contract picks the item, called with the credit as its only
-	/// entropy.
+	/// The collection's minter contract picks the item, called with the claimed credit. The
+	/// credit is public and the submitter picks which one to spend, so the contract must not
+	/// treat it as unpredictable.
 	Contract(H160),
 }
 

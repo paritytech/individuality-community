@@ -19,10 +19,8 @@
 use crate::*;
 use codec::{Decode, DecodeWithMemTracking, Encode};
 use frame_support::{
-	defensive, ensure,
-	pallet_prelude::Weight,
-	traits::{IsSubType, UnixTime},
-	CloneNoBound, DebugNoBound, EqNoBound, PartialEqNoBound,
+	defensive, ensure, pallet_prelude::Weight, traits::IsSubType, CloneNoBound, DebugNoBound,
+	EqNoBound, PartialEqNoBound,
 };
 use frame_system::{CheckNonce, ValidNonceInfo};
 use indiv_support::tx_priority;
@@ -178,22 +176,22 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for GameAsI
 
 				let who_account_or_person = AccountOrPerson::Account(who.clone());
 
-				// Player must be new.
-				ensure!(
-					!Players::<T>::contains_key(&who_account_or_person),
-					InvalidTransaction::Custom(NotNewPlayer as u8)
-				);
+				// An invite signs up a new player only.
+				Pallet::<T>::check_sign_up_eligibility(
+					&who_account_or_person,
+					SignUpKind::WithInvite,
+				)
+				.map_err(|_| InvalidTransaction::Custom(NotNewPlayer as u8))?;
 
-				// Game must be in registration phase.
-				let game = Game::<T>::get().ok_or(InvalidTransaction::Custom(NoGame as u8))?;
-				ensure!(
-					T::UnixTime::now() < Duration::from_secs(game.registration_ends as u64),
-					InvalidTransaction::Custom(GameRegistrationEnded as u8)
-				);
-				ensure!(
-					matches!(game.state, GameState::Registration { .. }),
-					InvalidTransaction::Custom(GameNotInRegistration as u8)
-				);
+				// Game must be open for registration.
+				let game = Pallet::<T>::require_open_game().map_err(|reason| {
+					let code = match reason {
+						RegistrationClosedReason::NoGame => NoGame,
+						RegistrationClosedReason::RegistrationEnded => GameRegistrationEnded,
+						RegistrationClosedReason::NotInRegistration => GameNotInRegistration,
+					};
+					InvalidTransaction::Custom(code as u8)
+				})?;
 
 				// We prevent any overlap between statement accounts and player.
 				ensure!(
@@ -271,10 +269,8 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for GameAsI
 				// Prepare the nonce.
 				CheckNonce::<T>::prepare_nonce_for_account(&account, nonce)?;
 
-				// Consume the invite.
-				// Note: if the transaction fails, the invite is still consumed here.
-				// TODO(paritytech/individuality#230): refactor to make signing up with invite 100%
-				// fail-free guaranteed.
+				// Consume the invite. `validate` checked every precondition of the invite path, so
+				// the dispatch that follows has no failure case.
 				PendingInvites::<T>::remove(inviter, ticket);
 
 				Ok(GameAsInvitedValPre::UsingInvite(account))
@@ -288,10 +284,16 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for GameAsI
 		_info: &DispatchInfoOf<RuntimeCallOf<T>>,
 		_post_info: &PostDispatchInfoOf<RuntimeCallOf<T>>,
 		_len: usize,
-		_result: &sp_runtime::DispatchResult,
+		result: &sp_runtime::DispatchResult,
 	) -> Result<Weight, TransactionValidityError> {
 		match pre {
 			GameAsInvitedValPre::UsingInvite(account) => {
+				// `validate` checked every precondition of the invite path and nothing runs
+				// between validation and dispatch, so the sign-up cannot fail here. A failure
+				// consumes the invite for nothing, so report it.
+				if result.is_err() {
+					defensive!("sign_up_with_invite failed after validation, invite was consumed");
+				}
 				// Take back the sufficient reference. It's fine because the actual call dispatch,
 				// in case it was successful, will do an `inc_sufficients` for the caller, which
 				// will keep the account alive, and otherwise, if the call failed, the invite is

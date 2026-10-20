@@ -21,6 +21,17 @@ use xcm::latest::prelude::*;
 use xcm_runtime_apis::fees::runtime_decl_for_xcm_payment_api::XcmPaymentApi;
 
 #[test]
+fn xcm_payment_api_works() {
+	parachains_runtimes_test_utils::test_cases::xcm_payment_api_with_native_token_works::<
+		Runtime,
+		RuntimeCall,
+		RuntimeOrigin,
+		Block,
+		WeightToFee,
+	>();
+}
+
+#[test]
 fn xcm_payment_api_mirrors_the_configured_trader() {
 	new_test_ext().execute_with(|| {
 		type Trader = <XcmConfig as xcm_executor::Config>::Trader;
