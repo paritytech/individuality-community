@@ -285,6 +285,7 @@ pub trait PeopleTrait: AddOnlyPeopleTrait {
 	/// An error is returned if:
 	/// * a suspended personal id was already suspended.
 	/// * a personal id doesn't belong to any person.
+	/// * a personal id appears more than once.
 	fn suspend_personhood(suspensions: &[PersonalId]) -> DispatchResult;
 	/// Return whether the mutation session can be started.
 	///

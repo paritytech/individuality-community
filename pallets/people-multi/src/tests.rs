@@ -1919,6 +1919,24 @@ mod tenure {
 	}
 
 	#[test]
+	fn suspension_fails_on_duplicate_id() {
+		TestExt::new().execute_with(|| {
+			create_collection();
+			// Person still onboarding and holding an account.
+			let (person, _, _) = generate_people_with_index(0, 0)[0];
+			let origin = RuntimeOrigin::from(PeopleOrigin::PersonalIdentity(person));
+			assert_ok!(PeoplePallet::set_personal_id_account(origin, 42, 0));
+
+			// The batch names the person twice.
+			assert_ok!(PeoplePallet::start_people_set_mutation_session());
+			assert_noop!(
+				PeoplePallet::suspend_personhood(&[person, person]),
+				Error::<Test>::DuplicateSuspension
+			);
+		});
+	}
+
+	#[test]
 	fn oldest_period_is_settled_when_the_list_is_full() {
 		TestExt::new().execute_with(|| {
 			create_collection();

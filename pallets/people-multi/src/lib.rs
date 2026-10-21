@@ -68,7 +68,7 @@ pub use benchmarking::BenchmarkHelper;
 #[frame_support::pallet]
 pub mod pallet {
 	use super::*;
-	use alloc::{vec, vec::Vec};
+	use alloc::{collections::BTreeSet, vec, vec::Vec};
 	use frame_support::{pallet_prelude::*, traits::Contains};
 	use frame_system::{
 		offchain::{CreateAuthorizedTransaction, SubmitTransaction},
@@ -362,6 +362,8 @@ pub mod pallet {
 		AliasMismatch,
 		/// None of the supplied aliases were stale.
 		NoStaleAliases,
+		/// A personal id appears more than once in a suspension batch.
+		DuplicateSuspension,
 	}
 
 	#[pallet::origin]
@@ -989,7 +991,9 @@ pub mod pallet {
 		fn suspend_personhood(suspensions: &[PersonalId]) -> DispatchResult {
 			let now = T::Clock::now().as_secs();
 			let mut records = Vec::with_capacity(suspensions.len());
+			let mut seen = BTreeSet::new();
 			for personal_id in suspensions {
+				ensure!(seen.insert(*personal_id), Error::<T>::DuplicateSuspension);
 				let mut record = People::<T>::get(personal_id).ok_or(Error::<T>::NotPerson)?;
 				record.history.close(now).ok_or(Error::<T>::Suspended)?;
 				records.push((*personal_id, record));

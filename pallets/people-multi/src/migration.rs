@@ -67,13 +67,11 @@ pub mod v0 {
 
 impl<T: Config> MigrateV0ToV1<T> {
 	/// Returns the weight of migrating one person.
-	///
-	/// `DbWeight` carries no proof size, so the two reads add theirs explicitly.
 	fn weight_per_person() -> Weight {
 		let proof = v0::PersonRecord::<MemberOf<T>, T::AccountId>::max_encoded_len()
 			.saturating_add(RingPosition::max_encoded_len()) as u64;
 		T::DbWeight::get()
-			.reads_writes(2, 1)
+			.reads_writes(3, 1)
 			.saturating_add(Weight::from_parts(0, proof))
 	}
 
@@ -122,11 +120,12 @@ impl<T: Config> SteppedMigration for MigrateV0ToV1<T> {
 		}
 		let now = T::Clock::now().as_secs();
 		let mut migrated = 0u64;
+		// Overwriting values under existing keys only, so the iterator stays valid.
+		let mut keys = match cursor {
+			Some(last) => People::<T>::iter_keys_from_key(last),
+			None => People::<T>::iter_keys(),
+		};
 		while meter.can_consume(required) {
-			let mut keys = match cursor {
-				Some(last) => People::<T>::iter_keys_from(People::<T>::hashed_key_for(last)),
-				None => People::<T>::iter_keys(),
-			};
 			let Some(id) = keys.next() else {
 				StorageVersion::new(1).put::<Pallet<T>>();
 				log::info!(target: LOG_TARGET, "added recognition history to all people");
