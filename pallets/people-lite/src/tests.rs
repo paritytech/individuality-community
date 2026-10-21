@@ -1735,6 +1735,12 @@ mod paid_registration_throttling {
 
 			assert_eq!(LitePeople::<Test>::count(), 2);
 			assert_eq!(PaidRegistrations::<Test>::get(), PaidRegistrationWindow::default());
+
+			// The count now equals the threshold, so the limit of zero applies.
+			assert_noop!(
+				try_register_with_fee(12, 3),
+				crate::Error::<Test>::PaidRegistrationLimitReached
+			);
 		});
 	}
 
@@ -1837,6 +1843,31 @@ mod paid_registration_throttling {
 			assert_ok!(try_register_with_fee(10, 1));
 			assert_ok!(try_register_with_fee(11, 2));
 			assert_eq!(PaidRegistrations::<Test>::get(), PaidRegistrationWindow::default());
+		});
+	}
+
+	#[test]
+	fn a_period_length_change_resets_the_count_when_the_period_index_changes() {
+		new_test_ext().execute_with(|| {
+			set_up_throttle();
+			PaidRegistrationThreshold::set(&0);
+			PaidRegistrationsPerPeriod::set(&1);
+			assert_ok!(try_register_with_fee(10, 1));
+
+			// `10 * DAY / (DAY - 1)` is still period 10, so the count carries over.
+			PaidRegistrationPeriod::set(&(DAY as u32 - 1));
+			assert_noop!(
+				try_register_with_fee(11, 2),
+				crate::Error::<Test>::PaidRegistrationLimitReached
+			);
+
+			// `10 * DAY / (2 * DAY)` is period 5, so the count resets.
+			PaidRegistrationPeriod::set(&(2 * DAY as u32));
+			assert_ok!(try_register_with_fee(11, 2));
+			assert_eq!(
+				PaidRegistrations::<Test>::get(),
+				PaidRegistrationWindow { period: 5, registrations: 1 }
+			);
 		});
 	}
 
