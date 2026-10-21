@@ -522,8 +522,8 @@ pub mod pallet {
 				);
 			}
 			Self::ensure_lite_collection_created()?;
-			Self::ensure_below_lite_people_cap()?;
-			Self::throttle_paid_registration()?;
+			let count = Self::ensure_below_lite_people_cap()?;
+			Self::throttle_paid_registration(count)?;
 
 			let msg = Self::registration_message(&candidate, &ring_vrf_key);
 			ensure!(
@@ -766,34 +766,30 @@ pub mod pallet {
 			candidate: &T::AccountId,
 			info: LitePersonInfoOf<T>,
 		) -> DispatchResult {
-			let ring_vrf_key = info.ring_vrf_key.clone();
-			LitePeople::<T>::insert(candidate, info);
-			T::MemberService::add_members(LITE_PEOPLE_MEMBER_IDENTIFIER, vec![ring_vrf_key])?;
+			LitePeople::<T>::insert(candidate, &info);
+			T::MemberService::add_members(LITE_PEOPLE_MEMBER_IDENTIFIER, vec![info.ring_vrf_key])?;
 			frame_system::Pallet::<T>::inc_sufficients(candidate);
 			Ok(())
 		}
 
-		/// Ensure the lite people count is below `MaxLitePeople`.
+		/// Ensure the lite people count is below `MaxLitePeople` and return the count.
 		///
 		/// Fails with [`Error::TooManyLitePeople`] otherwise. Registrations check it before the
 		/// paid registration throttle, so a caller at the cap does not get a period error.
-		fn ensure_below_lite_people_cap() -> DispatchResult {
-			ensure!(
-				LitePeople::<T>::count() < T::MaxLitePeople::get(),
-				Error::<T>::TooManyLitePeople
-			);
-			Ok(())
+		fn ensure_below_lite_people_cap() -> Result<u32, DispatchError> {
+			let count = LitePeople::<T>::count();
+			ensure!(count < T::MaxLitePeople::get(), Error::<T>::TooManyLitePeople);
+			Ok(count)
 		}
 
-		/// Record one paid registration in the current period once the number of lite people
-		/// reaches `PaidRegistrationThreshold`.
+		/// Record one paid registration in the current period once `count` lite people reach
+		/// `PaidRegistrationThreshold`.
 		///
 		/// Fails with [`Error::PaidRegistrationLimitReached`] when the period has no registrations
 		/// left.
-		fn throttle_paid_registration() -> DispatchResult {
+		fn throttle_paid_registration(count: u32) -> DispatchResult {
 			let period_length = T::PaidRegistrationPeriod::get();
-			if period_length == 0 || LitePeople::<T>::count() < T::PaidRegistrationThreshold::get()
-			{
+			if period_length == 0 || count < T::PaidRegistrationThreshold::get() {
 				return Ok(());
 			}
 			let period =
