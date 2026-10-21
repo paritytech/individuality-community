@@ -18,7 +18,7 @@
 
 extern crate alloc;
 
-use crate::{Config, LitePeople, LitePeopleCollectionCreated, Pallet, WeightInfo};
+use crate::{Config, LitePeopleCollectionCreated, Pallet, WeightInfo};
 use frame_support::{pallet_prelude::*, traits::OnRuntimeUpgrade};
 use sp_runtime::Saturating;
 
@@ -77,11 +77,12 @@ pub mod v1 {
 		>;
 	}
 
-	/// The counter of the [`LitePeople`] counted map.
+	/// The counter of the [`LitePeople`](crate::LitePeople) counted map.
 	#[storage_alias]
 	type CounterForLitePeople<T: Config> = StorageValue<Pallet<T>, u32, ValueQuery>;
 
-	/// Counts the lite people of version 0 into the counter of [`LitePeople`] over several blocks.
+	/// Counts the lite people of version 0 into the counter of [`LitePeople`](crate::LitePeople)
+	/// over several blocks.
 	///
 	/// The cursor is the last counted account. The migration sets the storage version to 1 when it
 	/// completes. It does nothing if the storage version is not 0.
@@ -131,7 +132,8 @@ pub mod v1 {
 		#[cfg(feature = "try-runtime")]
 		fn post_upgrade(_state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
 			ensure!(
-				LitePeople::<T>::count() as usize == LitePeople::<T>::iter_keys().count(),
+				crate::LitePeople::<T>::count() as usize ==
+					crate::LitePeople::<T>::iter_keys().count(),
 				"the lite people count must match the registered lite people"
 			);
 			ensure!(
