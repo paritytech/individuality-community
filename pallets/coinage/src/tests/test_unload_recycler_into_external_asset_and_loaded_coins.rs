@@ -21,13 +21,16 @@ use crate::{
 };
 use codec::Encode;
 use frame_support::{
-	assert_err_ignore_postinfo, assert_ok, traits::fungibles::InspectHold as _, BoundedVec,
+	assert_err_ignore_postinfo, assert_ok, dispatch::GetDispatchInfo,
+	traits::fungibles::InspectHold as _, BoundedVec,
 };
 use frame_system::AuthorizeCall;
 use indiv_support::traits::Alias;
 use sp_crypto_hashing::blake2_256;
 use sp_runtime::{bounded_vec, testing::UintAuthorityId};
 use verifiable::GenerateVerifiable;
+
+type W = <Test as Config>::WeightInfo;
 
 fn build_unload_ext(
 	call: RuntimeCall,
@@ -143,14 +146,14 @@ fn mixed_output_prepaid_success() {
 		assert_eq!(
 			post.actual_weight,
 			Some(
-				Coinage::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(1, 1)
-					.saturating_add(
-						<Test as Config>::WeightInfo::read_instance().saturating_mul(2)
-					)
+				Coinage::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(
+					1, 1, 1
+				)
+				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2))
 			),
 		);
 		assert!(post.actual_weight.unwrap().all_lte(
-			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(1, 1)
+			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(1, 1, 1)
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2))
 		));
 
@@ -298,13 +301,13 @@ fn mixed_output_from_output_success() {
 			post.actual_weight,
 			Some(
 				Coinage::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-					1, 1
+					1, 1, 1
 				)
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2))
 			),
 		);
 		assert!(post.actual_weight.unwrap().all_lte(
-			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(1, 1)
+			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(1, 1, 1)
 				.saturating_add(<Test as Config>::WeightInfo::read_instance().saturating_mul(2))
 		));
 
@@ -530,6 +533,81 @@ fn mixed_output_invalid_loaded_coin_value_rejected() {
 				0,
 			),
 			Error::<Test>::DenominationOutOfBound
+		);
+	});
+}
+
+#[test]
+fn mixed_output_invalid_loaded_coin_value_fails_in_extension() {
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		setup_asset();
+
+		let (secrets, index, revision) = setup_recycler(0, 1, 0);
+		let alias: Alias =
+			CryptoOf::<Test>::alias_in_context(&secrets[0], UNLOADING_RECYCLER_CONTEXT.as_ref())
+				.unwrap();
+		let loaded_coin_secret = CryptoOf::<Test>::new_secret([212u8; 32]);
+		let loaded_coin_member = CryptoOf::<Test>::member_from_secret(&loaded_coin_secret);
+		let people_alias = [78u8; 32];
+
+		let call = RuntimeCall::Coinage(
+			crate::Call::unload_recycler_into_external_asset_and_loaded_coins {
+				instance_id: TEST_INSTANCE_ID,
+				aliases: bounded_vec![alias],
+				value: 0,
+				index,
+				revision,
+				to: 42,
+				external_asset_amount: 0,
+				loaded_coins: bounded_vec![(
+					<Test as Config>::MaximumExponent::get() + 1,
+					loaded_coin_member
+				)],
+				max_fee: 0,
+			},
+		);
+
+		let ext = build_unload_ext(call, 0, 0, &secrets, 0, index, Some(people_alias));
+		assert_invalid(ext, CustomInvalidity::DenominationOutOfBound);
+		assert!(!Coinage::is_free_token_alias_consumed(0, people_alias));
+	});
+}
+
+#[test]
+fn mixed_output_from_output_invalid_loaded_coin_value_fails_in_extension() {
+	new_test_ext().execute_with(|| {
+		System::set_block_number(1);
+		setup_balances();
+
+		let value: Denomination = 0;
+		let (secrets, index, revision) = setup_recycler(value, 1, 0);
+		let alias =
+			CryptoOf::<Test>::alias_in_context(&secrets[0], UNLOADING_RECYCLER_CONTEXT.as_ref())
+				.unwrap();
+		let loaded_coin_secret = CryptoOf::<Test>::new_secret([213u8; 32]);
+		let loaded_coin_member = CryptoOf::<Test>::member_from_secret(&loaded_coin_secret);
+
+		let call = crate::Call::unload_recycler_into_external_asset_and_loaded_coins {
+			instance_id: TEST_INSTANCE_ID,
+			aliases: bounded_vec![alias],
+			value,
+			index,
+			revision,
+			to: CHARLIE,
+			external_asset_amount: 0,
+			loaded_coins: bounded_vec![(
+				<Test as Config>::MaximumExponent::get() + 1,
+				loaded_coin_member
+			)],
+			max_fee: unload_token_fee_in_asset(),
+		};
+
+		let ext = build_unload_from_output_ext(call, value, index, revision, &secrets[0..1]);
+		assert_invalid(ext, CustomInvalidity::DenominationOutOfBound);
+		assert_ne!(
+			RecyclerAliasStates::<Test>::get((TEST_INSTANCE_ID, value, index, alias)),
+			Some(AliasState::Unloaded)
 		);
 	});
 }
@@ -899,4 +977,147 @@ fn mixed_output_multi_value_loaded_coins_work_via_unload_token_extension() {
 		);
 		assert_eq!(AssetsWithHolder::total_balance(TEST_ASSET_ID, &42,), 250);
 	});
+}
+
+fn check_mixed_output_diversity_weight(fee: UnloadFee) {
+	for (exponents, expected_groups, external_asset_amount) in
+		[([-2, -1, 0], 3, 250), ([-2, -1, -2], 2, 1_000)]
+	{
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			setup_balances();
+			let prepaid = W::unload_recycler_into_external_asset_and_loaded_coins_prepaid_1(
+				expected_groups,
+				3,
+			);
+			let from_output = W::unload_recycler_into_external_asset_and_loaded_coins_from_output_1(
+				expected_groups,
+				3,
+			);
+			// The fee modes must differ, so charging the wrong one fails this test.
+			assert_ne!(prepaid, from_output);
+			let charged = match fee {
+				UnloadFee::Prepaid => prepaid,
+				UnloadFee::FromOutput { .. } => from_output,
+			};
+			// One denomination-1 input provides eight minimum-denomination units. Three
+			// distinct outputs cost seven units, so three is the maximum diversity for three
+			// outputs.
+			let value = 1;
+			let (secrets, index, revision) = setup_recycler(value, 1, 0);
+			let proven_msg = [91u8; 32];
+			let (alias, proof) = create_alias_and_proof(&secrets[0], value, index, &proven_msg);
+			if let UnloadFee::FromOutput { fee_recycler_value, fee_recycler_index } = fee {
+				assert_eq!((fee_recycler_value, fee_recycler_index), (value, index));
+				RecyclerManager::<Test>::mark_alias_unloaded(TEST_INSTANCE_ID, value, index, alias);
+			}
+			let loaded_coins: BoundedVec<_, <Test as Config>::MaxSplitOutputs> = exponents
+				.into_iter()
+				.enumerate()
+				.map(|(i, denomination)| {
+					let secret = CryptoOf::<Test>::new_secret([220 + i as u8; 32]);
+					(denomination, CryptoOf::<Test>::member_from_secret(&secret))
+				})
+				.collect::<Vec<_>>()
+				.try_into()
+				.unwrap();
+			let aliases: BoundedVec<_, <Test as Config>::MaxConsolidation> = bounded_vec![alias];
+			let max_fee = unload_token_fee_in_asset();
+			let declared_weight = |loaded_coins| {
+				Call::<Test>::unload_recycler_into_external_asset_and_loaded_coins {
+					instance_id: TEST_INSTANCE_ID,
+					aliases: aliases.clone(),
+					value,
+					index,
+					revision,
+					to: CHARLIE,
+					external_asset_amount,
+					loaded_coins,
+					max_fee,
+				}
+				.get_dispatch_info()
+				.call_weight
+			};
+			let mut repeated = loaded_coins.clone();
+			for (denomination, _) in &mut repeated {
+				*denomination = -2;
+			}
+			let declared = declared_weight(loaded_coins.clone());
+			assert!(declared.all_gt(declared_weight(repeated)));
+			let recipient_before = AssetsWithHolder::total_balance(TEST_ASSET_ID, &CHARLIE);
+			let market_before = AssetsWithHolder::total_balance(TEST_ASSET_ID, &MOCK_MARKET);
+			let fee_amount = match fee {
+				UnloadFee::Prepaid => 0,
+				UnloadFee::FromOutput { .. } => max_fee,
+			};
+			let post = Coinage::unload_recycler_into_external_asset_and_loaded_coins(
+				RuntimeOrigin::from(pallet::Origin::<Test>::UnloadToken {
+					alias_proofs: bounded_vec![proof],
+					proven_msg,
+					fee,
+				}),
+				TEST_INSTANCE_ID,
+				aliases,
+				value,
+				index,
+				revision,
+				CHARLIE,
+				external_asset_amount,
+				loaded_coins.clone(),
+				max_fee,
+			)
+			.expect("diverse mixed-output unload should succeed");
+			let expected = charged.saturating_add(W::read_instance().saturating_mul(2));
+			assert_eq!(post.actual_weight, Some(expected));
+			// The declared weight takes each dimension from the heavier fee mode, so the charged
+			// mode can match it in one dimension.
+			assert!(expected.all_lte(declared) && expected.any_lt(declared));
+			assert_eq!(
+				AssetsWithHolder::total_balance(TEST_ASSET_ID, &CHARLIE) - recipient_before,
+				external_asset_amount - fee_amount
+			);
+			assert_eq!(
+				AssetsWithHolder::total_balance(TEST_ASSET_ID, &MOCK_MARKET) - market_before,
+				fee_amount
+			);
+			assert_eq!(
+				RecyclerAliasStates::<Test>::get((TEST_INSTANCE_ID, value, index, alias)),
+				Some(AliasState::Unloaded)
+			);
+			for (denomination, member) in loaded_coins {
+				assert_eq!(
+					RecyclersCoinToRecycler::<Test>::get(member),
+					Some((TEST_INSTANCE_ID, denomination))
+				);
+			}
+		});
+	}
+}
+
+#[test]
+fn mixed_output_prepaid_refund_counts_distinct_denominations_and_repeats() {
+	check_mixed_output_diversity_weight(UnloadFee::Prepaid);
+}
+
+#[test]
+fn mixed_output_from_output_refund_counts_distinct_denominations_and_repeats() {
+	check_mixed_output_diversity_weight(UnloadFee::FromOutput {
+		fee_recycler_value: 1,
+		fee_recycler_index: 0,
+	});
+}
+
+#[test]
+fn loaded_coin_denominations_are_counted_independently_of_order_and_member() {
+	let member = CryptoOf::<Test>::member_from_secret(&CryptoOf::<Test>::new_secret([240; 32]));
+	assert_eq!(Coinage::loaded_coin_denomination_count(&[]), 0);
+	for (denominations, expected) in [
+		(vec![-2], 1),
+		(vec![-2, -2, -2], 1),
+		(vec![-2, 0, -2, 7, 0], 3),
+		(vec![i8::MIN, i8::MAX, i8::MIN, 0], 3),
+	] {
+		let loaded = denominations.into_iter().map(|d| (d, member)).collect::<Vec<_>>();
+		assert_eq!(Coinage::loaded_coin_denomination_count(&loaded), expected);
+	}
 }
