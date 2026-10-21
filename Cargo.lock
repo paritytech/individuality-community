@@ -1213,6 +1213,25 @@ dependencies = [
  "ark-std 0.6.0",
  "digest 0.10.7",
  "generic-array",
+ "sha2 0.10.9",
+ "w3f-ring-proof",
+ "zeroize",
+]
+
+[[package]]
+name = "ark-vrf"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "578e43862345b4c7900667809bc0b3664dea55aa79c1d8448d853d1d8ee98a6a"
+dependencies = [
+ "ark-bls12-381 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ed-on-bls12-381-bandersnatch 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+ "digest 0.10.7",
+ "rand 0.8.7",
  "rayon",
  "sha2 0.10.9",
  "w3f-ring-proof",
@@ -10449,7 +10468,7 @@ version = "43.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41314ae10e80f9f0c5f68bb23f26f2d21f105bb6d867810b719c29c684aa0458"
 dependencies = [
- "ark-vrf",
+ "ark-vrf 0.5.3",
  "array-bytes 6.2.3",
  "bip39",
  "bitflags 1.3.2",
@@ -12223,13 +12242,13 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "verifiable"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61bcf1e43762a8701eb3c2e836633c9ff3b65814ff573772b3250c1ed6ff218d"
+checksum = "df0ebe0ca633f63379d7192d8e26ccb87ed628d4ae5548a1f25091a66895061c"
 dependencies = [
  "ark-scale 0.0.14",
  "ark-serialize 0.6.0",
- "ark-vrf",
+ "ark-vrf 0.6.0",
  "bounded-collections 0.3.2",
  "getrandom 0.2.17",
  "getrandom_or_panic",

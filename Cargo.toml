@@ -298,7 +298,7 @@ tokio = { version = "1.45.0", default-features = false, features = [
 	"rt-multi-thread",
 ] }
 tracing = { version = "0.1.37", default-features = false }
-verifiable = { version = "0.3.0", default-features = false }
+verifiable = { version = "0.4.0", default-features = false }
 xcm = { version = "24.1.0", package = "staging-xcm", default-features = false }
 xcm-builder = { version = "29.0.1", package = "staging-xcm-builder", default-features = false }
 xcm-executor = { version = "28.0.1", package = "staging-xcm-executor", default-features = false }
