@@ -388,11 +388,15 @@ impl<T: frame_system::Config> WeightInfo<T> {
 		// Minimum execution time: 790_000 picoseconds.
 		Weight::from_parts(940_000, 0)
 	}
+	// Benchmark: 2026-09-24, frame-omni-bencher 0.24.0, 50 steps, 20 repeats.
+	// Storage: `PolkadotXcm::AuthorizedAliases` (r:1 w:0)
+	// Proof: `PolkadotXcm::AuthorizedAliases` (`max_values`: None, `max_size`: None, mode: `Measured`)
 	pub(crate) fn alias_origin() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `0`
-		//  Estimated: `0`
-		// Minimum execution time: 800_000 picoseconds.
-		Weight::from_parts(920_000, 0)
+		//  Measured:  `6181`
+		//  Estimated: `9646`
+		// Minimum execution time: 18_000_000 picoseconds.
+		Weight::from_parts(19_000_000, 9646)
+			.saturating_add(T::DbWeight::get().reads(1))
 	}
 }

@@ -1958,8 +1958,8 @@ mod stale_alias_cleanup {
 			Members::process_maintenance();
 			Members::process_maintenance();
 
-			// Simulate an airdrop-like dynamic context.
-			let dynamic_context: Context = *b"pop:polkadot.network/airdrop\x01\0\0\0";
+			// Simulate a dynamic context, such as a per-event product context.
+			let dynamic_context: Context = *b"pop:test/dynamic-context\0\0\0\0\0\0\0\0";
 			add_extra_context(dynamic_context);
 
 			let alias_account: u64 = 42;

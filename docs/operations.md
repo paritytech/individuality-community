@@ -67,7 +67,8 @@ These are sensible starting points, not the only valid flows.
    `Airdrop::airdrop_pot_id()` (`PalletId` turned into an account) — not a
    configurable address. Transfer the prize asset to it with a normal asset
    transfer; `schedule_event` assumes the pot already holds the prize.
-3. `schedule_event`. The event lifecycle then runs automatically.
+3. `schedule_event` with the `product_name` owning the event's ring VRF
+   context. The event lifecycle then runs automatically.
 
 ## Enable coinage
 

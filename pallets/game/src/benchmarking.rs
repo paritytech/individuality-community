@@ -231,7 +231,10 @@ mod benches {
 			.map(|airdrop_index| {
 				let event_id =
 					pallet::Pallet::<T>::airdrop_event_id(game_index, airdrop_index as u8);
-				let context = indiv_pallet_airdrop::context_for_event(&event_id);
+				let context = indiv_pallet_airdrop::Pallet::<T>::context_for_event(
+					pallet::PRODUCT_NAME,
+					&event_id,
+				);
 				let (proof, _alias) = <<T as indiv_pallet_airdrop::Config>::BenchmarkHelper
 					as indiv_pallet_airdrop::benchmarking::BenchmarkHelper<T>>::build_membership_proof(
 						&context, &message, 0,

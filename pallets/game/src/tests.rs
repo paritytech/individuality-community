@@ -5785,6 +5785,7 @@ mod airdrop {
 	) {
 		let event_id = Game::airdrop_event_id(game_index, airdrop_index);
 		let info = EventInfo {
+			product_name: Game::product_name(),
 			prize: test_airdrop_prize(),
 			registration_starts: 0,
 			draw_time: 0,
@@ -5840,6 +5841,7 @@ mod airdrop {
 			assert_eq!(event.info.end_time, 10 + TEST_AIRDROP_CLAIM_WINDOW);
 			// The schedule call carried the schedule's airdrop prize.
 			assert_eq!(event.info.prize, test_airdrop_prize());
+			assert_eq!(&event.info.product_name[..], b"dim2");
 		});
 	}
 
@@ -6775,6 +6777,7 @@ mod airdrop {
 			ActiveEvent {
 				id: occupied,
 				info: EventInfo {
+					product_name: Game::product_name(),
 					prize: test_airdrop_prize(),
 					registration_starts: 0,
 					draw_time: 1,

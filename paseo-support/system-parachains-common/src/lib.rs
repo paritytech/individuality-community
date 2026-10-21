@@ -17,6 +17,8 @@
 //! Shared types between system-parachains runtimes.
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(feature = "runtime-benchmarks")]
+pub mod benchmarking;
 pub mod randomness;
 
 #[cfg(feature = "multi-asset-bounties")]

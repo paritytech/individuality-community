@@ -20,9 +20,13 @@ use crate::{CollectionId, InstanceId, ItemIndex};
 use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode};
 use scale_info::TypeInfo;
+use sp_runtime::{traits::ConstU32, BoundedVec};
 
 /// Maximum number of metadata targets in one runtime API request.
 pub const MAX_METADATA_QUERIES: u32 = 128;
+
+/// A metadata batch, bounded so an oversized request fails at decode.
+pub type MetadataQueries = BoundedVec<MetadataQuery, ConstU32<MAX_METADATA_QUERIES>>;
 
 /// A target whose stored metadata layers are requested.
 #[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
@@ -62,20 +66,14 @@ pub struct MetadataLayers {
 	pub instance: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
-/// A metadata batch request that cannot be evaluated.
-#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
-pub enum BatchError {
-	/// The batch exceeds the stable request ceiling and must be split by the caller.
-	TooLarge { max: u32 },
-}
-
 sp_api::decl_runtime_apis! {
 	/// Read-only batched access to Scarcity's stored metadata layers.
+	// The `Vec` return replaced a `Result` return before any released runtime shipped this API,
+	// so the trait stays at implicit version 1.
 	pub trait ScarcityApi {
 		/// Returns one positionally aligned result per query without failing on missing targets.
-		/// An oversized request fails explicitly and is never truncated.
-		fn metadata_batch(
-			queries: Vec<MetadataQuery>,
-		) -> Result<Vec<MetadataLayers>, BatchError>;
+		/// The bounded argument enforces the batch ceiling at decode, so an accepted request is
+		/// never truncated.
+		fn metadata_batch(queries: MetadataQueries) -> Vec<MetadataLayers>;
 	}
 }

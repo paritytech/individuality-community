@@ -98,7 +98,7 @@ use sp_runtime::{
 		IdentityLookup, Verify,
 	},
 	transaction_validity::{TransactionSource, TransactionValidity},
-	ApplyExtrinsicResult, FixedU128, Perbill, Permill,
+	ApplyExtrinsicResult, FixedU128, MultiSignature, MultiSigner, Perbill, Permill,
 };
 use system_parachains_constants::async_backing::MINUTES;
 use xcm::latest::prelude::*;
@@ -124,9 +124,9 @@ use frame_support::{
 		fungible::{self, HoldConsideration},
 		fungibles,
 		tokens::imbalance::ResolveAssetTo,
-		AsEnsureOriginWithArg, ConstBool, ConstU32, ConstU64, ConstU8, ConstantStoragePrice,
-		ContainsPair, EitherOf, EitherOfDiverse, Equals, InstanceFilter, LinearStoragePrice,
-		PrivilegeCmp, TransformOrigin, WithdrawReasons,
+		AsEnsureOriginWithArg, ConstBool, ConstU16, ConstU32, ConstU64, ConstU8,
+		ConstantStoragePrice, ContainsPair, EitherOf, EitherOfDiverse, Equals, InstanceFilter,
+		LinearStoragePrice, PrivilegeCmp, TransformOrigin, WithdrawReasons,
 	},
 	weights::{ConstantMultiplier, Weight},
 	PalletId,
@@ -192,10 +192,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 3_003_000,
+	spec_version: 3_004_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
-	transaction_version: 21,
+	transaction_version: 22,
 	system_version: 1,
 };
 
@@ -556,6 +556,30 @@ impl pallet_utility::Config for Runtime {
 	type RuntimeCall = RuntimeCall;
 	type PalletsOrigin = OriginCaller;
 	type WeightInfo = weights::pallet_utility::WeightInfo<Runtime>;
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct VerifySignatureBenchmarkHelper;
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_verify_signature::BenchmarkHelper<MultiSignature, AccountId>
+	for VerifySignatureBenchmarkHelper
+{
+	fn create_signature(_entropy: &[u8], msg: &[u8]) -> (MultiSignature, AccountId) {
+		use sp_io::crypto::{sr25519_generate, sr25519_sign};
+		use sp_runtime::traits::IdentifyAccount;
+		let public = sr25519_generate(0.into(), None);
+		let who_account: AccountId = MultiSigner::Sr25519(public).into_account();
+		let signature = MultiSignature::Sr25519(sr25519_sign(0.into(), &public, msg).unwrap());
+		(signature, who_account)
+	}
+}
+
+impl pallet_verify_signature::Config for Runtime {
+	type Signature = MultiSignature;
+	type AccountIdentifier = MultiSigner;
+	type WeightInfo = weights::pallet_verify_signature::WeightInfo<Runtime>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = VerifySignatureBenchmarkHelper;
 }
 
 parameter_types! {
@@ -1128,10 +1152,15 @@ impl indiv_pallet_scarcity::Config for Runtime {
 	type MetadataDeposit = ScarcityStoragePrice;
 	type MaxKeyLen = ConstU32<32>;
 	type MaxValueLen = ConstU32<256>;
-	type MaxInstanceMetadata = ConstU32<100>;
+	type MaxCollectionMetadata = ConstU32<100>;
+	type MaxItemMetadata = ConstU32<100>;
+	type MaxInstanceMetadata = ConstU32<16>;
 	// Matches Coinage's `CoinFailureLockPeriod` and paces retries of a failing purse key.
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
+	// Matches Coinage's `MaximumAge`: the feeless moves one mint buys, after which a move is paid
+	// for and the budget refills.
+	type MaximumMoves = ConstU16<16>;
 	// Clears a collection's nft-claims minter registration when the collection is deleted, so no
 	// registration outlives the collection it names.
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
@@ -2189,7 +2218,7 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 	fn validate(contract: sp_core::H160) -> sp_runtime::DispatchResult {
 		frame_support::ensure!(
 			pallet_revive::AccountInfo::<Runtime>::is_contract(&contract),
-			sp_runtime::DispatchError::Other("no contract code at the minter address")
+			indiv_pallet_nft_claims::Error::<Runtime>::MinterNotAContract
 		);
 		Ok(())
 	}
@@ -2217,7 +2246,9 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 				"minter contract {contract:?} reverted with 0x{}",
 				sp_core::hexdisplay::HexDisplay::from(&ret.data)
 			);
-			return Err(fail(sp_runtime::DispatchError::Other("minter contract reverted")));
+			return Err(fail(
+				indiv_pallet_nft_claims::Error::<Runtime>::MinterContractReverted.into(),
+			));
 		}
 		let item = decode_minter_item(&ret.data).ok_or_else(|| {
 			log::debug!(
@@ -2225,7 +2256,7 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 				"minter contract {contract:?} returned no canonical uint32 item: 0x{}",
 				sp_core::hexdisplay::HexDisplay::from(&ret.data)
 			);
-			fail(sp_runtime::DispatchError::Other("minter contract returned no item"))
+			fail(indiv_pallet_nft_claims::Error::<Runtime>::MinterContractInvalidReturn.into())
 		})?;
 		Ok(indiv_pallet_nft_claims::Selection { item, weight_consumed })
 	}
@@ -2399,7 +2430,8 @@ impl indiv_pallet_members_subscriber::Config for Runtime {
 	type SelfParaId = MembersSubscriberSelfParaId;
 	type MaxMissingRootsPerCollection = ConstU32<255>;
 	type MaxDeletedRingsPerCollection = ConstU32<100>;
-	type MaxGapScanPerBatch = ConstU32<32>;
+	type MaxGapScanPerCall = ConstU32<32>;
+	type GapScanCooldownSeconds = ConstU64<60>;
 	type PurgePageSize = ConstU32<100>;
 	type EnsureNotifierOrigin = EnsureNotifierSibling;
 	type EnsureTerminationOrigin = EitherOfDiverse<EnsureRoot<AccountId>, EnsureNotifierSibling>;
@@ -2892,6 +2924,7 @@ construct_runtime!(
 		Revive: pallet_revive = 100,
 		DotnsGateway: indiv_pallet_dotns_gateway = 152,
 		OriginRestriction: indiv_pallet_origin_restriction = 153,
+		VerifySignature: pallet_verify_signature = 155,
 		Sudo: pallet_sudo::{Pallet, Call, Storage, Event<T>, Config<T>} = 251,
 		PgasAllowance: pallet_pgas_allowance = 252,
 	}
@@ -2905,13 +2938,42 @@ pub type Block = generic::Block<Header, UncheckedExtrinsic>;
 pub type SignedBlock = generic::SignedBlock<Block>;
 /// BlockId type as expected by this runtime.
 pub type BlockId = generic::BlockId<Block>;
-/// The `TransactionExtension` to the basic transaction logic.
-pub type TxExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
+/// The Individuality transaction extension pipeline version.
+pub const INDIVIDUALITY_EXTENSION_VERSION: u8 = 1;
+
+/// The frozen standard transaction extension pipeline version 0.
+/// This follows the fellowship Asset Hub Polkadot runtime implementation.
+pub type TxExtensionV0 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
+	Runtime,
+	(
+		frame_system::AuthorizeCall<Runtime>,
+		frame_system::CheckNonZeroSender<Runtime>,
+		frame_system::CheckSpecVersion<Runtime>,
+		frame_system::CheckTxVersion<Runtime>,
+		frame_system::CheckGenesis<Runtime>,
+		frame_system::CheckEra<Runtime>,
+		frame_system::CheckNonce<Runtime>,
+		frame_system::CheckWeight<Runtime>,
+		pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
+		pallet_claims::PrevalidateAttests<Runtime>,
+		frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
+		pallet_revive::evm::tx_extension::SetOrigin<Runtime>,
+	),
+>;
+
+/// The transaction extension pipeline version 1 carries the Individuality extensions.
+/// This follows the fellowship Asset Hub Polkadot runtime implementation with the Paseo
+/// scarcity extension.
+pub type TxExtensionV1 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	Runtime,
 	(
 		// Origin modifiers
 		(
 			(),
+			// Only general transactions can select V1.
+			// A general transaction has no signed origin.
+			// VerifySignature supplies one for ChargePGAS and signed calls.
+			pallet_verify_signature::VerifySignature<Runtime>,
 			indiv_pallet_scarcity::extension::AsScarcity<Runtime>,
 			frame_system::AuthorizeCall<Runtime>,
 			indiv_pallet_pgas::AsPgas<Runtime>,
@@ -2930,10 +2992,19 @@ pub type TxExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 			Runtime,
 			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
 		>,
-		frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
-		pallet_revive::evm::tx_extension::SetOrigin<Runtime>,
+		pallet_claims::PrevalidateAttests<Runtime>,
+		// Nested only to stay within the 12-element limit of `TransactionExtension`'s tuple impls.
+		// A nested tuple encodes exactly like the flattened one.
+		(
+			frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
+			pallet_revive::evm::tx_extension::SetOrigin<Runtime>,
+		),
 	),
 >;
+
+/// The transaction extension pipelines a general transaction may select other than version 0.
+pub type TxExtensionOtherVersions =
+	sp_runtime::traits::PipelineAtVers<INDIVIDUALITY_EXTENSION_VERSION, TxExtensionV1>;
 
 /// Default extensions applied to Ethereum transactions.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -2941,19 +3012,12 @@ pub struct EthExtraImpl;
 
 impl EthExtra for EthExtraImpl {
 	type Config = Runtime;
-	type ExtensionV0 = TxExtension;
-	type ExtensionOtherVersions = sp_runtime::traits::InvalidVersion;
+	type ExtensionV0 = TxExtensionV0;
+	type ExtensionOtherVersions = TxExtensionOtherVersions;
 
 	fn get_eth_extension(nonce: u32, tip: Balance) -> Self::ExtensionV0 {
 		(
-			(
-				(),
-				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
-				frame_system::AuthorizeCall::<Runtime>::new(),
-				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
-				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
-			),
-			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(true),
+			frame_system::AuthorizeCall::<Runtime>::new(),
 			frame_system::CheckNonZeroSender::<Runtime>::new(),
 			frame_system::CheckSpecVersion::<Runtime>::new(),
 			frame_system::CheckTxVersion::<Runtime>::new(),
@@ -2961,14 +3025,8 @@ impl EthExtra for EthExtraImpl {
 			frame_system::CheckMortality::from(generic::Era::Immortal),
 			frame_system::CheckNonce::<Runtime>::from(nonce),
 			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_pgas_allowance::ChargePGAS::<
-				Runtime,
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::new_skip_pgas(
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
-					tip, None,
-				),
-			),
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(tip, None),
+			pallet_claims::PrevalidateAttests::<Runtime>::new(),
 			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::new_from_eth_transaction(),
 		)
@@ -2976,23 +3034,15 @@ impl EthExtra for EthExtraImpl {
 	}
 }
 
-/// Builds a `TxExtension` carrying only authorization-related checks. Used by the
-/// members-subscriber offchain worker when submitting `replay_missing_roots` via
-/// `frame_system::AuthorizeCall`.
+/// Builds a `TxExtensionV0` for the members-subscriber offchain worker, which submits
+/// `replay_missing_roots` through `frame_system::AuthorizeCall`.
 impl<LocalCall> frame_system::offchain::CreateAuthorizedTransaction<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
 {
 	fn create_extension() -> Self::Extension {
-		TxExtension::from((
-			(
-				(),
-				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(None),
-				frame_system::AuthorizeCall::<Runtime>::new(),
-				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
-				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
-			),
-			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(true),
+		(
+			frame_system::AuthorizeCall::<Runtime>::new(),
 			frame_system::CheckNonZeroSender::<Runtime>::new(),
 			frame_system::CheckSpecVersion::<Runtime>::new(),
 			frame_system::CheckTxVersion::<Runtime>::new(),
@@ -3000,21 +3050,29 @@ where
 			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
 			frame_system::CheckNonce::<Runtime>::from(0),
 			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_pgas_allowance::ChargePGAS::<
-				Runtime,
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::new_skip_pgas(
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
-			),
+			pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
+			pallet_claims::PrevalidateAttests::<Runtime>::new(),
 			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
-		))
+		)
+			.into()
 	}
 }
 
 /// Unchecked extrinsic type as expected by this runtime.
 pub type UncheckedExtrinsic =
 	pallet_revive::evm::runtime::UncheckedExtrinsic<Address, Signature, EthExtraImpl>;
+
+/// The extrinsic that [`UncheckedExtrinsic`] wraps.
+/// Signed and version 0 general transactions use [`TxExtensionV0`].
+/// General transactions of other versions use [`TxExtensionOtherVersions`].
+pub type GenericUncheckedExtrinsic = generic::UncheckedExtrinsic<
+	Address,
+	RuntimeCall,
+	Signature,
+	TxExtensionV0,
+	TxExtensionOtherVersions,
+>;
 
 /// The runtime migrations per release.
 #[allow(missing_docs)]
@@ -3099,8 +3157,10 @@ pub mod migrations {
 		pallet_staking_async::migrations::SetWeightedPointsFormulaStartEra<Runtime>,
 		ForceCreatePgasAsset,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_scarcity::migration::MigrateV1ToV2<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_members_subscriber::migration::MigrateV0ToV1<Runtime>,
 	);
 
 	/// Migrations/checks that do not need to be versioned and can run on every update.
@@ -3199,6 +3259,7 @@ mod benches {
 	use alloc::boxed::Box;
 	use frame_support::assert_ok;
 	use paseo_runtime_constants::system_parachain::PeopleParaId;
+	use system_parachains_common::benchmarking::set_up_worst_case_authorized_alias;
 	use system_parachains_constants::paseo::locations::PeopleLocation;
 
 	frame_benchmarking::define_benchmarks!(
@@ -3225,6 +3286,7 @@ mod benches {
 		[pallet_session, SessionBench::<Runtime>]
 		[pallet_uniques, Uniques]
 		[pallet_utility, Utility]
+		[pallet_verify_signature, VerifySignature]
 		[pallet_vesting, Vesting]
 		[pallet_timestamp, Timestamp]
 		[pallet_treasury, Treasury]
@@ -3639,10 +3701,7 @@ mod benches {
 		}
 
 		fn alias_origin() -> Result<(Location, Location), BenchmarkError> {
-			Ok((
-				Location::new(1, [Parachain(1001)]),
-				Location::new(1, [Parachain(1001), AccountId32 { id: [111u8; 32], network: None }]),
-			))
+			Ok(set_up_worst_case_authorized_alias::<Runtime>())
 		}
 	}
 
@@ -3995,22 +4054,16 @@ pallet_revive::impl_runtime_apis_plus_revive_traits! {
 
 	impl indiv_pallet_scarcity::runtime_api::ScarcityApi<Block> for Runtime {
 		fn metadata_batch(
-			queries: Vec<indiv_pallet_scarcity::runtime_api::MetadataQuery>,
-		) -> Result<
-			Vec<indiv_pallet_scarcity::runtime_api::MetadataLayers>,
-			indiv_pallet_scarcity::runtime_api::BatchError,
-		> {
+			queries: indiv_pallet_scarcity::runtime_api::MetadataQueries,
+		) -> Vec<indiv_pallet_scarcity::runtime_api::MetadataLayers> {
 			Scarcity::metadata_batch(queries)
 		}
 	}
 
 	impl indiv_pallet_nft_claims::runtime_api::NftClaimsApi<Block> for Runtime {
 		fn preview_mints(
-			queries: Vec<indiv_pallet_nft_claims::runtime_api::PreviewQuery>,
-		) -> Result<
-			Vec<indiv_pallet_nft_claims::runtime_api::PreviewOutcome>,
-			indiv_pallet_nft_claims::runtime_api::BatchError,
-		> {
+			queries: indiv_pallet_nft_claims::runtime_api::PreviewQueries,
+		) -> Vec<indiv_pallet_nft_claims::runtime_api::PreviewOutcome> {
 			NftClaims::preview_mints(queries)
 		}
 	}
@@ -4390,147 +4443,5 @@ mod tests {
 		assert!(ProxyType::NonTransfer.is_superset(&ProxyType::NominationPools));
 		assert!(ProxyType::NonTransfer.is_superset(&ProxyType::Auction));
 		assert!(ProxyType::NonTransfer.is_superset(&ProxyType::ParaRegistration));
-	}
-
-	fn scarcity_tx_extension(nonce: u32, state_nonce: u64) -> TxExtension {
-		TxExtension::from((
-			(
-				(),
-				indiv_pallet_scarcity::extension::AsScarcity::<Runtime>::new(Some(
-					indiv_pallet_scarcity::extension::AsScarcityInfo::AsNft {
-						instance: 0,
-						state_nonce,
-					},
-				)),
-				frame_system::AuthorizeCall::<Runtime>::new(),
-				indiv_pallet_pgas::AsPgas::<Runtime>::new(None),
-				indiv_pallet_dotns_gateway::AsDotnsGateway::<Runtime>::new(None),
-			),
-			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(true),
-			frame_system::CheckNonZeroSender::<Runtime>::new(),
-			frame_system::CheckSpecVersion::<Runtime>::new(),
-			frame_system::CheckTxVersion::<Runtime>::new(),
-			frame_system::CheckGenesis::<Runtime>::new(),
-			frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
-			frame_system::CheckNonce::<Runtime>::from(nonce),
-			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_pgas_allowance::ChargePGAS::<
-				Runtime,
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::new_skip_pgas(
-				pallet_asset_conversion_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
-			),
-			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
-			pallet_revive::evm::tx_extension::SetOrigin::<Runtime>::default(),
-		))
-	}
-
-	fn scarcity_purse_test_state(state_nonce: u64) -> (sp_io::TestExternalities, AccountId) {
-		use sp_runtime::BuildStorage;
-		let storage = frame_system::GenesisConfig::<Runtime>::default().build_storage().unwrap();
-		let mut ext = sp_io::TestExternalities::from(storage);
-		let from = AccountId::from([1u8; 32]);
-		ext.execute_with(|| {
-			frame_system::Pallet::<Runtime>::set_block_number(1);
-			pallet_timestamp::Pallet::<Runtime>::set_timestamp(1_000);
-			indiv_pallet_scarcity::NftsByOwner::<Runtime>::insert(
-				&from,
-				indiv_pallet_scarcity::Nft {
-					instance: 0,
-					collection: 0,
-					item: 0,
-					minted_at: 0,
-					last_moved: 0,
-					state_nonce,
-				},
-			);
-			indiv_pallet_scarcity::Instances::<Runtime>::insert(0, &from);
-			// The holder transfer resolves its item's transferability, so the definition the
-			// instance names has to exist as it would on a chain that minted it.
-			indiv_pallet_scarcity::ItemDefs::<Runtime>::insert(
-				0,
-				0,
-				indiv_pallet_scarcity::ItemDefinition {
-					supply: 1,
-					live_supply: 1,
-					metadata_count: 0,
-					deposit: 0,
-					transferability: indiv_pallet_scarcity::Transferability::Transferable,
-				},
-			);
-		});
-		(ext, from)
-	}
-
-	/// An NFT-only purse key — no balance, no System account — can send a feeless transfer
-	/// through the full extension pipeline. This pins the security-critical ordering of
-	/// `AsScarcity` within `TxExtension`.
-	#[test]
-	fn nft_only_purse_without_system_account_can_transfer() {
-		use frame_support::dispatch::GetDispatchInfo;
-		use sp_runtime::traits::DispatchTransaction;
-
-		let (mut ext, from) = scarcity_purse_test_state(0);
-		ext.execute_with(|| {
-			let to = AccountId::from([2u8; 32]);
-			assert!(Balances::free_balance(&from).is_zero());
-			assert_eq!(frame_system::Pallet::<Runtime>::account_nonce(&from), 0);
-
-			let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer {
-				to: to.clone(),
-			});
-			let info = call.get_dispatch_info();
-			let result = scarcity_tx_extension(0, 0).dispatch_transaction(
-				RuntimeOrigin::signed(from.clone()),
-				call,
-				&info,
-				0,
-				0,
-			);
-			assert!(matches!(result, Ok(Ok(_))), "transaction failed: {result:?}");
-
-			assert!(Balances::free_balance(&from).is_zero());
-			assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&from));
-			assert_eq!(
-				indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&to).map(|nft| nft.state_nonce),
-				Some(1),
-			);
-		});
-	}
-
-	/// A failed purse dispatch restores the NFT behind the backoff lock and charges no fee —
-	/// Coinage's retry model.
-	#[test]
-	fn failed_scarcity_transfer_is_feeless_and_retryable_after_lock() {
-		use frame_support::dispatch::GetDispatchInfo;
-		use sp_runtime::traits::DispatchTransaction;
-
-		// A state nonce at u64::MAX makes the dispatch (not validation) fail on overflow.
-		let (mut ext, from) = scarcity_purse_test_state(u64::MAX);
-		ext.execute_with(|| {
-			let to = AccountId::from([2u8; 32]);
-			let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer {
-				to: to.clone(),
-			});
-			let info = call.get_dispatch_info();
-			let result = scarcity_tx_extension(0, u64::MAX).dispatch_transaction(
-				RuntimeOrigin::signed(from.clone()),
-				call,
-				&info,
-				0,
-				0,
-			);
-			assert!(matches!(result, Ok(Err(_))), "expected failed dispatch: {result:?}");
-
-			assert!(Balances::free_balance(&from).is_zero());
-			// The bumped state nonce saturates at the maximum this purse starts from.
-			assert_eq!(
-				indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&from)
-					.map(|nft| nft.state_nonce),
-				Some(u64::MAX),
-			);
-			assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&to));
-			assert!(indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&from));
-		});
 	}
 }
