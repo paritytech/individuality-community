@@ -108,7 +108,7 @@ pub mod dynamic_params {
 		pub static RegistrationFee: Balance = 75 * UNITS;
 		/// Number of lite people from which paid registrations are throttled.
 		#[codec(index = 1)]
-		pub static PaidRegistrationThreshold: u32 = 1_000;
+		pub static PaidRegistrationThreshold: u32 = 20_000;
 		/// Length of a paid registration period in seconds.
 		#[codec(index = 2)]
 		pub static PaidRegistrationPeriod: u32 = SECONDS_PER_DAY;
@@ -117,7 +117,7 @@ pub mod dynamic_params {
 		pub static PaidRegistrationsPerPeriod: u32 = 10;
 		/// Maximum number of lite people, attested and paid together.
 		#[codec(index = 4)]
-		pub static MaxLitePeople: u32 = 10_000;
+		pub static MaxLitePeople: u32 = 100_000;
 	}
 }
 
