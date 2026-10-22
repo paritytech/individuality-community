@@ -383,13 +383,17 @@ interface IScarcityCollection {
     /// @dev This precompile's own function, not part of any ERC standard. A slot is a purse key
     /// that no known key can sign for and that only `vault` can move a token out of on the holder's
     /// authority, which lets a contract hold more than one token by holding one in each of
-    /// several slots. The collection owner keeps its force powers: `forceTransfer` and
+    /// several slots. A key whose address equals a slot would control it; finding one for a slot
+    /// costs a second preimage, or about 2^80 work for the deployer of a CREATE2 vault, who chooses
+    /// its salt. The collection owner keeps its force powers: `forceTransfer` and
     /// `forceBurn` reach a token in a slot as they reach one anywhere. The address is the low 20
     /// bytes of `keccak256(abi.encodePacked("scarcity/slot", vault, index))`. Nothing is stored:
     /// any `(vault, index)` pair names a slot, and the contract tracks which indices it has used.
     ///
     /// Anyone can push a token into any slot, because a purse key gives no destination consent.
     /// A contract that holds tokens in slots must therefore:
+    /// - act only on collection addresses it has listed itself, because whoever supplies the
+    ///   address chooses the contract that answers `ownerOf` and the contract the exit calls;
     /// - keep its own custody record, written by its own functions, and attribute a stake through
     ///   that record and never through who pushed;
     /// - check each token it acts on in constant time with

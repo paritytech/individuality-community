@@ -589,23 +589,13 @@ where
 		if caller_account::<T>(env)? != holder {
 			return Err(revert(ERR_NOT_HOLDER));
 		}
-		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
-		// The move registers its destination. `WeightInfo::transfer_by_holder` does not cover that:
-		// the extrinsic adds the same term to its own annotation, and the benchmark runtime wires
-		// no handler.
-		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
-			T::AccountId,
-		>>::on_purse_occupied_weight())?;
-		let to = account_of::<T>(transfer.to);
-		Scarcity::<T>::do_transfer_by_holder(&holder, nft.instance, to)
-			.map_err(revert_scarcity::<T>)?;
-		deposit_event(
+		Self::move_by_holder(
+			&holder,
+			nft.instance,
+			*transfer.from,
+			*transfer.to,
+			*transfer.token,
 			env,
-			IScarcityCollection::Transfer {
-				from: *transfer.from,
-				to: *transfer.to,
-				tokenId: *transfer.token,
-			},
 		)?;
 		if let Safety::Checked { data } = safety {
 			// A revert here unwinds the move above with the rest of the frame.
@@ -614,6 +604,30 @@ where
 			}
 		}
 		Ok(Vec::new())
+	}
+
+	/// Move an instance on its holder's authority and log the move from `from` to `to`.
+	///
+	/// Charges the pallet call and the registration of the destination.
+	/// `WeightInfo::transfer_by_holder` does not cover the registration: the extrinsic adds the
+	/// same term to its own annotation, and the benchmark runtime wires no handler. The caller
+	/// charges its own reads and makes its refusals first, so a refused call does not pay for the
+	/// move.
+	fn move_by_holder(
+		holder: &T::AccountId,
+		instance: InstanceId,
+		from: Address,
+		to: Address,
+		token: U256,
+		env: &mut impl Ext<T = T>,
+	) -> Result<(), Error> {
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
+		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+			T::AccountId,
+		>>::on_purse_occupied_weight())?;
+		Scarcity::<T>::do_transfer_by_holder(holder, instance, account_of::<T>(&to))
+			.map_err(revert_scarcity::<T>)?;
+		deposit_event(env, IScarcityCollection::Transfer { from, to, tokenId: token })
 	}
 
 	/// Ask the destination of a `safeTransferFrom` to acknowledge the token it now holds.
@@ -663,7 +677,7 @@ where
 			return Err(revert(ERR_SELF_TRANSFER));
 		}
 		// The move registers its destination, which the benchmark does not cover. See
-		// `transfer_from`. Charged past the rejections above so a revert does not pay for a
+		// `move_by_holder`. Charged past the rejections above so a revert does not pay for a
 		// registration that never happens.
 		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
 			T::AccountId,
@@ -729,15 +743,16 @@ where
 
 	/// Move a token out of one of the calling vault's slots on the slot's holder authority.
 	///
-	/// The slot is derived from the caller, so a caller can only reach slots that are its own, and
-	/// the slot account has no key, so this is the only way the token leaves on holder authority.
-	/// Who staked the token is the calling contract's record to keep; nothing here asks.
+	/// The slot is derived from the caller, so a caller can only reach slots that are its own. No
+	/// key is known for a slot account, so this is the only known way a token leaves a slot on
+	/// holder authority. Who staked the token is the calling contract's record to keep; nothing
+	/// here asks.
 	///
-	/// Only a contract may call. `caller_is_origin(false)` is true exactly when the caller is the
-	/// transaction's origin, whoever signed it or the root origin. It looks at the frame rather
-	/// than at code. A forwarding contract still passes, so this is a fence and not a boundary. It
-	/// runs ahead of this call's own charges and reads, like the crate's frame guards; `call` has
-	/// already charged for and done the collection check.
+	/// Only a contract may call. `caller_is_origin(false)` is true exactly when the immediate
+	/// caller is the transaction's origin, whoever signed it or the root origin. A forwarding
+	/// contract still passes, so this is a fence and not a boundary. It runs ahead of this call's
+	/// own charges and reads, like the crate's frame guards; `call` has already charged for and
+	/// done the collection check.
 	fn transfer_from_slot(
 		collection: CollectionId,
 		call: &IScarcityCollection::transferFromSlotCall,
@@ -750,15 +765,10 @@ where
 		if call.to == Address::ZERO {
 			return Err(revert(ERR_ZERO_DESTINATION));
 		}
-		// What `transfer_from` charges, so the slot path never costs less than the holder path it
-		// stands beside, plus the hash that derives the slot. The destination registers like any
-		// other, which `WeightInfo::transfer_by_holder` does not cover.
-		charge_reads(env, 4)?;
+		// Collection-membership validation reads and the destination's reverse address mapping,
+		// then the hash that derives the slot.
+		charge_reads(env, 3)?;
 		charge_slot_hash::<T>(env)?;
-		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
-		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
-			T::AccountId,
-		>>::on_purse_occupied_weight())?;
 
 		let vault = address_of::<T>(&caller_account::<T>(env)?);
 		let slot = slot_address(&vault, &call.index);
@@ -773,13 +783,7 @@ where
 		if call.to == slot {
 			return Err(revert(ERR_SELF_TRANSFER));
 		}
-		let to = account_of::<T>(&call.to);
-		Scarcity::<T>::do_transfer_by_holder(&slot_account, nft.instance, to)
-			.map_err(revert_scarcity::<T>)?;
-		deposit_event(
-			env,
-			IScarcityCollection::Transfer { from: slot, to: call.to, tokenId: call.tokenId },
-		)?;
+		Self::move_by_holder(&slot_account, nft.instance, slot, call.to, call.tokenId, env)?;
 		Ok(Vec::new())
 	}
 

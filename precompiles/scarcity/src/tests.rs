@@ -3809,31 +3809,34 @@ fn a_slot_names_itself_through_owner_of_and_balance_of() {
 	});
 }
 
+/// Register `account` in `pallet-revive`'s address registry as the key behind `address`.
+///
+/// The registry's storage type is private to `pallet-revive`, so the entry is written under its
+/// raw key: `OriginalAccount` is keyed by the raw address, so the key is the storage prefix
+/// followed by the 20 address bytes. The assertion proves the write took effect, so a test built on
+/// it cannot pass vacuously.
+fn register_key_at(address: &Address, account: &AccountId32) {
+	let mut key = frame_support::storage::storage_prefix(b"Revive", b"OriginalAccount").to_vec();
+	key.extend_from_slice(address.as_slice());
+	frame_support::storage::unhashed::put(&key, account);
+	assert_eq!(
+		<Test as pallet_revive::Config>::AddressMapper::to_account_id(&H160(address.into_array())),
+		*account,
+		"the registry must now name the registered key"
+	);
+}
+
 /// A slot is the fallback account of its address even when a key is registered to that address.
 ///
-/// `AddressMapper::to_account_id` reads the registry first, so a key mapped to the slot's address
-/// would take the slot over; the fallback form skips the registry. The registry's storage type is
-/// private to `pallet-revive`, so the entry is written under its raw key. The assertion before the
-/// one that matters proves the write took effect: `to_account_id` does follow the registered key,
-/// which is the takeover `slot_account` must not allow.
+/// `AddressMapper::to_account_id` reads the registry first and follows the registered key; the
+/// fallback form makes the slot one fixed account whatever the registry holds.
 #[test]
 fn a_slot_is_the_fallback_account_even_when_a_key_is_mapped_to_its_address() {
 	new_test_ext().execute_with(|| {
 		let slot = slot_address(&Address::repeat_byte(0x07), &U256::from(3u64));
 		let slot_h160 = H160(slot.into_array());
 		let usurper = id_to_account(7);
-
-		// `OriginalAccount` is a map keyed by the raw address, so its entry is the storage prefix
-		// followed by the 20 address bytes.
-		let mut key =
-			frame_support::storage::storage_prefix(b"Revive", b"OriginalAccount").to_vec();
-		key.extend_from_slice(slot.as_slice());
-		frame_support::storage::unhashed::put(&key, &usurper);
-		assert_eq!(
-			<Test as pallet_revive::Config>::AddressMapper::to_account_id(&slot_h160),
-			usurper,
-			"the registry must now name the usurper, or this test checks nothing"
-		);
+		register_key_at(&slot, &usurper);
 
 		let account = slot_account::<Test>(&slot);
 		assert_ne!(account, usurper);
@@ -3911,7 +3914,8 @@ fn a_vault_holds_many_tokens_one_per_slot() {
 
 /// An externally owned account cannot move a token out of a slot, not even one derived from its
 /// own address: slots are for contracts. The refusal comes ahead of the call's own reads and
-/// charges, and the token stays where it was.
+/// charges, so it costs what an unknown collection's refusal costs, and the token stays where it
+/// was.
 #[test]
 fn an_account_cannot_use_slots() {
 	new_test_ext().execute_with(|| {
@@ -3928,19 +3932,28 @@ fn an_account_cannot_use_slots() {
 		)
 		.unwrap();
 		let (destination, _) = purse(0xAB);
+		let input = IScarcityCollection::transferFromSlotCall {
+			index: U256::ZERO,
+			tokenId: U256::from(instance),
+			to: destination.0.into(),
+		}
+		.abi_encode();
 
-		call_reverted_with(
-			&alice,
-			collection_address(collection),
-			IScarcityCollection::transferFromSlotCall {
-				index: U256::ZERO,
-				tokenId: U256::from(instance),
-				to: destination.0.into(),
-			}
-			.abi_encode(),
+		let refused = call_full(&alice, collection_address(collection), input.clone());
+		assert_reverted_with(
+			"an account",
+			&refused.result.expect("call executes"),
 			ERR_NOT_CONTRACT,
 		);
 		assert_eq!(Instances::<Test>::get(instance), Some(slot_account::<Test>(&slot)));
+
+		let unknown = call_full(&alice, collection_address(collection + 1), input);
+		assert_reverted_with(
+			"an unknown collection",
+			&unknown.result.expect("call executes"),
+			ERR_UNKNOWN_COLLECTION,
+		);
+		assert_eq!(refused.weight_consumed, unknown.weight_consumed);
 	});
 }
 
@@ -4817,6 +4830,43 @@ mod evm_fixture {
 		}
 	}
 
+	/// A key registered to a slot's address does not take the slot over. The vault still moves the
+	/// slot's token, and still cannot name the slot as its own destination. In this state the
+	/// slot's address resolves to the key, so the pallet's account comparison passes and only the
+	/// precompile's address check refuses the move.
+	#[test]
+	fn a_key_registered_to_a_slot_address_does_not_take_the_slot_over() {
+		for (compiler, code) in slot_releaser_codes() {
+			new_test_ext().execute_with(|| {
+				let world = VaultWorld::new(code);
+				let (empty_address, empty) = purse(0xAB);
+				let first = world.mint_into(world.slot_account(0));
+				register_key_at(&world.slot(0), &id_to_account(7));
+
+				call_ok(
+					&world.alice,
+					world.vault,
+					world.release_input(
+						world.collection,
+						0,
+						U256::from(first),
+						alloy_address(empty_address),
+					),
+				);
+				assert_eq!(world.holder_of(first), Some(empty), "{compiler}");
+				assert!(NftsByOwner::<Test>::get(world.slot_account(0)).is_none(), "{compiler}");
+
+				let second = world.mint_into(world.slot_account(0));
+				world.release_reverts(
+					&alloc::format!("{compiler}: the slot itself"),
+					world.release_input(world.collection, 0, U256::from(second), world.slot(0)),
+					ERR_SELF_TRANSFER,
+				);
+				assert_eq!(world.holder_of(second), Some(world.slot_account(0)), "{compiler}");
+			});
+		}
+	}
+
 	/// Every way a vault can fail to move a token, each leaving the token where it was.
 	#[test]
 	fn a_vault_cannot_move_what_is_not_in_its_slot() {
@@ -4848,8 +4898,13 @@ mod evm_fixture {
 				.unwrap();
 				// Held by slot 0 correctly, for the destination failures.
 				let in_slot_zero = world.mint_into(world.slot_account(0));
+				// Held by slot 3, with no state nonce left to advance.
+				let exhausted = world.mint_into(world.slot_account(3));
+				NftsByOwner::<Test>::mutate(world.slot_account(3), |nft| {
+					nft.as_mut().unwrap().state_nonce = u64::MAX
+				});
 
-				let reverts: [(&str, Vec<u8>, &str); 8] = [
+				let reverts: [(&str, Vec<u8>, &str); 9] = [
 					(
 						"another slot of the vault",
 						world.release_input(world.collection, 0, U256::from(in_slot_one), empty),
@@ -4910,6 +4965,11 @@ mod evm_fixture {
 						),
 						ERR_SELF_TRANSFER,
 					),
+					(
+						"a token with no state nonce left",
+						world.release_input(world.collection, 3, U256::from(exhausted), empty),
+						"instance state nonce exhausted",
+					),
 				];
 				for (case, input, reason) in reverts {
 					world.release_reverts(&alloc::format!("{compiler}: {case}"), input, reason);
@@ -4925,6 +4985,7 @@ mod evm_fixture {
 					),
 					(in_other_collection, world.slot_account(2)),
 					(in_slot_zero, world.slot_account(0)),
+					(exhausted, world.slot_account(3)),
 				];
 				for (instance, holder) in holders {
 					assert_eq!(Instances::<Test>::get(instance), Some(holder), "{compiler}");
@@ -4933,56 +4994,75 @@ mod evm_fixture {
 		}
 	}
 
-	/// `transferFromSlot` charges the hash, the holder transfer, the reads and the destination
-	/// registration.
+	/// `transferFromSlot` charges its reads and the hash ahead of the token lookup, and the holder
+	/// transfer and the destination registration only once its refusals pass.
 	///
-	/// Two reverts of the same token, both from inside the precompile: a zero destination is
-	/// refused ahead of every charge, and a slot that does not hold the token is refused once the
-	/// charges are paid. What the second adds over the first is exactly the charges: the hash that
-	/// derives the slot, the holder transfer, and the reads and the destination registration, which
-	/// the mock prices only in proof size because its database weight is zero. Dropping any one of
-	/// them leaves the difference short. The test cannot tell where the charges sit relative to the
-	/// token lookup, since that revert comes after both; that order is for review to hold.
+	/// Three calls for the same token. A zero destination is refused ahead of every charge. An
+	/// unknown token is refused at the lookup, the first step after the reads and the hash. A move
+	/// to an empty key pays everything. The mock prices reads and the registration only in proof
+	/// size, because its database weight is zero. The refused lookup must pay the reads and the
+	/// hash and not the move, and the move must pay the rest on top, so a charge moved across the
+	/// lookup or dropped fails one of the bounds.
 	#[test]
-	fn transfer_from_slot_charges_the_hash_the_move_and_the_registration() {
+	fn transfer_from_slot_charges_the_move_only_past_its_refusals() {
 		new_test_ext().execute_with(|| {
 			let world = VaultWorld::new(fixture_code("SlotReleaser"));
 			let instance = world.mint_into(world.slot_account(0));
 			let token = U256::from(instance);
-
-			let before_charges = call_full(
-				&world.alice,
-				world.vault,
-				world.release_input(world.collection, 0, token, Address::ZERO),
-			);
-			assert!(before_charges.result.expect("call executes").did_revert());
 			let (empty, _) = purse(0xAB);
-			let after_charges = call_full(
-				&world.alice,
-				world.vault,
-				// The token sits in slot 0, so slot 1 refuses it once the charges are paid.
-				world.release_input(world.collection, 1, token, alloy_address(empty)),
+			let reading = |input: Vec<u8>, reverts: bool| {
+				let result = call_full(&world.alice, world.vault, input);
+				assert_eq!(result.result.expect("call executes").did_revert(), reverts);
+				result.weight_consumed
+			};
+
+			let uncharged =
+				reading(world.release_input(world.collection, 0, token, Address::ZERO), true);
+			let refused = reading(
+				world.release_input(
+					world.collection,
+					0,
+					U256::from(u64::MAX),
+					alloy_address(empty),
+				),
+				true,
 			);
-			assert!(after_charges.result.expect("call executes").did_revert());
+			let moved = reading(
+				world.release_input(world.collection, 0, token, alloy_address(empty)),
+				false,
+			);
 
 			let hash = <() as pallet_revive::weights::WeightInfo>::seal_hash_keccak_256(
 				SLOT_PREIMAGE_LEN as u32,
 			);
 			let transfer = <() as indiv_pallet_scarcity::weights::WeightInfo>::transfer_by_holder();
-			// Four reads charged up front, and the registration of the destination, which is priced
-			// as two reads of proof.
-			let proof_floor = 6 * PROOF_SIZE_PER_READ + transfer.proof_size();
-			let time_floor = hash.ref_time() + transfer.ref_time();
-			assert!(time_floor > 0, "the mock must price the move for this test to mean anything");
-
-			let (before, after) = (before_charges.weight_consumed, after_charges.weight_consumed);
 			assert!(
-				after.ref_time() >= before.ref_time().saturating_add(time_floor),
-				"ref time: after the charges {after:?}, before them {before:?}, floor {time_floor}"
+				transfer.ref_time() > 0,
+				"the mock must price the move for this test to mean anything"
+			);
+
+			// Three reads and the hash ahead of the lookup.
+			assert!(
+				refused.ref_time() >= uncharged.ref_time() + hash.ref_time(),
+				"ref time: refused {refused:?}, uncharged {uncharged:?}"
 			);
 			assert!(
-				after.proof_size() >= before.proof_size().saturating_add(proof_floor),
-				"proof size: after the charges {after:?}, before them {before:?}, floor {proof_floor}"
+				refused.proof_size() >= uncharged.proof_size() + 3 * PROOF_SIZE_PER_READ,
+				"proof size: refused {refused:?}, uncharged {uncharged:?}"
+			);
+			assert!(
+				refused.ref_time() < uncharged.ref_time() + hash.ref_time() + transfer.ref_time(),
+				"a refused lookup must not pay for the move: refused {refused:?}, uncharged {uncharged:?}"
+			);
+			// The move and the registration, priced as two reads of proof, past the refusals.
+			assert!(
+				moved.ref_time() >= refused.ref_time() + transfer.ref_time(),
+				"ref time: moved {moved:?}, refused {refused:?}"
+			);
+			assert!(
+				moved.proof_size() >=
+					refused.proof_size() + transfer.proof_size() + 2 * PROOF_SIZE_PER_READ,
+				"proof size: moved {moved:?}, refused {refused:?}"
 			);
 		});
 	}
@@ -5119,6 +5199,29 @@ mod evm_fixture {
 					&players[1].account,
 					ISlotVault::claimCall { index: U256::from(1u64), to: empty_address },
 					ISlotVault::NotReleasable {},
+				);
+
+				// A claim into a taken key fails as a whole, so the winner retries with another
+				// key.
+				let (blocked_address, blocked) = purse(0xF1);
+				world.mint_into(blocked);
+				assert_reverted_with(
+					&alloc::format!("{compiler}: claiming into a taken key"),
+					&call_precompile(
+						&players[0].account,
+						world.vault,
+						ISlotVault::claimCall {
+							index: U256::from(1u64),
+							to: alloy_address(blocked_address),
+						}
+						.abi_encode(),
+					),
+					"destination purse already holds an instance",
+				);
+				assert_eq!(
+					world.holder_of(players[1].token),
+					Some(world.slot_account(1)),
+					"{compiler}"
 				);
 
 				// The winner claims one token per call. Their own key is empty, because their token
@@ -5428,7 +5531,8 @@ mod evm_fixture {
 
 	/// A collection's owner can move or burn a staked token out of its slot. The stake is then
 	/// gone but still counted, and the winner's claim reverts at the precompile. Anyone can void
-	/// it, which only records what the collection already says, and the slot is usable again.
+	/// it, which only records what the collection already says and stops the stake counting. The
+	/// round is settled, so the slot takes no new stake.
 	#[test]
 	fn a_vault_recovers_a_slot_whose_stake_the_collection_owner_removed() {
 		for (compiler, code) in slot_vault_codes() {

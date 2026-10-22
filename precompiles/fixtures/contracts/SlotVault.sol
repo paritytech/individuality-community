@@ -50,7 +50,10 @@ import "../../scarcity/sol/IScarcityCollection.sol";
 ///   them and both are owner-only. A real round should add a deadline after which a player may
 ///   take a stake back.
 /// - An accepted collection's owner can pull a stake out of a slot with `forceTransfer` or
-///   `forceBurn`. `void` frees the slot and its capacity afterwards.
+///   `forceBurn`. Before settlement the owner's `cancel` or anyone's `void` stops it counting.
+///   After settlement only `void` does, and the round stays closed.
+/// - `cancel` stops a stake counting but does not bar its player, who can `confirm` the token
+///   again while the round has room. A round that evicts players needs its own record of them.
 /// - Authority over the slots follows this contract's address, and its records live in its storage.
 ///   A contract redeployed at the same address starts with empty records and the old authority.
 ///
@@ -141,8 +144,8 @@ contract SlotVault {
     /// @notice Accept the tokens of a collection as stakes.
     /// @dev Accept only collections whose owner this vault trusts. A collection's owner keeps
     /// `forceTransfer` and `forceBurn` over its tokens wherever they sit, slots included, so an
-    /// owner who is also a player can pull a losing stake back out after `settle`, and the winner's
-    /// `claim` then reverts with "token is not in this slot" until someone calls `void`.
+    /// owner who is also a player can pull a losing stake back out after `settle`. The winner's
+    /// `claim` then reverts with "token is not in this slot", and `void` only drops the record.
     /// @param collection The address of the collection.
     function accept(address collection) external onlyOwner {
         accepted[collection] = true;
@@ -183,11 +186,12 @@ contract SlotVault {
     /// the player reserves another. The destination is an argument rather than something fixed at
     /// reservation, so an occupied key only fails this call, not every later one. It does not ask
     /// whether the collection is accepted, because custody of what a player pushed must not depend
-    /// on the owner's list. That is safe here: only the slot's reserver can call it, it writes no
-    /// state before the call, and the only call it makes goes to the address the caller names,
-    /// asking it to move a token out of the caller's own slot, which gives that address no
-    /// authority over the vault. A contract that holds other roles should not copy this as it
-    /// stands: restrict `collection` to the precompile address shape or to a known list.
+    /// on the owner's list. Only the slot's reserver can call it, and it writes no state before
+    /// the call. The call goes to the address the caller names. Code there runs as itself, so a
+    /// `transferFromSlot` it makes reaches only its own slots. A delegate call would reach this
+    /// vault's slots, and only the collection precompile's refusal of delegate calls stops it. A
+    /// contract that holds other roles should not copy this as it stands: restrict `collection` to
+    /// the precompile address shape or to a known list.
     /// @param collection The address of the token's collection.
     /// @param index The slot the caller reserved.
     /// @param tokenId The token to take back.
@@ -225,7 +229,8 @@ contract SlotVault {
 
     /// @notice Stop counting one live stake, while the round is unsettled.
     /// @dev Frees the capacity the stake used. No token moves: the player takes it back with
-    /// `withdraw`, to a key they name then.
+    /// `withdraw`, to a key they name then. While the token is in the slot, the player can also
+    /// `confirm` it again.
     /// @param index The slot to cancel.
     function cancel(uint256 index) external onlyOwner {
         Stake storage stake = stakes[index];
@@ -238,13 +243,14 @@ contract SlotVault {
     /// @notice Drop a live stake whose token is no longer in its slot, so the slot and its capacity
     /// are not lost.
     /// @dev A collection's owner can move a token out of a slot with `forceTransfer` or `forceBurn`.
-    /// Until this runs, `claim` and `cancel` on that slot fail, `withdraw` refuses a live stake, and
-    /// the stake still counts toward `MAX_STAKES`. Anyone can call it, because it only records what
-    /// the collection already says: it does nothing while the token is still in the slot. A burned
-    /// token makes `ownerOf` revert with "unknown token", which counts as gone. No other failure of
-    /// that call does: a call that could not run, for example because the call stack was full,
-    /// fails with no return data on the EVM backend, and taking that as gone would let anyone drop
-    /// a live stake while its token is still in the slot.
+    /// Until this runs, `claim` on that slot fails, `withdraw` refuses a live stake, and the stake
+    /// still counts toward `MAX_STAKES`, unless the owner cancels it before settlement. After
+    /// settlement this only drops the record: the round stays closed. Anyone can call it, because
+    /// it only records what the collection already says: it does nothing while the token is still
+    /// in the slot. A burned token makes `ownerOf` revert with "unknown token", which counts as
+    /// gone. No other failure of that call does: a call that could not run, for example because
+    /// the call stack was full, fails with no return data on the EVM backend, and taking that as
+    /// gone would let anyone drop a live stake while its token is still in the slot.
     /// @param index The slot to check.
     function void(uint256 index) external {
         Stake storage stake = stakes[index];

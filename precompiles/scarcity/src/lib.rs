@@ -126,9 +126,10 @@
 //! Weights: state-changing calls charge the corresponding `indiv-pallet-scarcity` benchmark
 //! weights. Read calls charge one database read per worst-case storage access, which
 //! over-charges pure computation but never under-charges; a crate benchmark can refine this
-//! later. The slot calls add no benchmark: `transferFromSlot` charges what `transferFrom`
-//! charges plus the keccak that derives the slot, and `slotAddress` charges only that hash, beyond
-//! the collection check every selector pays.
+//! later. The slot calls add no benchmark. `transferFromSlot` charges its reads and the keccak
+//! that derives the slot ahead of its refusals, and the move and the destination's registration
+//! that `transferFrom` charges once they pass. `slotAddress` charges only that hash, beyond the
+//! collection check every selector pays.
 //!
 //! # Contract slots
 //!
@@ -142,12 +143,21 @@
 //! The slot's account is the fallback account of that address, never what
 //! `AddressMapper::to_account_id` returns, which reads `OriginalAccount` first. The fallback
 //! account ends in the `0xEE` suffix, so it is mapped from the start: `ownerOf` and `balanceOf`
-//! name it, and [`MapPurseKey`] has nothing to register when a token lands on it. Acting for it in
-//! a transaction would take a secp256k1 key whose address is the slot. No such key is known. The
+//! name it, and [`MapPurseKey`] has nothing to register when a token lands on it. The fallback
+//! form fixes which account a slot is, so `transferFromSlot` does not depend on the registry. A
+//! push into a slot and the reads that take an address resolve it through the registry, so they
+//! reach the slot account only while no key is registered to the slot's address.
+//!
+//! A key whose address equals a slot controls the slot account. A secp256k1 key signs for it
+//! directly, because an Ethereum-derived account is its address followed by the `0xEE` suffix. Any
+//! other account whose address equals the slot acts for it through
+//! `pallet_revive::dispatch_as_fallback_account`. A contract's own account has one more barrier: as
+//! EIP-3607 requires, `pallet-revive` refuses a signed origin whose address carries code. A slot
+//! carries no code, so only the cost of finding such a key protects it. No such key is known. The
 //! slot is a 160-bit hash output in the same address space as every key and contract, so finding
 //! one for a given slot is a second preimage, while a vault's deployer, who chooses the vault's
 //! address through its CREATE2 salt, could search salts and keys together for a match at about
-//! 2^80 work, the bound every CREATE2 address shares. Such a key would leave no trace on chain.
+//! 2^80 work. Such a key would leave no trace on chain.
 //!
 //! `transferFromSlot(index, tokenId, to)` moves a token out of slot `index` of the caller. It
 //! derives the slot from the caller, requires the slot to hold the token, and moves it through
@@ -157,7 +167,9 @@
 //! into a slot stays there except through the owner's force powers. The call does not ask who
 //! staked the token: that is the calling contract's record to keep. The collection owner keeps
 //! `forceTransfer` and `forceBurn` over a token wherever it sits, slots included, so a contract
-//! should accept stakes only from collections whose owner it trusts.
+//! should accept stakes only from collections whose owner it trusts. It should also act only on
+//! collection addresses it has listed itself: whoever supplies the address chooses both the
+//! contract that answers `ownerOf` and the contract the exit calls.
 //!
 //! Anyone can push a token into any slot: a purse key gives no destination consent, and a fee-less
 //! native push has no callback and emits no EVM `Transfer`. A contract therefore cannot learn who
@@ -174,18 +186,24 @@
 //! `balanceOf` and `tokenOfOwnerByIndex` stay 0 or 1 per key, so each slot answers for itself and
 //! there is no per-holder counter or index. A contract must not use either for its logic.
 //!
-//! Authority over a slot follows the vault's address, not its code. When a contract terminates, its
+//! Authority over a slot follows the vault's address, not its code. When a contract is deleted, its
 //! tokens stay in their slots, and nothing can move one out on the holder's authority until a
 //! contract exists at that address again. The collection owner's force powers do not depend on one.
+//! `SELFDESTRUCT` on the EVM backend and the `terminate` host function on PolkaVM delete a contract
+//! only in the transaction that created it, as EIP-6780 specifies, so a vault that took stakes in
+//! an earlier transaction stays. The `System` precompile's `terminate` has no Ethereum counterpart
+//! and deletes the calling contract in any transaction.
+//!
 //! A CREATE2 address depends only on the deployer, code, input and salt, so a redeployment with the
 //! same ones lands on the same address once the previous occupant's deposits are cleaned up
 //! (`pallet-revive` refuses the address until then, and while it is still a contract). It runs the
 //! same init code on empty storage, so a vault that keeps its records in storage has lost them
-//! while the new contract holds every slot's authority: `SlotVault` redeployed this way lets
-//! anyone reserve slot 0 again and withdraw what the old one held there. Other code reaches the
-//! same address only through CREATE, whose address depends on the deployer and its nonce alone, or
-//! through init code that picks its runtime code from state. Whoever stakes into a vault should
-//! check that it cannot be redeployed, or that a redeployment cannot reach its slots.
+//! while the new contract holds every slot's authority. A vault built like `SlotVault` that called
+//! `System.terminate` would, once redeployed, let anyone reserve slot 0 again and withdraw what the
+//! old one held there. `SlotVault` itself never terminates. Other code reaches the same address
+//! only through CREATE, whose address depends on the deployer and its nonce alone, or through init
+//! code that picks its runtime code from state. Whoever stakes into a vault should check that it
+//! cannot be deleted and redeployed, or that a redeployment cannot reach its slots.
 //!
 //! # Frame guards
 //!
@@ -204,16 +222,16 @@
 //!   interface has to be classified before the crate compiles. The factory denies a read-only frame
 //!   outright, because every one of its selectors mutates.
 //!
-//! The delegate and value guards revert, so the caller keeps the gas it forwarded, which a trap
-//! would consume instead.
+//! The delegate and value guards revert, so the caller receives an `Error(string)` it can catch.
 //!
 //! `transferFromSlot` adds a guard of its own, after those three and ahead of its own charges and
 //! reads: it reverts when the caller is the transaction's origin, whoever signed the transaction
-//! or the root origin. The test is `caller_is_origin(false)` on the frame, not a look at code size,
-//! so it would keep working if accounts could ever carry code. It is a fence, not a boundary: an
-//! account can deploy a contract that forwards the call, and that contract then holds as many
-//! tokens as it has slots. Every key still holds one token. The guard only keeps a plain wallet
-//! from being a vault.
+//! or the root origin. The test is `caller_is_origin(false)` on the frame, which compares the
+//! immediate caller with the origin. That separates wallets from contracts only while accounts
+//! cannot run code. EIP-7702 delegation lets them, and `pallet-revive` does not support it, so the
+//! guard needs a review if that support comes. It is a fence, not a boundary: an account can
+//! deploy a contract that forwards the call, and that contract then holds as many tokens as it has
+//! slots. Every key still holds one token. The guard only keeps a plain wallet from being a vault.
 //!
 //! No other selector is contract-only. `transferFrom` and `safeTransferFrom` need the caller to be
 //! the holder, and accounts are holders. `slotAddress` is a pure derivation that grants nothing.
@@ -462,7 +480,7 @@ const SLOT_PREIMAGE_LEN: usize = SLOT_DOMAIN.len() + 20 + 32;
 /// `AddressMapper::to_address` and `ownerOf` can name it.
 ///
 /// The caller charges for the hash first, through [`charge_slot_hash`].
-pub(crate) fn slot_address(vault: &Address, index: &U256) -> Address {
+fn slot_address(vault: &Address, index: &U256) -> Address {
 	let mut preimage = Vec::with_capacity(SLOT_PREIMAGE_LEN);
 	preimage.extend_from_slice(SLOT_DOMAIN);
 	preimage.extend_from_slice(vault.as_slice());
@@ -473,11 +491,10 @@ pub(crate) fn slot_address(vault: &Address, index: &U256) -> Address {
 
 /// The account a slot address stands for.
 ///
-/// The fallback account, never `to_account_id`: that reads `OriginalAccount` first, so a mapped
-/// key whose address equals the slot would take the slot over. The fallback form skips the read.
-/// It ends in the `0xEE` suffix, so `to_address` strips it back to the slot address. Acting for it
-/// in a transaction would take a secp256k1 key whose address is the slot. None is known; the
-/// crate documentation gives the cost of finding one.
+/// The fallback account, never `to_account_id`, which reads `OriginalAccount` first. The fallback
+/// form makes the slot one fixed account whatever the registry holds. It ends in the `0xEE`
+/// suffix, so `to_address` strips it back to the slot address. A key whose address equals the
+/// slot controls this account; the crate documentation gives the cost of finding one.
 fn slot_account<T: pallet_revive::Config>(slot: &Address) -> T::AccountId {
 	<T as pallet_revive::Config>::AddressMapper::to_fallback_account_id(&H160(slot.into_array()))
 }
