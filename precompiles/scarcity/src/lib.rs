@@ -249,6 +249,9 @@ pub const ERR_UNKNOWN_ITEM: &str = "unknown item";
 pub const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range";
 /// Revert reason when a reserved metadata value is not valid UTF-8.
 pub const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8";
+/// Revert reason when the holder moves a token that carries a pledge with effect.
+pub const ERR_PLEDGED: &str =
+	"token is pledged: only the pledgee can move it until the pledge ends";
 
 /// Registers a purse key's address when a mint occupies it, for `indiv-pallet-scarcity`'s
 /// [`OnPurseOccupied`](indiv_pallet_scarcity::OnPurseOccupied) hook.
@@ -309,7 +312,7 @@ fn collection_id_of(address: &[u8; 20]) -> CollectionId {
 ///
 /// Anything else propagates as a plain error, which traps the frame rather than reverting.
 fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error {
-	let cases: [(ScarcityError<T>, &str); 22] = [
+	let cases: [(ScarcityError<T>, &str); 23] = [
 		(ScarcityError::NoPermission, "caller is not the collection owner"),
 		(ScarcityError::UnknownCollection, ERR_UNKNOWN_COLLECTION),
 		(ScarcityError::UnknownItem, ERR_UNKNOWN_ITEM),
@@ -332,6 +335,7 @@ fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error 
 		(ScarcityError::CollectionItemsNotEmpty, "item definitions must be deleted first"),
 		(ScarcityError::CollectionMetadataNotEmpty, "collection metadata must be removed first"),
 		(ScarcityError::DeletionInvariant, "stored counters or deposits do not permit deletion"),
+		(ScarcityError::Pledged, ERR_PLEDGED),
 	];
 	for (error, reason) in cases {
 		if e == DispatchError::from(error) {

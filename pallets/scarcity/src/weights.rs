@@ -70,6 +70,7 @@ pub trait WeightInfo {
 	fn delete_collection() -> Weight;
 	fn claim_collection_ownership() -> Weight;
 	fn as_scarcity_pipeline() -> Weight;
+	fn pledge() -> Weight;
 }
 
 /// Weights for `indiv_pallet_scarcity` using the Substrate node and recommended hardware.
@@ -397,6 +398,16 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(5_u64))
 			.saturating_add(T::DbWeight::get().writes(2_u64))
 	}
+	/// Not yet benchmarked: the values of `transfer`, which reads as much and writes more, with
+	/// the proof widened by the pledge.
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	fn pledge() -> Weight {
+		Weight::from_parts(26_155_000, 3594)
+			.saturating_add(T::DbWeight::get().reads(3_u64))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -721,6 +732,16 @@ impl WeightInfo for () {
 		// Minimum execution time: 31_989_000 picoseconds.
 		Weight::from_parts(33_754_000, 6116)
 			.saturating_add(RocksDbWeight::get().reads(5_u64))
+			.saturating_add(RocksDbWeight::get().writes(2_u64))
+	}
+	/// Not yet benchmarked: the values of `transfer`, which reads as much and writes more, with
+	/// the proof widened by the pledge.
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	fn pledge() -> Weight {
+		Weight::from_parts(26_155_000, 3594)
+			.saturating_add(RocksDbWeight::get().reads(3_u64))
 			.saturating_add(RocksDbWeight::get().writes(2_u64))
 	}
 }

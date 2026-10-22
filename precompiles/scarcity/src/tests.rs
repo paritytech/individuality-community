@@ -3195,8 +3195,9 @@ fn collection_owner_deposit_reports_aggregate() {
 /// metadata and fails on any that starts trapping instead of reverting.
 #[test]
 fn mapped_scarcity_errors_are_exhaustive() {
-	// The ABI covers the pallet's whole owner surface, so every error variant is reachable.
-	const UNREACHABLE: [&str; 0] = [];
+	// The ABI covers the pallet's whole owner surface. The pledge calls have no selector yet, so
+	// only a holder's move of a pledged token reaches a pledge error.
+	const UNREACHABLE: [&str; 4] = ["NotPledgee", "AlreadyPledged", "PledgeExpiry", "PledgeToSelf"];
 
 	let pallet_index = match DispatchError::from(indiv_pallet_scarcity::Error::<Test>::NoPermission)
 	{

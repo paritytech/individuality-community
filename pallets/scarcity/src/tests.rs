@@ -3182,6 +3182,275 @@ fn the_extension_passes_the_paid_holder_call_through() {
 	});
 }
 
+mod pledges {
+	use super::*;
+	use frame_support::dispatch::DispatchResultWithPostInfo;
+
+	const PLEDGEE: u64 = 5;
+
+	fn nft_of(holder: u64) -> NftOf<Test> {
+		NftsByOwner::<Test>::get(holder).expect("the holder has an NFT")
+	}
+
+	/// Dispatch a fee-less pledge of the instance `holder` holds, as the extension would.
+	fn pledge_from(holder: u64, to: u64, until: u64) -> DispatchResultWithPostInfo {
+		Scarcity::pledge(nft_origin(holder, nft_of(holder)), to, until)
+	}
+
+	/// Mint instance 0 to `RECIPIENT` and pledge it to `PLEDGEE` until 100.
+	fn pledged_instance() {
+		setup_item();
+		mint(0, RECIPIENT);
+		assert_ok!(pledge_from(RECIPIENT, PLEDGEE, 100));
+	}
+
+	#[test]
+	fn a_pledge_spends_a_move_and_advances_the_state_nonce() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			MockNow::set(10);
+			let before = nft_of(RECIPIENT);
+
+			let post = pledge_from(RECIPIENT, PLEDGEE, 100).expect("the pledge is valid");
+
+			assert_eq!(post.pays_fee, Pays::No);
+			let after = nft_of(RECIPIENT);
+			assert_eq!(after.pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
+			assert_eq!(after.moves, before.moves + 1);
+			assert_eq!(after.state_nonce, before.state_nonce + 1);
+			assert_eq!(after.last_moved, before.last_moved, "a pledge does not move the instance");
+			assert_eq!(Instances::<Test>::get(0), Some(RECIPIENT));
+			System::assert_has_event(
+				Event::<Test>::Pledged {
+					instance: 0,
+					collection: 0,
+					holder: RECIPIENT,
+					pledgee: PLEDGEE,
+					until: 100,
+				}
+				.into(),
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn a_failed_pledge_pays_its_fee() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+
+			let error = pledge_from(RECIPIENT, RECIPIENT, 100).expect_err("a pledge to self");
+			assert_eq!(error.error, Error::<Test>::PledgeToSelf.into());
+			assert_eq!(error.post_info.pays_fee, Pays::Yes);
+
+			let error = Scarcity::pledge(RuntimeOrigin::signed(RECIPIENT), PLEDGEE, 100)
+				.expect_err("pledging needs the purse-key origin");
+			assert_eq!(error.error, sp_runtime::DispatchError::BadOrigin);
+			assert_eq!(error.post_info.pays_fee, Pays::Yes);
+		});
+	}
+
+	/// Each term the holder picks is checked, each with its own error.
+	#[test]
+	fn a_pledge_is_refused_for_each_invalid_term() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			define_as(0, Transferability::Soulbound);
+			mint(0, RECIPIENT);
+			mint(1, OTHER);
+			MockNow::set(1_000);
+			let cap = MaxPledgeDuration::get();
+
+			assert_noop!(pledge_from(RECIPIENT, RECIPIENT, 1_100), Error::<Test>::PledgeToSelf);
+			assert_noop!(pledge_from(OTHER, PLEDGEE, 1_100), Error::<Test>::Soulbound);
+			assert_noop!(pledge_from(RECIPIENT, PLEDGEE, 999), Error::<Test>::PledgeExpiry);
+			assert_noop!(pledge_from(RECIPIENT, PLEDGEE, 1_000), Error::<Test>::PledgeExpiry);
+			assert_noop!(
+				pledge_from(RECIPIENT, PLEDGEE, 1_000 + cap + 1),
+				Error::<Test>::PledgeExpiry
+			);
+			NftsByOwner::<Test>::mutate(RECIPIENT, |nft| {
+				nft.as_mut().expect("minted").state_nonce = u64::MAX;
+			});
+			assert_noop!(pledge_from(RECIPIENT, PLEDGEE, 1_100), Error::<Test>::StateNonceOverflow);
+			NftsByOwner::<Test>::mutate(RECIPIENT, |nft| {
+				nft.as_mut().expect("minted").state_nonce = 0;
+			});
+
+			assert_ok!(pledge_from(RECIPIENT, PLEDGEE, 1_000 + cap));
+		});
+	}
+
+	#[test]
+	fn a_live_pledge_cannot_be_replaced_and_an_expired_one_can() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+
+			assert_noop!(pledge_from(RECIPIENT, OTHER, 200), Error::<Test>::AlreadyPledged);
+
+			MockNow::set(100);
+			assert_ok!(pledge_from(RECIPIENT, OTHER, 200));
+			assert_eq!(nft_of(RECIPIENT).pledge, Some(Pledge { pledgee: OTHER, until: 200 }));
+		});
+	}
+
+	/// The holder cannot move or burn a pledged instance on any path until the pledge expires.
+	#[test]
+	fn a_live_pledge_stops_every_holder_path_until_it_expires() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+
+			assert_noop!(
+				Scarcity::transfer(nft_origin(RECIPIENT, nft_of(RECIPIENT)), OTHER),
+				Error::<Test>::Pledged
+			);
+			assert_noop!(
+				Scarcity::burn(nft_origin(RECIPIENT, nft_of(RECIPIENT))),
+				Error::<Test>::Pledged
+			);
+			assert_noop!(
+				Scarcity::do_transfer_by_holder(&RECIPIENT, 0, OTHER),
+				Error::<Test>::Pledged
+			);
+			assert_noop!(
+				Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER),
+				Error::<Test>::Pledged
+			);
+
+			MockNow::set(100);
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER));
+			assert_eq!(nft_of(OTHER).pledge, None, "the move clears the expired pledge");
+		});
+	}
+
+	#[test]
+	fn an_expired_pledge_frees_the_fee_less_paths() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			mint(0, OTHER);
+			assert_ok!(pledge_from(OTHER, PLEDGEE, 100));
+			MockNow::set(100);
+
+			feeless_move(RECIPIENT, 4);
+			assert_eq!(nft_of(4).pledge, None, "the move clears the expired pledge");
+
+			let (_, val, origin) = validate_burn(OTHER).expect("the burn is authorized");
+			let pre = prepare_burn(val, &origin);
+			assert_ok!(Scarcity::burn(origin));
+			post_dispatch(pre, Ok(()));
+			assert!(!Instances::<Test>::contains_key(1));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn the_pledgee_seizes_into_an_empty_key() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			let before = nft_of(RECIPIENT);
+			assert_eq!(before.moves, 1, "the pledge spent a move");
+			MockNow::set(50);
+
+			assert_ok!(Scarcity::do_seize(&PLEDGEE, 0, 4));
+
+			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT));
+			assert_eq!(Instances::<Test>::get(0), Some(4));
+			let after = nft_of(4);
+			assert_eq!(after.pledge, None);
+			assert_eq!(after.moves, 0, "a seize is a paid move and refills the budget");
+			assert_eq!(after.state_nonce, before.state_nonce + 1);
+			assert_eq!(after.last_moved, 50);
+			assert_eq!(OccupiedPurses::get().last(), Some(&4));
+			System::assert_has_event(
+				Event::<Test>::Seized {
+					instance: 0,
+					collection: 0,
+					from: RECIPIENT,
+					to: 4,
+					pledgee: PLEDGEE,
+				}
+				.into(),
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn only_the_pledgee_seizes_and_only_into_an_empty_key_while_the_pledge_lasts() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			mint(0, OTHER);
+
+			assert_noop!(Scarcity::do_seize(&OTHER, 0, 4), Error::<Test>::NotPledgee);
+			assert_noop!(Scarcity::do_seize(&RECIPIENT, 0, 4), Error::<Test>::NotPledgee);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 1, 4), Error::<Test>::NotPledgee);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 99, 4), Error::<Test>::UnknownInstance);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, OTHER), Error::<Test>::AddressOccupied);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, RECIPIENT), Error::<Test>::SelfTransfer);
+
+			MockNow::set(100);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, 4), Error::<Test>::NotPledgee);
+		});
+	}
+
+	#[test]
+	fn the_pledgee_releases_and_the_instance_stays() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			let before = nft_of(RECIPIENT);
+
+			assert_noop!(Scarcity::do_release(&OTHER, 0), Error::<Test>::NotPledgee);
+			assert_noop!(Scarcity::do_release(&RECIPIENT, 0), Error::<Test>::NotPledgee);
+			assert_ok!(Scarcity::do_release(&PLEDGEE, 0));
+
+			let after = nft_of(RECIPIENT);
+			assert_eq!(after.pledge, None);
+			assert_eq!(after.state_nonce, before.state_nonce + 1);
+			assert_eq!(after.moves, before.moves, "a release refills nothing");
+			System::assert_has_event(
+				Event::<Test>::PledgeReleased {
+					instance: 0,
+					collection: 0,
+					holder: RECIPIENT,
+					pledgee: PLEDGEE,
+				}
+				.into(),
+			);
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER));
+		});
+	}
+
+	#[test]
+	fn an_expired_pledge_cannot_be_released() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			MockNow::set(100);
+
+			assert_noop!(Scarcity::do_release(&PLEDGEE, 0), Error::<Test>::NotPledgee);
+		});
+	}
+
+	/// The collection owner's force powers ignore a pledge, and a force move clears it.
+	#[test]
+	fn the_collection_owner_ignores_a_pledge() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			mint(0, OTHER);
+			assert_ok!(pledge_from(OTHER, PLEDGEE, 100));
+
+			assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, 4));
+			assert_eq!(nft_of(4).pledge, None);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, 6), Error::<Test>::NotPledgee);
+
+			assert_ok!(Scarcity::force_burn(RuntimeOrigin::signed(OWNER), 1));
+			assert!(!Instances::<Test>::contains_key(1));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+}
+
 mod migration {
 	use super::*;
 	use crate::migration::{

@@ -391,4 +391,15 @@ impl<T: frame_system::Config> indiv_pallet_scarcity::WeightInfo for WeightInfo<T
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
+	/// Not yet benchmarked: the values of `transfer`, which reads as much and writes more, with
+	/// the proof widened by the pledge.
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	fn pledge() -> Weight {
+		Weight::from_parts(26_155_000, 0)
+			.saturating_add(Weight::from_parts(0, 3594))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
 }
