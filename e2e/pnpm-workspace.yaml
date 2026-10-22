@@ -4,3 +4,4 @@ packages:
   # symlinked LIVE into consumers — a `file:` dep here gets injected/packed (peer dep) and goes stale.
   - "packages/descriptors/.papi/descriptors"
   - "suites/*"
+  - "probes"
