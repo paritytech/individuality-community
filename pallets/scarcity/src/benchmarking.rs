@@ -23,7 +23,7 @@ use alloc::{vec, vec::Vec};
 use frame_benchmarking::v2::*;
 use frame_support::{
 	dispatch::{DispatchInfo, GetDispatchInfo, PostDispatchInfo},
-	traits::{Consideration, Get},
+	traits::{Consideration, Get, UnixTime},
 };
 use frame_system::RawOrigin;
 use sp_runtime::{
@@ -63,6 +63,26 @@ fn create_definition<T: Config>(
 		Vec::new(),
 	)?;
 	Ok((collection, item))
+}
+
+/// The latest `until` a pledge made now may name.
+fn longest_pledge<T: Config>() -> u64 {
+	T::UnixTime::now().as_secs().saturating_add(T::MaxPledgeDuration::get())
+}
+
+/// Mint an instance from a new definition of `owner` into `holder` and pledge it to `pledgee`.
+fn mint_pledged<T: Config>(
+	owner: &T::AccountId,
+	holder: &T::AccountId,
+	pledgee: &T::AccountId,
+) -> Result<InstanceId, BenchmarkError> {
+	let (collection, item) = create_definition::<T>(owner)?;
+	let instance =
+		Pallet::<T>::do_mint(owner.clone(), collection, item, holder.clone(), Vec::new())?;
+	let nft = NftsByOwner::<T>::take(holder).expect("holder has the minted NFT");
+	let origin: T::RuntimeOrigin = Origin::<T>::Nft { owner: holder.clone(), nft }.into();
+	Pallet::<T>::pledge(origin, pledgee.clone(), longest_pledge::<T>()).map_err(|e| e.error)?;
+	Ok(instance)
 }
 
 #[benchmarks(
@@ -323,6 +343,71 @@ mod benchmarks {
 	}
 
 	#[benchmark]
+	fn pledge() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = whitelisted_caller();
+		let pledgee: T::AccountId = account("pledgee", 0, 0);
+		let (collection, item) = create_definition::<T>(&owner)?;
+		Pallet::<T>::do_mint(owner.clone(), collection, item, owner.clone(), Vec::new())?;
+		let nft = NftsByOwner::<T>::take(&owner).expect("owner has the minted NFT");
+		let until = longest_pledge::<T>();
+		let origin: T::RuntimeOrigin = Origin::<T>::Nft { owner: owner.clone(), nft }.into();
+
+		#[extrinsic_call]
+		_(origin, pledgee.clone(), until);
+
+		assert_eq!(
+			NftsByOwner::<T>::get(&owner).and_then(|nft| nft.pledge),
+			Some(Pledge { pledgee, until })
+		);
+		Ok(())
+	}
+
+	/// Contract environments charge this weight for `do_seize`, which no extrinsic reaches.
+	#[benchmark]
+	fn seize() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = account("owner", 0, 0);
+		let holder: T::AccountId = whitelisted_caller();
+		let pledgee: T::AccountId = account("pledgee", 0, 0);
+		let to: T::AccountId = account("to", 0, 0);
+		NftsByOwner::<T>::remove(&to);
+		let instance = mint_pledged::<T>(&owner, &holder, &pledgee)?;
+		// Worst case clears a lock on the source purse.
+		Locked::<T>::insert(&holder, LockInfo { retries: u8::MAX, until: u64::MAX });
+
+		#[block]
+		{
+			Pallet::<T>::do_seize(&pledgee, instance, to.clone())?;
+		}
+
+		let nft = NftsByOwner::<T>::get(&to).expect("destination holds the seized NFT");
+		assert_eq!(nft.instance, instance);
+		assert_eq!(nft.pledge, None);
+		assert_eq!(Instances::<T>::get(instance), Some(to));
+		assert!(!NftsByOwner::<T>::contains_key(&holder));
+		assert!(!Locked::<T>::contains_key(&holder));
+		Ok(())
+	}
+
+	/// Contract environments charge this weight for `do_release`, which no extrinsic reaches.
+	#[benchmark]
+	fn release() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = account("owner", 0, 0);
+		let holder: T::AccountId = whitelisted_caller();
+		let pledgee: T::AccountId = account("pledgee", 0, 0);
+		let instance = mint_pledged::<T>(&owner, &holder, &pledgee)?;
+
+		#[block]
+		{
+			Pallet::<T>::do_release(&pledgee, instance)?;
+		}
+
+		let nft = NftsByOwner::<T>::get(&holder).expect("the holder keeps the NFT");
+		assert_eq!(nft.instance, instance);
+		assert_eq!(nft.pledge, None);
+		Ok(())
+	}
+
+	#[benchmark]
 	fn delete_item() -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
 		let (collection, item) = create_definition::<T>(&caller)?;
@@ -370,6 +455,8 @@ mod benchmarks {
 		Ok(())
 	}
 
+	/// Measured on a transfer. The transfer arm of `validate` reads everything the pledge and
+	/// burn arms read and the destination key on top, so this weight bounds all three.
 	#[benchmark]
 	fn as_scarcity_pipeline() -> Result<(), BenchmarkError> {
 		let owner: T::AccountId = whitelisted_caller();
