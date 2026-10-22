@@ -4311,8 +4311,15 @@ mod evm_fixture {
 	}
 
 	fn deploy_with_args(owner: &AccountId32, mut code: Vec<u8>, args: Vec<u8>) -> H160 {
-		// An EVM constructor reads its arguments appended to the init code, not from the call data.
-		code.extend_from_slice(&args);
+		// An EVM constructor reads its arguments appended to the init code. A PolkaVM blob, which
+		// starts with its magic bytes, would no longer parse with them appended, and its
+		// constructor reads them from the call data instead.
+		let data = if code.starts_with(b"PVM\0") {
+			args
+		} else {
+			code.extend_from_slice(&args);
+			Vec::new()
+		};
 		pallet_revive::Pallet::<Test>::bare_instantiate(
 			RuntimeOrigin::signed(owner.clone()),
 			0u32.into(),
@@ -4321,7 +4328,7 @@ mod evm_fixture {
 				deposit_limit: 1u64 << 50,
 			},
 			Code::Upload(code),
-			Vec::new(),
+			data,
 			// A fixed salt derives the address from the code, so deploying two different contracts
 			// in one test yields two different addresses.
 			Some([0u8; 32]),
@@ -4749,5 +4756,253 @@ mod evm_fixture {
 				ERC721_METADATA_INTERFACE_ID
 			);
 		});
+	}
+
+	alloy::sol! {
+		interface IPledgeGame {
+			function join(uint256 tokenId) external;
+			function settle(uint256 winningToken, address[] calldata prizeKeys) external;
+			function stakerOf(uint256 tokenId) external view returns (address staker);
+			function stakeCount() external view returns (uint256 count);
+			error NotPledgedHere();
+			error PledgeTooShort();
+			error AlreadyJoined();
+			error Settled();
+			error NotOperator();
+		}
+	}
+
+	/// The pallet clock when a round starts.
+	const GAME_NOW: u64 = 1_000;
+	/// The Unix second by which a round settles.
+	const GAME_DEADLINE: u64 = 1_500;
+	/// When the pledges the players make stop having effect, after the deadline.
+	const GAME_PLEDGE_UNTIL: u64 = 2_000;
+
+	fn pledge_game_codes() -> [(&'static str, Vec<u8>); 2] {
+		[("solc", fixture_code("PledgeGame")), ("resolc", resolc_code("PledgeGame"))]
+	}
+
+	/// A player: an eth-derived purse holding one token of the round's collection.
+	struct Player {
+		address: H160,
+		account: AccountId32,
+		token: U256,
+	}
+
+	/// A `PledgeGame` deployed by `alice` over a collection she owns, with two players.
+	struct Game {
+		alice: AccountId32,
+		game: H160,
+		game_account: AccountId32,
+		target: H160,
+		players: [Player; 2],
+	}
+
+	impl Game {
+		fn new(code: Vec<u8>) -> Self {
+			MockNow::set(GAME_NOW);
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let mut args = alloy_address(collection_address(collection)).into_word().0.to_vec();
+			args.extend_from_slice(&U256::from(GAME_DEADLINE).to_be_bytes::<32>());
+			let game = deploy_with_args(&alice, code, args);
+			let players = [0xB1u8, 0xB2].map(|byte| {
+				let (address, account, instance) =
+					mint_to_funded_purse(&alice, collection, item, byte);
+				Player { address, account, token: U256::from(instance) }
+			});
+			let game_account = account_of::<Test>(&alloy_address(game));
+			Self { alice, game, game_account, target: collection_address(collection), players }
+		}
+
+		/// Pledge `player`'s token natively, as `AsScarcity` dispatches it: the record leaves the
+		/// purse before the call and the call writes it back.
+		fn pledge_natively(&self, player: &Player, pledgee: AccountId32, until: u64) {
+			let nft = NftsByOwner::<Test>::take(&player.account).unwrap();
+			let origin = RuntimeOrigin::from(indiv_pallet_scarcity::Origin::<Test>::Nft {
+				owner: player.account.clone(),
+				nft,
+			});
+			assert_ok!(Scarcity::pledge(origin, pledgee, until));
+		}
+
+		fn pledge_to_game(&self, player: &Player) {
+			self.pledge_natively(player, self.game_account.clone(), GAME_PLEDGE_UNTIL);
+		}
+
+		fn join(&self, caller: &AccountId32, token: U256) -> pallet_revive::ExecReturnValue {
+			call_precompile(
+				caller,
+				self.game,
+				IPledgeGame::joinCall { tokenId: token }.abi_encode(),
+			)
+		}
+
+		fn settle(
+			&self,
+			caller: &AccountId32,
+			winner: U256,
+			prize_keys: &[H160],
+		) -> pallet_revive::ExecReturnValue {
+			call_precompile(
+				caller,
+				self.game,
+				IPledgeGame::settleCall {
+					winningToken: winner,
+					prizeKeys: prize_keys.iter().map(|key| alloy_address(*key)).collect(),
+				}
+				.abi_encode(),
+			)
+		}
+
+		fn staker_of(&self, token: U256) -> Address {
+			let data = call_ok(
+				&self.alice,
+				self.game,
+				IPledgeGame::stakerOfCall { tokenId: token }.abi_encode(),
+			);
+			IPledgeGame::stakerOfCall::abi_decode_returns(&data).unwrap()
+		}
+	}
+
+	/// Assert `output` reverted with the custom error whose selector is `selector`.
+	fn assert_custom_error(output: &pallet_revive::ExecReturnValue, selector: [u8; 4], case: &str) {
+		assert!(output.did_revert(), "{case}: expected a revert, got {output:?}");
+		assert_eq!(output.data.get(..4), Some(&selector[..]), "{case}: wrong revert {output:?}");
+	}
+
+	/// Two players pledge and join, and settling releases the winner's stake and moves the
+	/// loser's to the key the winner named.
+	#[test]
+	fn a_round_settles_on_pledges() {
+		for (compiler, code) in pledge_game_codes() {
+			new_test_ext().execute_with(|| {
+				let game = Game::new(code);
+				let [winner, loser] = &game.players;
+				for player in &game.players {
+					game.pledge_to_game(player);
+					assert!(!game.join(&game.alice, player.token).did_revert(), "{compiler}");
+				}
+				let (prize_address, prize) = purse(0xC1);
+
+				assert_custom_error(
+					&game.settle(&winner.account, winner.token, &[prize_address]),
+					IPledgeGame::NotOperator::SELECTOR,
+					compiler,
+				);
+				let settled = game.settle(&game.alice, winner.token, &[prize_address]);
+				assert!(!settled.did_revert(), "{compiler}: {settled:?}");
+
+				let moved = NftsByOwner::<Test>::get(&prize).expect("the prize key holds a token");
+				assert_eq!(U256::from(moved.instance), loser.token, "{compiler}");
+				assert_eq!(moved.pledge, None, "{compiler}");
+				assert_eq!(moved.moves, 0, "{compiler}: a seize refills the budget");
+				assert!(NftsByOwner::<Test>::get(&loser.account).is_none(), "{compiler}");
+				let kept = NftsByOwner::<Test>::get(&winner.account).expect("the winner keeps");
+				assert_eq!(U256::from(kept.instance), winner.token, "{compiler}");
+				assert_eq!(kept.pledge, None, "{compiler}: the winner's stake is released");
+
+				assert_custom_error(
+					&game.settle(&game.alice, winner.token, &[prize_address]),
+					IPledgeGame::Settled::SELECTOR,
+					compiler,
+				);
+			});
+		}
+	}
+
+	/// Anyone may report a pledge, and the stake is credited to the holder whoever reports it.
+	#[test]
+	fn a_front_run_join_credits_the_holder() {
+		for (compiler, code) in pledge_game_codes() {
+			new_test_ext().execute_with(|| {
+				let game = Game::new(code);
+				let [staker, intruder] = &game.players;
+				game.pledge_to_game(staker);
+
+				assert!(!game.join(&intruder.account, staker.token).did_revert(), "{compiler}");
+
+				assert_eq!(
+					game.staker_of(staker.token),
+					alloy_address(staker.address),
+					"{compiler}"
+				);
+				assert_custom_error(
+					&game.join(&staker.account, staker.token),
+					IPledgeGame::AlreadyJoined::SELECTOR,
+					compiler,
+				);
+			});
+		}
+	}
+
+	/// `join` counts only a pledge that names the round and outlives its deadline.
+	#[test]
+	fn join_refuses_a_pledge_that_does_not_bind_the_token_to_the_round() {
+		for (compiler, code) in pledge_game_codes() {
+			new_test_ext().execute_with(|| {
+				let game = Game::new(code);
+				let [first, second] = &game.players;
+
+				assert_custom_error(
+					&game.join(&game.alice, first.token),
+					IPledgeGame::NotPledgedHere::SELECTOR,
+					&alloc::format!("{compiler}: an unpledged token"),
+				);
+				game.pledge_natively(first, game.alice.clone(), GAME_PLEDGE_UNTIL);
+				assert_custom_error(
+					&game.join(&game.alice, first.token),
+					IPledgeGame::NotPledgedHere::SELECTOR,
+					&alloc::format!("{compiler}: a token pledged elsewhere"),
+				);
+				game.pledge_natively(second, game.game_account.clone(), GAME_DEADLINE);
+				assert_custom_error(
+					&game.join(&game.alice, second.token),
+					IPledgeGame::PledgeTooShort::SELECTOR,
+					&alloc::format!("{compiler}: a pledge that ends at the deadline"),
+				);
+			});
+		}
+	}
+
+	/// A round that is never settled holds nothing: once the pledges expire, settling fails and
+	/// each player moves its own stake again.
+	#[test]
+	fn an_unsettled_round_hands_the_stakes_back_at_expiry() {
+		for (compiler, code) in pledge_game_codes() {
+			new_test_ext().execute_with(|| {
+				let game = Game::new(code);
+				let [first, second] = &game.players;
+				for player in &game.players {
+					game.pledge_to_game(player);
+					assert!(!game.join(&game.alice, player.token).did_revert(), "{compiler}");
+				}
+				MockNow::set(GAME_PLEDGE_UNTIL);
+				let (prize_address, _) = purse(0xC1);
+
+				let late = game.settle(&game.alice, first.token, &[prize_address]);
+				assert!(late.did_revert(), "{compiler}: a settle after expiry must revert");
+				assert_eq!(
+					NftsByOwner::<Test>::get(&second.account).map(|nft| U256::from(nft.instance)),
+					Some(second.token),
+					"{compiler}: the stake stays with its holder"
+				);
+
+				let (to_address, to) = purse(0xC2);
+				call_ok(
+					&second.account,
+					game.target,
+					IScarcityCollection::transferFromCall {
+						from: alloy_address(second.address),
+						to: alloy_address(to_address),
+						tokenId: second.token,
+					}
+					.abi_encode(),
+				);
+				assert!(NftsByOwner::<Test>::contains_key(&to), "{compiler}");
+			});
+		}
 	}
 }

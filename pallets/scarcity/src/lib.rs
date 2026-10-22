@@ -1226,8 +1226,8 @@ pub mod pallet {
 		/// Pledge the NFT held by the `Origin::Nft` purse-key origin to `to` until `until`.
 		///
 		/// Until `until`, in Unix seconds, the holder cannot move or burn the instance, and only
-		/// `to` can end the pledge, through [`Pallet::do_seize`] or [`Pallet::do_release`]. The holder
-		/// cannot revoke it. The pledge spends a feeless move.
+		/// `to` can end the pledge, through [`Pallet::do_seize`] or [`Pallet::do_release`]. The
+		/// holder cannot revoke it. The pledge spends a feeless move.
 		#[pallet::call_index(15)]
 		#[pallet::weight(T::WeightInfo::pledge())]
 		pub fn pledge(
