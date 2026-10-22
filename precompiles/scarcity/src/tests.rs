@@ -2329,6 +2329,17 @@ fn all_collection_calls(
 		}),
 		IScarcityCollectionCalls::contractURI(IScarcityCollection::contractURICall {}),
 		IScarcityCollectionCalls::locked(IScarcityCollection::lockedCall { tokenId: token }),
+		IScarcityCollectionCalls::pledgeOf(IScarcityCollection::pledgeOfCall { tokenId: token }),
+		IScarcityCollectionCalls::pledge(IScarcityCollection::pledgeCall {
+			tokenId: token,
+			pledgee: empty,
+			until: 100,
+		}),
+		IScarcityCollectionCalls::seize(IScarcityCollection::seizeCall {
+			tokenId: token,
+			to: empty
+		}),
+		IScarcityCollectionCalls::release(IScarcityCollection::releaseCall { tokenId: token }),
 		IScarcityCollectionCalls::defineItem(IScarcityCollection::defineItemCall {
 			soulbound: false,
 			keys: alloc::vec![],
@@ -3195,9 +3206,9 @@ fn collection_owner_deposit_reports_aggregate() {
 /// metadata and fails on any that starts trapping instead of reverting.
 #[test]
 fn mapped_scarcity_errors_are_exhaustive() {
-	// The ABI covers the pallet's whole owner surface. The pledge calls have no selector yet, so
-	// only a holder's move of a pledged token reaches a pledge error.
-	const UNREACHABLE: [&str; 4] = ["NotPledgee", "AlreadyPledged", "PledgeExpiry", "PledgeToSelf"];
+	// The ABI covers the pallet's whole owner, holder and pledgee surface, so every error variant
+	// is reachable.
+	const UNREACHABLE: [&str; 0] = [];
 
 	let pallet_index = match DispatchError::from(indiv_pallet_scarcity::Error::<Test>::NoPermission)
 	{
@@ -3634,6 +3645,461 @@ fn royalty_basis_points_reject_a_value_that_is_not_exactly_u128() {
 /// enabling the feature on the pallets that implement them, breaking any workspace-wide
 /// build. The gate keeps it to feature-enabled runs, which is where CI exercises it.
 #[cfg(feature = "runtime-benchmarks")]
+/// One collection whose instance sits at a funded eth-derived purse, with a funded pledgee.
+struct PledgeWorld {
+	alice: AccountId32,
+	collection: CollectionId,
+	target: H160,
+	holder_address: Address,
+	holder: AccountId32,
+	instance: InstanceId,
+	token: U256,
+	pledgee_address: Address,
+	pledgee: AccountId32,
+}
+
+/// The pallet clock when a pledge world starts.
+const PLEDGE_NOW: u64 = 1_000;
+/// When the pledges these tests make stop having effect.
+const PLEDGE_UNTIL: u64 = 1_100;
+
+impl PledgeWorld {
+	fn new() -> Self {
+		MockNow::set(PLEDGE_NOW);
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let (holder_address, holder, instance) =
+			mint_to_funded_purse(&alice, collection, item, 0xBB);
+		let (pledgee_address, pledgee) = purse(0xAA);
+		Balances::make_free_balance_be(&pledgee, u64::MAX / 4);
+		Self {
+			alice,
+			collection,
+			target: collection_address(collection),
+			holder_address: holder_address.0.into(),
+			holder,
+			instance,
+			token: U256::from(instance),
+			pledgee_address: pledgee_address.0.into(),
+			pledgee,
+		}
+	}
+
+	/// Pledge the instance to the pledgee as the native path would, without an EVM log.
+	fn pledge_natively(&self) {
+		indiv_pallet_scarcity::Pallet::<Test>::do_pledge_by_holder(
+			&self.holder,
+			self.instance,
+			self.pledgee.clone(),
+			PLEDGE_UNTIL,
+		)
+		.unwrap();
+	}
+
+	fn pledge_of(&self) -> (Address, u64) {
+		let data = call_ok(
+			&self.alice,
+			self.target,
+			IScarcityCollection::pledgeOfCall { tokenId: self.token }.abi_encode(),
+		);
+		let answer = IScarcityCollection::pledgeOfCall::abi_decode_returns(&data).unwrap();
+		(answer.pledgee, answer.until)
+	}
+
+	fn locked(&self) -> bool {
+		let data = call_ok(
+			&self.alice,
+			self.target,
+			IScarcityCollection::lockedCall { tokenId: self.token }.abi_encode(),
+		);
+		IScarcityCollection::lockedCall::abi_decode_returns(&data).unwrap()
+	}
+
+	fn seize(&self, to: Address) -> Vec<u8> {
+		IScarcityCollection::seizeCall { tokenId: self.token, to }.abi_encode()
+	}
+
+	fn transfer_from(&self, to: Address) -> Vec<u8> {
+		IScarcityCollection::transferFromCall { from: self.holder_address, to, tokenId: self.token }
+			.abi_encode()
+	}
+}
+
+#[test]
+fn pledge_of_reports_only_a_pledge_with_effect() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		assert_eq!(world.pledge_of(), (Address::ZERO, 0));
+		assert!(!world.locked());
+
+		world.pledge_natively();
+		assert_eq!(world.pledge_of(), (world.pledgee_address, PLEDGE_UNTIL));
+		assert!(world.locked(), "a pledged token is locked to its holder");
+
+		MockNow::set(PLEDGE_UNTIL);
+		assert_eq!(world.pledge_of(), (Address::ZERO, 0), "an expired pledge reads as none");
+		assert!(!world.locked());
+	});
+}
+
+/// A pledge is not an approval, so the ERC-721 approval reads stay empty and `approve` keeps
+/// reverting while one stands.
+#[test]
+fn a_pledge_is_not_an_approval() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+
+		let data = call_ok(
+			&world.alice,
+			world.target,
+			IScarcityCollection::getApprovedCall { tokenId: world.token }.abi_encode(),
+		);
+		assert_eq!(
+			IScarcityCollection::getApprovedCall::abi_decode_returns(&data).unwrap(),
+			Address::ZERO
+		);
+		let data = call_ok(
+			&world.alice,
+			world.target,
+			IScarcityCollection::isApprovedForAllCall {
+				owner: world.holder_address,
+				operator: world.pledgee_address,
+			}
+			.abi_encode(),
+		);
+		assert!(!IScarcityCollection::isApprovedForAllCall::abi_decode_returns(&data).unwrap());
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			IScarcityCollection::approveCall { to: Address::ZERO, tokenId: world.token }
+				.abi_encode(),
+			ERR_APPROVALS_UNSUPPORTED,
+		);
+		assert_eq!(world.pledge_of(), (world.pledgee_address, PLEDGE_UNTIL));
+	});
+}
+
+#[test]
+fn the_holder_pledges_through_the_precompile() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		let before = NftsByOwner::<Test>::get(&world.holder).unwrap();
+		let pledge = |pledgee: Address, until: u64| {
+			IScarcityCollection::pledgeCall { tokenId: world.token, pledgee, until }.abi_encode()
+		};
+
+		call_reverted_with(
+			&world.alice,
+			world.target,
+			pledge(world.pledgee_address, PLEDGE_UNTIL),
+			"caller does not hold this token",
+		);
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			pledge(Address::ZERO, PLEDGE_UNTIL),
+			ERR_ZERO_PLEDGEE,
+		);
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			pledge(world.holder_address, PLEDGE_UNTIL),
+			"token cannot be pledged to its holder",
+		);
+		for until in [PLEDGE_NOW, PLEDGE_NOW + 3_600 + 1] {
+			call_reverted_with(
+				&world.holder,
+				world.target,
+				pledge(world.pledgee_address, until),
+				"pledge must end in the future and within the maximum duration",
+			);
+		}
+		assert_no_contract_event();
+
+		call_ok(&world.holder, world.target, pledge(world.pledgee_address, PLEDGE_UNTIL));
+
+		assert_only_contract_event(
+			world.target,
+			IScarcityCollection::Locked { tokenId: world.token },
+		);
+		let after = NftsByOwner::<Test>::get(&world.holder).unwrap();
+		assert_eq!(
+			after.pledge,
+			Some(indiv_pallet_scarcity::Pledge {
+				pledgee: world.pledgee.clone(),
+				until: PLEDGE_UNTIL
+			})
+		);
+		assert_eq!(after.moves, before.moves, "a paid pledge spends no feeless move");
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			pledge(address_of::<Test>(&world.alice), PLEDGE_UNTIL),
+			"token already carries a pledge",
+		);
+	});
+}
+
+#[test]
+fn a_soulbound_token_cannot_be_pledged() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item_as(&alice, collection, Transferability::Soulbound);
+		let (_, holder, instance) = mint_to_funded_purse(&alice, collection, item, 0xBB);
+		let (pledgee, _) = purse(0xAA);
+
+		call_reverted_with(
+			&holder,
+			collection_address(collection),
+			IScarcityCollection::pledgeCall {
+				tokenId: U256::from(instance),
+				pledgee: pledgee.0.into(),
+				until: 100,
+			}
+			.abi_encode(),
+			"token is soulbound to its purse key",
+		);
+	});
+}
+
+#[test]
+fn the_pledgee_seizes_into_an_empty_key() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let (to_address, to) = purse(0xCC);
+		let to_address: Address = to_address.0.into();
+		let before = NftsByOwner::<Test>::get(&world.holder).unwrap();
+
+		call_ok(&world.pledgee, world.target, world.seize(to_address));
+
+		assert!(NftsByOwner::<Test>::get(&world.holder).is_none());
+		let moved = NftsByOwner::<Test>::get(&to).expect("the destination holds the token");
+		assert_eq!(moved.instance, world.instance);
+		assert_eq!(moved.pledge, None);
+		assert_eq!(moved.moves, 0, "a seize is a paid move and refills the budget");
+		assert_eq!(moved.state_nonce, before.state_nonce + 1);
+		assert_eq!(Instances::<Test>::get(world.instance), Some(to));
+		assert_contract_event(world.target, IScarcityCollection::Unlocked { tokenId: world.token });
+		assert_contract_event(
+			world.target,
+			IScarcityCollection::Transfer {
+				from: world.holder_address,
+				to: to_address,
+				tokenId: world.token,
+			},
+		);
+		assert_eq!(contract_event_count(), 2);
+		assert_eq!(world.pledge_of(), (Address::ZERO, 0));
+		assert!(!world.locked());
+	});
+}
+
+#[test]
+fn only_the_pledgee_seizes_and_only_into_an_empty_key_while_the_pledge_lasts() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let (empty, _) = purse(0xCC);
+		let empty: Address = empty.0.into();
+		let item = setup_item(&world.alice, world.collection);
+		let (occupied, _, _) = mint_to_funded_purse(&world.alice, world.collection, item, 0xDD);
+
+		let cases: [(&AccountId32, Address, &str); 5] = [
+			(&world.alice, empty, ERR_NOT_PLEDGEE),
+			(&world.holder, empty, ERR_NOT_PLEDGEE),
+			(&world.pledgee, Address::ZERO, ERR_ZERO_DESTINATION),
+			(&world.pledgee, occupied.0.into(), "destination purse already holds an instance"),
+			(&world.pledgee, world.holder_address, ERR_SELF_TRANSFER),
+		];
+		for (caller, to, reason) in cases {
+			call_reverted_with(caller, world.target, world.seize(to), reason);
+		}
+
+		MockNow::set(PLEDGE_UNTIL);
+		call_reverted_with(&world.pledgee, world.target, world.seize(empty), ERR_NOT_PLEDGEE);
+
+		assert_eq!(Instances::<Test>::get(world.instance), Some(world.holder.clone()));
+		assert_no_contract_event();
+	});
+}
+
+#[test]
+fn the_pledgee_releases_and_the_token_stays() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let release = IScarcityCollection::releaseCall { tokenId: world.token }.abi_encode();
+
+		call_reverted_with(&world.alice, world.target, release.clone(), ERR_NOT_PLEDGEE);
+		call_reverted_with(&world.holder, world.target, release.clone(), ERR_NOT_PLEDGEE);
+		call_ok(&world.pledgee, world.target, release.clone());
+
+		assert_only_contract_event(
+			world.target,
+			IScarcityCollection::Unlocked { tokenId: world.token },
+		);
+		assert_eq!(NftsByOwner::<Test>::get(&world.holder).unwrap().pledge, None);
+		assert_eq!(world.pledge_of(), (Address::ZERO, 0));
+		call_reverted_with(&world.pledgee, world.target, release, ERR_NOT_PLEDGEE);
+
+		let (empty, _) = purse(0xCC);
+		call_ok(&world.holder, world.target, world.transfer_from(empty.0.into()));
+	});
+}
+
+/// `transferFrom` from the live pledgee is a seize; the holder of a pledged token and every other
+/// caller are refused.
+#[test]
+fn transfer_from_by_the_pledgee_is_a_seize() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let (to_address, to) = purse(0xCC);
+		let to_address: Address = to_address.0.into();
+
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			world.transfer_from(to_address),
+			ERR_PLEDGED,
+		);
+		call_reverted_with(
+			&world.alice,
+			world.target,
+			world.transfer_from(to_address),
+			"caller does not hold this token",
+		);
+		assert_no_contract_event();
+
+		call_ok(&world.pledgee, world.target, world.transfer_from(to_address));
+
+		let moved = NftsByOwner::<Test>::get(&to).expect("the destination holds the token");
+		assert_eq!((moved.instance, moved.pledge, moved.moves), (world.instance, None, 0));
+		assert_contract_event(world.target, IScarcityCollection::Unlocked { tokenId: world.token });
+		assert_contract_event(
+			world.target,
+			IScarcityCollection::Transfer {
+				from: world.holder_address,
+				to: to_address,
+				tokenId: world.token,
+			},
+		);
+	});
+}
+
+#[test]
+fn an_expired_pledge_hands_transfers_back_to_the_holder() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		MockNow::set(PLEDGE_UNTIL);
+		let (to_address, to) = purse(0xCC);
+		let to_address: Address = to_address.0.into();
+
+		call_reverted_with(
+			&world.pledgee,
+			world.target,
+			world.transfer_from(to_address),
+			"caller does not hold this token",
+		);
+		call_ok(&world.holder, world.target, world.transfer_from(to_address));
+
+		assert_eq!(NftsByOwner::<Test>::get(&to).unwrap().pledge, None, "the move clears it");
+	});
+}
+
+/// A safe transfer from the pledgee is a seize as well, and still owes the receiver check.
+#[test]
+fn safe_transfer_from_by_the_pledgee_is_a_seize() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let (to_address, to) = purse(0xCC);
+
+		call_ok(
+			&world.pledgee,
+			world.target,
+			IScarcityCollection::safeTransferFrom_1Call {
+				from: world.holder_address,
+				to: to_address.0.into(),
+				tokenId: world.token,
+			}
+			.abi_encode(),
+		);
+
+		assert_eq!(NftsByOwner::<Test>::get(&to).unwrap().instance, world.instance);
+	});
+}
+
+/// `seize` charges its reads ahead of its refusals, and the move and the destination's
+/// registration only once they pass.
+///
+/// Three calls by the same caller. A zero destination is refused ahead of every charge. A token
+/// pledged to someone else is refused right after the reads. A seize of a token pledged to the
+/// caller pays everything. The mock prices reads and the registration only in proof size, so a
+/// charge moved ahead of the refusal or dropped from the move fails one of the bounds.
+#[test]
+fn seize_charges_the_move_only_past_its_refusals() {
+	new_test_ext().execute_with(|| {
+		MockNow::set(PLEDGE_NOW);
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let target = collection_address(collection);
+		let (_, mine_holder, mine) = mint_to_funded_purse(&alice, collection, item, 0xBB);
+		let (_, theirs_holder, theirs) = mint_to_funded_purse(&alice, collection, item, 0xCC);
+		let (other, _) = purse(0xAA);
+		let pledge = |holder: &AccountId32, instance, pledgee: AccountId32| {
+			indiv_pallet_scarcity::Pallet::<Test>::do_pledge_by_holder(
+				holder,
+				instance,
+				pledgee,
+				PLEDGE_UNTIL,
+			)
+			.unwrap()
+		};
+		pledge(&mine_holder, mine, alice.clone());
+		pledge(&theirs_holder, theirs, account_of::<Test>(&other.0.into()));
+		let (empty, _) = purse(0xDD);
+		let seize = |instance: InstanceId, to: Address| {
+			IScarcityCollection::seizeCall { tokenId: U256::from(instance), to }.abi_encode()
+		};
+		let weigh = |input: Vec<u8>, reverts: bool| {
+			let result = call_full(&alice, target, input);
+			assert_eq!(result.result.expect("call executes").did_revert(), reverts);
+			result.weight_consumed
+		};
+
+		let uncharged = weigh(seize(mine, Address::ZERO), true);
+		let refused = weigh(seize(theirs, empty.0.into()), true);
+		let moved = weigh(seize(mine, empty.0.into()), false);
+
+		let reads = 4 * PROOF_SIZE_PER_READ;
+		let seize_weight = <() as indiv_pallet_scarcity::weights::WeightInfo>::seize();
+		let registration = <MapPurseKey<Test> as indiv_pallet_scarcity::OnPurseOccupied<
+			AccountId32,
+		>>::on_purse_occupied_weight();
+		assert!(registration.proof_size() > 0, "the mock must price the registration");
+		assert!(
+			refused.proof_size() >= uncharged.proof_size() + reads,
+			"the reads come ahead of the refusal: refused {refused:?}, uncharged {uncharged:?}"
+		);
+		assert!(
+			refused.proof_size() < uncharged.proof_size() + reads + registration.proof_size(),
+			"a refused seize pays neither the move nor the registration: refused {refused:?}"
+		);
+		assert!(
+			moved.proof_size() >=
+				refused.proof_size() + seize_weight.proof_size() + registration.proof_size(),
+			"a seize pays the move and the registration: moved {moved:?}, refused {refused:?}"
+		);
+	});
+}
+
 mod guards {
 	use super::*;
 	use pallet_revive::precompiles::run::{
@@ -3757,7 +4223,7 @@ mod guards {
 			// A tripwire, not a safety net: `all_collection_calls` already pins that every selector
 			// is driven, and a new mutator classified as a read leaves this count untouched. That
 			// one is caught by review or not at all.
-			assert_eq!(mutating, 20, "mutating arm count changed; update this test deliberately");
+			assert_eq!(mutating, 23, "mutating arm count changed; update this test deliberately");
 
 			let factory = run_precompile::<ScarcityFactory<Test, FACTORY_INDEX>, _>(
 				&mut ext,

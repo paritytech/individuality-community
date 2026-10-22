@@ -30,7 +30,8 @@
 //!   allocates it.
 //!
 //! `transferFrom` and `safeTransferFrom` move a token on its holder's own authority, through
-//! `indiv-pallet-scarcity::do_transfer_by_holder`. The caller must be the holder: the pallet has no
+//! `indiv-pallet-scarcity::do_transfer_by_holder`, or on a pledgee's, as described below. Short of
+//! a pledge, the caller must be the holder: the pallet has no
 //! approval mechanism to resolve a spender against, so `approve` and `setApprovalForAll` revert
 //! and their getters answer with the empty values (zero address and `false`) that keep
 //! read-driven indexers working. Only an eth-derived purse can be an EVM caller at all, so this
@@ -60,8 +61,19 @@
 //! ignore the flag, so a misdirected mint still has a remedy and a locked token can still be
 //! destroyed. Soulbound binds the holder, not the issuer; EIP-5192 reads `locked` as
 //! non-transferable outright, and this is the documented deviation from it. A mint announces the
-//! status it settled on, `Locked` or `Unlocked`, which is the only point either can be emitted
-//! because the flag is fixed when the item is defined.
+//! status it settled on, `Locked` or `Unlocked`. The flag is fixed when the item is defined, so a
+//! soulbound token never announces again.
+//!
+//! A holder can pledge a token to another account until a time it picks: natively and fee-less,
+//! or through `pledge` here, paid. Until then `locked()` answers true, the holder paths revert,
+//! and only the pledgee acts: `seize` moves the token to an empty key it names and `release`
+//! gives the pledge up. `transferFrom` and `safeTransferFrom` from the live pledgee are a seize,
+//! as ERC-721 lets an operator transfer while `getApproved` shows nothing. A pledge is still not
+//! an approval: the holder cannot revoke it and it binds the holder, so `getApproved` stays the
+//! zero address and `approve` keeps reverting, and `pledgeOf` is the read that reports it.
+//! `pledge` emits `Locked`, and `seize` and `release` emit `Unlocked`. A native pledge emits no
+//! log, as a native transfer emits no `Transfer`, and an expiry emits nothing, so a consumer
+//! reads `locked()` or `pledgeOf()` rather than following the lock events.
 //!
 //! `name()`, `symbol()`, `tokenURI()`, ERC-7572 `contractURI()` and ERC-2981 `royaltyInfo()`
 //! read reserved metadata keys rather than dedicated pallet fields, so a collection opts into
@@ -249,6 +261,10 @@ pub const ERR_UNKNOWN_ITEM: &str = "unknown item";
 pub const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range";
 /// Revert reason when a reserved metadata value is not valid UTF-8.
 pub const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8";
+/// Revert reason when a pledge names the zero address as its pledgee.
+pub const ERR_ZERO_PLEDGEE: &str = "pledgee is the zero address";
+/// Revert reason when the caller holds no pledge with effect on the token.
+pub const ERR_NOT_PLEDGEE: &str = "caller holds no pledge on this token";
 /// Revert reason when the holder moves a token that carries a pledge with effect.
 pub const ERR_PLEDGED: &str =
 	"token is pledged: only the pledgee can move it until the pledge ends";
@@ -312,7 +328,7 @@ fn collection_id_of(address: &[u8; 20]) -> CollectionId {
 ///
 /// Anything else propagates as a plain error, which traps the frame rather than reverting.
 fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error {
-	let cases: [(ScarcityError<T>, &str); 23] = [
+	let cases: [(ScarcityError<T>, &str); 27] = [
 		(ScarcityError::NoPermission, "caller is not the collection owner"),
 		(ScarcityError::UnknownCollection, ERR_UNKNOWN_COLLECTION),
 		(ScarcityError::UnknownItem, ERR_UNKNOWN_ITEM),
@@ -336,6 +352,13 @@ fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error 
 		(ScarcityError::CollectionMetadataNotEmpty, "collection metadata must be removed first"),
 		(ScarcityError::DeletionInvariant, "stored counters or deposits do not permit deletion"),
 		(ScarcityError::Pledged, ERR_PLEDGED),
+		(ScarcityError::NotPledgee, ERR_NOT_PLEDGEE),
+		(ScarcityError::AlreadyPledged, "token already carries a pledge"),
+		(
+			ScarcityError::PledgeExpiry,
+			"pledge must end in the future and within the maximum duration",
+		),
+		(ScarcityError::PledgeToSelf, "token cannot be pledged to its holder"),
 	];
 	for (error, reason) in cases {
 		if e == DispatchError::from(error) {

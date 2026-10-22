@@ -3450,6 +3450,40 @@ mod pledges {
 		});
 	}
 
+	/// The paid path checks the same terms and spends no feeless move.
+	#[test]
+	fn a_paid_pledge_spends_no_move() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			mint(0, OTHER);
+			let before = nft_of(RECIPIENT);
+
+			assert_noop!(
+				Scarcity::do_pledge_by_holder(&RECIPIENT, 1, PLEDGEE, 100),
+				Error::<Test>::UnknownInstance
+			);
+			assert_noop!(
+				Scarcity::do_pledge_by_holder(&4, 0, PLEDGEE, 100),
+				Error::<Test>::UnknownInstance
+			);
+			assert_noop!(
+				Scarcity::do_pledge_by_holder(&RECIPIENT, 0, RECIPIENT, 100),
+				Error::<Test>::PledgeToSelf
+			);
+			assert_ok!(Scarcity::do_pledge_by_holder(&RECIPIENT, 0, PLEDGEE, 100));
+
+			let after = nft_of(RECIPIENT);
+			assert_eq!(after.pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
+			assert_eq!(after.moves, before.moves, "the caller pays, so no feeless move is spent");
+			assert_eq!(after.state_nonce, before.state_nonce + 1);
+			assert_noop!(
+				Scarcity::do_pledge_by_holder(&RECIPIENT, 0, OTHER, 100),
+				Error::<Test>::AlreadyPledged
+			);
+		});
+	}
+
 	fn pledge_call(to: u64, until: u64) -> RuntimeCall {
 		RuntimeCall::Scarcity(crate::Call::pledge { to, until })
 	}

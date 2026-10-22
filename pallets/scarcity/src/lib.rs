@@ -1226,7 +1226,7 @@ pub mod pallet {
 		/// Pledge the NFT held by the `Origin::Nft` purse-key origin to `to` until `until`.
 		///
 		/// Until `until`, in Unix seconds, the holder cannot move or burn the instance, and only
-		/// `to` can end the pledge, through [`Self::do_seize`] or [`Self::do_release`]. The holder
+		/// `to` can end the pledge, through [`Pallet::do_seize`] or [`Pallet::do_release`]. The holder
 		/// cannot revoke it. The pledge spends a feeless move.
 		#[pallet::call_index(15)]
 		#[pallet::weight(T::WeightInfo::pledge())]
@@ -1877,6 +1877,23 @@ pub mod pallet {
 			NftsByOwner::<T>::insert(&holder, Nft { state_nonce, pledge, ..nft });
 			Self::deposit_event(Event::Pledged { instance, collection, holder, pledgee, until });
 			Ok(())
+		}
+
+		/// Pledge `instance` on its current holder's authority, for the paid paths.
+		///
+		/// [`Self::pledge`] is the fee-less path and needs an `Origin::Nft`. This entry serves
+		/// contract environments that establish holder consent by other means. It applies no
+		/// consent check beyond `holder` currently holding `instance`, and it spends no feeless
+		/// move, because the caller pays.
+		pub fn do_pledge_by_holder(
+			holder: &T::AccountId,
+			instance: InstanceId,
+			pledgee: T::AccountId,
+			until: u64,
+		) -> DispatchResult {
+			let nft = NftsByOwner::<T>::get(holder).ok_or(Error::<T>::UnknownInstance)?;
+			ensure!(nft.instance == instance, Error::<T>::UnknownInstance);
+			Self::do_pledge(holder.clone(), nft, pledgee, until)
 		}
 
 		/// Resolve `instance` and check that `pledgee` holds a pledge on it with effect now.
