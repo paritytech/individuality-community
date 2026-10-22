@@ -3449,6 +3449,232 @@ mod pledges {
 			assert_ok!(Scarcity::do_try_state());
 		});
 	}
+
+	fn pledge_call(to: u64, until: u64) -> RuntimeCall {
+		RuntimeCall::Scarcity(crate::Call::pledge { to, until })
+	}
+
+	fn validate_pledge(
+		signer: u64,
+		to: u64,
+		until: u64,
+	) -> Result<(ValidTransaction, Val<Test>, RuntimeOrigin), TransactionValidityError> {
+		scarcity_extension(current_authorization(signer)).validate(
+			RuntimeOrigin::signed(signer),
+			&pledge_call(to, until),
+			&Default::default(),
+			0,
+			(),
+			&TxBaseImplication(()),
+			TransactionSource::External,
+		)
+	}
+
+	fn prepare_pledge(val: Val<Test>, origin: &RuntimeOrigin, to: u64, until: u64) -> Pre<Test> {
+		extension_for_val(&val)
+			.prepare(val, origin, &pledge_call(to, until), &Default::default(), 0)
+			.unwrap()
+	}
+
+	/// One fee-less pledge through the whole extension pipeline.
+	fn feeless_pledge(holder: u64, to: u64, until: u64) {
+		let (_, val, origin) =
+			validate_pledge(holder, to, until).expect("the pledge is authorized");
+		let pre = prepare_pledge(val, &origin, to, until);
+		assert_ok!(Scarcity::pledge(origin, to, until));
+		post_dispatch(pre, Ok(()));
+	}
+
+	#[test]
+	fn a_pledge_runs_through_the_whole_pipeline() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			MockNow::set(10);
+
+			let (valid, val, origin) = validate_pledge(RECIPIENT, PLEDGEE, 100).unwrap();
+			assert_eq!(valid.priority, 10, "a pledge is ordered by rest time like a transfer");
+			let pre = prepare_pledge(val, &origin, PLEDGEE, 100);
+			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT), "prepare takes the NFT");
+			assert_ok!(Scarcity::pledge(origin, PLEDGEE, 100));
+			post_dispatch(pre, Ok(()));
+
+			assert_eq!(nft_of(RECIPIENT).pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
+			assert_eq!(Locked::<Test>::get(RECIPIENT), None);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn the_extension_charges_its_pipeline_for_a_pledge() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			let extension = scarcity_extension(current_authorization(RECIPIENT));
+
+			assert_eq!(
+				extension.weight(&pledge_call(PLEDGEE, 100)),
+				<() as crate::WeightInfo>::as_scarcity_pipeline()
+			);
+			assert_ne!(
+				<() as crate::WeightInfo>::as_scarcity_pipeline(),
+				frame_support::weights::Weight::zero()
+			);
+		});
+	}
+
+	/// Every pledge term dispatch checks is checked at the pool first, so a mistaken pledge
+	/// never earns a lock.
+	#[test]
+	fn the_pool_refuses_each_invalid_pledge_without_a_lock() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			define_as(0, Transferability::Soulbound);
+			mint(0, RECIPIENT);
+			mint(1, OTHER);
+			MockNow::set(1_000);
+			let cap = MaxPledgeDuration::get();
+
+			let cases = [
+				(RECIPIENT, RECIPIENT, 1_100, CustomInvalidity::PledgeToSelf),
+				(OTHER, PLEDGEE, 1_100, CustomInvalidity::Soulbound),
+				(RECIPIENT, PLEDGEE, 999, CustomInvalidity::PledgeExpiry),
+				(RECIPIENT, PLEDGEE, 1_000, CustomInvalidity::PledgeExpiry),
+				(RECIPIENT, PLEDGEE, 1_000 + cap + 1, CustomInvalidity::PledgeExpiry),
+			];
+			for (holder, to, until, expected) in cases {
+				assert_invalidity(
+					validate_pledge(holder, to, until).err().expect("refused"),
+					expected,
+				);
+			}
+
+			feeless_pledge(RECIPIENT, PLEDGEE, 1_100);
+			assert_invalidity(
+				validate_pledge(RECIPIENT, OTHER, 1_200).err().expect("refused"),
+				CustomInvalidity::AlreadyPledged,
+			);
+			assert_eq!(Locked::<Test>::iter().count(), 0, "a pool refusal writes no lock");
+
+			MockNow::set(1_100);
+			assert!(validate_pledge(RECIPIENT, OTHER, 1_100 + cap).is_ok());
+		});
+	}
+
+	#[test]
+	fn a_pledge_spends_the_feeless_budget() {
+		new_test_ext().execute_with(|| {
+			MaximumMoves::set(&1);
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_move(RECIPIENT, OTHER);
+
+			assert_invalidity(
+				validate_pledge(OTHER, PLEDGEE, 100).err().expect("the budget is spent"),
+				CustomInvalidity::MovesExhausted,
+			);
+
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(OTHER), 0, 4));
+			feeless_pledge(4, PLEDGEE, 100);
+			assert_eq!(nft_of(4).moves, 1);
+			MockNow::set(100);
+			assert_invalidity(
+				validate_transfer(4, 6).err().expect("the pledge spent the refilled move"),
+				CustomInvalidity::MovesExhausted,
+			);
+		});
+	}
+
+	#[test]
+	fn the_pool_refuses_a_move_or_burn_of_a_pledged_instance_until_it_expires() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_pledge(RECIPIENT, PLEDGEE, 100);
+
+			assert_invalidity(
+				validate_transfer(RECIPIENT, 4).err().expect("pledged"),
+				CustomInvalidity::Pledged,
+			);
+			assert_invalidity(
+				validate_transfer(RECIPIENT, RECIPIENT).err().expect("pledged"),
+				CustomInvalidity::Pledged,
+			);
+			assert_invalidity(
+				validate_burn(RECIPIENT).err().expect("pledged"),
+				CustomInvalidity::Pledged,
+			);
+			assert_eq!(Locked::<Test>::get(RECIPIENT), None);
+			assert!(NftsByOwner::<Test>::contains_key(RECIPIENT));
+
+			MockNow::set(100);
+			assert!(validate_transfer(RECIPIENT, 4).is_ok());
+			assert!(validate_burn(RECIPIENT).is_ok());
+		});
+	}
+
+	/// A transaction the pool refused for a pledge applies once the pledge expires, because
+	/// expiry leaves the state nonce where it was.
+	#[test]
+	fn an_authorization_refused_for_a_pledge_applies_once_it_expires() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_pledge(RECIPIENT, PLEDGEE, 100);
+			let signed_during = current_authorization(RECIPIENT);
+			assert!(validate_transfer_as(RECIPIENT, 4, signed_during.clone()).is_err());
+
+			MockNow::set(100);
+			assert!(validate_transfer_as(RECIPIENT, 4, signed_during).is_ok());
+		});
+	}
+
+	/// A release advances the state nonce, so what the holder signed during the pledge stays
+	/// dead.
+	#[test]
+	fn an_authorization_signed_during_a_pledge_does_not_apply_after_a_release() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_pledge(RECIPIENT, PLEDGEE, 100);
+			let signed_during = current_authorization(RECIPIENT);
+			assert_invalidity(
+				validate_transfer_as(RECIPIENT, 4, signed_during.clone())
+					.err()
+					.expect("pledged"),
+				CustomInvalidity::Pledged,
+			);
+
+			assert_ok!(Scarcity::do_release(&PLEDGEE, 0));
+
+			assert_state_mismatch(
+				validate_transfer_as(RECIPIENT, 4, signed_during).err().expect("stale"),
+			);
+			assert!(validate_transfer(RECIPIENT, 4).is_ok());
+		});
+	}
+
+	/// The pool checks every term dispatch checks except the state nonce's headroom, so that is
+	/// the failure that reaches dispatch. It locks the purse like any failed dispatch.
+	#[test]
+	fn a_failed_pledge_dispatch_restores_the_nft_and_locks_the_purse() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			NftsByOwner::<Test>::mutate(RECIPIENT, |nft| {
+				nft.as_mut().expect("minted").state_nonce = u64::MAX;
+			});
+
+			let (_, val, origin) = validate_pledge(RECIPIENT, PLEDGEE, 100).unwrap();
+			let pre = prepare_pledge(val, &origin, PLEDGEE, 100);
+			assert_noop!(Scarcity::pledge(origin, PLEDGEE, 100), Error::<Test>::StateNonceOverflow);
+			post_dispatch(pre, Err(Error::<Test>::StateNonceOverflow.into()));
+
+			assert_eq!(nft_of(RECIPIENT).pledge, None);
+			assert_eq!(Locked::<Test>::get(RECIPIENT), Some(LockInfo { retries: 1, until: 60 }));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
 }
 
 mod migration {
