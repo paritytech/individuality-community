@@ -411,7 +411,7 @@ pub mod pallet {
 	#[derive(
 		Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, MaxEncodedLen,
 	)]
-	pub struct Nft {
+	pub struct Nft<AccountId> {
 		pub instance: InstanceId,
 		pub collection: CollectionId,
 		pub item: ItemIndex,
@@ -431,6 +431,25 @@ pub mod pallet {
 		/// [`AsScarcity`](crate::extension::AsScarcity) extension authorizes no transfer once the
 		/// two are equal.
 		pub moves: u16,
+		/// The right of another account to take this instance, if one was granted.
+		///
+		/// A pledge has effect only before its `until`. Every move clears it.
+		pub pledge: Option<Pledge<AccountId>>,
+	}
+
+	/// The NFT record as this runtime stores it.
+	pub type NftOf<T> = Nft<<T as frame_system::Config>::AccountId>;
+
+	/// The right of `pledgee` to seize or release an instance, granted by its holder.
+	#[derive(
+		Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, MaxEncodedLen,
+	)]
+	pub struct Pledge<AccountId> {
+		/// The only account that can seize or release the instance while the pledge has effect.
+		pub pledgee: AccountId,
+		/// Unix seconds at which the pledge stops having effect. The pledge has effect while the
+		/// current time is below this value.
+		pub until: u64,
 	}
 
 	/// Post-failure backoff lock for an NFT purse key.
@@ -512,7 +531,7 @@ pub mod pallet {
 
 	/// One NFT per owner key — the coinage model.
 	#[pallet::storage]
-	pub type NftsByOwner<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, Nft>;
+	pub type NftsByOwner<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, NftOf<T>>;
 
 	/// Stable reverse index from instance identifier to its current owner key.
 	#[pallet::storage]
@@ -663,8 +682,9 @@ pub mod pallet {
 		StorageDeposit,
 	}
 
-	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft`.
-	const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft` and
+	/// version 3 `pledge` to `Nft`.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
@@ -724,7 +744,7 @@ pub mod pallet {
 	pub enum Origin<T: Config> {
 		/// The NFT is removed from storage by `AsScarcity` before dispatch and held by this
 		/// origin.
-		Nft { owner: T::AccountId, nft: Nft },
+		Nft { owner: T::AccountId, nft: NftOf<T> },
 	}
 
 	#[pallet::config]
@@ -904,7 +924,13 @@ pub mod pallet {
 			// instance could spend it since, and that changes the state nonce the authorization
 			// names.
 			let moves = nft.moves.saturating_add(1);
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves, ..nft };
+			let nft = Nft {
+				last_moved: T::UnixTime::now().as_secs(),
+				state_nonce,
+				moves,
+				pledge: None,
+				..nft
+			};
 			NftsByOwner::<T>::insert(&to, nft.clone());
 			Instances::<T>::insert(nft.instance, &to);
 			T::OnPurseOccupied::on_purse_occupied(&to);
@@ -1607,7 +1633,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		fn do_burn(owner: T::AccountId, nft: Nft) -> Result<u32, DispatchError> {
+		fn do_burn(owner: T::AccountId, nft: NftOf<T>) -> Result<u32, DispatchError> {
 			let instance = nft.instance;
 			let expected_metadata_count = InstanceMetadataCount::<T>::take(instance);
 			let mut actual_metadata_count = 0u32;
@@ -1662,8 +1688,13 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft =
-				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
+			let nft = Nft {
+				last_moved: T::UnixTime::now().as_secs(),
+				state_nonce,
+				moves: 0,
+				pledge: None,
+				..nft
+			};
 			let collection = nft.collection;
 			NftsByOwner::<T>::remove(&from);
 			Locked::<T>::remove(&from);
@@ -1678,13 +1709,13 @@ pub mod pallet {
 		///
 		/// The flag lives on the definition rather than the instance, so every holder-authorized
 		/// move pays one `ItemDefs` read for it.
-		pub fn transferability_of(nft: &Nft) -> Result<Transferability, DispatchError> {
+		pub fn transferability_of(nft: &NftOf<T>) -> Result<Transferability, DispatchError> {
 			ItemDefs::<T>::get(nft.collection, nft.item)
 				.map(|definition| definition.transferability)
 				.ok_or_else(|| Error::<T>::UnknownItem.into())
 		}
 
-		fn ensure_transferable(nft: &Nft) -> DispatchResult {
+		fn ensure_transferable(nft: &NftOf<T>) -> DispatchResult {
 			ensure!(
 				Self::transferability_of(nft)? == Transferability::Transferable,
 				Error::<T>::Soulbound
@@ -1717,8 +1748,13 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft =
-				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
+			let nft = Nft {
+				last_moved: T::UnixTime::now().as_secs(),
+				state_nonce,
+				moves: 0,
+				pledge: None,
+				..nft
+			};
 			let collection = nft.collection;
 			NftsByOwner::<T>::remove(holder);
 			Locked::<T>::remove(holder);
@@ -1826,14 +1862,15 @@ pub mod pallet {
 				last_moved: now,
 				state_nonce: 0,
 				moves: 0,
+				pledge: None,
 			};
 			let instance_deposit = if with_deposit {
 				// Four storage entries back one instance: `NftsByOwner`, the `Instances`
 				// reverse index, `InstanceDeposits`, and `InstanceMetadataCount`. This measures
 				// their logical encoded payload; the runtime's per-record base can price trie
-				// and hash-prefix overhead.
-				let record_size = nft
-					.encoded_size()
+				// and hash-prefix overhead. The NFT counts at its largest, because the holder
+				// can grow it with a pledge and no deposit is taken then.
+				let record_size = NftOf::<T>::max_encoded_len()
 					.saturating_add(to.encoded_size().saturating_mul(2))
 					.saturating_add(instance.encoded_size().saturating_mul(3))
 					.saturating_add(BalanceOf::<T>::max_encoded_len())
@@ -1963,13 +2000,22 @@ pub mod pallet {
 				if nft.instance >= next_instance {
 					return Err(TryRuntimeError::Other("NFT instance is not below NextInstanceId"));
 				}
-				if Instances::<T>::get(nft.instance) != Some(owner) {
+				if Instances::<T>::get(nft.instance).as_ref() != Some(&owner) {
 					return Err(TryRuntimeError::Other(
 						"NftsByOwner entry has no matching Instances entry",
 					));
 				}
 				let definition = ItemDefs::<T>::get(nft.collection, nft.item)
 					.ok_or(TryRuntimeError::Other("NFT has no matching item definition"))?;
+				// An expired pledge stays until the next move, so the checks cover it too.
+				if let Some(pledge) = &nft.pledge {
+					if pledge.pledgee == owner {
+						return Err(TryRuntimeError::Other("NFT is pledged to its own holder"));
+					}
+					if definition.transferability != Transferability::Transferable {
+						return Err(TryRuntimeError::Other("a soulbound NFT carries a pledge"));
+					}
+				}
 				let live = live_by_item.entry((nft.collection, nft.item)).or_default();
 				*live += 1;
 				if *live > u64::from(definition.live_supply) {

@@ -398,7 +398,7 @@ where
 	/// Answers `None` for every misconfiguration: an unset key, a receiver that is not an address
 	/// or is the zero address, basis points that do not decode, and a share above 100%. The values
 	/// are raw metadata bytes, so this read is the only place that can reject them.
-	fn royalty_terms(nft: &Nft) -> Result<Option<([u8; 20], u128)>, Error> {
+	fn royalty_terms(nft: &NftOf<T>) -> Result<Option<([u8; 20], u128)>, Error> {
 		let (Some(receiver), Some(basis_points)) = (
 			Self::item_bytes(nft, ROYALTY_RECEIVER_KEY)?,
 			Self::item_bytes(nft, ROYALTY_BASIS_POINTS_KEY)?,
@@ -428,7 +428,7 @@ where
 	///
 	/// The reserved keys are shorter than any sane `MaxKeyLen`, so the revert here reports a
 	/// runtime misconfiguration rather than anything a collection can cause.
-	fn item_bytes(nft: &Nft, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+	fn item_bytes(nft: &NftOf<T>, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
 		let key =
 			MetadataKeyOf::<T>::try_from(key.to_vec()).map_err(|_| revert(ERR_KEY_TOO_LONG))?;
 		Ok(Scarcity::<T>::item_metadata_of(nft.collection, nft.item, &key)

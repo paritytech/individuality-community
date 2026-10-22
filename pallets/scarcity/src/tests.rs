@@ -26,8 +26,8 @@ use crate::{
 	CollectionMetadata, Collections, Error, Event, InspectCollection, InstanceDeposits,
 	InstanceMetadata, InstanceMetadataCount, Instances, ItemDefs, ItemMetadata, LockInfo, Locked,
 	MetadataEntry, MetadataKeyOf, MetadataValueOf, MintWithoutDeposit, NextCollectionId,
-	NextInstanceId, Nft, NftsByOwner, OnCollectionDeleted, OnCollectionOwnerChanged, Origin,
-	Transferability,
+	NextInstanceId, NftOf, NftsByOwner, OnCollectionDeleted, OnCollectionOwnerChanged, Origin,
+	Pledge, Transferability,
 };
 use codec::{Decode, Encode};
 #[cfg(feature = "try-runtime")]
@@ -90,7 +90,7 @@ fn mint_with_metadata(item: u32, to: u64, entries: &[(&[u8], &[u8])]) {
 	assert_ok!(Scarcity::mint(RuntimeOrigin::signed(OWNER), 0, item, to, metadata(entries),));
 }
 
-fn nft_origin(owner: u64, nft: Nft) -> RuntimeOrigin {
+fn nft_origin(owner: u64, nft: NftOf<Test>) -> RuntimeOrigin {
 	RuntimeOrigin::from(Origin::<Test>::Nft { owner, nft })
 }
 
@@ -2821,6 +2821,72 @@ fn try_state_rejects_nft_without_item_definition() {
 	});
 }
 
+/// Write a pledge straight into the record, past every check a call would make.
+fn put_pledge(holder: u64, pledgee: u64, until: u64) {
+	NftsByOwner::<Test>::mutate(holder, |maybe_nft| {
+		maybe_nft.as_mut().expect("the holder has an NFT").pledge = Some(Pledge { pledgee, until });
+	});
+}
+
+#[test]
+fn try_state_accepts_a_live_and_an_expired_pledge() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		mint(0, OTHER);
+		MockNow::set(100);
+		put_pledge(RECIPIENT, OWNER, 200);
+		put_pledge(OTHER, OWNER, 50);
+
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+#[test]
+fn try_state_rejects_a_pledge_to_the_holder() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		put_pledge(RECIPIENT, RECIPIENT, 200);
+
+		assert_try_state_error("NFT is pledged to its own holder");
+	});
+}
+
+#[test]
+fn try_state_rejects_a_pledge_on_a_soulbound_instance() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+		define_as(0, Transferability::Soulbound);
+		mint(0, RECIPIENT);
+		put_pledge(RECIPIENT, OWNER, 200);
+
+		assert_try_state_error("a soulbound NFT carries a pledge");
+	});
+}
+
+/// Every move rebuilds the record without the pledge, so an expired one does not travel.
+#[test]
+fn every_move_drops_an_expired_pledge() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		MockNow::set(100);
+
+		put_pledge(RECIPIENT, OWNER, 50);
+		feeless_move(RECIPIENT, OTHER);
+		assert_eq!(NftsByOwner::<Test>::get(OTHER).expect("moved").pledge, None);
+
+		put_pledge(OTHER, OWNER, 50);
+		assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(OTHER), 0, RECIPIENT));
+		assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("moved").pledge, None);
+
+		put_pledge(RECIPIENT, OTHER, 50);
+		assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, 4));
+		assert_eq!(NftsByOwner::<Test>::get(4).expect("moved").pledge, None);
+	});
+}
+
 #[test]
 fn try_state_rejects_live_supply_below_stored_instances() {
 	new_test_ext().execute_with(|| {
@@ -3110,7 +3176,8 @@ fn the_extension_passes_the_paid_holder_call_through() {
 mod migration {
 	use super::*;
 	use crate::migration::{
-		v1::MigrateToTransferability, v2::MigrateToMoves, MigrateV0ToV1, MigrateV1ToV2,
+		v1::MigrateToTransferability, v2::MigrateToMoves, v3::MigrateToPledge, MigrateV0ToV1,
+		MigrateV1ToV2, MigrateV2ToV3,
 	};
 	#[cfg(feature = "try-runtime")]
 	use codec::Decode;
@@ -3508,6 +3575,189 @@ mod migration {
 			MigrateToMoves::<Test>::on_runtime_upgrade();
 
 			assert!(MigrateToMoves::<Test>::post_upgrade(state).is_err());
+		});
+	}
+
+	/// Write an NFT in the shape stored before pledges existed.
+	///
+	/// Encoded as the bare field sequence rather than through the migration's own `OldNft`, so a
+	/// mistake in that struct fails here instead of round-tripping through itself and passing.
+	fn put_unpledged_nft(owner: u64, instance: u64) {
+		let old = (instance, 0u32, 0u32, 7u64, 9u64, 3u64, 5u16);
+		unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(owner), &old.encode());
+	}
+
+	/// Mint through the pallet, then strip only the pledge field from the stored NFT.
+	fn strip_the_pledge_of_a_real_nft(owner: u64) {
+		let nft = NftsByOwner::<Test>::get(owner).expect("the instance was minted");
+		let old = (
+			nft.instance,
+			nft.collection,
+			nft.item,
+			nft.minted_at,
+			nft.last_moved,
+			nft.state_nonce,
+			nft.moves,
+		);
+		unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(owner), &old.encode());
+		assert_eq!(NftsByOwner::<Test>::get(owner), None, "the downgrade must be unreadable");
+	}
+
+	/// The old encoding is unreadable under the current type, and the migration recovers every
+	/// field of it.
+	#[test]
+	fn translates_nfts_written_before_pledges() {
+		new_test_ext().execute_with(|| {
+			for (owner, instance) in [(RECIPIENT, 4), (OTHER, 5), (6, 6)] {
+				put_unpledged_nft(owner, instance);
+			}
+			assert_eq!(NftsByOwner::<Test>::iter().count(), 0, "the old encoding must not decode");
+
+			MigrateToPledge::<Test>::on_runtime_upgrade();
+
+			assert_eq!(NftsByOwner::<Test>::iter().count(), 3, "every NFT is translated");
+			let nft = NftsByOwner::<Test>::get(RECIPIENT).expect("the migration restored the NFT");
+			assert_eq!(nft.instance, 4);
+			assert_eq!(nft.minted_at, 7);
+			assert_eq!(nft.last_moved, 9);
+			assert_eq!(nft.state_nonce, 3);
+			assert_eq!(nft.moves, 5, "the spent budget carries over");
+			assert_eq!(nft.pledge, None);
+		});
+	}
+
+	/// A translated NFT is usable again, and the state it belongs to stays consistent.
+	#[test]
+	fn a_translated_unpledged_nft_is_usable_again() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			strip_the_pledge_of_a_real_nft(RECIPIENT);
+			assert!(validate_transfer_as(RECIPIENT, OTHER, authorization(0, 0)).is_err());
+
+			MigrateToPledge::<Test>::on_runtime_upgrade();
+
+			assert_ok!(Scarcity::do_try_state());
+			feeless_move(RECIPIENT, OTHER);
+			assert_eq!(NftsByOwner::<Test>::get(OTHER).expect("moved").moves, 1);
+		});
+	}
+
+	/// The gate runs the translation on a chain still at version 2, and closes behind it.
+	#[test]
+	fn the_pledge_migration_translates_and_bumps_the_version() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(2).put::<Scarcity>();
+			put_unpledged_nft(RECIPIENT, 4);
+
+			let weight = <MigrateV2ToV3<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("translated").pledge, None);
+			assert_eq!(Scarcity::on_chain_storage_version(), 3, "the gate must close behind it");
+			// One read and write for the one NFT, one more read for the end of the prefix
+			// iteration, and a read and write for the version the gate checks and stamps.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			assert_eq!(weight, db.reads_writes(3, 2), "the translation must charge what it did");
+		});
+	}
+
+	/// A chain at version 1 reaches version 3 in one upgrade when both migrations run in the
+	/// order the runtime lists them.
+	#[test]
+	fn a_version_one_chain_reaches_version_three_in_one_upgrade() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(1).put::<Scarcity>();
+			put_old_nft(RECIPIENT, 4);
+
+			<(MigrateV1ToV2<Test>, MigrateV2ToV3<Test>) as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			let nft = NftsByOwner::<Test>::get(RECIPIENT).expect("translated");
+			assert_eq!((nft.state_nonce, nft.moves, nft.pledge), (3, 0, None));
+			assert_eq!(Scarcity::on_chain_storage_version(), 3);
+		});
+	}
+
+	/// A chain built from this code is already at version 3, so the gate holds shut.
+	///
+	/// Without it a second run would decode a pledged NFT as its own seven-field prefix and drop
+	/// the pledge, which frees a staked token from the contract it was pledged to.
+	#[test]
+	fn a_fresh_chain_skips_the_pledge_migration() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(
+				Scarcity::on_chain_storage_version(),
+				3,
+				"genesis stamps the in-code version"
+			);
+			setup_item();
+			mint(0, RECIPIENT);
+			put_pledge(RECIPIENT, OTHER, 200);
+
+			let weight = <MigrateV2ToV3<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert_eq!(
+				NftsByOwner::<Test>::get(RECIPIENT).expect("the NFT exists").pledge,
+				Some(Pledge { pledgee: OTHER, until: 200 }),
+				"the gate must leave a pledge alone"
+			);
+			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));
+		});
+	}
+
+	/// The version gate is what makes the migration single-shot.
+	#[test]
+	fn a_second_unguarded_pledge_migration_would_drop_the_pledge() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			put_pledge(RECIPIENT, OTHER, 200);
+
+			MigrateToPledge::<Test>::on_runtime_upgrade();
+
+			assert_eq!(
+				NftsByOwner::<Test>::get(RECIPIENT).expect("the NFT exists").pledge,
+				None,
+				"an unguarded rerun drops the pledge, which is why `MigrateV2ToV3` gates on the \
+				 storage version"
+			);
+		});
+	}
+
+	/// The try-runtime checks pass over the state the migration is meant for.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_try_runtime_checks_span_the_pledge_translation() {
+		new_test_ext().execute_with(|| {
+			for (owner, instance) in [(RECIPIENT, 0), (OTHER, 1), (4, 2)] {
+				put_unpledged_nft(owner, instance);
+			}
+			assert_eq!(
+				NftsByOwner::<Test>::iter().count(),
+				0,
+				"nothing decodes before the migration"
+			);
+
+			let state = MigrateToPledge::<Test>::pre_upgrade().expect("counts the keys");
+			assert_eq!(u32::decode(&mut &state[..]).unwrap(), 3, "keys are counted, not entries");
+
+			MigrateToPledge::<Test>::on_runtime_upgrade();
+
+			assert_ok!(MigrateToPledge::<Test>::post_upgrade(state));
+		});
+	}
+
+	/// `post_upgrade` fails when an NFT does not survive, rather than reporting success.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_post_upgrade_check_catches_a_lost_unpledged_nft() {
+		new_test_ext().execute_with(|| {
+			put_unpledged_nft(RECIPIENT, 0);
+			let state = MigrateToPledge::<Test>::pre_upgrade().expect("counts the keys");
+
+			unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(RECIPIENT), &[0xffu8]);
+			MigrateToPledge::<Test>::on_runtime_upgrade();
+
+			assert!(MigrateToPledge::<Test>::post_upgrade(state).is_err());
 		});
 	}
 }

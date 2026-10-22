@@ -3158,6 +3158,7 @@ pub mod migrations {
 		ForceCreatePgasAsset,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_scarcity::migration::MigrateV1ToV2<Runtime>,
+		indiv_pallet_scarcity::migration::MigrateV2ToV3<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_members_subscriber::migration::MigrateV0ToV1<Runtime>,

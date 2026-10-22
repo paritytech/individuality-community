@@ -100,6 +100,7 @@ fn scarcity_purse_test_state(state_nonce: u64) -> (sp_io::TestExternalities, Acc
 				last_moved: 0,
 				state_nonce,
 				moves: 0,
+				pledge: None,
 			},
 		);
 		indiv_pallet_scarcity::Instances::<Runtime>::insert(0, &from);

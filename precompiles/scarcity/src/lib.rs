@@ -138,7 +138,7 @@ use core::{marker::PhantomData, num::NonZero};
 use frame_support::traits::Get;
 use indiv_pallet_scarcity::{
 	CollectionId, CollectionMetadata, Collections, Error as ScarcityError, InstanceId,
-	InstanceMetadata, Instances, ItemMetadata, MetadataKeyOf, MetadataValueOf, Nft, NftsByOwner,
+	InstanceMetadata, Instances, ItemMetadata, MetadataKeyOf, MetadataValueOf, NftOf, NftsByOwner,
 	Transferability,
 };
 use pallet_revive::{
@@ -367,7 +367,7 @@ const REF_TIME_PER_METADATA_BYTE: u64 = 1_000;
 fn live_instance<T: indiv_pallet_scarcity::Config>(
 	collection: CollectionId,
 	token: &U256,
-) -> Result<(T::AccountId, Nft), Error> {
+) -> Result<(T::AccountId, NftOf<T>), Error> {
 	let id: InstanceId = u64::try_from(*token).map_err(|_| revert(ERR_UNKNOWN_TOKEN))?;
 	let purse = Instances::<T>::get(id).ok_or_else(|| revert(ERR_UNKNOWN_TOKEN))?;
 	let nft = NftsByOwner::<T>::get(&purse).ok_or_else(|| revert(ERR_UNKNOWN_TOKEN))?;

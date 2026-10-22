@@ -52,7 +52,7 @@
 //! to zero. The holder's paid move is [`Call::transfer_by_holder`], signed without this
 //! extension. Burns stay feeless throughout, because they free storage.
 
-use crate::{pallet::*, weights::WeightInfo, Config, Nft, Transferability};
+use crate::{pallet::*, weights::WeightInfo, Config, Nft, NftOf, Transferability};
 use codec::{Decode, DecodeWithMemTracking, Encode};
 use core::marker::PhantomData;
 use frame_support::{
@@ -132,7 +132,7 @@ pub enum Val<T: Config + Send + Sync> {
 /// Information carried from preparation to post-dispatch.
 pub enum Pre<T: Config + Send + Sync> {
 	NotUsing,
-	UsingNft { owner: T::AccountId, nft: Nft },
+	UsingNft { owner: T::AccountId, nft: NftOf<T> },
 }
 
 /// Purse-key authorization for Scarcity transfers and burns.
@@ -284,7 +284,7 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 			Val::UsingNft { owner, instance, state_nonce } => {
 				let nft = NftsByOwner::<T>::try_mutate_exists(
 					&owner,
-					|maybe_nft| -> Result<Nft, TransactionValidityError> {
+					|maybe_nft| -> Result<NftOf<T>, TransactionValidityError> {
 						let nft = maybe_nft.as_ref().ok_or(CustomInvalidity::NoNft)?;
 						if nft.instance != instance || nft.state_nonce != state_nonce {
 							return Err(CustomInvalidity::NftStateMismatch.into());
