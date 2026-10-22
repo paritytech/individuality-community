@@ -1063,6 +1063,15 @@ mod integrity {
 			<Scarcity as Hooks<u64>>::integrity_test();
 		});
 	}
+
+	#[test]
+	#[should_panic = "`MaxPledgeDuration` must be greater than zero"]
+	fn rejects_a_zero_pledge_duration() {
+		new_test_ext().execute_with(|| {
+			MaxPledgeDuration::set(&0);
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
+	}
 }
 
 #[test]

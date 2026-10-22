@@ -698,7 +698,8 @@ pub mod pallet {
 		/// the weights of [`Config::MetadataPolicy`], [`Config::OnPurseOccupied`] and
 		/// [`Config::OnCollectionDeleted`] ride on the calls that run them. A runtime that
 		/// overshoots on any of them produces a call that no block can hold.
-		/// [`Config::LockPeriod`] must pace the retries of a failing purse key.
+		/// [`Config::LockPeriod`] must pace the retries of a failing purse key, and
+		/// [`Config::MaxPledgeDuration`] must admit some pledge.
 		fn integrity_test() {
 			let budget = OcwWeightBudget::from_normal_max::<T>();
 			let pairs = T::MaxInstanceMetadata::get();
@@ -720,6 +721,11 @@ pub mod pallet {
 			// A zero lock period expires the lock in the block that creates it, so a purse key
 			// that fails dispatch retries in the next block at no cost.
 			assert!(T::LockPeriod::get() > 0, "`LockPeriod` must be greater than zero");
+			// A zero duration leaves no `until` that is both in the future and within the cap.
+			assert!(
+				T::MaxPledgeDuration::get() > 0,
+				"`MaxPledgeDuration` must be greater than zero"
+			);
 		}
 
 		#[cfg(feature = "try-runtime")]
@@ -829,6 +835,13 @@ pub mod pallet {
 		/// move.
 		#[pallet::constant]
 		type MaximumMoves: Get<u16>;
+
+		/// Longest a pledge may run, in seconds.
+		///
+		/// The holder cannot revoke a pledge, so this bounds how long a pledgee that never seizes
+		/// or releases keeps the holder from moving or burning the instance.
+		#[pallet::constant]
+		type MaxPledgeDuration: Get<u64>;
 
 		/// Cross-pallet cleanup run when a collection is deleted. Defaults to `()` for runtimes
 		/// with nothing keyed by a collection.
