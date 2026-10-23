@@ -2608,7 +2608,7 @@ mod credit_tree_removal {
 				.0
 				.into_iter()
 				.find_map(|instruction| match instruction {
-					Instruction::Transact { call, .. } => Some(call.into_encoded()),
+					Instruction::Transact { call, .. } => Some(call.encoded().to_vec()),
 					_ => None,
 				})
 				.expect("the XCM carries a Transact");
