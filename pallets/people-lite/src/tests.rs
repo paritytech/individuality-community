@@ -22,7 +22,7 @@ use crate::{
 		mock_consumer_registrar_fail_next, mock_member_service_delete_collection,
 		mock_member_service_fail_next_add_members, mock_member_service_members,
 		mock_member_service_revision, mock_registered_consumers, new_test_ext, Extrinsic,
-		LitePersonRegistrationFee, RuntimeCall, RuntimeEvent, RuntimeOrigin, Test,
+		LitePersonRegistrationFee, MockSignature, RuntimeCall, RuntimeEvent, RuntimeOrigin, Test,
 		TransactionExecutionError, OTHER_LITE_CONTEXT,
 	},
 	pallet::{AccountToAlias, AliasToAccount, AttestationAllowance, LitePeople},
@@ -79,8 +79,7 @@ fn register_lite_person(verifier: u64, user: u64, seed: u8) -> SecretOfTest {
 	let secret = secret_from_seed(seed);
 	let ring_vrf_key = member_from_secret(&secret);
 	let proof = sign_attest_with_secret(&secret, user);
-	let candidate_signature: <Test as crate::Config>::AttestationSignature =
-		sp_runtime::testing::UintAuthorityId(user);
+	let candidate_signature: <Test as crate::Config>::AttestationSignature = MockSignature(user);
 	let call = RuntimeCall::PeopleLite(crate::Call::<Test>::attest {
 		candidate: user,
 		candidate_signature,
@@ -235,7 +234,7 @@ fn attest_fails_when_collection_not_initialized() {
 		let ring_vrf_key = member_from_secret(&secret);
 		let proof = sign_attest_with_secret(&secret, candidate);
 		let candidate_signature: <Test as crate::Config>::AttestationSignature =
-			sp_runtime::testing::UintAuthorityId(candidate);
+			MockSignature(candidate);
 
 		assert_noop!(
 			PeopleLitePallet::<Test>::attest(
@@ -264,7 +263,7 @@ fn set_attestation_fails_for_wrong_origin() {
 		let ring_vrf_key = member_from_secret(&secret);
 		let proof = sign_attest_with_secret(&secret, candidate);
 		let candidate_signature: <Test as crate::Config>::AttestationSignature =
-			sp_runtime::testing::UintAuthorityId(candidate);
+			MockSignature(candidate);
 
 		let err = PeopleLitePallet::<Test>::attest(
 			frame_system::RawOrigin::Root.into(),
@@ -296,7 +295,7 @@ fn set_attestation_fails_for_no_attestation_allowance() {
 		let ring_vrf_key = member_from_secret(&secret);
 		let proof = sign_attest_with_secret(&secret, candidate);
 		let candidate_signature: <Test as crate::Config>::AttestationSignature =
-			sp_runtime::testing::UintAuthorityId(candidate);
+			MockSignature(candidate);
 		let call = RuntimeCall::PeopleLite(crate::Call::<Test>::attest {
 			candidate,
 			candidate_signature,
@@ -333,7 +332,7 @@ fn attest_rejects_invalid_proof_of_ownership() {
 		let ring_vrf_key = member_from_secret(&secret_ok);
 		let bad_proof = sign_attest_with_secret(&secret_wrong, candidate);
 		let candidate_signature: <Test as crate::Config>::AttestationSignature =
-			sp_runtime::testing::UintAuthorityId(candidate);
+			MockSignature(candidate);
 
 		assert_noop!(
 			PeopleLitePallet::<Test>::attest(
@@ -362,7 +361,7 @@ fn attest_rejects_invalid_attestation_signature() {
 		let ring_vrf_key = member_from_secret(&secret);
 		let proof = sign_attest_with_secret(&secret, candidate);
 		let bad_attestation_signature: <Test as crate::Config>::AttestationSignature =
-			sp_runtime::testing::UintAuthorityId(candidate + 1);
+			MockSignature(candidate + 1);
 
 		assert_noop!(
 			PeopleLitePallet::<Test>::attest(
@@ -391,7 +390,7 @@ fn attest_rolls_back_when_add_members_fails() {
 		let ring_vrf_key = member_from_secret(&secret);
 		let proof = sign_attest_with_secret(&secret, candidate);
 		let candidate_signature: <Test as crate::Config>::AttestationSignature =
-			sp_runtime::testing::UintAuthorityId(candidate);
+			MockSignature(candidate);
 
 		// Force add_members to fail. assert_noop! checks the error and that nothing
 		// changed. Allowance still there, no person registered, no sufficients bump.
@@ -423,7 +422,7 @@ fn attest_rejects_already_registered_candidate() {
 		let ring_vrf_key = member_from_secret(&secret);
 		let proof = sign_attest_with_secret(&secret, candidate);
 		let candidate_signature: <Test as crate::Config>::AttestationSignature =
-			sp_runtime::testing::UintAuthorityId(candidate);
+			MockSignature(candidate);
 
 		assert_noop!(
 			PeopleLitePallet::<Test>::attest(
@@ -457,7 +456,7 @@ fn attest_rejects_candidate_account_bound_to_alias() {
 			PeopleLitePallet::<Test>::attest(
 				Some(verifier).into(),
 				alias_account,
-				sp_runtime::testing::UintAuthorityId(alias_account),
+				MockSignature(alias_account),
 				ring_vrf_key,
 				sign_attest_with_secret(&candidate_secret, alias_account),
 				None,
@@ -482,7 +481,7 @@ fn attest_rejects_duplicate_ring_vrf_key() {
 		AttestationAllowance::<Test>::insert(verifier, 1);
 		let proof = sign_attest_with_secret(&secret, candidate);
 		let candidate_signature: <Test as crate::Config>::AttestationSignature =
-			sp_runtime::testing::UintAuthorityId(candidate);
+			MockSignature(candidate);
 
 		assert_noop!(
 			PeopleLitePallet::<Test>::attest(
@@ -526,9 +525,9 @@ mod register_with_fee_tests {
 
 	fn consumer_registration_params(
 		account: u64,
-	) -> crate::types::LiteConsumerRegistrationParams<u64, sp_runtime::testing::UintAuthorityId> {
+	) -> crate::types::LiteConsumerRegistrationParams<u64, MockSignature> {
 		crate::types::LiteConsumerRegistrationParams {
-			signature: sp_runtime::testing::UintAuthorityId(account),
+			signature: MockSignature(account),
 			account,
 			identifier_key: [7; 65],
 			username: indiv_support::traits::Username::try_from(b"liteperson.1".to_vec())
@@ -539,9 +538,9 @@ mod register_with_fee_tests {
 
 	fn invalid_consumer_registration_params(
 		account: u64,
-	) -> crate::types::LiteConsumerRegistrationParams<u64, sp_runtime::testing::UintAuthorityId> {
+	) -> crate::types::LiteConsumerRegistrationParams<u64, MockSignature> {
 		let mut params = consumer_registration_params(account);
-		params.signature = sp_runtime::testing::UintAuthorityId(account.saturating_add(1));
+		params.signature = MockSignature(account.saturating_add(1));
 		params
 	}
 
@@ -722,7 +721,7 @@ mod register_with_fee_tests {
 				PeopleLitePallet::<Test>::attest(
 					Some(97).into(),
 					deposited_candidate,
-					sp_runtime::testing::UintAuthorityId(deposited_candidate),
+					MockSignature(deposited_candidate),
 					member_from_secret(&attested_secret),
 					sign_attest_with_secret(&attested_secret, deposited_candidate),
 					None,
@@ -839,9 +838,12 @@ mod register_with_fee_tests {
 			let secret = secret_from_seed(26);
 			let params = consumer_registration_params(consumer);
 
-			assert!(params
-				.signature
-				.verify(&params.signing_payload(&candidate)[..], &params.account));
+			assert!(params.signature.verify(
+				&PeopleLitePallet::<Test>::account_signing_payload(
+					&params.signing_payload(&candidate)
+				)[..],
+				&params.account
+			));
 			assert_noop!(
 				PeopleLitePallet::<Test>::register_with_fee(
 					Some(candidate).into(),
