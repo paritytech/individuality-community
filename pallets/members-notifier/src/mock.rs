@@ -128,7 +128,7 @@ pub fn extract_transact_call(encoded_xcm: &[u8]) -> Option<Vec<u8>> {
 	let xcm: Xcm<()> = Xcm::decode(&mut &encoded_xcm[..]).ok()?;
 	for inst in xcm.0.into_iter() {
 		if let Instruction::Transact { call, .. } = inst {
-			return Some(call.into_encoded());
+			return Some(call.encoded().to_vec());
 		}
 	}
 	None

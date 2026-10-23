@@ -85,8 +85,6 @@ use sp_runtime::{
 	ApplyExtrinsicResult, MultiSignature, MultiSigner,
 };
 pub use sp_runtime::{MultiAddress, Perbill, Permill};
-#[cfg(feature = "std")]
-use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 /// Paseo network constants - defined locally to avoid version conflicts
 pub mod paseo_constants {
@@ -315,12 +313,6 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	transaction_version: 6,
 	system_version: 1,
 };
-
-/// The version information used to identify this runtime when compiled natively.
-#[cfg(feature = "std")]
-pub fn native_version() -> NativeVersion {
-	NativeVersion { runtime_version: VERSION, can_author_with: Default::default() }
-}
 
 parameter_types! {
 	pub const Version: RuntimeVersion = VERSION;
@@ -1087,6 +1079,8 @@ parameter_types! {
 	pub StakingPotAccount: AccountId =
 		<pallet_collator_selection::StakingPotAccountId<Runtime> as frame_support::traits::TypedGet>::get();
 	pub LpFee: Permill = Permill::from_rational(3u32, 1_000u32); // 0.3%
+	/// The highest swap fee `AdminOrigin` can set on a single pool.
+	pub MaxSwapFee: Permill = Permill::from_percent(2);
 	/// Storage deposit for the pool entry and for its liquidity token, plus the deposit an asset
 	/// costs to register, so that creating a pool is no cheaper than creating the asset it pairs.
 	pub const PoolSetupFee: Balance = deposit(1, 4) + AssetDeposit::get();
@@ -1132,6 +1126,8 @@ impl pallet_asset_conversion::Config for Runtime {
 	type PoolSetupFeeTarget = ResolveAssetTo<StakingPotAccount, Self::Assets>;
 	type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
 	type LPFee = LpFee;
+	type AdminOrigin = EnsureRoot<AccountId>;
+	type MaxSwapFee = MaxSwapFee;
 	type PalletId = AssetConversionPalletId;
 	// Every pool holds the native asset on one side (see `PoolLocator`), so swapping one asset for
 	// another takes two hops through native. Coinage itself only ever swaps an asset for native,
@@ -1811,6 +1807,39 @@ impl_runtime_apis! {
 						id: AssetId(RelayLocation::get()),
 						fun: Fungible(ExistentialDeposit::get()),
 					}
+				}
+
+				fn get_assets(n: u32) -> XcmAssets {
+					use frame_support::traits::tokens::fungible;
+					let account: AccountId = frame_benchmarking::whitelisted_caller();
+					frame_support::assert_ok!(<Balances as fungible::Mutate<_>>::mint_into(
+						&account,
+						ExistentialDeposit::get(),
+					));
+					let amount = 1_000_000u128;
+					// Worst case: `n` distinct foreign assets, which `AssetTransactors` matches
+					// after the native token.
+					let assets = (0..n)
+						.map(|i| {
+							let asset_location = Location::new(
+								1,
+								[Parachain(3000), PalletInstance(53), GeneralIndex((1984 + i).into())],
+							);
+							frame_support::assert_ok!(Assets::force_create(
+								RuntimeOrigin::root(),
+								asset_location.clone(),
+								account.clone().into(),
+								true,
+								1u128,
+							));
+							Asset { id: AssetId(asset_location), fun: Fungible(amount) }
+						})
+						.collect::<Vec<_>>();
+					assets.into()
+				}
+
+				fn batch_call(calls: Vec<RuntimeCall>) -> Option<RuntimeCall> {
+					Some(RuntimeCall::Utility(pallet_utility::Call::batch { calls }))
 				}
 			}
 
