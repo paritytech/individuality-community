@@ -94,6 +94,7 @@ impl indiv_pallet_scarcity::Config for Test {
 	// Mirrors the runtime: a mint makes its purse key addressable to the contract environment.
 	type OnPurseOccupied = crate::MapPurseKey<Test>;
 	type MetadataPolicy = crate::Erc721MetadataPolicy<Test>;
+	type ContractAccounts = crate::ReviveContracts<Test>;
 }
 
 #[derive_impl(pallet_revive::config_preludes::TestDefaultConfig)]

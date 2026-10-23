@@ -3511,3 +3511,344 @@ mod migration {
 		});
 	}
 }
+
+mod contracts {
+	use super::*;
+	use crate::{ContractNftCount, ContractNfts, Holding};
+
+	const CONTRACT: u64 = 50;
+	const OTHER_CONTRACT: u64 = 51;
+
+	fn contract_instances(contract: u64) -> Vec<u64> {
+		let mut instances = ContractNfts::<Test>::iter_key_prefix(contract).collect::<Vec<_>>();
+		instances.sort_unstable();
+		instances
+	}
+
+	#[test]
+	fn a_contract_holds_several_instances() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+
+			mint(0, CONTRACT);
+			mint(0, CONTRACT);
+			mint(0, CONTRACT);
+
+			assert_eq!(contract_instances(CONTRACT), vec![0, 1, 2]);
+			assert_eq!(ContractNftCount::<Test>::get(CONTRACT, 0), 3);
+			assert_eq!(Scarcity::balance_of(&CONTRACT, 0), 3);
+			assert!(!NftsByOwner::<Test>::contains_key(CONTRACT));
+			assert_eq!(Instances::<Test>::get(1), Some(CONTRACT));
+			assert_eq!(
+				Scarcity::holding_of(1).map(|(_, _, holding)| holding),
+				Some(Holding::Contract)
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn a_key_that_is_not_a_contract_still_holds_one_instance() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+
+			assert_noop!(
+				Scarcity::mint(RuntimeOrigin::signed(OWNER), 0, 0, RECIPIENT, metadata(&[])),
+				Error::<Test>::AddressOccupied
+			);
+		});
+	}
+
+	#[test]
+	fn the_count_is_kept_per_collection() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+			assert_ok!(Scarcity::define_item(
+				RuntimeOrigin::signed(OWNER),
+				1,
+				Transferability::Transferable,
+				metadata(&[])
+			));
+			MockContracts::add(CONTRACT);
+
+			mint(0, CONTRACT);
+			assert_ok!(Scarcity::mint(RuntimeOrigin::signed(OWNER), 1, 0, CONTRACT, metadata(&[])));
+			assert_ok!(Scarcity::mint(RuntimeOrigin::signed(OWNER), 1, 0, CONTRACT, metadata(&[])));
+
+			assert_eq!(Scarcity::balance_of(&CONTRACT, 0), 1);
+			assert_eq!(Scarcity::balance_of(&CONTRACT, 1), 2);
+			assert_eq!(Scarcity::balance_of(&CONTRACT, 2), 0);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn an_unsolicited_instance_does_not_block_a_contract() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+			mint(0, OTHER);
+
+			// The fee-less push of another holder lands next to what the contract holds.
+			assert!(validate_transfer_as(OTHER, CONTRACT, current_authorization(OTHER)).is_ok());
+			let nft = NftsByOwner::<Test>::take(OTHER).unwrap();
+			assert_ok!(Scarcity::transfer(nft_origin(OTHER, nft), CONTRACT));
+
+			assert_eq!(contract_instances(CONTRACT), vec![0, 1]);
+			assert_eq!(ContractNfts::<Test>::get(CONTRACT, 1).map(|nft| nft.moves), Some(1));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn a_contract_moves_an_instance_out_on_its_own_authority() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+			mint(0, CONTRACT);
+
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(CONTRACT), 1, RECIPIENT));
+
+			assert_eq!(contract_instances(CONTRACT), vec![0]);
+			assert_eq!(ContractNftCount::<Test>::get(CONTRACT, 0), 1);
+			let nft = NftsByOwner::<Test>::get(RECIPIENT).unwrap();
+			assert_eq!((nft.instance, nft.state_nonce, nft.moves), (1, 1, 0));
+			assert_eq!(Instances::<Test>::get(1), Some(RECIPIENT));
+			System::assert_last_event(
+				Event::<Test>::Transferred {
+					instance: 1,
+					collection: 0,
+					from: CONTRACT,
+					to: RECIPIENT,
+				}
+				.into(),
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn the_count_entry_is_removed_with_the_last_instance() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(CONTRACT), 0, RECIPIENT));
+
+			assert!(!ContractNftCount::<Test>::contains_key(CONTRACT, 0));
+			assert_eq!(ContractNfts::<Test>::iter_prefix(CONTRACT).count(), 0);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn a_contract_moves_an_instance_to_another_contract() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			MockContracts::add(OTHER_CONTRACT);
+			mint(0, CONTRACT);
+			mint(0, OTHER_CONTRACT);
+
+			assert_ok!(Scarcity::transfer_by_holder(
+				RuntimeOrigin::signed(CONTRACT),
+				0,
+				OTHER_CONTRACT
+			));
+
+			assert_eq!(contract_instances(CONTRACT), Vec::<u64>::new());
+			assert_eq!(contract_instances(OTHER_CONTRACT), vec![0, 1]);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn a_contract_cannot_move_an_instance_it_does_not_hold() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+			mint(0, OTHER);
+
+			assert_noop!(
+				Scarcity::transfer_by_holder(RuntimeOrigin::signed(CONTRACT), 1, RECIPIENT),
+				Error::<Test>::UnknownInstance
+			);
+		});
+	}
+
+	#[test]
+	fn a_contract_cannot_move_an_instance_to_itself() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			assert_noop!(
+				Scarcity::transfer_by_holder(RuntimeOrigin::signed(CONTRACT), 0, CONTRACT),
+				Error::<Test>::SelfTransfer
+			);
+		});
+	}
+
+	#[test]
+	fn a_contract_cannot_move_a_soulbound_instance() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+			define_as(0, Transferability::Soulbound);
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			assert_noop!(
+				Scarcity::transfer_by_holder(RuntimeOrigin::signed(CONTRACT), 0, RECIPIENT),
+				Error::<Test>::Soulbound
+			);
+		});
+	}
+
+	#[test]
+	fn the_collection_owner_forces_an_instance_out_of_a_contract() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+			mint(0, CONTRACT);
+
+			assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, RECIPIENT));
+			assert_ok!(Scarcity::force_burn(RuntimeOrigin::signed(OWNER), 1));
+
+			assert_eq!(ContractNfts::<Test>::iter_prefix(CONTRACT).count(), 0);
+			assert!(!ContractNftCount::<Test>::contains_key(CONTRACT, 0));
+			assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).map(|nft| nft.instance), Some(0));
+			assert!(!Instances::<Test>::contains_key(1));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn the_collection_owner_forces_an_instance_into_a_contract() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+			mint(0, RECIPIENT);
+
+			assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 1, CONTRACT));
+
+			assert_eq!(contract_instances(CONTRACT), vec![0, 1]);
+			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn instance_metadata_resolves_for_an_instance_a_contract_holds() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint_with_metadata(0, CONTRACT, &[(b"level", b"1")]);
+
+			assert_ok!(Scarcity::set_instance_metadata(
+				RuntimeOrigin::signed(OWNER),
+				0,
+				key(b"level"),
+				Some(value(b"2"))
+			));
+
+			assert_eq!(Scarcity::instance_metadata_of(0, &key(b"level")), Some(value(b"2")));
+			let layers = Scarcity::metadata_layers(MetadataQuery::Instance(0));
+			assert_eq!(
+				layers.resolved,
+				Some(MetadataTarget::Instance { instance: 0, collection: 0, item: 0 })
+			);
+		});
+	}
+
+	#[test]
+	fn an_instance_received_before_the_contract_existed_stays_in_its_purse() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, CONTRACT);
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			assert_eq!(NftsByOwner::<Test>::get(CONTRACT).map(|nft| nft.instance), Some(0));
+			assert_eq!(contract_instances(CONTRACT), vec![1]);
+			assert_eq!(Scarcity::balance_of(&CONTRACT, 0), 2);
+			assert_ok!(Scarcity::do_try_state());
+
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(CONTRACT), 0, RECIPIENT));
+			assert!(!NftsByOwner::<Test>::contains_key(CONTRACT));
+			assert_eq!(contract_instances(CONTRACT), vec![1]);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn a_removed_contract_keeps_what_it_holds() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+			mint(0, CONTRACT);
+			MockContracts::remove(CONTRACT);
+
+			assert_eq!(contract_instances(CONTRACT), vec![0, 1]);
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(CONTRACT), 0, RECIPIENT));
+			// No longer a contract, so the next arrival takes its single purse.
+			mint(0, CONTRACT);
+			assert_noop!(
+				Scarcity::mint(RuntimeOrigin::signed(OWNER), 0, 0, CONTRACT, metadata(&[])),
+				Error::<Test>::AddressOccupied
+			);
+			assert_eq!(contract_instances(CONTRACT), vec![1]);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn try_state_detects_a_wrong_contract_count() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			ContractNftCount::<Test>::insert(CONTRACT, 0, 2);
+
+			assert_try_state_error("ContractNftCount does not match stored ContractNfts entries");
+		});
+	}
+
+	#[test]
+	fn try_state_detects_a_missing_contract_count() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			ContractNftCount::<Test>::remove(CONTRACT, 0);
+
+			assert_try_state_error("ContractNfts entries have no ContractNftCount entry");
+		});
+	}
+
+	#[test]
+	fn try_state_detects_an_instance_in_both_maps() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			let nft = ContractNfts::<Test>::get(CONTRACT, 0).unwrap();
+			NftsByOwner::<Test>::insert(CONTRACT, nft);
+
+			assert_try_state_error("instance is in both NftsByOwner and ContractNfts");
+		});
+	}
+}
