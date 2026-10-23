@@ -1108,14 +1108,27 @@ impl sp_statement_store::StatementStore for MockStatementStore {
 
 	fn take_recent_statements(
 		&self,
-	) -> sp_statement_store::Result<Vec<(sp_statement_store::Hash, Statement)>> {
+	) -> sp_statement_store::Result<Vec<(u64, sp_statement_store::Hash, Statement)>> {
 		unimplemented!();
 	}
 
 	fn has_statement(&self, _: &sp_statement_store::Hash) -> bool {
 		unimplemented!();
 	}
-	fn statement_hashes(&self) -> Vec<sp_statement_store::Hash> {
+	fn admission_watermark(&self) -> sp_statement_store::Result<u64> {
+		unimplemented!();
+	}
+	fn admitted_statements(
+		&self,
+		_cursor: u64,
+		_watermark: u64,
+		_scan_limit: usize,
+		_filter: &mut dyn FnMut(
+			&sp_statement_store::Hash,
+			&[u8],
+			&Statement,
+		) -> sp_statement_store::FilterDecision,
+	) -> sp_statement_store::Result<sp_statement_store::AdmittedBatch> {
 		unimplemented!();
 	}
 	fn statements_by_hashes(
