@@ -18,16 +18,18 @@
 
 use super::{pallet::*, *};
 use crate::{
-	migration::MigrateV0ToV1,
+	migration::v1::MigrateConsumerAllowances,
 	mock::*,
-	types::{Credibility, NotificationReference, PersonalUsernameChoice, UnrecordedAllowances},
+	types::{Credibility, NotificationReference, PersonalUsernameChoice},
 	Error,
 };
 use codec::Encode;
 use frame_support::{
 	assert_noop, assert_ok,
 	dispatch::GetDispatchInfo,
-	traits::{Authorize, GetStorageVersion, Hooks, OnRuntimeUpgrade, StorageVersion},
+	migrations::{SteppedMigration, SteppedMigrationError},
+	traits::{Authorize, Hooks},
+	weights::{Weight, WeightMeter},
 };
 use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::{
@@ -1393,19 +1395,84 @@ fn credibility_changes_replace_the_granted_allowance_after_limit_changes() {
 	});
 }
 
-/// Remove the record of `account` and store the current limits as the unrecorded allowances, as
-/// for a consumer that registered before the upgrade.
-fn forget_consumer_allowance(account: &AccountId32) {
-	ConsumerAllowances::<Test>::remove(account);
-	StorageVersion::new(0).put::<Resources>();
-	MigrateV0ToV1::<Test>::on_runtime_upgrade();
+/// Run [`MigrateConsumerAllowances`] to completion, one consumer per step, and return the
+/// number of steps.
+fn run_consumer_allowances_migration() -> u32 {
+	let required = <Test as Config>::WeightInfo::migrate_consumer_allowances_step();
+	let mut cursor = None;
+	let mut steps = 0;
+	loop {
+		let mut meter = WeightMeter::with_limit(required);
+		cursor = MigrateConsumerAllowances::<Test>::step(cursor, &mut meter).unwrap();
+		steps += 1;
+		if cursor.is_none() {
+			return steps;
+		}
+	}
 }
 
 #[test]
-fn promotion_revokes_the_unrecorded_lite_allowance_without_a_record() {
+fn migration_records_the_allowance_of_each_credibility() {
+	new_test_ext().execute_with(|| {
+		let lite = register_lite_person_with_other_grant(&OTHER_GRANT);
+		promote_to_person(&lite);
+		demote_expired_person(&lite);
+		let person = id_to_account(2);
+		assert_ok!(Resources::register_lite_person(
+			lite_person_origin(2),
+			comm_id(b"key2"),
+			username::<Test>(b"liteuser.22"),
+			None
+		));
+		let person_proof = mock_lite_proof(person.clone());
+		assert_ok!(Resources::register_person(
+			person_origin_for(20, 0, 0),
+			person.clone(),
+			person_proof,
+			PersonalUsernameChoice::Standalone(username::<Test>(b"seconduser"))
+		));
+		let still_lite = id_to_account(3);
+		assert_ok!(Resources::register_lite_person(
+			lite_person_origin(3),
+			comm_id(b"key3"),
+			username::<Test>(b"liteuser.33"),
+			None
+		));
+		let _ = ConsumerAllowances::<Test>::clear(u32::MAX, None);
+
+		// One step per consumer and a final step that finds no more consumers.
+		assert_eq!(run_consumer_allowances_migration(), 4);
+
+		let lite_limit = Some(LitePersonStatementLimit::get().into());
+		assert_eq!(ConsumerAllowances::<Test>::get(&lite), lite_limit);
+		assert_eq!(ConsumerAllowances::<Test>::get(&still_lite), lite_limit);
+		assert_eq!(
+			ConsumerAllowances::<Test>::get(&person),
+			Some(PersonStatementLimit::get().into())
+		);
+	});
+}
+
+#[test]
+fn migration_step_fails_without_weight_for_one_consumer() {
+	new_test_ext().execute_with(|| {
+		register_lite_person_with_other_grant(&OTHER_GRANT);
+		let required = <Test as Config>::WeightInfo::migrate_consumer_allowances_step();
+		let mut meter = WeightMeter::with_limit(required.saturating_sub(Weight::from_parts(1, 0)));
+
+		assert_eq!(
+			MigrateConsumerAllowances::<Test>::step(None, &mut meter),
+			Err(SteppedMigrationError::InsufficientWeight { required })
+		);
+	});
+}
+
+#[test]
+fn promotion_after_a_limit_change_revokes_the_migrated_allowance() {
 	new_test_ext().execute_with(|| {
 		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
-		forget_consumer_allowance(&account);
+		ConsumerAllowances::<Test>::remove(&account);
+		run_consumer_allowances_migration();
 		LitePersonStatementLimit::set(&StatementAllowance { max_count: 5, max_size: 2 * 1024 });
 
 		promote_to_person(&account);
@@ -1418,11 +1485,12 @@ fn promotion_revokes_the_unrecorded_lite_allowance_without_a_record() {
 }
 
 #[test]
-fn demotion_revokes_the_unrecorded_person_allowance_without_a_record() {
+fn demotion_after_a_limit_change_revokes_the_migrated_allowance() {
 	new_test_ext().execute_with(|| {
 		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
 		promote_to_person(&account);
-		forget_consumer_allowance(&account);
+		ConsumerAllowances::<Test>::remove(&account);
+		run_consumer_allowances_migration();
 		PersonStatementLimit::set(&StatementAllowance { max_count: 40, max_size: 8 * 1024 });
 
 		demote_expired_person(&account);
@@ -1431,74 +1499,6 @@ fn demotion_revokes_the_unrecorded_person_allowance_without_a_record() {
 			get_allowance(&account),
 			OTHER_GRANT.saturating_add(LitePersonStatementLimit::get())
 		);
-	});
-}
-
-#[test]
-fn touch_revokes_the_unrecorded_lite_allowance_without_a_record() {
-	new_test_ext().execute_with(|| {
-		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
-		promote_to_person(&account);
-		demote_expired_person(&account);
-		forget_consumer_allowance(&account);
-		LitePersonStatementLimit::set(&StatementAllowance { max_count: 5, max_size: 2 * 1024 });
-
-		touch_person();
-
-		assert_eq!(
-			get_allowance(&account),
-			OTHER_GRANT.saturating_add(PersonStatementLimit::get())
-		);
-	});
-}
-
-#[test]
-fn promotion_revokes_the_current_lite_limit_without_an_unrecorded_allowance() {
-	new_test_ext().execute_with(|| {
-		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
-		let granted = LitePersonStatementLimit::get();
-		ConsumerAllowances::<Test>::remove(&account);
-		let lowered = StatementAllowance { max_count: 5, max_size: 2 * 1024 };
-		LitePersonStatementLimit::set(&lowered);
-
-		promote_to_person(&account);
-
-		assert_eq!(
-			get_allowance(&account),
-			OTHER_GRANT
-				.saturating_add(granted)
-				.saturating_add(PersonStatementLimit::get())
-				.saturating_sub(lowered)
-		);
-	});
-}
-
-#[test]
-fn migration_v1_stores_the_current_limits_as_the_unrecorded_allowances() {
-	new_test_ext().execute_with(|| {
-		StorageVersion::new(0).put::<Resources>();
-
-		MigrateV0ToV1::<Test>::on_runtime_upgrade();
-
-		assert_eq!(
-			UnrecordedConsumerAllowances::<Test>::get(),
-			Some(UnrecordedAllowances {
-				lite: LitePersonStatementLimit::get().into(),
-				person: PersonStatementLimit::get().into(),
-			})
-		);
-		assert_eq!(Resources::on_chain_storage_version(), StorageVersion::new(1));
-	});
-}
-
-#[test]
-fn migration_v1_runs_only_from_version_zero() {
-	new_test_ext().execute_with(|| {
-		StorageVersion::new(1).put::<Resources>();
-
-		MigrateV0ToV1::<Test>::on_runtime_upgrade();
-
-		assert!(!UnrecordedConsumerAllowances::<Test>::exists());
 	});
 }
 

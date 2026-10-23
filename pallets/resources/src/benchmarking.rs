@@ -19,15 +19,17 @@
 #![allow(unused)]
 
 use super::*;
-use crate::Pallet as Resources;
+use crate::{migration::v1::MigrateConsumerAllowances, Pallet as Resources};
 use codec::{Decode, Encode};
 use core::time::Duration;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_support::{
 	assert_ok,
 	dispatch::{DispatchInfo, PostDispatchInfo},
+	migrations::SteppedMigration,
 	pallet_prelude::Authorize,
 	traits::{EnsureOrigin, IsSubType},
+	weights::WeightMeter,
 	BoundedVec,
 };
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin as SystemOrigin};
@@ -61,6 +63,17 @@ pub trait BenchmarkHelper<T: Config> {
 
 fn assert_last_event<T: Config>(generic_event: <T as frame_system::Config>::RuntimeEvent) {
 	frame_system::Pallet::<T>::assert_last_event(generic_event.into());
+}
+
+/// Inserts `info` for `account` with the allowance that the credibility of `info` holds.
+fn insert_consumer<T: Config>(account: &T::AccountId, info: ConsumerInfo) {
+	let allowance = match info.credibility {
+		Credibility::Person { demoted: false, .. } => T::PersonStatementLimit::get(),
+		Credibility::Lite | Credibility::Person { demoted: true, .. } =>
+			T::LitePersonStatementLimit::get(),
+	};
+	ConsumerAllowances::<T>::insert(account, GrantedStatementAllowance::from(allowance));
+	Consumers::<T>::insert(account, info);
 }
 
 fn setup_people_ring_with_one_member<
@@ -205,7 +218,7 @@ mod benches {
 			lite_username: lite_uname,
 			credibility: Credibility::Lite,
 		};
-		Consumers::<T>::insert(&lite_account, info);
+		insert_consumer::<T>(&lite_account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&lite_account);
 
 		let n = T::MaxReservationQueueLength::get();
@@ -258,7 +271,7 @@ mod benches {
 			lite_username: lite_uname,
 			credibility: Credibility::Lite,
 		};
-		Consumers::<T>::insert(&lite_account, info);
+		insert_consumer::<T>(&lite_account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&lite_account);
 
 		let n = T::MaxReservationQueueLength::get();
@@ -326,7 +339,7 @@ mod benches {
 			lite_username: username,
 			credibility: Credibility::Lite,
 		};
-		Consumers::<T>::insert(&account, info);
+		insert_consumer::<T>(&account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&account);
 
 		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&alias[..]);
@@ -489,7 +502,7 @@ mod benches {
 		let mut post_consumer_info = consumer_info.clone();
 		post_consumer_info.credibility =
 			Credibility::Person { alias, last_update: 0, demoted: true };
-		Consumers::<T>::insert(&account, consumer_info);
+		insert_consumer::<T>(&account, consumer_info);
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(
 			T::PersonAuthDuration::get() as u64 + 1,
 		));
@@ -1101,6 +1114,33 @@ mod benches {
 			call.authorize(TransactionSource::InBlock)
 				.ok_or("Call must give some authorization")??;
 		}
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn migrate_consumer_allowances_step() -> Result<(), BenchmarkError> {
+		let account: T::AccountId = whitelisted_caller();
+		let consumer_info = ConsumerInfo {
+			identifier_key: [0u8; 65],
+			full_username: Some(Username::try_from([b'b'; 32].to_vec()).unwrap()),
+			lite_username: Username::try_from([b'a'; 32].to_vec()).unwrap(),
+			credibility: Credibility::Person { alias: [1u8; 32], last_update: 0, demoted: false },
+		};
+		Consumers::<T>::insert(&account, consumer_info);
+		let mut meter =
+			WeightMeter::with_limit(<T as Config>::WeightInfo::migrate_consumer_allowances_step());
+
+		#[block]
+		{
+			MigrateConsumerAllowances::<T>::step(None, &mut meter)
+				.map_err(|_| BenchmarkError::Stop("migration step failed"))?;
+		}
+
+		assert_eq!(
+			ConsumerAllowances::<T>::get(&account),
+			Some(T::PersonStatementLimit::get().into())
+		);
 
 		Ok(())
 	}

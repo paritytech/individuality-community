@@ -81,15 +81,6 @@ pub struct StmtStoreAllowanceEntry<T: Config> {
 	pub since: u64,
 }
 
-/// The personhood statement allowances that consumers without a `ConsumerAllowances` entry hold.
-#[frame_support::stored]
-pub struct UnrecordedAllowances {
-	/// The allowance of a lite or demoted consumer.
-	pub lite: GrantedStatementAllowance,
-	/// The allowance of a person.
-	pub person: GrantedStatementAllowance,
-}
-
 /// The information related to a particular consumer.
 #[derive(
 	Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,

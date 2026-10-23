@@ -54,7 +54,7 @@ pub use weights::WeightInfo;
 
 use frame_support::{
 	dispatch::DispatchResultWithPostInfo,
-	traits::{DefensiveOption, EnsureOriginWithArg, IsSubType, OriginTrait, UnixTime},
+	traits::{Defensive, DefensiveOption, EnsureOriginWithArg, IsSubType, OriginTrait, UnixTime},
 };
 use frame_system::offchain::{CreateAuthorizedTransaction, SubmitTransaction};
 use indiv_support::{
@@ -73,7 +73,7 @@ use sp_runtime::traits::{IdentifyAccount, Verify};
 use types::{
 	ConsumerInfo, Credibility, LongTermStorageAllocation, MembershipCollection,
 	NotificationReference, PersonalUsernameChoice, ReservationQueueEntryOf,
-	StmtStoreAllowanceEntry, UnrecordedAllowances,
+	StmtStoreAllowanceEntry,
 };
 use verifiable::GenerateVerifiable;
 
@@ -88,10 +88,7 @@ pub mod pallet {
 	const LOG_TARGET: &str = "runtime::indiv-pallet-resources";
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
 
-	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
-
 	#[pallet::pallet]
-	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -331,18 +328,10 @@ pub mod pallet {
 	///
 	/// A change of credibility revokes the recorded amount, so a change of
 	/// `LitePersonStatementLimit` or `PersonStatementLimit` in between does not skew the allowance
-	/// of the account. A consumer without an entry revokes the matching allowance in
-	/// [`UnrecordedConsumerAllowances`].
+	/// of the account.
 	#[pallet::storage]
 	pub type ConsumerAllowances<T: Config> =
 		StorageMap<_, Blake2_128Concat, T::AccountId, GrantedStatementAllowance>;
-
-	/// The statement allowances that consumers without a [`ConsumerAllowances`] entry hold.
-	///
-	/// When the value is not set, the pallet uses the current `LitePersonStatementLimit` and
-	/// `PersonStatementLimit`.
-	#[pallet::storage]
-	pub type UnrecordedConsumerAllowances<T: Config> = StorageValue<_, UnrecordedAllowances>;
 
 	/// Accounts associated with a statement store slot through an anonymous allowance, per period.
 	///
@@ -783,11 +772,7 @@ pub mod pallet {
 
 			if was_demoted {
 				// A person's allowance should be given back.
-				Self::set_consumer_allowance(
-					&account,
-					T::PersonStatementLimit::get(),
-					Self::unrecorded_allowances().lite.into(),
-				);
+				Self::set_consumer_allowance(&account, T::PersonStatementLimit::get());
 			}
 
 			Self::deposit_event(Event::PersonAuthorizationTouched { account });
@@ -876,11 +861,7 @@ pub mod pallet {
 			ensure_authorized(origin)?;
 			let consumer_info = Self::validate_demotion(&account)?;
 			if let Credibility::Person { alias, last_update, .. } = consumer_info.credibility {
-				Self::set_consumer_allowance(
-					&account,
-					T::LitePersonStatementLimit::get(),
-					Self::unrecorded_allowances().person.into(),
-				);
+				Self::set_consumer_allowance(&account, T::LitePersonStatementLimit::get());
 				Consumers::<T>::insert(
 					&account,
 					ConsumerInfo {
@@ -1488,11 +1469,7 @@ pub mod pallet {
 			// Set the consumer's record.
 			Consumers::<T>::insert(linked_lite_identity, linked_consumer_info);
 
-			Self::set_consumer_allowance(
-				linked_lite_identity,
-				T::PersonStatementLimit::get(),
-				Self::unrecorded_allowances().lite.into(),
-			);
+			Self::set_consumer_allowance(linked_lite_identity, T::PersonStatementLimit::get());
 
 			Self::deposit_event(Event::PersonRegistered {
 				alias,
@@ -1788,42 +1765,26 @@ pub mod pallet {
 			frame_system::Pallet::<T>::inc_sufficients(&account);
 
 			// A new lite person has been registered, so the initial allowance should be given
-			Self::set_consumer_allowance(
-				&account,
-				T::LitePersonStatementLimit::get(),
-				StatementAllowance::default(),
-			);
+			let allowance = T::LitePersonStatementLimit::get();
+			increase_allowance_by(account.clone().into(), allowance.clone());
+			ConsumerAllowances::<T>::insert(&account, GrantedStatementAllowance::from(allowance));
 
 			Self::deposit_event(Event::LitePersonRegistered { account });
 			Ok(())
 		}
 
-		/// The allowances in [`UnrecordedConsumerAllowances`], or the current limits when it is not
-		/// set.
-		pub(crate) fn unrecorded_allowances() -> UnrecordedAllowances {
-			UnrecordedConsumerAllowances::<T>::get().unwrap_or_else(Self::current_allowances)
-		}
-
-		/// The current `LitePersonStatementLimit` and `PersonStatementLimit`.
-		pub(crate) fn current_allowances() -> UnrecordedAllowances {
-			UnrecordedAllowances {
-				lite: T::LitePersonStatementLimit::get().into(),
-				person: T::PersonStatementLimit::get().into(),
-			}
-		}
-
 		/// Replace the personhood statement allowance of `account` with `allowance` and record it
 		/// in [`ConsumerAllowances`].
 		///
-		/// The pallet revokes the recorded allowance, or `unrecorded` when `account` has no record.
 		/// It grants before it revokes, because a depleted dimension removes the whole allowance
 		/// of the account.
-		fn set_consumer_allowance(
-			account: &T::AccountId,
-			allowance: StatementAllowance,
-			unrecorded: StatementAllowance,
-		) {
-			let previous = ConsumerAllowances::<T>::get(account).map_or(unrecorded, Into::into);
+		fn set_consumer_allowance(account: &T::AccountId, allowance: StatementAllowance) {
+			let previous: StatementAllowance = ConsumerAllowances::<T>::get(account)
+				.defensive_proof(
+					"indiv-pallet-resources: a consumer must have a recorded allowance",
+				)
+				.map(Into::into)
+				.unwrap_or_default();
 			increase_allowance_by(account.clone().into(), allowance.clone());
 			decrease_allowance_by(account.clone().into(), previous);
 			ConsumerAllowances::<T>::insert(account, GrantedStatementAllowance::from(allowance));
