@@ -34,14 +34,21 @@ pragma solidity ^0.8.30;
 /// A holder moves a token on its own authority: the caller must be the current holder.
 /// Approvals are not supported, so @custom:function approve and @custom:function setApprovalForAll revert, @custom:function getApproved
 /// returns the zero address and @custom:function isApprovedForAll returns false.
+///
+/// A purse key holds one token. A contract holds more than one by holding one in each of several
+/// slots, which are purse keys derived from the contract (@custom:function slotAddress) and that
+/// only the contract can move a token out of on the holder's authority (@custom:function
+/// transferFromSlot), the collection owner's force powers aside. Anyone can push
+/// a token into any slot, so read the rules under @custom:function slotAddress before holding other
+/// people's tokens.
 /// @custom:reverts "unknown collection"
 /// @custom:reverts "this precompile does not accept value"
 /// @custom:reverts "illegal to call this pre-compile via delegate call"
 /// @custom:security-contact admin@parity.io
 interface IScarcityCollection {
     /// @notice ERC-721 standard event. Emitted by @custom:function mint, @custom:function transferFrom, @custom:function safeTransferFrom,
-    /// @custom:function forceTransfer and @custom:function forceBurn when `tokenId` moves between purse keys, including mints
-    /// (from the zero address) and burns (to the zero address).
+    /// @custom:function transferFromSlot, @custom:function forceTransfer and @custom:function forceBurn when `tokenId` moves
+    /// between purse keys, including mints (from the zero address) and burns (to the zero address).
     /// @param from The purse key the instance left, or the zero address on a mint.
     /// @param to The purse key the instance arrived at, or the zero address on a burn.
     /// @param tokenId The permanent instance identifier that moved.
@@ -148,7 +155,9 @@ interface IScarcityCollection {
     /// require a code-carrying `to` to acknowledge the token.
     /// @dev ERC-721 standard function. The caller must be the current holder. `data` is forwarded
     /// to the receiver callback, which this precompile cannot make yet, so a code-carrying `to`
-    /// always reverts. The acknowledgement runs after the move and unwinds it on failure.
+    /// always reverts. The acknowledgement runs after the move and unwinds it on failure. A slot
+    /// of @custom:function slotAddress carries no code, so a transfer into one succeeds with
+    /// nobody asked: the contract that owns the slot learns nothing from it.
     /// @param from The current holder.
     /// @param to The empty purse key to move the instance to.
     /// @param tokenId The instance to move.
@@ -369,6 +378,57 @@ interface IScarcityCollection {
     /// @custom:reverts "unknown token"
     /// @custom:emits Transfer
     function forceBurn(uint256 tokenId) external;
+
+    /// @notice The address of slot number `index` of `vault`.
+    /// @dev This precompile's own function, not part of any ERC standard. A slot is a purse key
+    /// that no known key can sign for and that only `vault` can move a token out of on the holder's
+    /// authority, which lets a contract hold more than one token by holding one in each of
+    /// several slots. A key whose address equals a slot would control it; finding one for a slot
+    /// costs a second preimage, or about 2^80 work for the deployer of a CREATE2 vault, who chooses
+    /// its salt. The collection owner keeps its force powers: `forceTransfer` and
+    /// `forceBurn` reach a token in a slot as they reach one anywhere. The address is the low 20
+    /// bytes of `keccak256(abi.encodePacked("scarcity/slot", vault, index))`. Nothing is stored:
+    /// any `(vault, index)` pair names a slot, and the contract tracks which indices it has used.
+    ///
+    /// Anyone can push a token into any slot, because a purse key gives no destination consent.
+    /// A contract that holds tokens in slots must therefore:
+    /// - act only on collection addresses it has listed itself, because whoever supplies the
+    ///   address chooses the contract that answers `ownerOf` and the contract the exit calls;
+    /// - keep its own custody record, written by its own functions, and attribute a stake through
+    ///   that record and never through who pushed;
+    /// - check each token it acts on in constant time with
+    ///   `ownerOf(tokenId) == slotAddress(address(this), index)`;
+    /// - never use `balanceOf` or `tokenOfOwnerByIndex` for its logic;
+    /// - keep every loop bounded, for example by a player cap per round;
+    /// - ignore a token it did not expect instead of reverting on it;
+    /// - abandon a slot that someone else occupied and use another index, instead of trying to
+    ///   eject what is there or looping over slots to find one that is free.
+    /// @param vault The contract the slot belongs to.
+    /// @param index The slot number, chosen by the contract.
+    /// @return slot The address of the slot.
+    function slotAddress(address vault, uint256 index) external view returns (address slot);
+
+    /// @notice Move `tokenId` out of slot number `index` of the caller to the empty purse key `to`.
+    /// @dev This precompile's own function, not part of any ERC standard. Only a contract may call
+    /// this: the slot is derived from the caller as in @custom:function slotAddress, so the caller
+    /// is the vault and a call from an externally owned account is refused. That check is a fence,
+    /// not a boundary, since an account can deploy a contract that forwards the call. The move is
+    /// a holder transfer, so it refills the token's fee-less moves and it fails for a soulbound
+    /// token, as @custom:function transferFrom does. It does not check who staked the token: the
+    /// calling contract decides that from its own record.
+    /// @param index The slot number the token sits in.
+    /// @param tokenId The instance to move.
+    /// @param to The empty purse key to move the instance to.
+    /// @custom:reverts "slots are for contracts: call from a contract"
+    /// @custom:reverts "destination is the zero address"
+    /// @custom:reverts "unknown token"
+    /// @custom:reverts "token is not in this slot"
+    /// @custom:reverts "destination already holds this instance"
+    /// @custom:reverts "destination purse already holds an instance"
+    /// @custom:reverts "token is soulbound to its purse key"
+    /// @custom:reverts "instance state nonce exhausted"
+    /// @custom:emits Transfer
+    function transferFromSlot(uint256 index, uint256 tokenId, address to) external;
 
     /// @notice Set or overwrite the collection-scope metadata default under `key`.
     /// @dev This precompile's own function, not part of any ERC standard. Only the collection owner

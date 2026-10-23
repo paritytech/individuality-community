@@ -23,8 +23,8 @@
 //!   lives at `0x00000007000000000000000000000000_0520_0000`. It serves the ERC-721 core and
 //!   metadata read surface with the exact standard selectors, the collection owner's admin surface
 //!   (define, mint, force-transfer, force-burn, metadata mutation at all three scopes, ownership
-//!   handover, deletion) and Scarcity-specific reads (supply, instance info, raw metadata and its
-//!   presence, pending owner, aggregate deposit).
+//!   handover, deletion), the contract slots described below, and Scarcity-specific reads (supply,
+//!   instance info, raw metadata and its presence, pending owner, aggregate deposit).
 //! - [`ScarcityFactory`] answers at one fixed address and creates collections. Creation cannot live
 //!   on the per-collection addresses because the collection id does not exist until creation
 //!   allocates it.
@@ -55,13 +55,13 @@
 //! nothing besides.
 //!
 //! An item definition may be declared soulbound, binding every instance minted from it to the
-//! purse key it lands in. Both holder paths then revert, `locked()` answers true and ERC-5192
-//! is claimed. The collection owner's `forceTransfer` and `forceBurn` are a separate authority and
-//! ignore the flag, so a misdirected mint still has a remedy and a locked token can still be
-//! destroyed. Soulbound binds the holder, not the issuer; EIP-5192 reads `locked` as
-//! non-transferable outright, and this is the documented deviation from it. A mint announces the
-//! status it settled on, `Locked` or `Unlocked`, which is the only point either can be emitted
-//! because the flag is fixed when the item is defined.
+//! purse key it lands in. Every holder path then reverts, `transferFromSlot` included, `locked()`
+//! answers true and ERC-5192 is claimed. The collection owner's `forceTransfer` and `forceBurn` are
+//! a separate authority and ignore the flag, so a misdirected mint still has a remedy and a locked
+//! token can still be destroyed. Soulbound binds the holder, not the issuer; EIP-5192 reads
+//! `locked` as non-transferable outright, and this is the documented deviation from it. A mint
+//! announces the status it settled on, `Locked` or `Unlocked`, which is the only point either can
+//! be emitted because the flag is fixed when the item is defined.
 //!
 //! `name()`, `symbol()`, `tokenURI()`, ERC-7572 `contractURI()` and ERC-2981 `royaltyInfo()`
 //! read reserved metadata keys rather than dedicated pallet fields, so a collection opts into
@@ -126,7 +126,115 @@
 //! Weights: state-changing calls charge the corresponding `indiv-pallet-scarcity` benchmark
 //! weights. Read calls charge one database read per worst-case storage access, which
 //! over-charges pure computation but never under-charges; a crate benchmark can refine this
-//! later.
+//! later. The slot calls add no benchmark. `transferFromSlot` charges its reads and the keccak
+//! that derives the slot ahead of its refusals, and the move and the destination's registration
+//! that `transferFrom` charges once they pass. `slotAddress` charges only that hash, beyond the
+//! collection check every selector pays.
+//!
+//! # Contract slots
+//!
+//! A purse key holds one token, and a contract cannot sign for a purse key, so a contract holds
+//! many tokens by holding one in each of several slots. A slot is a purse key derived from the
+//! contract: `slotAddress(vault, index)` is the low 20 bytes of
+//! `keccak256(abi.encodePacked("scarcity/slot", vault, index))`, which a contract derives on its
+//! own with the same expression. Nothing is stored. Any `(vault, index)` names a slot, and the
+//! contract tracks the indices it has used.
+//!
+//! The slot's account is the fallback account of that address, never what
+//! `AddressMapper::to_account_id` returns, which reads `OriginalAccount` first. The fallback
+//! account ends in the `0xEE` suffix, so it is mapped from the start: `ownerOf` and `balanceOf`
+//! name it, and [`MapPurseKey`] has nothing to register when a token lands on it. The fallback
+//! form fixes which account a slot is, so `transferFromSlot` does not depend on the registry. A
+//! push into a slot and the reads that take an address resolve it through the registry, so they
+//! reach the slot account only while no key is registered to the slot's address.
+//!
+//! A key whose address equals a slot controls the slot account. A secp256k1 key signs for it
+//! directly, because an Ethereum-derived account is its address followed by the `0xEE` suffix. Any
+//! other account whose address equals the slot acts for it through
+//! `pallet_revive::dispatch_as_fallback_account`. A contract's own account has one more barrier: as
+//! EIP-3607 requires, `pallet-revive` refuses a signed origin whose address carries code. A slot
+//! carries no code, so only the cost of finding such a key protects it. No such key is known. The
+//! slot is a 160-bit hash output in the same address space as every key and contract, so finding
+//! one for a given slot is a second preimage, while a vault's deployer, who chooses the vault's
+//! address through its CREATE2 salt, could search salts and keys together for a match at about
+//! 2^80 work. Such a key would leave no trace on chain.
+//!
+//! `transferFromSlot(index, tokenId, to)` moves a token out of slot `index` of the caller. It
+//! derives the slot from the caller, requires the slot to hold the token, and moves it through
+//! `do_transfer_by_holder`. The destination must be empty, and the move refills the token's
+//! fee-less moves and advances its state nonce, as `transferFrom` does. A soulbound token cannot be
+//! moved this way, nor pushed into a slot by its holder, so one the collection owner mints straight
+//! into a slot stays there except through the owner's force powers. The call does not ask who
+//! staked the token: that is the calling contract's record to keep. The collection owner keeps
+//! `forceTransfer` and `forceBurn` over a token wherever it sits, slots included, so a contract
+//! should accept stakes only from collections whose owner it trusts. It should also act only on
+//! collection addresses it has listed itself: whoever supplies the address chooses both the
+//! contract that answers `ownerOf` and the contract the exit calls.
+//!
+//! Anyone can push a token into any slot: a purse key gives no destination consent, and a fee-less
+//! native push has no callback and emits no EVM `Transfer`. A contract therefore cannot learn who
+//! pushed. It credits a stake to what it recorded itself, such as the account that reserved the
+//! slot, and checks each token in constant time with
+//! `ownerOf(tokenId) == slotAddress(address(this), index)`. Once a slot holds someone else's token
+//! it refuses a player's own push, and the pool refuses a fee-less one at validation. An attacker
+//! with a token can occupy a slot as soon as its address is known, so a contract abandons an
+//! occupied slot for another index rather than ejecting what is in it, and lets the player who
+//! reserved a slot take back anything in it that holds no live stake, except a soulbound token,
+//! which only its collection's owner can move out of the slot. `SlotVault`, under
+//! `precompiles/fixtures/contracts`, is the reference for that flow.
+//!
+//! `balanceOf` and `tokenOfOwnerByIndex` stay 0 or 1 per key, so each slot answers for itself and
+//! there is no per-holder counter or index. A contract must not use either for its logic.
+//!
+//! Authority over a slot follows the vault's address, not its code. When a contract is deleted, its
+//! tokens stay in their slots, and nothing can move one out on the holder's authority until a
+//! contract exists at that address again. The collection owner's force powers do not depend on one.
+//! `SELFDESTRUCT` on the EVM backend and the `terminate` host function on PolkaVM delete a contract
+//! only in the transaction that created it, as EIP-6780 specifies, so a vault that took stakes in
+//! an earlier transaction stays. The `System` precompile's `terminate` has no Ethereum counterpart
+//! and deletes the calling contract in any transaction.
+//!
+//! A CREATE2 address depends only on the deployer, code, input and salt, so a redeployment with the
+//! same ones lands on the same address once the previous occupant's deposits are cleaned up
+//! (`pallet-revive` refuses the address until then, and while it is still a contract). It runs the
+//! same init code on empty storage, so a vault that keeps its records in storage has lost them
+//! while the new contract holds every slot's authority. A vault built like `SlotVault` that called
+//! `System.terminate` would, once redeployed, let anyone reserve slot 0 again and withdraw what the
+//! old one held there. `SlotVault` itself never terminates. Other code reaches the same address
+//! only through CREATE, whose address depends on the deployer and its nonce alone, or through init
+//! code that picks its runtime code from state. Whoever stakes into a vault should check that it
+//! cannot be deleted and redeployed, or that a redeployment cannot reach its slots.
+//!
+//! # Frame guards
+//!
+//! `ScarcityCollection::call` applies these to every selector, in this order, before any charge
+//! or state read of its own:
+//!
+//! - A delegate call reverts. Under a delegate call the precompile runs with the delegator's
+//!   address and storage and `env.caller()` is the delegator's own caller, so both the collection
+//!   id in the address and the caller `transferFromSlot` derives a slot from are under the
+//!   delegating contract's control. No selector is served.
+//! - Attached value reverts. This address has no owner, no code and no withdrawal path, so value
+//!   sent here is unrecoverable.
+//! - A mutating selector is refused in a read-only frame, with `pallet-revive`'s own
+//!   `StateChangeDenied`. The guard is per selector, through `is_mutating`, because the views must
+//!   stay callable from a `STATICCALL`. `is_mutating` is exhaustive, so a selector added to the
+//!   interface has to be classified before the crate compiles. The factory denies a read-only frame
+//!   outright, because every one of its selectors mutates.
+//!
+//! The delegate and value guards revert, so the caller receives an `Error(string)` it can catch.
+//!
+//! `transferFromSlot` adds a guard of its own, after those three and ahead of its own charges and
+//! reads: it reverts when the caller is the transaction's origin, whoever signed the transaction
+//! or the root origin. The test is `caller_is_origin(false)` on the frame, which compares the
+//! immediate caller with the origin. That separates wallets from contracts only while accounts
+//! cannot run code. EIP-7702 delegation lets them, and `pallet-revive` does not support it, so the
+//! guard needs a review if that support comes. It is a fence, not a boundary: an account can
+//! deploy a contract that forwards the call, and that contract then holds as many tokens as it has
+//! slots. Every key still holds one token. The guard only keeps a plain wallet from being a vault.
+//!
+//! No other selector is contract-only. `transferFrom` and `safeTransferFrom` need the caller to be
+//! the holder, and accounts are holders. `slotAddress` is a pure derivation that grants nothing.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -145,7 +253,7 @@ use pallet_revive::{
 	precompiles::{
 		alloy::{
 			self,
-			primitives::{Address, IntoLogData, U256},
+			primitives::{keccak256, Address, IntoLogData, U256},
 			sol_types::SolCall,
 		},
 		AddressMapper, AddressMatcher, Error, Ext, RuntimeCosts, H160, H256,
@@ -245,6 +353,10 @@ pub const ERR_KEY_VALUE_MISMATCH: &str = "metadata keys and values differ in len
 pub const ERR_UNKNOWN_COLLECTION: &str = "unknown collection";
 /// Revert reason when an item index names no definition.
 pub const ERR_UNKNOWN_ITEM: &str = "unknown item";
+/// Revert reason when an externally owned account calls a function that only a contract may call.
+pub const ERR_NOT_CONTRACT: &str = "slots are for contracts: call from a contract";
+/// Revert reason when `transferFromSlot` names a slot that does not hold the token.
+pub const ERR_NOT_IN_SLOT: &str = "token is not in this slot";
 /// Revert reason when a royalty amount exceeds the representable range.
 pub const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range";
 /// Revert reason when a reserved metadata value is not valid UTF-8.
@@ -352,6 +464,46 @@ fn revert_scarcity<T: indiv_pallet_scarcity::Config>(e: DispatchError) -> Error 
 
 fn account_of<T: pallet_revive::Config>(address: &Address) -> T::AccountId {
 	<T as pallet_revive::Config>::AddressMapper::to_account_id(&H160(address.into_array()))
+}
+
+/// Domain separator hashed ahead of a vault and index to derive one of its slots.
+const SLOT_DOMAIN: &[u8] = b"scarcity/slot";
+
+/// Length of the preimage [`slot_address`] hashes: the domain, a 20-byte vault and a 32-byte index.
+const SLOT_PREIMAGE_LEN: usize = SLOT_DOMAIN.len() + 20 + 32;
+
+/// The address of slot `index` of `vault`.
+///
+/// The low 20 bytes of `keccak256(SLOT_DOMAIN ++ vault ++ index)`, with `index` as 32 big-endian
+/// bytes. This is `abi.encodePacked("scarcity/slot", vault, index)`, so a contract derives the same
+/// address on its own. The result is an H160, so its fallback account round-trips through
+/// `AddressMapper::to_address` and `ownerOf` can name it.
+///
+/// The caller charges for the hash first, through [`charge_slot_hash`].
+fn slot_address(vault: &Address, index: &U256) -> Address {
+	let mut preimage = Vec::with_capacity(SLOT_PREIMAGE_LEN);
+	preimage.extend_from_slice(SLOT_DOMAIN);
+	preimage.extend_from_slice(vault.as_slice());
+	preimage.extend_from_slice(&index.to_be_bytes::<32>());
+	let hash = keccak256(&preimage);
+	Address::from_slice(&hash[12..])
+}
+
+/// The account a slot address stands for.
+///
+/// The fallback account, never `to_account_id`, which reads `OriginalAccount` first. The fallback
+/// form makes the slot one fixed account whatever the registry holds. It ends in the `0xEE`
+/// suffix, so `to_address` strips it back to the slot address. A key whose address equals the
+/// slot controls this account; the crate documentation gives the cost of finding one.
+fn slot_account<T: pallet_revive::Config>(slot: &Address) -> T::AccountId {
+	<T as pallet_revive::Config>::AddressMapper::to_fallback_account_id(&H160(slot.into_array()))
+}
+
+/// Charge for hashing one slot preimage, before [`slot_address`] runs.
+fn charge_slot_hash<T: pallet_revive::Config>(env: &mut impl Ext<T = T>) -> Result<(), Error> {
+	env.frame_meter_mut()
+		.charge_weight_token(RuntimeCosts::HashKeccak256(SLOT_PREIMAGE_LEN as u32))?;
+	Ok(())
 }
 
 /// Ref time charged per metadata byte a policy validation scans.
