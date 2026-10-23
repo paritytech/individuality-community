@@ -56,8 +56,8 @@ use crate::{
 		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
 		LongTermStoragePeriodDuration, NotificationAllowance, NotificationPeriodDuration,
 		NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource, PersonStatementLimit,
-		StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreReplacementCooldown,
-		StmtStoreSlotsPerPeriod,
+		PlayerStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow,
+		StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -624,12 +624,12 @@ parameter_types! {
 	pub const PlayDepositReason: RuntimeHoldReason =
 		RuntimeHoldReason::Game(indiv_pallet_game::HoldReason::PlayDeposit);
 	pub const PlayDepositDefault: Balance = 2 * UNITS;
-	// TODO(paritytech/individuality#1124): find a reasonable value.
-	pub PlayerStatementLimit: StatementAllowance = StatementAllowance {
+	pub GameAirdropSource: AccountId = PalletId(*b"pop/gads").into_account_truncating();
+	/// The player allowance before `PlayerStatementLimit` became a dynamic parameter.
+	pub PlayerStatementLimitBeforeV1: StatementAllowance = StatementAllowance {
 		max_size: 1_000_000,
 		max_count: 1_000_000,
 	};
-	pub GameAirdropSource: AccountId = PalletId(*b"pop/gads").into_account_truncating();
 }
 
 impl indiv_pallet_game::Config for Runtime {

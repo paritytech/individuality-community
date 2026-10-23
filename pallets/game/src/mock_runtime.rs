@@ -420,7 +420,7 @@ impl pallet_assets_holder::Config for Test {
 }
 
 parameter_types! {
-	pub PlayerStatementLimit: StatementAllowance = StatementAllowance {
+	pub storage PlayerStatementLimit: StatementAllowance = StatementAllowance {
 		max_size: 1000,
 		max_count: 1000,
 	};

@@ -15,6 +15,7 @@
 // limitations under the License.
 
 use crate::{
+	migration::MigrateV0ToV1,
 	mock::{deposit::MockConsideration, Game, *},
 	*,
 };
@@ -22,7 +23,8 @@ use codec::Encode;
 use frame_support::{
 	assert_noop, assert_ok,
 	dispatch::Pays,
-	traits::{Get, Hooks, OffchainWorker},
+	parameter_types,
+	traits::{Get, GetStorageVersion, Hooks, OffchainWorker, OnRuntimeUpgrade, StorageVersion},
 	BoundedVec,
 };
 use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
@@ -31,7 +33,7 @@ use indiv_support::traits::{
 };
 use sp_core::{crypto::VrfSecret, ed25519, sr25519, Pair};
 use sp_runtime::{testing::TestSignature, transaction_validity::InvalidTransaction, AccountId32};
-use sp_statement_store::Statement;
+use sp_statement_store::{get_allowance, increase_allowance_by, Statement, StatementAllowance};
 use std::{slice, time::Duration};
 use verifiable::{mock::Mock, GenerateVerifiable};
 
@@ -461,6 +463,261 @@ fn offboard_live_player() {
 			zero_allowance,
 			"ALICE allowance should be 0 after offboarding as a live player"
 		);
+	});
+}
+
+const OTHER_GRANT: StatementAllowance = StatementAllowance { max_count: 7, max_size: 70 };
+
+fn limits_granting(granted: StatementAllowance) -> Option<PlayerStatementLimitsRecord> {
+	Some(PlayerStatementLimitsRecord { granted: granted.into(), next: None })
+}
+
+/// A report that confirms every co-player, so `reporter` attends and stays live.
+fn attending_report(reporter: &AccountOrPerson<AccountId32>) -> FullReport<Test> {
+	build_report_with_opinion(reporter, |_| Report::Person)
+}
+
+fn live_player_schedule(game_play_time: u32) -> GameSchedule<u32, u128> {
+	GameSchedule::<u32, u128> { game_play_time, rounds: 2, max_group_size: 2, ..Default::default() }
+}
+
+fn solo_player_schedule(game_play_time: u32) -> GameSchedule<u32, u128> {
+	GameSchedule::<u32, u128> { game_play_time, rounds: 1, max_group_size: 1, ..Default::default() }
+}
+
+/// Plays one game that `accounts` attend. Each account holds `OTHER_GRANT` from another pallet.
+fn sign_up_live_players_with_other_grant(accounts: &[AccountId32]) {
+	for account in accounts {
+		increase_allowance_by(account, OTHER_GRANT);
+	}
+	let players = accounts.iter().cloned().map(AccountOrPerson::Account).collect::<Vec<_>>();
+	run_game_scenario(live_player_schedule(25), &players, |p| Some(attending_report(p)));
+}
+
+/// Plays one game with ALICE, applies `change` to `PlayerStatementLimit` and offboards ALICE.
+///
+/// Asserts that ALICE keeps only `OTHER_GRANT`.
+fn assert_offboard_revokes_the_granted_allowance(change: fn(u32) -> u32) {
+	new_test_ext().execute_with(|| {
+		let granted = PlayerStatementLimit::get();
+		sign_up_live_players_with_other_grant(&[ALICE]);
+		assert_eq!(get_allowance(ALICE), OTHER_GRANT.saturating_add(granted.clone()));
+
+		PlayerStatementLimit::set(&StatementAllowance {
+			max_count: change(granted.max_count),
+			max_size: change(granted.max_size),
+		});
+		assert_ok!(Game::offboard(RuntimeOrigin::signed(ALICE)));
+
+		assert_eq!(get_allowance(ALICE), OTHER_GRANT);
+	});
+}
+
+#[test]
+fn offboard_revokes_the_granted_player_allowance_after_a_limit_increase() {
+	assert_offboard_revokes_the_granted_allowance(|limit| limit * 2);
+}
+
+#[test]
+fn offboard_revokes_the_granted_player_allowance_after_a_limit_decrease() {
+	assert_offboard_revokes_the_granted_allowance(|limit| limit / 2);
+}
+
+#[test]
+fn player_processing_moves_live_players_to_a_changed_limit() {
+	new_test_ext().execute_with(|| {
+		let granted = PlayerStatementLimit::get();
+		sign_up_live_players_with_other_grant(&[ALICE]);
+		let raised = StatementAllowance { max_count: 2000, max_size: 2000 };
+		PlayerStatementLimit::set(&raised);
+
+		run_game_scenario_with_phase(
+			live_player_schedule(60),
+			|| {
+				for account in [ALICE, BOB] {
+					assert_ok!(Game::sign_up_with_account(
+						RuntimeOrigin::signed(account),
+						DEFAULT_IDENTIFIER_KEY,
+						None
+					));
+				}
+				// A new player gets the granted limit until player processing.
+				assert_eq!(get_allowance(BOB), granted);
+			},
+			|| {
+				for account in [ALICE, BOB] {
+					let report = attending_report(&AccountOrPerson::Account(account.clone()));
+					assert_ok!(Game::report(RuntimeOrigin::signed(account), report));
+				}
+			},
+		);
+
+		assert_eq!(get_allowance(ALICE), OTHER_GRANT.saturating_add(raised.clone()));
+		assert_eq!(get_allowance(BOB), raised.clone());
+		assert_eq!(PlayerStatementLimits::<Test>::get(), limits_granting(raised));
+
+		assert_ok!(Game::offboard(RuntimeOrigin::signed(ALICE)));
+		assert_eq!(get_allowance(ALICE), OTHER_GRANT);
+	});
+}
+
+#[test]
+fn player_processing_applies_the_limit_at_its_start() {
+	new_test_ext().execute_with(|| {
+		sign_up_live_players_with_other_grant(&[ALICE, BOB]);
+		let first = StatementAllowance { max_count: 2000, max_size: 2000 };
+		PlayerStatementLimit::set(&first);
+
+		let schedule = live_player_schedule(60);
+		assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]));
+		advance_process();
+		for account in [ALICE, BOB] {
+			assert_ok!(Game::sign_up_with_account(
+				RuntimeOrigin::signed(account),
+				DEFAULT_IDENTIFIER_KEY,
+				None
+			));
+		}
+		advance_to_reporting_phase(&schedule);
+		for account in [ALICE, BOB] {
+			let report = attending_report(&AccountOrPerson::Account(account.clone()));
+			assert_ok!(Game::report(RuntimeOrigin::signed(account), report));
+		}
+		let report_ends = GameTimes::<Test>::reporting_end(&schedule);
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((report_ends + 1) as u64));
+		advance_process(); // reporting -> player process step1
+
+		// Process one player, then change the limit.
+		let one_player = <Test as Config>::WeightInfo::player_process_step1()
+			.saturating_add(<Test as Config>::WeightInfo::player_process_step1_inner_loop(2));
+		Game::player_process_step1(&mut WeightMeter::with_limit(one_player));
+		assert!(matches!(
+			crate::Game::<Test>::get().unwrap().state,
+			GameState::PlayerProcess {
+				step: PlayerProcessStep::Step1ProcessPlayers { last_iteration: Some(_), .. }
+			}
+		));
+		PlayerStatementLimit::set(&StatementAllowance { max_count: 3000, max_size: 3000 });
+		advance_process(); // step1 -> step2
+		advance_process(); // step2 -> step3
+		advance_process(); // step3 -> done
+
+		for account in [ALICE, BOB] {
+			assert_eq!(get_allowance(account), OTHER_GRANT.saturating_add(first.clone()));
+		}
+		assert_eq!(PlayerStatementLimits::<Test>::get(), limits_granting(first));
+	});
+}
+
+#[test]
+fn archive_revokes_the_granted_player_allowance_after_a_limit_change() {
+	new_test_ext().execute_with(|| {
+		increase_allowance_by(ALICE, OTHER_GRANT);
+		let lowered = StatementAllowance { max_count: 1, max_size: 1 };
+		run_game_scenario_with_phase(
+			solo_player_schedule(10),
+			|| {
+				assert_ok!(Game::sign_up_with_account(
+					RuntimeOrigin::signed(ALICE),
+					DEFAULT_IDENTIFIER_KEY,
+					None
+				));
+			},
+			// ALICE does not report, so the game archives ALICE.
+			|| PlayerStatementLimit::set(&lowered),
+		);
+
+		assert!(ArchivedPlayers::<Test>::contains_key(AccountOrPerson::Account(ALICE)));
+		assert_eq!(get_allowance(ALICE), OTHER_GRANT);
+		assert_eq!(PlayerStatementLimits::<Test>::get(), limits_granting(lowered));
+	});
+}
+
+#[test]
+fn statement_account_switch_moves_the_granted_player_allowance() {
+	new_test_ext().execute_with(|| {
+		let granted = PlayerStatementLimit::get();
+		let alias = id_to_alias(101);
+		let previous_account = AccountId32::new(alias);
+		let next_account = id_to_account(202);
+		increase_allowance_by(&previous_account, OTHER_GRANT);
+		run_game_scenario(
+			solo_player_schedule(10),
+			slice::from_ref(&AccountOrPerson::Person(alias)),
+			|_| Some(vec![BoundedVec::default()].try_into().unwrap()),
+		);
+
+		PlayerStatementLimit::set(&StatementAllowance { max_count: 2000, max_size: 2000 });
+		run_game_scenario_with_phase(
+			solo_player_schedule(25),
+			|| {
+				assert_ok!(Game::sign_up_with_alias(
+					runtime_origin_for_alias(&alias),
+					DEFAULT_IDENTIFIER_KEY,
+					next_account.clone(),
+					AccountAuthority(next_account.clone()),
+					None
+				));
+				assert_eq!(get_allowance(&previous_account), OTHER_GRANT);
+				assert_eq!(get_allowance(&next_account), granted);
+			},
+			|| {},
+		);
+	});
+}
+
+#[test]
+fn player_statement_limits_are_stored_on_first_grant() {
+	new_test_ext().execute_with(|| {
+		let granted = PlayerStatementLimit::get();
+		assert!(!PlayerStatementLimits::<Test>::exists());
+
+		assert_ok!(Game::new_game(&live_player_schedule(10)));
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(ALICE),
+			DEFAULT_IDENTIFIER_KEY,
+			None
+		));
+		PlayerStatementLimit::set(&StatementAllowance { max_count: 1, max_size: 1 });
+
+		assert_eq!(PlayerStatementLimits::<Test>::get(), limits_granting(granted.clone()));
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(BOB),
+			DEFAULT_IDENTIFIER_KEY,
+			None
+		));
+		assert_eq!(get_allowance(BOB), granted);
+	});
+}
+
+parameter_types! {
+	pub PlayerStatementLimitBeforeV1: StatementAllowance =
+		StatementAllowance { max_count: 5, max_size: 50 };
+}
+
+#[test]
+fn migration_v1_stores_the_allowance_that_players_hold() {
+	new_test_ext().execute_with(|| {
+		StorageVersion::new(0).put::<Game>();
+
+		MigrateV0ToV1::<Test, PlayerStatementLimitBeforeV1>::on_runtime_upgrade();
+
+		assert_eq!(
+			PlayerStatementLimits::<Test>::get(),
+			limits_granting(PlayerStatementLimitBeforeV1::get())
+		);
+		assert_eq!(Game::on_chain_storage_version(), StorageVersion::new(1));
+	});
+}
+
+#[test]
+fn migration_v1_runs_only_from_version_zero() {
+	new_test_ext().execute_with(|| {
+		StorageVersion::new(1).put::<Game>();
+
+		MigrateV0ToV1::<Test, PlayerStatementLimitBeforeV1>::on_runtime_upgrade();
+
+		assert!(!PlayerStatementLimits::<Test>::exists());
 	});
 }
 

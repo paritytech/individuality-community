@@ -19,7 +19,10 @@ use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use frame_support::{pallet_prelude::Get, traits::ConstU32, BoundedVec};
 use indiv_pallet_airdrop::{types::AirdropPrize, RegistrationEntry};
 use indiv_pallet_score::AccountOrPerson;
-use indiv_support::traits::{Alias, RevisionIndex, RingIndex};
+use indiv_support::{
+	parameters::StatementAllowanceParameter,
+	traits::{Alias, RevisionIndex, RingIndex},
+};
 use scale_info::TypeInfo;
 use sp_core::sr25519::vrf::VrfSignature;
 
@@ -277,6 +280,20 @@ impl<BlockNumber> ArchivedPlayer<BlockNumber> {
 			Self::Kickable { first_game, .. } | Self::Unkickable { first_game } => *first_game,
 		}
 	}
+}
+
+/// The statement allowances that the pallet grants to live players.
+#[derive(
+	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Clone, PartialEq, Eq, Debug,
+)]
+pub struct PlayerStatementLimitsRecord {
+	/// The allowance that each live player holds.
+	pub granted: StatementAllowanceParameter,
+	/// The allowance that player processing moves each live player to.
+	///
+	/// Player processing sets it at its start if `PlayerStatementLimit` differs from `granted`,
+	/// and moves it to `granted` at its end.
+	pub next: Option<StatementAllowanceParameter>,
 }
 
 /// The information of a game.
