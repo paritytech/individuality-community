@@ -21,7 +21,7 @@
 use super::*;
 use crate::parameters::{
 	LitePersonStatementLimit, NotificationAllowance, NotificationPeriodDuration,
-	StmtStoreGraceWindow,
+	PlayerStatementLimit, StmtStoreGraceWindow,
 };
 use frame_support::traits::Authorize;
 use sp_runtime::transaction_validity::{InvalidTransaction, TransactionSource};
@@ -384,6 +384,6 @@ fn game_sign_up_grants_player_allowance() {
 		assert!(matches!(game_info.unwrap().state, indiv_pallet_game::GameState::Reporting { .. }));
 
 		let allowance = get_allowance(&stmt_acc);
-		assert_eq!(allowance, crate::people::PlayerStatementLimit::get());
+		assert_eq!(allowance, PlayerStatementLimit::get());
 	})
 }

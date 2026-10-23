@@ -161,6 +161,11 @@
 //! All players in the game are given some statement store usage allowance. The player's allowance
 //! is cleared and their statements removed when archived or offboarded.
 //!
+//! Every live player holds [`PlayerStatementLimitsRecord::granted`]. The statement store sums the
+//! grants of all pallets per account, so a revocation uses the granted amount, not the current
+//! `PlayerStatementLimit`. The player processing of the next game moves every live player to a
+//! changed `PlayerStatementLimit`. Until then, new players get the previous limit.
+//!
 //! # NFT claim credits
 //!
 //! A player earns one credit per successful report of one player on another, in one round of one
@@ -232,6 +237,7 @@ extern crate self as indiv_pallet_game;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 mod extension;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
@@ -268,6 +274,7 @@ use indiv_pallet_airdrop::types::{
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
 	credit_trees::AwardCredits,
+	parameters::StatementAllowanceParameter,
 	traits::{Alias, CommunicationIdentifier, Context},
 	weight_budget::OcwWeightBudget,
 };
@@ -322,7 +329,10 @@ pub mod pallet {
 	/// RFC-0022](https://github.com/paritytech/trinity-user-agents/blob/63a450d025462f113311a26408dc53627d1a268d/docs/rfcs/0022-account-derivations.md).
 	pub const PRODUCT_NAME: &[u8] = b"dim2";
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -677,6 +687,13 @@ pub mod pallet {
 	#[pallet::storage]
 	pub(crate) type StmtAccountToAlias<T: Config> =
 		StorageMap<_, Blake2_128Concat, T::AccountId, Alias>;
+
+	/// The statement allowances that the pallet grants to live players.
+	///
+	/// It is unset only while no player holds an allowance. The first grant then stores the
+	/// current `PlayerStatementLimit`.
+	#[pallet::storage]
+	pub type PlayerStatementLimits<T: Config> = StorageValue<_, PlayerStatementLimitsRecord>;
 
 	/// The communication identifiers used by players to establish an encrypted P2P connection in
 	/// order to play the game. The account under which the communication identifier is registered
@@ -1359,10 +1376,7 @@ pub mod pallet {
 
 			if let Some(stmt_account) = stmt_account {
 				if player_is_offboarding {
-					decrease_allowance_by(
-						stmt_account.clone().into(),
-						T::PlayerStatementLimit::get(),
-					);
+					Self::revoke_player_allowance(&stmt_account);
 				}
 				Self::deposit_event(Event::<T>::StmtUsageRemoved { who: stmt_account.into() });
 			}
@@ -2159,6 +2173,59 @@ pub mod pallet {
 			Self::deposit_event(Event::<T>::GameCancelled { game_index: game.index });
 		}
 
+		/// Return [`PlayerStatementLimits`], or the current `PlayerStatementLimit` when unset.
+		pub(crate) fn player_statement_limits() -> PlayerStatementLimitsRecord {
+			PlayerStatementLimits::<T>::get().unwrap_or_else(|| PlayerStatementLimitsRecord {
+				granted: T::PlayerStatementLimit::get().into(),
+				next: None,
+			})
+		}
+
+		/// Grant [`PlayerStatementLimitsRecord::granted`] to `account`.
+		///
+		/// Store [`PlayerStatementLimits`] when unset, so revocations use the same amount.
+		fn grant_player_allowance(account: &T::AccountId) {
+			let granted = PlayerStatementLimits::<T>::get()
+				.unwrap_or_else(|| {
+					let limits = PlayerStatementLimitsRecord {
+						granted: T::PlayerStatementLimit::get().into(),
+						next: None,
+					};
+					PlayerStatementLimits::<T>::put(&limits);
+					limits
+				})
+				.granted;
+			increase_allowance_by(account.clone().into(), granted.into());
+		}
+
+		fn revoke_player_allowance(account: &T::AccountId) {
+			let granted = Self::player_statement_limits().granted;
+			decrease_allowance_by(account.clone().into(), granted.into());
+		}
+
+		/// Move the allowance of `player_id` from [`PlayerStatementLimitsRecord::granted`] to
+		/// [`PlayerStatementLimitsRecord::next`], if set.
+		///
+		/// Grant before revoking: the statement store removes the whole allowance of an account
+		/// when one dimension reaches zero.
+		fn update_player_allowance(player_id: &AccountOrPerson<T::AccountId>) {
+			let PlayerStatementLimitsRecord { granted, next: Some(next) } =
+				Self::player_statement_limits()
+			else {
+				return;
+			};
+			let stmt_account = match player_id {
+				AccountOrPerson::Person(alias) => AliasToStmtAccount::<T>::get(alias)
+					.defensive_proof(
+						"indiv-pallet-game: alias player must have a statement account",
+					),
+				AccountOrPerson::Account(account) => Some(account.clone()),
+			};
+			let Some(stmt_account) = stmt_account else { return };
+			increase_allowance_by(stmt_account.clone().into(), next.into());
+			decrease_allowance_by(stmt_account.into(), granted.into());
+		}
+
 		/// **Warning**: Storage must be rollbacked on error.
 		fn sign_up_inner(
 			args: SignUpArgs<T::AccountId, T::AccountSignature, AirdropProofOf<T>>,
@@ -2192,10 +2259,7 @@ pub mod pallet {
 					if prev_stmt_account != Some(statement_account.clone()) {
 						if let Some(prev_stmt_account) = prev_stmt_account {
 							StmtAccountToAlias::<T>::remove(&prev_stmt_account);
-							decrease_allowance_by(
-								prev_stmt_account.clone().into(),
-								T::PlayerStatementLimit::get(),
-							);
+							Self::revoke_player_allowance(&prev_stmt_account);
 							Self::deposit_event(Event::<T>::StmtUsageRemoved {
 								who: prev_stmt_account.into(),
 							});
@@ -2214,10 +2278,7 @@ pub mod pallet {
 
 						StmtAccountToAlias::<T>::insert(&statement_account, who);
 						AliasToStmtAccount::<T>::insert(who, &statement_account);
-						increase_allowance_by(
-							statement_account.clone().into(),
-							T::PlayerStatementLimit::get(),
-						);
+						Self::grant_player_allowance(&statement_account);
 					}
 					CommunicationIdentifiers::<T>::insert(&statement_account, identifier_key);
 
@@ -2291,7 +2352,7 @@ pub mod pallet {
 			// An account-identified player gets allowance when signed up
 			if !already_playing {
 				if let Some(account) = who.account() {
-					increase_allowance_by(account.clone().into(), T::PlayerStatementLimit::get());
+					Self::grant_player_allowance(account);
 				}
 			}
 
@@ -3091,10 +3152,7 @@ pub mod pallet {
 				};
 
 				if let Some(stmt_account) = stmt_account {
-					decrease_allowance_by(
-						stmt_account.clone().into(),
-						T::PlayerStatementLimit::get(),
-					);
+					Self::revoke_player_allowance(&stmt_account);
 					Self::deposit_event(Event::<T>::StmtUsageRemoved { who: stmt_account.into() });
 				}
 
@@ -3120,6 +3178,7 @@ pub mod pallet {
 					credibility => credibility,
 				};
 
+				Self::update_player_allowance(&player_id);
 				Players::<T>::insert(
 					&player_id,
 					Player {
@@ -3166,6 +3225,15 @@ pub mod pallet {
 				defensive!("game state is not process player");
 				return;
 			};
+
+			if last_iteration.is_none() {
+				let limits = Self::player_statement_limits();
+				let limit = StatementAllowanceParameter::from(T::PlayerStatementLimit::get());
+				let next = (limit != limits.granted).then_some(limit);
+				if next != limits.next {
+					PlayerStatementLimits::<T>::put(PlayerStatementLimitsRecord { next, ..limits });
+				}
+			}
 
 			let mut iterator = match last_iteration.clone() {
 				None => Players::<T>::iter(),
@@ -3218,6 +3286,15 @@ pub mod pallet {
 					.defensive_proof(
 						"indiv-pallet-game: session was started before the process players phase",
 					);
+
+				if let Some(PlayerStatementLimitsRecord { next: Some(next), .. }) =
+					PlayerStatementLimits::<T>::get()
+				{
+					PlayerStatementLimits::<T>::put(PlayerStatementLimitsRecord {
+						granted: next,
+						next: None,
+					});
+				}
 
 				game.state =
 					GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices };
