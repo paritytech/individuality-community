@@ -34,6 +34,16 @@
 //! runtimes or contracts that need receive-consent or long-lived well-known destinations must
 //! enforce that policy above this storage layer.
 //!
+//! A contract is the exception to the one-NFT rule. [`Config::ContractAccounts`] names the
+//! contracts. An instance that arrives at one is stored in [`ContractNfts`], keyed by the contract
+//! and the instance, so a contract holds any number. [`ContractNftCount`] keeps the number per
+//! contract and collection. An unsolicited instance blocks nothing at a contract, because there is
+//! no single key to fill. The pallet picks the map when an instance arrives and finds it again
+//! through [`Instances`]. A contract that is later removed keeps what it holds, and an instance a
+//! key received before it became a contract stays in [`NftsByOwner`]. A contract cannot sign, so it
+//! moves its instances through [`Pallet::do_transfer_by_holder`] and never through the fee-less
+//! [`Pallet::transfer`].
+//!
 //! The current collection owner backs all collection state with one aggregate consideration
 //! ticket. To transfer that responsibility safely, the owner first nominates a successor and the
 //! successor claims the collection. Claiming atomically creates an equivalent ticket for the
@@ -223,6 +233,30 @@ impl<AccountId> OnPurseOccupied<AccountId> for () {
 	}
 }
 
+/// Tells the pallet which accounts are contracts, so that a contract can hold more than one
+/// instance.
+///
+/// The pallet asks only when an instance arrives, so a removed contract keeps what it received.
+/// Benchmarks measure the check, so a runtime wires its real implementation for them too.
+pub trait ContractAccounts<AccountId> {
+	/// Whether `account` is a contract.
+	fn is_contract(account: &AccountId) -> bool;
+
+	/// Makes [`Self::is_contract`] true for `account`, so that a benchmark takes the contract
+	/// branch.
+	#[cfg(feature = "runtime-benchmarks")]
+	fn set_contract(account: &AccountId);
+}
+
+impl<AccountId> ContractAccounts<AccountId> for () {
+	fn is_contract(_account: &AccountId) -> bool {
+		false
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn set_contract(_account: &AccountId) {}
+}
+
 /// Decides whether a metadata pair may be stored.
 ///
 /// Metadata here is opaque bytes under opaque keys, and this pallet reserves no key for anything.
@@ -274,8 +308,8 @@ pub use weights::WeightInfo;
 #[frame_support::pallet]
 pub mod pallet {
 	use crate::{
-		weights::WeightInfo, OnCollectionDeleted, OnCollectionOwnerChanged, OnPurseOccupied,
-		ValidateMetadata,
+		weights::WeightInfo, ContractAccounts, OnCollectionDeleted, OnCollectionOwnerChanged,
+		OnPurseOccupied, ValidateMetadata,
 	};
 	#[cfg(any(test, feature = "try-runtime"))]
 	use alloc::collections::BTreeMap;
@@ -377,6 +411,15 @@ pub mod pallet {
 		Transferable,
 		/// The instance stays with the purse key it was minted into.
 		Soulbound,
+	}
+
+	/// The map that holds a live instance.
+	#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+	pub enum Holding {
+		/// [`NftsByOwner`], which holds at most one instance per key.
+		Purse,
+		/// [`ContractNfts`], which holds any number of instances per contract.
+		Contract,
 	}
 
 	/// Immutable shared definition for every minted copy of an item.
@@ -517,6 +560,28 @@ pub mod pallet {
 	/// Stable reverse index from instance identifier to its current owner key.
 	#[pallet::storage]
 	pub type Instances<T: Config> = StorageMap<_, Twox64Concat, InstanceId, T::AccountId>;
+
+	/// Instances held by contracts, any number per contract.
+	///
+	/// A contract can also hold one instance in [`NftsByOwner`], if it received it before it had
+	/// code.
+	#[pallet::storage]
+	pub type ContractNfts<T: Config> =
+		StorageDoubleMap<_, Blake2_128Concat, T::AccountId, Twox64Concat, InstanceId, Nft>;
+
+	/// Number of instances of a collection that a contract holds in [`ContractNfts`].
+	///
+	/// Absent when zero.
+	#[pallet::storage]
+	pub type ContractNftCount<T: Config> = StorageDoubleMap<
+		_,
+		Blake2_128Concat,
+		T::AccountId,
+		Twox64Concat,
+		CollectionId,
+		u32,
+		ValueQuery,
+	>;
 
 	/// Exact per-instance storage deposits, present only for deposit-paying mints.
 	#[pallet::storage]
@@ -825,6 +890,10 @@ pub mod pallet {
 		/// Rule every stored metadata value must satisfy. Defaults to `()` for runtimes that
 		/// read metadata as the opaque bytes this pallet stores.
 		type MetadataPolicy: crate::ValidateMetadata<MetadataKeyOf<Self>, MetadataValueOf<Self>>;
+
+		/// The accounts that can hold more than one instance. Defaults to `()` for runtimes
+		/// without contracts.
+		type ContractAccounts: crate::ContractAccounts<Self::AccountId>;
 	}
 
 	#[pallet::call]
@@ -894,7 +963,7 @@ pub mod pallet {
 				return Err(DispatchError::BadOrigin.into());
 			};
 			ensure!(to != owner, Error::<T>::SelfTransfer);
-			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
+			let destination = Self::destination_of(&to)?;
 			Self::ensure_transferable(&nft)?;
 
 			let from = owner;
@@ -905,8 +974,7 @@ pub mod pallet {
 			// names.
 			let moves = nft.moves.saturating_add(1);
 			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves, ..nft };
-			NftsByOwner::<T>::insert(&to, nft.clone());
-			Instances::<T>::insert(nft.instance, &to);
+			Self::place(&to, &nft, destination)?;
 			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance: nft.instance,
@@ -1311,11 +1379,7 @@ pub mod pallet {
 			instance: InstanceId,
 			key: &MetadataKeyOf<T>,
 		) -> Option<MetadataValueOf<T>> {
-			let owner = Instances::<T>::get(instance)?;
-			let nft = NftsByOwner::<T>::get(owner)?;
-			if nft.instance != instance {
-				return None;
-			}
+			let (_, nft, _) = Self::holding_of(instance)?;
 			InstanceMetadata::<T>::get(instance, key)
 				.map(|entry| entry.value)
 				.or_else(|| Self::item_metadata_of(nft.collection, nft.item, key))
@@ -1361,18 +1425,7 @@ pub mod pallet {
 
 			match query {
 				MetadataQuery::Instance(instance) => {
-					let Some(owner) = Instances::<T>::get(instance) else {
-						return MetadataLayers::default();
-					};
-					let Some(nft) =
-						NftsByOwner::<T>::get(owner).filter(|nft| nft.instance == instance)
-					else {
-						// `Instances` and `NftsByOwner` are kept in bijection by every mutation
-						// path, so this arm is inconsistent state, not a missing target.
-						log::error!(
-							target: crate::LOG_TARGET,
-							"Instances entry {instance:?} has no matching NftsByOwner entry"
-						);
+					let Some((_, nft, _)) = Self::holding_of(instance) else {
 						return MetadataLayers::default();
 					};
 					MetadataLayers {
@@ -1554,9 +1607,7 @@ pub mod pallet {
 			value: Option<MetadataValueOf<T>>,
 			with_deposit: bool,
 		) -> DispatchResult {
-			let purse = Instances::<T>::get(instance).ok_or(Error::<T>::UnknownInstance)?;
-			let nft = NftsByOwner::<T>::get(purse).ok_or(Error::<T>::UnknownInstance)?;
-			ensure!(nft.instance == instance, Error::<T>::UnknownInstance);
+			let (_, nft, _) = Self::holding_of(instance).ok_or(Error::<T>::UnknownInstance)?;
 
 			let mut info =
 				Collections::<T>::get(nft.collection).ok_or(Error::<T>::UnknownCollection)?;
@@ -1634,15 +1685,13 @@ pub mod pallet {
 		}
 
 		fn do_force_burn(owner: &T::AccountId, instance: InstanceId) -> Result<u32, DispatchError> {
-			let purse = Instances::<T>::get(instance).ok_or(Error::<T>::UnknownInstance)?;
-			let nft = NftsByOwner::<T>::get(&purse).ok_or(Error::<T>::UnknownInstance)?;
-			ensure!(nft.instance == instance, Error::<T>::UnknownInstance);
+			let (purse, nft, holding) =
+				Self::holding_of(instance).ok_or(Error::<T>::UnknownInstance)?;
 			let info =
 				Collections::<T>::get(nft.collection).ok_or(Error::<T>::UnknownCollection)?;
 			ensure!(info.owner == *owner, Error::<T>::NoPermission);
 
-			NftsByOwner::<T>::remove(&purse);
-			Locked::<T>::remove(&purse);
+			Self::take(&purse, &nft, holding)?;
 			Self::do_burn(purse, nft)
 		}
 
@@ -1651,26 +1700,104 @@ pub mod pallet {
 			instance: InstanceId,
 			to: T::AccountId,
 		) -> DispatchResult {
-			let from = Instances::<T>::get(instance).ok_or(Error::<T>::UnknownInstance)?;
-			let nft = NftsByOwner::<T>::get(&from).ok_or(Error::<T>::UnknownInstance)?;
-			ensure!(nft.instance == instance, Error::<T>::UnknownInstance);
+			let (from, nft, holding) =
+				Self::holding_of(instance).ok_or(Error::<T>::UnknownInstance)?;
 			let info =
 				Collections::<T>::get(nft.collection).ok_or(Error::<T>::UnknownCollection)?;
 			ensure!(info.owner == *owner, Error::<T>::NoPermission);
 			ensure!(to != from, Error::<T>::SelfTransfer);
-			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
+			let destination = Self::destination_of(&to)?;
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
+			Self::take(&from, &nft, holding)?;
 			let nft =
 				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
-			NftsByOwner::<T>::remove(&from);
-			Locked::<T>::remove(&from);
-			NftsByOwner::<T>::insert(&to, nft);
-			Instances::<T>::insert(instance, &to);
+			Self::place(&to, &nft, destination)?;
 			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::ForceTransferred { instance, collection, from, to });
+			Ok(())
+		}
+
+		/// The instance `instance` if `holder` holds it, and the map that holds it.
+		pub fn nft_held_by(holder: &T::AccountId, instance: InstanceId) -> Option<(Nft, Holding)> {
+			match NftsByOwner::<T>::get(holder) {
+				Some(nft) if nft.instance == instance => Some((nft, Holding::Purse)),
+				_ => ContractNfts::<T>::get(holder, instance).map(|nft| (nft, Holding::Contract)),
+			}
+		}
+
+		/// The holder of the live instance `instance`, the instance and the map that holds it.
+		pub fn holding_of(instance: InstanceId) -> Option<(T::AccountId, Nft, Holding)> {
+			let holder = Instances::<T>::get(instance)?;
+			let Some((nft, holding)) = Self::nft_held_by(&holder, instance) else {
+				log::error!(
+					target: crate::LOG_TARGET,
+					"Instances entry {instance:?} has no matching NftsByOwner or ContractNfts entry"
+				);
+				return None;
+			};
+			Some((holder, nft, holding))
+		}
+
+		/// The map an instance arriving at `to` goes into.
+		///
+		/// Fails with [`Error::AddressOccupied`] when `to` is not a contract and already holds an
+		/// instance.
+		pub fn destination_of(to: &T::AccountId) -> Result<Holding, DispatchError> {
+			if T::ContractAccounts::is_contract(to) {
+				return Ok(Holding::Contract);
+			}
+			ensure!(!NftsByOwner::<T>::contains_key(to), Error::<T>::AddressOccupied);
+			Ok(Holding::Purse)
+		}
+
+		/// Number of instances of `collection` that `holder` holds in both maps.
+		pub fn balance_of(holder: &T::AccountId, collection: CollectionId) -> u32 {
+			let purse = NftsByOwner::<T>::get(holder).filter(|nft| nft.collection == collection);
+			ContractNftCount::<T>::get(holder, collection)
+				.saturating_add(u32::from(purse.is_some()))
+		}
+
+		/// Store `nft` at `to` in the map [`Self::destination_of`] chose.
+		fn place(to: &T::AccountId, nft: &Nft, holding: Holding) -> DispatchResult {
+			match holding {
+				Holding::Purse => NftsByOwner::<T>::insert(to, nft),
+				Holding::Contract => {
+					ContractNftCount::<T>::try_mutate(to, nft.collection, |count| {
+						*count = count.checked_add(1).ok_or(ArithmeticError::Overflow)?;
+						Ok::<_, DispatchError>(())
+					})?;
+					ContractNfts::<T>::insert(to, nft.instance, nft);
+				},
+			}
+			Instances::<T>::insert(nft.instance, to);
+			Ok(())
+		}
+
+		/// Remove `nft` from `holder` in the map that holds it.
+		///
+		/// Clears the backoff lock of a purse, which keeps every `Locked` entry paired with an
+		/// NFT. A contract cannot sign, so it never has a lock.
+		fn take(holder: &T::AccountId, nft: &Nft, holding: Holding) -> DispatchResult {
+			match holding {
+				Holding::Purse => {
+					NftsByOwner::<T>::remove(holder);
+					Locked::<T>::remove(holder);
+				},
+				Holding::Contract => {
+					ContractNfts::<T>::remove(holder, nft.instance);
+					ContractNftCount::<T>::try_mutate_exists(holder, nft.collection, |count| {
+						let next = count
+							.unwrap_or_default()
+							.checked_sub(1)
+							.ok_or(ArithmeticError::Underflow)?;
+						*count = (next > 0).then_some(next);
+						Ok::<_, DispatchError>(())
+					})?;
+				},
+			}
 			Ok(())
 		}
 
@@ -1709,21 +1836,19 @@ pub mod pallet {
 			instance: InstanceId,
 			to: T::AccountId,
 		) -> DispatchResult {
-			let nft = NftsByOwner::<T>::get(holder).ok_or(Error::<T>::UnknownInstance)?;
-			ensure!(nft.instance == instance, Error::<T>::UnknownInstance);
+			let (nft, holding) =
+				Self::nft_held_by(holder, instance).ok_or(Error::<T>::UnknownInstance)?;
 			ensure!(to != *holder, Error::<T>::SelfTransfer);
-			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
+			let destination = Self::destination_of(&to)?;
 			Self::ensure_transferable(&nft)?;
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
+			Self::take(holder, &nft, holding)?;
 			let nft =
 				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
-			NftsByOwner::<T>::remove(holder);
-			Locked::<T>::remove(holder);
-			NftsByOwner::<T>::insert(&to, nft);
-			Instances::<T>::insert(instance, &to);
+			Self::place(&to, &nft, destination)?;
 			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance,
@@ -1810,7 +1935,7 @@ pub mod pallet {
 				Collections::<T>::get(collection).ok_or(Error::<T>::UnknownCollection)?;
 			let mut definition =
 				ItemDefs::<T>::get(collection, item).ok_or(Error::<T>::UnknownItem)?;
-			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
+			let destination = Self::destination_of(&to)?;
 
 			let instance = NextInstanceId::<T>::get();
 			let next_instance = instance.checked_add(1).ok_or(Error::<T>::TooManyInstances)?;
@@ -1831,7 +1956,8 @@ pub mod pallet {
 				// Four storage entries back one instance: `NftsByOwner`, the `Instances`
 				// reverse index, `InstanceDeposits`, and `InstanceMetadataCount`. This measures
 				// their logical encoded payload; the runtime's per-record base can price trie
-				// and hash-prefix overhead.
+				// and hash-prefix overhead. The deposit does not follow the instance when it
+				// moves, so an instance held in `ContractNfts` is priced as a purse entry.
 				let record_size = nft
 					.encoded_size()
 					.saturating_add(to.encoded_size().saturating_mul(2))
@@ -1851,8 +1977,7 @@ pub mod pallet {
 			let collection_owner = info.owner.clone();
 			Collections::<T>::insert(collection, info);
 			ItemDefs::<T>::insert(collection, item, definition);
-			NftsByOwner::<T>::insert(&to, nft);
-			Instances::<T>::insert(instance, &to);
+			Self::place(&to, &nft, destination)?;
 			InstanceMetadataCount::<T>::insert(instance, 0);
 			if let Some(deposit) = instance_deposit {
 				InstanceDeposits::<T>::insert(instance, deposit);
@@ -1978,6 +2103,53 @@ pub mod pallet {
 					));
 				}
 			}
+			let mut contract_counts = BTreeMap::<(T::AccountId, CollectionId), u32>::new();
+			for (holder, instance, nft) in ContractNfts::<T>::iter() {
+				if nft.instance != instance {
+					return Err(TryRuntimeError::Other(
+						"ContractNfts entry is keyed by a different instance",
+					));
+				}
+				if instance >= next_instance {
+					return Err(TryRuntimeError::Other("NFT instance is not below NextInstanceId"));
+				}
+				if Instances::<T>::get(instance).as_ref() != Some(&holder) {
+					return Err(TryRuntimeError::Other(
+						"ContractNfts entry has no matching Instances entry",
+					));
+				}
+				if NftsByOwner::<T>::get(&holder).is_some_and(|held| held.instance == instance) {
+					return Err(TryRuntimeError::Other(
+						"instance is in both NftsByOwner and ContractNfts",
+					));
+				}
+				let definition = ItemDefs::<T>::get(nft.collection, nft.item)
+					.ok_or(TryRuntimeError::Other("NFT has no matching item definition"))?;
+				let live = live_by_item.entry((nft.collection, nft.item)).or_default();
+				*live += 1;
+				if *live > u64::from(definition.live_supply) {
+					return Err(TryRuntimeError::Other(
+						"item live supply is below its stored instance count",
+					));
+				}
+				*contract_counts.entry((holder, nft.collection)).or_default() += 1;
+			}
+			for (holder, collection, count) in ContractNftCount::<T>::iter() {
+				if count == 0 {
+					return Err(TryRuntimeError::Other("ContractNftCount entry is zero"));
+				}
+				if contract_counts.remove(&(holder, collection)) != Some(count) {
+					return Err(TryRuntimeError::Other(
+						"ContractNftCount does not match stored ContractNfts entries",
+					));
+				}
+			}
+			if !contract_counts.is_empty() {
+				return Err(TryRuntimeError::Other(
+					"ContractNfts entries have no ContractNftCount entry",
+				));
+			}
+
 			for (collection, item, definition) in ItemDefs::<T>::iter() {
 				let actual = live_by_item.get(&(collection, item)).copied().unwrap_or_default();
 				if u64::from(definition.live_supply) != actual {
@@ -1996,12 +2168,9 @@ pub mod pallet {
 				if !InstanceMetadataCount::<T>::contains_key(instance) {
 					return Err(TryRuntimeError::Other("live instance has no metadata count entry"));
 				}
-				if !matches!(
-					NftsByOwner::<T>::get(&owner),
-					Some(nft) if nft.instance == instance
-				) {
+				if Self::nft_held_by(&owner, instance).is_none() {
 					return Err(TryRuntimeError::Other(
-						"Instances entry has no matching NftsByOwner entry",
+						"Instances entry has no matching NftsByOwner or ContractNfts entry",
 					));
 				}
 			}
@@ -2020,7 +2189,7 @@ pub mod pallet {
 				let owner = Instances::<T>::get(instance).ok_or(TryRuntimeError::Other(
 					"InstanceDeposits entry has no matching owner",
 				))?;
-				let nft = NftsByOwner::<T>::get(owner)
+				let (nft, _) = Self::nft_held_by(&owner, instance)
 					.ok_or(TryRuntimeError::Other("InstanceDeposits entry has no matching NFT"))?;
 				let expected = expected_collection_deposits.get_mut(&nft.collection).ok_or(
 					TryRuntimeError::Other(
@@ -2042,13 +2211,8 @@ pub mod pallet {
 				let owner = Instances::<T>::get(instance).ok_or(TryRuntimeError::Other(
 					"InstanceMetadata entry has no matching instance",
 				))?;
-				let nft = NftsByOwner::<T>::get(owner)
+				let (nft, _) = Self::nft_held_by(&owner, instance)
 					.ok_or(TryRuntimeError::Other("InstanceMetadata entry has no matching NFT"))?;
-				if nft.instance != instance {
-					return Err(TryRuntimeError::Other(
-						"InstanceMetadata entry resolves to a different NFT",
-					));
-				}
 				let count = actual_instance_metadata_counts.entry(instance).or_default();
 				*count = count
 					.checked_add(1)

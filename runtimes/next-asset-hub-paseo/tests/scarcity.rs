@@ -21,14 +21,14 @@ use frame_support::{
 	dispatch::GetDispatchInfo,
 	traits::{
 		fungibles::{Create, Inspect, Mutate},
-		Get,
+		Currency, Get,
 	},
 };
 use next_asset_hub_paseo_runtime::{
 	Assets, Balances, PgasAdmin, PgasAssetId, PgasMinBalance, Runtime, RuntimeCall, RuntimeOrigin,
-	TxExtensionV1, INDIVIDUALITY_EXTENSION_VERSION,
+	Scarcity, TxExtensionV1, INDIVIDUALITY_EXTENSION_VERSION,
 };
-use pallet_revive::AddressMapper as _;
+use pallet_revive::{AddressMapper, Code, ExecConfig, TransactionLimits};
 use parachains_common::AccountId;
 use polkadot_runtime_common::claims as pallet_claims;
 use sp_runtime::{
@@ -195,77 +195,6 @@ fn a_spent_move_budget_stops_a_feeless_transfer() {
 	});
 }
 
-/// A contract slot is an ordinary purse key to the fee-less path. It is the fallback account of an
-/// address nobody holds a key for, and the pool takes a push into it while it is empty and refuses
-/// a push into it once it holds a token, at validation (`DestinationOccupied`), so the second
-/// push never reaches a block. That is how junk in a slot blocks a player's own push.
-#[test]
-fn a_feeless_push_into_a_contract_slot_lands_only_while_the_slot_is_empty() {
-	let (mut ext, first) = scarcity_purse_test_state(0);
-	ext.execute_with(|| {
-		let slot = <Runtime as pallet_revive::Config>::AddressMapper::to_fallback_account_id(
-			&pallet_revive::H160([0x5A; 20]),
-		);
-		let second = AccountId::from([3u8; 32]);
-		indiv_pallet_scarcity::NftsByOwner::<Runtime>::insert(
-			&second,
-			indiv_pallet_scarcity::Nft {
-				instance: 1,
-				collection: 0,
-				item: 0,
-				minted_at: 0,
-				last_moved: 0,
-				state_nonce: 0,
-				moves: 0,
-			},
-		);
-		indiv_pallet_scarcity::Instances::<Runtime>::insert(1, &second);
-		let push = |holder: &AccountId, instance: u64| {
-			let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer {
-				to: slot.clone(),
-			});
-			let info = call.get_dispatch_info();
-			purse_tx_extension(
-				0,
-				Some(indiv_pallet_scarcity::extension::AsScarcityInfo::AsNft {
-					instance,
-					state_nonce: 0,
-				}),
-			)
-			.dispatch_transaction(
-				RuntimeOrigin::signed(holder.clone()),
-				call,
-				&info,
-				0,
-				INDIVIDUALITY_EXTENSION_VERSION,
-			)
-		};
-
-		let landed = push(&first, 0);
-		assert!(matches!(landed, Ok(Ok(_))), "transaction failed: {landed:?}");
-		assert_eq!(indiv_pallet_scarcity::Instances::<Runtime>::get(0), Some(slot.clone()));
-		assert_eq!(
-			indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&slot)
-				.map(|nft| (nft.instance, nft.moves)),
-			Some((0, 1)),
-			"the push spends one of the token's feeless moves",
-		);
-
-		let refused = push(&second, 1);
-		assert_eq!(
-			refused.unwrap_err(),
-			TransactionValidityError::Invalid(InvalidTransaction::Custom(
-				indiv_pallet_scarcity::extension::CustomInvalidity::DestinationOccupied as u8
-			)),
-		);
-		// Refused at the pool: the second token stays put, earns no lock, and the slot is
-		// unchanged.
-		assert_eq!(indiv_pallet_scarcity::Instances::<Runtime>::get(1), Some(second.clone()));
-		assert!(!indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&second));
-		assert_eq!(indiv_pallet_scarcity::Instances::<Runtime>::get(0), Some(slot));
-	});
-}
-
 /// A purse that holds only PGAS pays for the move that refills a spent budget
 /// (paritytech/individuality#1270). Without this path an instance is stuck once its feeless
 /// moves are gone.
@@ -391,5 +320,88 @@ fn failed_scarcity_transfer_is_feeless_and_retryable_after_lock() {
 		);
 		assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&to));
 		assert!(indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&from));
+	});
+}
+
+/// Deploy a contract whose code is a single `STOP`, funded by `deployer`, and return its account.
+fn deploy_contract(deployer: &AccountId) -> AccountId {
+	let _ = Balances::deposit_creating(deployer, 1u128 << 60);
+	assert_ok!(<Assets as Create<_>>::create(PgasAssetId::get(), deployer.clone(), true, 1));
+	assert_ok!(<Assets as Mutate<_>>::mint_into(PgasAssetId::get(), deployer, 1u128 << 60));
+	// EVM init code that copies the byte after it and returns it as the runtime code: `STOP`.
+	let init_code =
+		vec![0x60, 0x01, 0x60, 0x0c, 0x60, 0x00, 0x39, 0x60, 0x01, 0x60, 0x00, 0xf3, 0x00];
+	let address = pallet_revive::Pallet::<Runtime>::bare_instantiate(
+		RuntimeOrigin::signed(deployer.clone()),
+		0u32.into(),
+		TransactionLimits::WeightAndDeposit {
+			weight_limit: frame_support::weights::Weight::from_parts(
+				500_000_000_000,
+				5 * 1024 * 1024,
+			),
+			deposit_limit: 1u128 << 50,
+		},
+		Code::Upload(init_code),
+		Vec::new(),
+		None,
+		&ExecConfig::new_substrate_tx(),
+	)
+	.result
+	.expect("contract instantiates")
+	.addr;
+	<Runtime as pallet_revive::Config>::AddressMapper::to_account_id(&address)
+}
+
+/// A fee-less push lands at a contract that already holds an instance, because the runtime wires
+/// `ReviveContracts` and a contract holds any number of instances.
+#[test]
+fn a_feeless_push_into_a_contract_lands_next_to_what_it_holds() {
+	let storage = frame_system::GenesisConfig::<Runtime>::default().build_storage().unwrap();
+	sp_io::TestExternalities::from(storage).execute_with(|| {
+		frame_system::Pallet::<Runtime>::set_block_number(1);
+		pallet_timestamp::Pallet::<Runtime>::set_timestamp(1_000);
+		let owner = AccountId::from([9u8; 32]);
+		let contract = deploy_contract(&owner);
+		let collection = Scarcity::do_create_collection(owner.clone()).expect("collection");
+		let item = Scarcity::do_define_item(
+			owner.clone(),
+			collection,
+			indiv_pallet_scarcity::Transferability::Transferable,
+			Vec::new(),
+		)
+		.expect("item");
+		let held = Scarcity::do_mint(owner.clone(), collection, item, contract.clone(), Vec::new())
+			.expect("mint into the contract");
+		let from = AccountId::from([1u8; 32]);
+		let pushed = Scarcity::do_mint(owner, collection, item, from.clone(), Vec::new())
+			.expect("mint into the purse");
+
+		let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer {
+			to: contract.clone(),
+		});
+		let info = call.get_dispatch_info();
+		let result = purse_tx_extension(
+			0,
+			Some(indiv_pallet_scarcity::extension::AsScarcityInfo::AsNft {
+				instance: pushed,
+				state_nonce: 0,
+			}),
+		)
+		.dispatch_transaction(
+			RuntimeOrigin::signed(from),
+			call,
+			&info,
+			0,
+			INDIVIDUALITY_EXTENSION_VERSION,
+		);
+		assert!(matches!(result, Ok(Ok(_))), "transaction failed: {result:?}");
+
+		let mut instances =
+			indiv_pallet_scarcity::ContractNfts::<Runtime>::iter_key_prefix(&contract)
+				.collect::<Vec<_>>();
+		instances.sort_unstable();
+		assert_eq!(instances, vec![held, pushed]);
+		assert_eq!(Scarcity::balance_of(&contract, collection), 2);
+		assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&contract));
 	});
 }

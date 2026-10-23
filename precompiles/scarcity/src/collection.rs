@@ -19,8 +19,8 @@
 use super::*;
 use frame_system::RawOrigin;
 use indiv_pallet_scarcity::{
-	weights::WeightInfo as _, ItemDefs, ItemIndex, OnCollectionDeleted, OnPurseOccupied,
-	Pallet as Scarcity, ValidateMetadata,
+	weights::WeightInfo as _, ContractNftCount, ItemDefs, ItemIndex, OnCollectionDeleted,
+	OnPurseOccupied, Pallet as Scarcity, ValidateMetadata,
 };
 use pallet_revive::{codec::DecodeAll, sp_runtime::traits::UniqueSaturatedInto};
 use IScarcityCollection::IScarcityCollectionCalls;
@@ -117,10 +117,6 @@ where
 			IScarcityCollectionCalls::forceTransfer(call) =>
 				Self::force_transfer(collection, call, env),
 			IScarcityCollectionCalls::forceBurn(call) => Self::force_burn(collection, call, env),
-			// Contract slots
-			IScarcityCollectionCalls::slotAddress(call) => Self::slot_address(call, env),
-			IScarcityCollectionCalls::transferFromSlot(call) =>
-				Self::transfer_from_slot(collection, call, env),
 			IScarcityCollectionCalls::setCollectionMetadata(call) => {
 				let value = bounded_value::<T>(&call.value)?;
 				Self::set_collection_metadata(collection, &call.key, Some(value), env)
@@ -222,7 +218,6 @@ pub(crate) fn is_mutating(input: &IScarcityCollectionCalls) -> bool {
 		IScarcityCollectionCalls::mint(_) |
 		IScarcityCollectionCalls::forceTransfer(_) |
 		IScarcityCollectionCalls::forceBurn(_) |
-		IScarcityCollectionCalls::transferFromSlot(_) |
 		IScarcityCollectionCalls::setCollectionMetadata(_) |
 		IScarcityCollectionCalls::removeCollectionMetadata(_) |
 		IScarcityCollectionCalls::setItemMetadata(_) |
@@ -257,8 +252,7 @@ pub(crate) fn is_mutating(input: &IScarcityCollectionCalls) -> bool {
 		IScarcityCollectionCalls::instanceMetadata(_) |
 		IScarcityCollectionCalls::hasCollectionMetadata(_) |
 		IScarcityCollectionCalls::hasItemMetadata(_) |
-		IScarcityCollectionCalls::hasInstanceMetadata(_) |
-		IScarcityCollectionCalls::slotAddress(_) => false,
+		IScarcityCollectionCalls::hasInstanceMetadata(_) => false,
 	}
 }
 
@@ -286,15 +280,13 @@ where
 		call: &IScarcityCollection::balanceOfCall,
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
-		// Reverse address mapping plus the purse read.
-		charge_reads(env, 2)?;
+		// Reverse address mapping, the purse read and the contract count.
+		charge_reads(env, 3)?;
 		if call.owner == Address::ZERO {
 			return Err(revert(ERR_ZERO_OWNER));
 		}
-		let holds = NftsByOwner::<T>::get(account_of::<T>(&call.owner))
-			.is_some_and(|nft| nft.collection == collection);
-		let balance = if holds { U256::ONE } else { U256::ZERO };
-		Ok(IScarcityCollection::balanceOfCall::abi_encode_returns(&balance))
+		let balance = Scarcity::<T>::balance_of(&account_of::<T>(&call.owner), collection);
+		Ok(IScarcityCollection::balanceOfCall::abi_encode_returns(&U256::from(balance)))
 	}
 
 	fn owner_of(
@@ -303,15 +295,17 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
 		charge_reads(env, 2)?;
-		let (purse, _) = live_instance::<T>(collection, &call.tokenId)?;
+		let (purse, _) = live_instance::<T>(collection, &call.tokenId, env)?;
 		Ok(IScarcityCollection::ownerOfCall::abi_encode_returns(&address_of::<T>(&purse)))
 	}
 
-	/// The single token a purse holds, at index 0.
+	/// The token of this collection at position `index` among those `owner` holds.
 	///
-	/// A purse holds at most one instance, so this is `balanceOf` with the answer in place of the
-	/// count, and every index above 0 is out of range. It does not make the collection ERC-721
-	/// Enumerable, which also needs `totalSupply` and `tokenByIndex`.
+	/// A purse holds at most one instance, at index 0. A contract's tokens in `ContractNfts`
+	/// follow, in storage order, which is stable while the contract's holdings do not change.
+	/// Reaching them walks the contract's tokens of every collection, one charged read per token
+	/// passed. It does not make the collection ERC-721 Enumerable, which also needs
+	/// `totalSupply` and `tokenByIndex`.
 	fn token_of_owner_by_index(
 		collection: CollectionId,
 		call: &IScarcityCollection::tokenOfOwnerByIndexCall,
@@ -322,17 +316,44 @@ where
 		if call.owner == Address::ZERO {
 			return Err(revert(ERR_ZERO_OWNER));
 		}
-		// EIP-721 requires a throw for any index at or above the holder's balance, which is 1 for
-		// a holder of this collection and 0 for everyone else.
-		let nft = NftsByOwner::<T>::get(account_of::<T>(&call.owner))
-			.filter(|nft| nft.collection == collection)
-			.ok_or_else(|| revert(ERR_INDEX_OUT_OF_RANGE))?;
-		if !call.index.is_zero() {
+		let owner = account_of::<T>(&call.owner);
+		// EIP-721 requires a throw for any index at or above the holder's balance.
+		let mut remaining =
+			u32::try_from(call.index).map_err(|_| revert(ERR_INDEX_OUT_OF_RANGE))?;
+		if let Some(nft) = NftsByOwner::<T>::get(&owner).filter(|nft| nft.collection == collection)
+		{
+			if remaining == 0 {
+				return Self::encode_token(nft.instance);
+			}
+			remaining -= 1;
+		}
+		// The count bounds the walk before it starts: an index past it reverts for one read.
+		charge_reads(env, 1)?;
+		if remaining >= ContractNftCount::<T>::get(&owner, collection) {
 			return Err(revert(ERR_INDEX_OUT_OF_RANGE));
 		}
-		Ok(IScarcityCollection::tokenOfOwnerByIndexCall::abi_encode_returns(&U256::from(
-			nft.instance,
-		)))
+		let mut held = ContractNfts::<T>::iter_prefix_values(&owner);
+		loop {
+			charge_reads(env, 1)?;
+			let Some(nft) = held.next() else {
+				log::error!(
+					target: LOG_TARGET,
+					"ContractNftCount of {owner:?} for collection {collection} exceeds its ContractNfts entries"
+				);
+				return Err(revert(ERR_INDEX_OUT_OF_RANGE));
+			};
+			if nft.collection != collection {
+				continue;
+			}
+			if remaining == 0 {
+				return Self::encode_token(nft.instance);
+			}
+			remaining -= 1;
+		}
+	}
+
+	fn encode_token(instance: InstanceId) -> Result<Vec<u8>, Error> {
+		Ok(IScarcityCollection::tokenOfOwnerByIndexCall::abi_encode_returns(&U256::from(instance)))
 	}
 
 	fn get_approved(
@@ -341,7 +362,7 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
 		charge_reads(env, 2)?;
-		live_instance::<T>(collection, &call.tokenId)?;
+		live_instance::<T>(collection, &call.tokenId, env)?;
 		Ok(IScarcityCollection::getApprovedCall::abi_encode_returns(&Address::ZERO))
 	}
 
@@ -352,7 +373,7 @@ where
 	) -> Result<Vec<u8>, Error> {
 		// The instance lookup, then the definition carrying the flag.
 		charge_reads(env, 3)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
 		let transferability =
 			Scarcity::<T>::transferability_of(&nft).map_err(revert_scarcity::<T>)?;
 		let locked = transferability == Transferability::Soulbound;
@@ -377,7 +398,7 @@ where
 	) -> Result<Vec<u8>, Error> {
 		// The instance lookup, then the item and collection scopes of both keys.
 		charge_reads(env, 6)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
 		let Some((receiver, basis_points)) = Self::royalty_terms(&nft)? else {
 			return Ok(IScarcityCollection::royaltyInfoCall::abi_encode_returns(
 				&IScarcityCollection::royaltyInfoReturn {
@@ -478,7 +499,7 @@ where
 		// `Nft` rather than through `instance_metadata_of`, which would repeat the instance
 		// lookup.
 		charge_reads(env, 5)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
 		let key = MetadataKeyOf::<T>::try_from(TOKEN_URI_KEY.to_vec())
 			.map_err(|_| revert(ERR_KEY_TOO_LONG))?;
 		let value = InstanceMetadata::<T>::get(nft.instance, &key)
@@ -582,20 +603,30 @@ where
 		}
 		// Collection-membership validation reads and both reverse address mappings.
 		charge_reads(env, 4)?;
-		let (holder, nft) = live_instance::<T>(collection, transfer.token)?;
+		let (holder, nft) = live_instance::<T>(collection, transfer.token, env)?;
 		if account_of::<T>(transfer.from) != holder {
 			return Err(revert(ERR_WRONG_HOLDER));
 		}
 		if caller_account::<T>(env)? != holder {
 			return Err(revert(ERR_NOT_HOLDER));
 		}
-		Self::move_by_holder(
-			&holder,
-			nft.instance,
-			*transfer.from,
-			*transfer.to,
-			*transfer.token,
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
+		// The move registers its destination. `WeightInfo::transfer_by_holder` does not cover that:
+		// the extrinsic adds the same term to its own annotation, and the benchmark runtime wires
+		// no handler.
+		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+			T::AccountId,
+		>>::on_purse_occupied_weight())?;
+		let to = account_of::<T>(transfer.to);
+		Scarcity::<T>::do_transfer_by_holder(&holder, nft.instance, to)
+			.map_err(revert_scarcity::<T>)?;
+		deposit_event(
 			env,
+			IScarcityCollection::Transfer {
+				from: *transfer.from,
+				to: *transfer.to,
+				tokenId: *transfer.token,
+			},
 		)?;
 		if let Safety::Checked { data } = safety {
 			// A revert here unwinds the move above with the rest of the frame.
@@ -604,30 +635,6 @@ where
 			}
 		}
 		Ok(Vec::new())
-	}
-
-	/// Move an instance on its holder's authority and log the move from `from` to `to`.
-	///
-	/// Charges the pallet call and the registration of the destination.
-	/// `WeightInfo::transfer_by_holder` does not cover the registration: the extrinsic adds the
-	/// same term to its own annotation, and the benchmark runtime wires no handler. The caller
-	/// charges its own reads and makes its refusals first, so a refused call does not pay for the
-	/// move.
-	fn move_by_holder(
-		holder: &T::AccountId,
-		instance: InstanceId,
-		from: Address,
-		to: Address,
-		token: U256,
-		env: &mut impl Ext<T = T>,
-	) -> Result<(), Error> {
-		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
-		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
-			T::AccountId,
-		>>::on_purse_occupied_weight())?;
-		Scarcity::<T>::do_transfer_by_holder(holder, instance, account_of::<T>(&to))
-			.map_err(revert_scarcity::<T>)?;
-		deposit_event(env, IScarcityCollection::Transfer { from, to, tokenId: token })
 	}
 
 	/// Ask the destination of a `safeTransferFrom` to acknowledge the token it now holds.
@@ -664,7 +671,7 @@ where
 		if call.to == Address::ZERO {
 			return Err(revert(ERR_ZERO_DESTINATION));
 		}
-		let (from, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let (from, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
 		let who = caller_account::<T>(env)?;
 		let to = account_of::<T>(&call.to);
 		let from_address = address_of::<T>(&from);
@@ -677,7 +684,7 @@ where
 			return Err(revert(ERR_SELF_TRANSFER));
 		}
 		// The move registers its destination, which the benchmark does not cover. See
-		// `move_by_holder`. Charged past the rejections above so a revert does not pay for a
+		// `transfer_from`. Charged past the rejections above so a revert does not pay for a
 		// registration that never happens.
 		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
 			T::AccountId,
@@ -707,7 +714,7 @@ where
 		// charge of the heaviest call in the crate, which
 		// `force_burn_refunds_unused_weight` pins against.
 		charge_reads(env, 2)?;
-		let (purse, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let (purse, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
 		let who = caller_account::<T>(env)?;
 		let worst = <T as indiv_pallet_scarcity::Config>::WeightInfo::force_burn(
 			<T as indiv_pallet_scarcity::Config>::MaxInstanceMetadata::get(),
@@ -724,66 +731,6 @@ where
 				tokenId: call.tokenId,
 			},
 		)?;
-		Ok(Vec::new())
-	}
-
-	/// The address of one of a vault's slots.
-	///
-	/// A pure derivation: past the collection check every selector gets, the only charge is the
-	/// hash and nothing else is read. It answers for any `(vault, index)`, including an EOA,
-	/// because naming a slot grants nothing: authority over it is checked where a token leaves it.
-	fn slot_address(
-		call: &IScarcityCollection::slotAddressCall,
-		env: &mut impl Ext<T = T>,
-	) -> Result<Vec<u8>, Error> {
-		charge_slot_hash::<T>(env)?;
-		let slot = slot_address(&call.vault, &call.index);
-		Ok(IScarcityCollection::slotAddressCall::abi_encode_returns(&slot))
-	}
-
-	/// Move a token out of one of the calling vault's slots on the slot's holder authority.
-	///
-	/// The slot is derived from the caller, so a caller can only reach slots that are its own. No
-	/// key is known for a slot account, so this is the only known way a token leaves a slot on
-	/// holder authority. Who staked the token is the calling contract's record to keep; nothing
-	/// here asks.
-	///
-	/// Only a contract may call. `caller_is_origin(false)` is true exactly when the immediate
-	/// caller is the transaction's origin, whoever signed it or the root origin. A forwarding
-	/// contract still passes, so this is a fence and not a boundary. It runs ahead of this call's
-	/// own charges and reads, like the crate's frame guards; `call` has already charged for and
-	/// done the collection check.
-	fn transfer_from_slot(
-		collection: CollectionId,
-		call: &IScarcityCollection::transferFromSlotCall,
-		env: &mut impl Ext<T = T>,
-	) -> Result<Vec<u8>, Error> {
-		if env.caller_is_origin(false) {
-			return Err(revert(ERR_NOT_CONTRACT));
-		}
-		// See `mint` on why the zero address is rejected.
-		if call.to == Address::ZERO {
-			return Err(revert(ERR_ZERO_DESTINATION));
-		}
-		// Collection-membership validation reads and the destination's reverse address mapping,
-		// then the hash that derives the slot.
-		charge_reads(env, 3)?;
-		charge_slot_hash::<T>(env)?;
-
-		let vault = address_of::<T>(&caller_account::<T>(env)?);
-		let slot = slot_address(&vault, &call.index);
-		let slot_account = slot_account::<T>(&slot);
-		let (holder, nft) = live_instance::<T>(collection, &call.tokenId)?;
-		if holder != slot_account {
-			return Err(revert(ERR_NOT_IN_SLOT));
-		}
-		// The pallet compares accounts and this call carries an address, as `force_transfer` notes
-		// for its own check. Naming the slot itself here keeps the refusal from depending on how
-		// the pallet compares them. Both give the same message.
-		if call.to == slot {
-			return Err(revert(ERR_SELF_TRANSFER));
-		}
-		Self::move_by_holder(&slot_account, nft.instance, slot, call.to, call.tokenId, env)?;
 		Ok(Vec::new())
 	}
 
@@ -896,7 +843,7 @@ where
 					<T as indiv_pallet_scarcity::Config>::MetadataPolicy::validate_weight(1),
 				),
 		)?;
-		let (_, nft) = live_instance::<T>(collection, token)?;
+		let (_, nft) = live_instance::<T>(collection, token, env)?;
 		let bounded = bounded_key::<T>(key)?;
 		let who = caller_account::<T>(env)?;
 		Scarcity::<T>::set_instance_metadata(
@@ -1065,7 +1012,7 @@ where
 	) -> Result<Vec<u8>, Error> {
 		// Instance lookup plus the presence check.
 		charge_reads(env, 3)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
 		let key = bounded_key::<T>(&call.key)?;
 		let present = InstanceMetadata::<T>::contains_key(nft.instance, &key);
 		Ok(IScarcityCollection::hasInstanceMetadataCall::abi_encode_returns(&present))
@@ -1093,7 +1040,7 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
 		charge_reads(env, 2)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
 		Ok(IScarcityCollection::instanceInfoCall::abi_encode_returns(
 			&IScarcityCollection::instanceInfoReturn {
 				item: nft.item,
@@ -1146,7 +1093,7 @@ where
 		// Instance lookup plus the three metadata scopes; see `token_uri` on the direct
 		// resolution.
 		charge_reads(env, 5)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
 		let key = MetadataKeyOf::<T>::try_from(call.key.to_vec())
 			.map_err(|_| revert(ERR_KEY_TOO_LONG))?;
 		let value = InstanceMetadata::<T>::get(nft.instance, &key)
