@@ -3951,43 +3951,56 @@ fn the_pledgee_releases_and_the_token_stays() {
 	});
 }
 
-/// `transferFrom` from the live pledgee is a seize; the holder of a pledged token and every other
-/// caller are refused.
+/// No ERC-721 transfer function moves a pledged token: the holder, the pledgee and every other
+/// caller are refused, each with its own reason, and `seize` is the pledgee's move.
 #[test]
-fn transfer_from_by_the_pledgee_is_a_seize() {
+fn transfer_from_refuses_every_caller_while_a_pledge_has_effect() {
 	new_test_ext().execute_with(|| {
 		let world = PledgeWorld::new();
 		world.pledge_natively();
+		let before = NftsByOwner::<Test>::get(&world.holder).unwrap();
 		let (to_address, to) = purse(0xCC);
 		let to_address: Address = to_address.0.into();
+		let safe_transfers = [
+			IScarcityCollection::safeTransferFrom_1Call {
+				from: world.holder_address,
+				to: to_address,
+				tokenId: world.token,
+			}
+			.abi_encode(),
+			IScarcityCollection::safeTransferFrom_0Call {
+				from: world.holder_address,
+				to: to_address,
+				tokenId: world.token,
+				data: Bytes::from_static(b"payload"),
+			}
+			.abi_encode(),
+		];
 
-		call_reverted_with(
-			&world.holder,
-			world.target,
-			world.transfer_from(to_address),
-			ERR_PLEDGED,
-		);
+		call_reverted_with(&world.holder, world.target, world.transfer_from(to_address), ERR_PLEDGED);
 		call_reverted_with(
 			&world.alice,
 			world.target,
 			world.transfer_from(to_address),
 			"caller does not hold this token",
 		);
+		call_reverted_with(
+			&world.pledgee,
+			world.target,
+			world.transfer_from(to_address),
+			ERR_PLEDGEE_TRANSFER,
+		);
+		for input in safe_transfers {
+			call_reverted_with(&world.pledgee, world.target, input, ERR_PLEDGEE_TRANSFER);
+		}
+		assert_eq!(NftsByOwner::<Test>::get(&world.holder).unwrap(), before);
+		assert!(world.locked());
 		assert_no_contract_event();
 
-		call_ok(&world.pledgee, world.target, world.transfer_from(to_address));
+		call_ok(&world.pledgee, world.target, world.seize(to_address));
 
 		let moved = NftsByOwner::<Test>::get(&to).expect("the destination holds the token");
-		assert_eq!((moved.instance, moved.pledge, moved.moves), (world.instance, None, 0));
-		assert_contract_event(world.target, IScarcityCollection::Unlocked { tokenId: world.token });
-		assert_contract_event(
-			world.target,
-			IScarcityCollection::Transfer {
-				from: world.holder_address,
-				to: to_address,
-				tokenId: world.token,
-			},
-		);
+		assert_eq!((moved.instance, moved.pledge), (world.instance, None));
 	});
 }
 
@@ -4009,29 +4022,6 @@ fn an_expired_pledge_hands_transfers_back_to_the_holder() {
 		call_ok(&world.holder, world.target, world.transfer_from(to_address));
 
 		assert_eq!(NftsByOwner::<Test>::get(&to).unwrap().pledge, None, "the move clears it");
-	});
-}
-
-/// A safe transfer from the pledgee is a seize as well, and still owes the receiver check.
-#[test]
-fn safe_transfer_from_by_the_pledgee_is_a_seize() {
-	new_test_ext().execute_with(|| {
-		let world = PledgeWorld::new();
-		world.pledge_natively();
-		let (to_address, to) = purse(0xCC);
-
-		call_ok(
-			&world.pledgee,
-			world.target,
-			IScarcityCollection::safeTransferFrom_1Call {
-				from: world.holder_address,
-				to: to_address.0.into(),
-				tokenId: world.token,
-			}
-			.abi_encode(),
-		);
-
-		assert_eq!(NftsByOwner::<Test>::get(&to).unwrap().instance, world.instance);
 	});
 }
 

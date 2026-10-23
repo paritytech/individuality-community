@@ -30,8 +30,7 @@
 //!   allocates it.
 //!
 //! `transferFrom` and `safeTransferFrom` move a token on its holder's own authority, through
-//! `indiv-pallet-scarcity::do_transfer_by_holder`, or on a pledgee's, as described below. Short of
-//! a pledge, the caller must be the holder: the pallet has no
+//! `indiv-pallet-scarcity::do_transfer_by_holder`. The caller must be the holder: the pallet has no
 //! approval mechanism to resolve a spender against, so `approve` and `setApprovalForAll` revert
 //! and their getters answer with the empty values (zero address and `false`) that keep
 //! read-driven indexers working. Only an eth-derived purse can be an EVM caller at all, so this
@@ -67,10 +66,11 @@
 //! A holder can pledge a token to another account until a time it picks: natively and fee-less,
 //! or through `pledge` here, paid. Until then `locked()` answers true, the holder paths revert,
 //! and only the pledgee acts: `seize` moves the token to an empty key it names and `release`
-//! gives the pledge up. `transferFrom` and `safeTransferFrom` from the live pledgee are a seize,
-//! as ERC-721 lets an operator transfer while `getApproved` shows nothing. A pledge is still not
-//! an approval: the holder cannot revoke it and it binds the holder, so `getApproved` stays the
-//! zero address and `approve` keeps reverting, and `pledgeOf` is the read that reports it.
+//! gives the pledge up. The pledgee moves the token through `seize` alone: `transferFrom` and
+//! `safeTransferFrom` refuse it, as ERC-5192 requires of the EIP-721 transfer functions while
+//! `locked()` answers true. A pledge is not an approval: the holder cannot revoke it and it binds
+//! the holder, so `getApproved` stays the zero address and `approve` keeps reverting, and
+//! `pledgeOf` is the read that reports it.
 //! `pledge` emits `Locked`, and `seize` and `release` emit `Unlocked`. A native pledge emits no
 //! log, as a native transfer emits no `Transfer`, and an expiry emits nothing, so a consumer
 //! reads `locked()` or `pledgeOf()` rather than following the lock events.
@@ -265,6 +265,9 @@ pub const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UT
 pub const ERR_ZERO_PLEDGEE: &str = "pledgee is the zero address";
 /// Revert reason when the caller holds no pledge with effect on the token.
 pub const ERR_NOT_PLEDGEE: &str = "caller holds no pledge on this token";
+/// Revert reason when the pledgee moves a token through an ERC-721 transfer function.
+pub const ERR_PLEDGEE_TRANSFER: &str =
+	"caller holds the pledge on this token: a pledgee moves it through seize";
 /// Revert reason when the holder moves a token that carries a pledge with effect.
 pub const ERR_PLEDGED: &str =
 	"token is pledged: only the pledgee can move it until the pledge ends";

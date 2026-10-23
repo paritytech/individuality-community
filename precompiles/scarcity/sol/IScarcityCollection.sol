@@ -39,8 +39,8 @@ pragma solidity ^0.8.30;
 /// @custom:function pledge or the fee-less native call. Until then the holder cannot move or burn
 /// it, and only the pledgee can end the pledge: @custom:function seize moves the token to a key
 /// the pledgee names, and @custom:function release gives it up. The holder cannot revoke a pledge.
-/// A pledge is not an approval, so @custom:function getApproved does not report it; read it with
-/// @custom:function pledgeOf.
+/// A pledge is not an approval: @custom:function getApproved does not report it and the pledgee
+/// cannot call @custom:function transferFrom; read it with @custom:function pledgeOf.
 ///
 /// A contract that takes pledges must check each one before it counts it: that
 /// @custom:function pledgeOf names the contract, that `until` covers the whole flow including
@@ -159,11 +159,11 @@ interface IScarcityCollection {
     /// @custom:reverts "unknown token"
     function ownerOf(uint256 tokenId) external view returns (address owner);
 
-    /// @notice Move `tokenId` to the empty purse key `to` on the caller's holder or pledgee
-    /// authority, then require a code-carrying `to` to acknowledge the token.
-    /// @dev ERC-721 standard function. The caller must be the current holder, or the pledgee while
-    /// a pledge has effect, for whom the move is a @custom:function seize. The holder cannot move
-    /// a pledged token. `data` is forwarded
+    /// @notice Move `tokenId` to the empty purse key `to` on the caller's holder authority, then
+    /// require a code-carrying `to` to acknowledge the token.
+    /// @dev ERC-721 standard function. The caller must be the current holder, and a pledged token
+    /// does not move here: its pledgee uses @custom:function seize, as ERC-5192 requires of a
+    /// locked token. `data` is forwarded
     /// to the receiver callback, which this precompile cannot make yet, so a code-carrying `to`
     /// always reverts. The acknowledgement runs after the move and unwinds it on failure.
     /// @param from The current holder.
@@ -174,13 +174,13 @@ interface IScarcityCollection {
     /// @custom:reverts "unknown token"
     /// @custom:reverts "transfer from the wrong holder"
     /// @custom:reverts "caller does not hold this token: transfers on another holder's authority need approvals, which are not supported yet"
+    /// @custom:reverts "caller holds the pledge on this token: a pledgee moves it through seize"
+    /// @custom:reverts "token is pledged: only the pledgee can move it until the pledge ends"
     /// @custom:reverts "destination already holds this instance"
     /// @custom:reverts "destination purse already holds an instance"
     /// @custom:reverts "token is soulbound to its purse key"
-    /// @custom:reverts "token is pledged: only the pledgee can move it until the pledge ends"
     /// @custom:reverts "instance state nonce exhausted"
     /// @custom:reverts "safe transfer to a contract is not supported yet: the receiver callback is unavailable"
-    /// @custom:emits Unlocked
     /// @custom:emits Transfer
     function safeTransferFrom(address from, address to, uint256 tokenId, bytes calldata data) external;
 
@@ -193,21 +193,20 @@ interface IScarcityCollection {
     /// @custom:reverts "unknown token"
     /// @custom:reverts "transfer from the wrong holder"
     /// @custom:reverts "caller does not hold this token: transfers on another holder's authority need approvals, which are not supported yet"
+    /// @custom:reverts "caller holds the pledge on this token: a pledgee moves it through seize"
+    /// @custom:reverts "token is pledged: only the pledgee can move it until the pledge ends"
     /// @custom:reverts "destination already holds this instance"
     /// @custom:reverts "destination purse already holds an instance"
     /// @custom:reverts "token is soulbound to its purse key"
-    /// @custom:reverts "token is pledged: only the pledgee can move it until the pledge ends"
     /// @custom:reverts "instance state nonce exhausted"
     /// @custom:reverts "safe transfer to a contract is not supported yet: the receiver callback is unavailable"
-    /// @custom:emits Unlocked
     /// @custom:emits Transfer
     function safeTransferFrom(address from, address to, uint256 tokenId) external;
 
-    /// @notice Move `tokenId` to the empty purse key `to` on the caller's holder or pledgee
-    /// authority.
-    /// @dev ERC-721 standard function. The caller must be the current holder, or the pledgee while
-    /// a pledge has effect, for whom the move is a @custom:function seize. The holder cannot move
-    /// a pledged token. Unlike
+    /// @notice Move `tokenId` to the empty purse key `to` on the caller's holder authority.
+    /// @dev ERC-721 standard function. The caller must be the current holder, and a pledged token
+    /// does not move here: its pledgee uses @custom:function seize, as ERC-5192 requires of a
+    /// locked token. Unlike
     /// @custom:function safeTransferFrom, a code-carrying `to` is accepted without an
     /// acknowledgement.
     /// @param from The current holder.
@@ -217,12 +216,12 @@ interface IScarcityCollection {
     /// @custom:reverts "unknown token"
     /// @custom:reverts "transfer from the wrong holder"
     /// @custom:reverts "caller does not hold this token: transfers on another holder's authority need approvals, which are not supported yet"
+    /// @custom:reverts "caller holds the pledge on this token: a pledgee moves it through seize"
+    /// @custom:reverts "token is pledged: only the pledgee can move it until the pledge ends"
     /// @custom:reverts "destination already holds this instance"
     /// @custom:reverts "destination purse already holds an instance"
     /// @custom:reverts "token is soulbound to its purse key"
-    /// @custom:reverts "token is pledged: only the pledgee can move it until the pledge ends"
     /// @custom:reverts "instance state nonce exhausted"
-    /// @custom:emits Unlocked
     /// @custom:emits Transfer
     function transferFrom(address from, address to, uint256 tokenId) external;
 
@@ -241,8 +240,8 @@ interface IScarcityCollection {
     function setApprovalForAll(address operator, bool approved) external;
 
     /// @notice Always returns the zero address, because @custom:function approve always reverts.
-    /// @dev ERC-721 standard function. A pledgee is not reported: `approve(address(0), tokenId)`
-    /// cannot clear a pledge, so reporting one here would mislead. See @custom:function pledgeOf.
+    /// @dev ERC-721 standard function. A pledgee is not reported: a pledge is not an approval and
+    /// does not let the pledgee call @custom:function transferFrom. See @custom:function pledgeOf.
     /// @param tokenId The instance to query.
     /// @return operator Always the zero address.
     /// @custom:reverts "unknown token"
@@ -360,7 +359,8 @@ interface IScarcityCollection {
     /// @notice Move `tokenId` from its holder to the empty purse key `to`, as its pledgee.
     /// @dev This precompile's own function, not part of any ERC standard. The caller must hold a
     /// pledge on the token with effect now. The move ends the pledge and is paid, so it refills the
-    /// token's feeless move budget. @custom:function transferFrom by the pledgee does the same.
+    /// token's feeless move budget. This is the pledgee's only way to move the token:
+    /// @custom:function transferFrom refuses it.
     /// @param tokenId The pledged instance.
     /// @param to The empty purse key to move the instance to.
     /// @custom:reverts "destination is the zero address"

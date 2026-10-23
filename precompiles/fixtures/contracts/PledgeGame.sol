@@ -91,7 +91,7 @@ contract PledgeGame {
     }
 
     /// @notice Release the winner's stake and move every other stake to the winner's prize keys.
-    /// @dev Each loser's stake moves through `transferFrom`, which a pledgee may call as a seize.
+    /// @dev Each loser's stake moves through `seize`, the pledgee's move.
     /// @param winningToken The stake whose holder wins.
     /// @param prizeKeys Empty keys of the winner, one per other stake, in join order.
     function settle(uint256 winningToken, address[] calldata prizeKeys) external {
@@ -106,7 +106,7 @@ contract PledgeGame {
             if (token == winningToken) {
                 collection.release(token);
             } else {
-                collection.transferFrom(collection.ownerOf(token), prizeKeys[next], token);
+                collection.seize(token, prizeKeys[next]);
                 ++next;
             }
         }

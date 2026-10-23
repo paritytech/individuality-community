@@ -576,11 +576,13 @@ where
 		Ok(IScarcityCollection::mintCall::abi_encode_returns(&token))
 	}
 
-	/// Move a token on its holder's own authority, or on its pledgee's.
+	/// Move a token on its holder's own authority.
 	///
-	/// The caller must be the holder, or the pledgee while the pledge has effect, for whom the
-	/// move is a seize. Without an approval mechanism there is no other third party to resolve.
-	/// The holder of a pledged token is refused ahead of the move's charges.
+	/// The caller must be the holder. Without an approval mechanism there is no third party to
+	/// resolve, so the ERC-721 spender cases all collapse to this one. A pledgee moves a pledged
+	/// token through `seize` only: ERC-5192 requires the EIP-721 transfer functions to throw
+	/// while `locked()` answers true. The holder of a pledged token is refused ahead of the move's
+	/// charges.
 	fn transfer_from(
 		collection: CollectionId,
 		transfer: Transfer<'_>,
@@ -599,25 +601,18 @@ where
 		}
 		let caller = caller_account::<T>(env)?;
 		let pledge = Scarcity::<T>::live_pledge(&nft, now::<T>());
-		if caller == holder {
-			if pledge.is_some() {
-				return Err(revert(ERR_PLEDGED));
-			}
-			Self::move_by_holder(&holder, nft.instance, &transfer, env)?;
-		} else if pledge.is_some_and(|pledge| pledge.pledgee == caller) {
-			// `from` resolves to the holder, so a `to` equal to it resolves to the holder too and
-			// the pallet refuses the self-transfer.
-			Self::seize_into(
-				&caller,
-				nft.instance,
-				*transfer.from,
-				*transfer.to,
-				*transfer.token,
-				env,
-			)?;
-		} else {
-			return Err(revert(ERR_NOT_HOLDER));
+		if caller != holder {
+			let reason = if pledge.is_some_and(|pledge| pledge.pledgee == caller) {
+				ERR_PLEDGEE_TRANSFER
+			} else {
+				ERR_NOT_HOLDER
+			};
+			return Err(revert(reason));
 		}
+		if pledge.is_some() {
+			return Err(revert(ERR_PLEDGED));
+		}
+		Self::move_by_holder(&holder, nft.instance, &transfer, env)?;
 		if let Safety::Checked { data } = safety {
 			// A revert here unwinds the move above with the rest of the frame.
 			if let Acknowledgement::Unavailable = Self::acknowledge_receipt(&transfer, data, env)? {
@@ -650,28 +645,6 @@ where
 				tokenId: *transfer.token,
 			},
 		)
-	}
-
-	/// Move a pledged token to `to` on the pledgee's authority and log the end of the pledge and
-	/// the move.
-	///
-	/// Charges the pallet entry and the registration of the destination, which
-	/// `WeightInfo::seize` does not cover. The caller makes its refusals first, so a refused call
-	/// pays for neither.
-	fn seize_into(
-		pledgee: &T::AccountId,
-		instance: InstanceId,
-		from: Address,
-		to: Address,
-		token: U256,
-		env: &mut impl Ext<T = T>,
-	) -> Result<(), Error> {
-		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::seize())?;
-		env.charge(Self::registration_weight())?;
-		Scarcity::<T>::do_seize(pledgee, instance, account_of::<T>(&to))
-			.map_err(revert_scarcity::<T>)?;
-		deposit_event(env, IScarcityCollection::Unlocked { tokenId: token })?;
-		deposit_event(env, IScarcityCollection::Transfer { from, to, tokenId: token })
 	}
 
 	/// What registering a move's destination costs.
@@ -740,7 +713,22 @@ where
 		if call.to == holder_address && account_of::<T>(&call.to) != holder {
 			return Err(revert(ERR_SELF_TRANSFER));
 		}
-		Self::seize_into(&caller, nft.instance, holder_address, call.to, call.tokenId, env)?;
+		// The pallet entry and the registration of the destination, which `WeightInfo::seize`
+		// does not cover. Charged past the refusals above; a refusal the pallet makes, such as an
+		// occupied destination, is charged in full.
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::seize())?;
+		env.charge(Self::registration_weight())?;
+		Scarcity::<T>::do_seize(&caller, nft.instance, account_of::<T>(&call.to))
+			.map_err(revert_scarcity::<T>)?;
+		deposit_event(env, IScarcityCollection::Unlocked { tokenId: call.tokenId })?;
+		deposit_event(
+			env,
+			IScarcityCollection::Transfer {
+				from: holder_address,
+				to: call.to,
+				tokenId: call.tokenId,
+			},
+		)?;
 		Ok(Vec::new())
 	}
 
