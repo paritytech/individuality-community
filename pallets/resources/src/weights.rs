@@ -77,6 +77,7 @@ pub trait WeightInfo {
 	fn claim_long_term_storage_tx_ext() -> Weight;
 	fn clear_expired_long_term_storage_aliases(n: u32, ) -> Weight;
 	fn authorize_clear_expired_long_term_storage_aliases() -> Weight;
+	fn migrate_consumer_allowances_step() -> Weight;
 }
 
 /// Weights for `indiv_pallet_resources` using the Substrate node and recommended hardware.
@@ -553,6 +554,11 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(8_507_000, 3517)
 			.saturating_add(T::DbWeight::get().reads(2_u64))
 	}
+	fn migrate_consumer_allowances_step() -> Weight {
+		Weight::from_parts(20_000_000, 6384)
+			.saturating_add(T::DbWeight::get().reads(3_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -1027,5 +1033,10 @@ impl WeightInfo for () {
 		// Minimum execution time: 8_197_000 picoseconds.
 		Weight::from_parts(8_507_000, 3517)
 			.saturating_add(RocksDbWeight::get().reads(2_u64))
+	}
+	fn migrate_consumer_allowances_step() -> Weight {
+		Weight::from_parts(20_000_000, 6384)
+			.saturating_add(RocksDbWeight::get().reads(3_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 }

@@ -459,11 +459,11 @@ parameter_types! {
 	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
 	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
 		b"paseo".to_vec().try_into().expect("network suffix fits");
-	pub LitePersonStatementLimit: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
+	pub storage LitePersonStatementLimit: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
 		max_size: 4 * 1024, // 4 KiB
 		max_count: 10,
 	};
-	pub PersonStatementLimit: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
+	pub storage PersonStatementLimit: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
 		max_size: 16 * 1024, // 16 KiB
 		max_count: 50,
 	};

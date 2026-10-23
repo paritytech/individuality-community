@@ -18,6 +18,7 @@
 
 use super::{pallet::*, *};
 use crate::{
+	migration::v1::MigrateConsumerAllowances,
 	mock::*,
 	types::{Credibility, NotificationReference, PersonalUsernameChoice},
 	Error,
@@ -26,7 +27,9 @@ use codec::Encode;
 use frame_support::{
 	assert_noop, assert_ok,
 	dispatch::GetDispatchInfo,
+	migrations::{SteppedMigration, SteppedMigrationError},
 	traits::{Authorize, Hooks},
+	weights::{Weight, WeightMeter},
 };
 use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::{
@@ -39,7 +42,7 @@ use sp_runtime::{
 	transaction_validity::{InvalidTransaction, TransactionSource},
 	AccountId32,
 };
-use sp_statement_store::{get_allowance, StatementAllowance};
+use sp_statement_store::{get_allowance, increase_allowance_by, StatementAllowance};
 
 // --- Test Helpers ---
 
@@ -1322,6 +1325,181 @@ fn queue_full_error() {
 			Error::<Test>::QueueFull
 		);
 	})
+}
+
+/// Registers account 1 as a lite person holding `other` from another grant.
+fn register_lite_person_with_other_grant(other: &StatementAllowance) -> AccountId32 {
+	let lite_account = id_to_account(1);
+	increase_allowance_by(&lite_account, other.clone());
+	set_time_sec(100);
+	assert_ok!(Resources::register_lite_person(
+		lite_person_origin(1),
+		comm_id(b"key1"),
+		username::<Test>(b"liteuser.12"),
+		None
+	));
+	lite_account
+}
+
+/// Promotes the lite person `account` to a person with id 10.
+fn promote_to_person(account: &AccountId32) {
+	let proof = mock_lite_proof(account.clone());
+	assert_ok!(Resources::register_person(
+		person_origin_for(10, 0, 0),
+		account.clone(),
+		proof,
+		PersonalUsernameChoice::Standalone(username::<Test>(b"personuser"))
+	));
+}
+
+/// Lets the person authorisation of `account` expire and demotes it.
+fn demote_expired_person(account: &AccountId32) {
+	let auth_duration: u32 = <Test as Config>::PersonAuthDuration::get();
+	advance_time_sec(auth_duration as u64 + 1);
+	assert_ok!(Resources::demote_auth_expired(SystemOrigin::Authorized.into(), account.clone()));
+}
+
+/// Touches the person authorisation of the person with id 10.
+fn touch_person() {
+	let min_interval: u32 = <Test as Config>::MinPersonAuthUpdateInterval::get();
+	advance_time_sec(min_interval as u64 + 1);
+	assert_ok!(Resources::touch_person_authorization(person_origin_for(10, 0, 0)));
+}
+
+const OTHER_GRANT: StatementAllowance = StatementAllowance { max_count: 7, max_size: 70 };
+
+#[test]
+fn credibility_changes_replace_the_granted_allowance_after_limit_changes() {
+	new_test_ext().execute_with(|| {
+		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
+		promote_to_person(&account);
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT.saturating_add(PersonStatementLimit::get())
+		);
+
+		// Demotion revokes the granted person allowance, not the raised limit.
+		let raised_person = StatementAllowance { max_count: 500, max_size: 160 * 1024 };
+		PersonStatementLimit::set(&raised_person);
+		demote_expired_person(&account);
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT.saturating_add(LitePersonStatementLimit::get())
+		);
+
+		// Touch revokes the granted lite allowance, not the lowered limit.
+		LitePersonStatementLimit::set(&StatementAllowance { max_count: 1, max_size: 1 });
+		touch_person();
+		assert_eq!(get_allowance(&account), OTHER_GRANT.saturating_add(raised_person.clone()));
+		assert_eq!(ConsumerAllowances::<Test>::get(&account), Some(raised_person.into()));
+	});
+}
+
+/// Run [`MigrateConsumerAllowances`] to completion, one consumer per step, and return the
+/// number of steps.
+fn run_consumer_allowances_migration() -> u32 {
+	let required = <Test as Config>::WeightInfo::migrate_consumer_allowances_step();
+	let mut cursor = None;
+	let mut steps = 0;
+	loop {
+		let mut meter = WeightMeter::with_limit(required);
+		cursor = MigrateConsumerAllowances::<Test>::step(cursor, &mut meter).unwrap();
+		steps += 1;
+		if cursor.is_none() {
+			return steps;
+		}
+	}
+}
+
+#[test]
+fn migration_records_the_allowance_of_each_credibility() {
+	new_test_ext().execute_with(|| {
+		let lite = register_lite_person_with_other_grant(&OTHER_GRANT);
+		promote_to_person(&lite);
+		demote_expired_person(&lite);
+		let person = id_to_account(2);
+		assert_ok!(Resources::register_lite_person(
+			lite_person_origin(2),
+			comm_id(b"key2"),
+			username::<Test>(b"liteuser.22"),
+			None
+		));
+		let person_proof = mock_lite_proof(person.clone());
+		assert_ok!(Resources::register_person(
+			person_origin_for(20, 0, 0),
+			person.clone(),
+			person_proof,
+			PersonalUsernameChoice::Standalone(username::<Test>(b"seconduser"))
+		));
+		let still_lite = id_to_account(3);
+		assert_ok!(Resources::register_lite_person(
+			lite_person_origin(3),
+			comm_id(b"key3"),
+			username::<Test>(b"liteuser.33"),
+			None
+		));
+		let _ = ConsumerAllowances::<Test>::clear(u32::MAX, None);
+
+		// One step per consumer and a final step that finds no more consumers.
+		assert_eq!(run_consumer_allowances_migration(), 4);
+
+		let lite_limit = Some(LitePersonStatementLimit::get().into());
+		assert_eq!(ConsumerAllowances::<Test>::get(&lite), lite_limit);
+		assert_eq!(ConsumerAllowances::<Test>::get(&still_lite), lite_limit);
+		assert_eq!(
+			ConsumerAllowances::<Test>::get(&person),
+			Some(PersonStatementLimit::get().into())
+		);
+	});
+}
+
+#[test]
+fn migration_step_fails_without_weight_for_one_consumer() {
+	new_test_ext().execute_with(|| {
+		register_lite_person_with_other_grant(&OTHER_GRANT);
+		let required = <Test as Config>::WeightInfo::migrate_consumer_allowances_step();
+		let mut meter = WeightMeter::with_limit(required.saturating_sub(Weight::from_parts(1, 0)));
+
+		assert_eq!(
+			MigrateConsumerAllowances::<Test>::step(None, &mut meter),
+			Err(SteppedMigrationError::InsufficientWeight { required })
+		);
+	});
+}
+
+#[test]
+fn promotion_after_a_limit_change_revokes_the_migrated_allowance() {
+	new_test_ext().execute_with(|| {
+		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
+		ConsumerAllowances::<Test>::remove(&account);
+		run_consumer_allowances_migration();
+		LitePersonStatementLimit::set(&StatementAllowance { max_count: 5, max_size: 2 * 1024 });
+
+		promote_to_person(&account);
+
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT.saturating_add(PersonStatementLimit::get())
+		);
+	});
+}
+
+#[test]
+fn demotion_after_a_limit_change_revokes_the_migrated_allowance() {
+	new_test_ext().execute_with(|| {
+		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
+		promote_to_person(&account);
+		ConsumerAllowances::<Test>::remove(&account);
+		run_consumer_allowances_migration();
+		PersonStatementLimit::set(&StatementAllowance { max_count: 40, max_size: 8 * 1024 });
+
+		demote_expired_person(&account);
+
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT.saturating_add(LitePersonStatementLimit::get())
+		);
+	});
 }
 
 #[test]
