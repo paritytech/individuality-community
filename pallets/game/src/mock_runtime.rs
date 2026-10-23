@@ -590,6 +590,7 @@ impl WeightInfo for MockWeightInfo {
 parameter_types! {
 	pub storage PeopleVoteWeight: u8 = 1;
 	pub storage CandidateVoteWeight: u8 = 1;
+	pub storage MinGroupSize: u32 = 1;
 	pub const PlayDepositDefault: u64 = 2;
 }
 
@@ -1593,7 +1594,7 @@ impl indiv_pallet_game::Config for Test {
 	type UnixTime = Test;
 	type MaxRounds = ConstUint<10>;
 	type MaxGroupSize = ConstUint<10>;
-	type MinGroupSize = ConstUint<0>;
+	type MinGroupSize = MinGroupSize;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type InviteIssuer = EnsureRoot<Self::AccountId>;
 	type EnsureLiteAlias = indiv_pallet_people_lite::EnsureLiteAliasInContext<Test>;

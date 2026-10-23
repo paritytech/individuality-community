@@ -414,44 +414,41 @@ pub enum ShuffleRetrievePhase {
 
 /// A setting for a distribution of players in groups.
 pub struct GroupsSetting {
-	/// The maximum number of players in a group.
-	pub max_per_group: u32,
+	/// The number of players in a full group, which is the game's `max_group_size`.
+	///
+	/// Every group holds this many players or one fewer, see [`Self::acceptable_player_count`].
+	pub full_group_size: u32,
 	/// The total number of players.
 	pub player_count: u32,
 }
 
 impl GroupsSetting {
-	/// Calculate if the number of players is acceptable to make groups where
-	/// all groups are at least `max_per_group - 1` players.
+	/// Whether there is at least one player and every group holds at least `full_group_size - 1`
+	/// players.
+	///
+	/// Players are dealt round-robin, so the smallest group holds `player_count / number_of_group`
+	/// players, rounded down. On a testnet any non-zero player count is acceptable.
 	pub fn acceptable_player_count<T: Config>(&self) -> bool {
-		match self.max_per_group {
-			0 => true,
-			1 => true,
-			2 => self.player_count >= 1,
-			_ => {
-				#[cfg(feature = "testnet")]
-				if T::TESTNET {
-					return self.player_count >= 1;
-				}
-
-				// Special condition for one group.
-				if self.player_count == self.max_per_group ||
-					self.player_count + 1 == self.max_per_group
-				{
-					return true;
-				}
-
-				let threshold = (self.max_per_group - 1).saturating_mul(self.max_per_group - 2);
-				self.player_count >= threshold
-			},
+		if self.player_count == 0 {
+			return false;
 		}
+
+		// A testnet game often has few players. This lets it start with a realistic
+		// `max_group_size`, which would otherwise require at least `max_group_size - 1` players.
+		#[cfg(feature = "testnet")]
+		if T::TESTNET {
+			return true;
+		}
+
+		let min_group_size = self.full_group_size.saturating_sub(1);
+		self.player_count >= min_group_size.saturating_mul(self.number_of_group())
 	}
 
 	/// Calculate the number of groups, it is the minimum number of groups that can contain all the
 	/// players.
 	pub fn number_of_group(&self) -> u32 {
-		let div = self.player_count.checked_div(self.max_per_group).unwrap_or(self.player_count);
-		let remainder = self.player_count.checked_rem(self.max_per_group).unwrap_or(0);
+		let div = self.player_count.checked_div(self.full_group_size).unwrap_or(self.player_count);
+		let remainder = self.player_count.checked_rem(self.full_group_size).unwrap_or(0);
 		if remainder > 0 {
 			div.saturating_add(1)
 		} else {
@@ -467,9 +464,9 @@ impl GroupsSetting {
 	/// Calculate the members of a group, given its index.
 	pub fn group_members(&self, group_index: GroupIndex) -> impl Iterator<Item = PlayerIndex> {
 		let number_of_group = self.number_of_group();
-		let max_per_group = self.max_per_group;
+		let full_group_size = self.full_group_size;
 		let number_of_player = self.player_count;
-		(0..max_per_group)
+		(0..full_group_size)
 			.map(move |i| group_index.saturating_add(i.saturating_mul(number_of_group)))
 			.filter(move |&x| x < number_of_player)
 	}
@@ -506,10 +503,9 @@ pub struct GameSchedule<AssetId, Balance> {
 	pub game_play_time: u32,
 	/// The number of rounds in the scheduled game.
 	pub rounds: u8,
-	/// The maximum number of players in one group.
+	/// The maximum number of players in one group. Must be greater than `MinGroupSize`.
 	///
-	/// Groups are ensured to be at least `max_group_size - 1` players, so this value must be at
-	/// least 3 in order to ensure that groups contains at least 2 players.
+	/// A game is cancelled if a group would hold fewer than `max_group_size - 1` players.
 	pub max_group_size: u32,
 	/// The airdrop events to schedule for this game, each drawn at its own offset relative to
 	/// the game play time. Empty skips airdrop scheduling for this game.

@@ -476,7 +476,7 @@ mod benches {
 		let schedule = crate::types::GameScheduleOf::<T> {
 			game_play_time: 1000,
 			rounds,
-			max_group_size: 2,
+			max_group_size: T::MinGroupSize::get() + 1,
 			airdrops: bench_airdrops::<T>(1),
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
@@ -555,7 +555,7 @@ mod benches {
 		let schedule = crate::types::GameScheduleOf::<T> {
 			game_play_time: 1000,
 			rounds,
-			max_group_size: 2,
+			max_group_size: T::MinGroupSize::get() + 1,
 			airdrops: bench_airdrops::<T>(1),
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
@@ -658,7 +658,7 @@ mod benches {
 		// `f(group_size, rounds)` weight cannot model, so we sweep a single component over the
 		// whole product range and derive the two dimensions from it below. (The benchmark macro
 		// requires single-letter parameter names, hence `p` rather than a spelled-out name.)
-		p: Linear<2, { T::MaxRounds::get() * T::MaxGroupSize::get() }>,
+		p: Linear<{ T::MinGroupSize::get() + 1 }, { T::MaxRounds::get() * T::MaxGroupSize::get() }>,
 	) -> Result<(), BenchmarkError> {
 		<T as Config>::BenchmarkHelper::set_valid_time();
 		bench_setup_airdrop_funds::<T>();
@@ -667,8 +667,8 @@ mod benches {
 		// first, up to `max_group_size`, then rounds take over for the rest of the range. This way
 		// small games (a low product) are measured too, instead of only sweeping rounds at the
 		// maximum group size. The runtime charges the worst case, `rounds * max_group_size`.
-		let group_size = p.clamp(2, T::MaxGroupSize::get());
-		let rounds = (p / group_size).max(1) as u8;
+		let group_size = p.min(T::MaxGroupSize::get());
+		let rounds = (p / group_size) as u8;
 		let player_count = 2u32 * group_size;
 
 		// One game exists with `max_group_size = group_size`.
@@ -1589,7 +1589,7 @@ mod benches {
 		// `rounds * (MaxGroupSize - 1)` unique players. Rewrite the caller's indices
 		// and the other slots of the caller's group so each round exposes a disjoint
 		// set of co-players, pushing `reported_players.len()` to the max.
-		let num_groups = max_group_size; // player_count / max_per_group == MaxGroupSize
+		let num_groups = max_group_size; // player_count / full_group_size == MaxGroupSize
 
 		let caller_aop = AccountOrPerson::Account(caller.clone());
 		let caller_indices: BoundedVec<PlayerIndex, T::MaxRounds> =
