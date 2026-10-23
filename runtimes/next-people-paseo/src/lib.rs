@@ -85,8 +85,6 @@ use sp_runtime::{
 	ApplyExtrinsicResult, MultiSignature, MultiSigner,
 };
 pub use sp_runtime::{MultiAddress, Perbill, Permill};
-#[cfg(feature = "std")]
-use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 /// Paseo network constants - defined locally to avoid version conflicts
 pub mod paseo_constants {
@@ -315,12 +313,6 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	transaction_version: 6,
 	system_version: 1,
 };
-
-/// The version information used to identify this runtime when compiled natively.
-#[cfg(feature = "std")]
-pub fn native_version() -> NativeVersion {
-	NativeVersion { runtime_version: VERSION, can_author_with: Default::default() }
-}
 
 parameter_types! {
 	pub const Version: RuntimeVersion = VERSION;
