@@ -3637,14 +3637,6 @@ fn royalty_basis_points_reject_a_value_that_is_not_exactly_u128() {
 	});
 }
 
-/// Frame-flag guards, driven through `pallet_revive::precompiles::run`, which executes a
-/// precompile inside a frame with controlled read-only and delegate-call flags.
-///
-/// `pallet-revive` exports that harness only under `runtime-benchmarks`, and enabling the
-/// feature unconditionally would grow the benchmark-only methods of the FRAME traits without
-/// enabling the feature on the pallets that implement them, breaking any workspace-wide
-/// build. The gate keeps it to feature-enabled runs, which is where CI exercises it.
-#[cfg(feature = "runtime-benchmarks")]
 /// One collection whose instance sits at a funded eth-derived purse, with a funded pledgee.
 struct PledgeWorld {
 	alice: AccountId32,
@@ -4090,6 +4082,14 @@ fn seize_charges_the_move_only_past_its_refusals() {
 	});
 }
 
+/// Frame-flag guards, driven through `pallet_revive::precompiles::run`, which executes a
+/// precompile inside a frame with controlled read-only and delegate-call flags.
+///
+/// `pallet-revive` exports that harness only under `runtime-benchmarks`, and enabling the
+/// feature unconditionally would grow the benchmark-only methods of the FRAME traits without
+/// enabling the feature on the pallets that implement them, breaking any workspace-wide
+/// build. The gate keeps it to feature-enabled runs, which is where CI exercises it.
+#[cfg(feature = "runtime-benchmarks")]
 mod guards {
 	use super::*;
 	use pallet_revive::precompiles::run::{
