@@ -1079,6 +1079,8 @@ parameter_types! {
 	pub StakingPotAccount: AccountId =
 		<pallet_collator_selection::StakingPotAccountId<Runtime> as frame_support::traits::TypedGet>::get();
 	pub LpFee: Permill = Permill::from_rational(3u32, 1_000u32); // 0.3%
+	/// The highest swap fee `AdminOrigin` can set on a single pool.
+	pub MaxSwapFee: Permill = Permill::from_percent(2);
 	/// Storage deposit for the pool entry and for its liquidity token, plus the deposit an asset
 	/// costs to register, so that creating a pool is no cheaper than creating the asset it pairs.
 	pub const PoolSetupFee: Balance = deposit(1, 4) + AssetDeposit::get();
@@ -1124,6 +1126,8 @@ impl pallet_asset_conversion::Config for Runtime {
 	type PoolSetupFeeTarget = ResolveAssetTo<StakingPotAccount, Self::Assets>;
 	type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
 	type LPFee = LpFee;
+	type AdminOrigin = EnsureRoot<AccountId>;
+	type MaxSwapFee = MaxSwapFee;
 	type PalletId = AssetConversionPalletId;
 	// Every pool holds the native asset on one side (see `PoolLocator`), so swapping one asset for
 	// another takes two hops through native. Coinage itself only ever swaps an asset for native,
