@@ -3497,6 +3497,39 @@ mod benches {
 				Location::new(0, [PalletInstance(50), GeneralIndex(asset_id.into())]);
 			Asset { id: AssetId(asset_location), fun: Fungible(amount) }
 		}
+
+		fn get_assets(n: u32) -> XcmAssets {
+			use frame_support::traits::tokens::fungible;
+			let account: AccountId = frame_benchmarking::whitelisted_caller();
+			assert_ok!(<Balances as fungible::Mutate<_>>::mint_into(
+				&account,
+				<Balances as fungible::Inspect<_>>::minimum_balance(),
+			));
+			let amount = 1_000_000u128;
+			// Worst case: `n` distinct `ForeignAssets`. A full `Location` key books more proof
+			// than a trust-backed asset id, and `AssetTransactors` matches them last.
+			let assets = (0..n)
+				.map(|i| {
+					let asset_location = Location::new(
+						1,
+						[Parachain(3000), PalletInstance(53), GeneralIndex((1984 + i).into())],
+					);
+					assert_ok!(ForeignAssets::force_create(
+						RuntimeOrigin::root(),
+						asset_location.clone(),
+						account.clone().into(),
+						true,
+						1u128,
+					));
+					Asset { id: AssetId(asset_location), fun: Fungible(amount) }
+				})
+				.collect::<Vec<_>>();
+			assets.into()
+		}
+
+		fn batch_call(calls: Vec<RuntimeCall>) -> Option<RuntimeCall> {
+			Some(RuntimeCall::Utility(pallet_utility::Call::batch { calls }))
+		}
 	}
 
 	impl pallet_xcm_benchmarks::Config for Runtime {
