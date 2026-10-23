@@ -112,11 +112,6 @@ pub fn id_to_alias(id: u64) -> Alias {
 	bytes
 }
 
-/// Helper function to create a bounded vec username
-pub fn username<T: Config>(s: &[u8]) -> Username {
-	s.to_vec().try_into().unwrap()
-}
-
 /// Helper to create a communication identifier
 pub fn comm_id(s: &[u8]) -> CommunicationIdentifier {
 	let mut buf = Vec::new();
@@ -517,10 +512,8 @@ impl Config for Test {
 	type WeightInfo = ();
 	type Suffix = NetworkSuffix;
 	type MemberService = Members;
-	type MinUsernameLength = ConstU32<7>;
 	type PersonAuthDuration = ConstU32<20>;
 	type MinPersonAuthUpdateInterval = ConstU32<10>;
-	type MaxReservationQueueLength = ConstU32<10>;
 	type AccountsApiAllowance = AccountsApiAllowance;
 	type StmtStoreSlotsPerPeriod = StmtStoreSlotsPerPeriod;
 	type LiteStmtStoreSlotsPerPeriod = LiteStmtStoreSlotsPerPeriod;
