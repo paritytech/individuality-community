@@ -3678,15 +3678,15 @@ impl PledgeWorld {
 		}
 	}
 
-	/// Pledge the instance to the pledgee as the native path would, without an EVM log.
+	/// Pledge the instance to the pledgee natively, as `AsScarcity` dispatches it: the record
+	/// leaves the purse before the call and the call writes it back with one more move spent.
 	fn pledge_natively(&self) {
-		indiv_pallet_scarcity::Pallet::<Test>::do_pledge_by_holder(
-			&self.holder,
-			self.instance,
-			self.pledgee.clone(),
-			PLEDGE_UNTIL,
-		)
-		.unwrap();
+		let nft = NftsByOwner::<Test>::take(&self.holder).unwrap();
+		let origin = RuntimeOrigin::from(indiv_pallet_scarcity::Origin::<Test>::Nft {
+			owner: self.holder.clone(),
+			nft,
+		});
+		assert_ok!(Scarcity::pledge(origin, self.pledgee.clone(), PLEDGE_UNTIL));
 	}
 
 	fn pledge_of(&self) -> (Address, u64) {
@@ -3865,6 +3865,7 @@ fn the_pledgee_seizes_into_an_empty_key() {
 		let (to_address, to) = purse(0xCC);
 		let to_address: Address = to_address.0.into();
 		let before = NftsByOwner::<Test>::get(&world.holder).unwrap();
+		assert_eq!(before.moves, 1, "the native pledge spent a feeless move");
 
 		call_ok(&world.pledgee, world.target, world.seize(to_address));
 
