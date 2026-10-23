@@ -24,9 +24,11 @@ use crate::{NftClaimCreditAward, NftClaimCreditProof, NftClaimCreditProofError};
 use alloc::vec::Vec;
 use codec::Codec;
 use indiv_support::{credit_trees::NftClaimCreditTree, identity::AccountOrPerson};
+use sp_runtime::DispatchError;
 
 sp_api::decl_runtime_apis! {
 	/// The API a wallet mints an NFT claim credit through.
+	#[api_version(2)]
 	pub trait NftCreditsApi<AccountId, BlockNumber>
 	where
 		AccountId: Codec,
@@ -77,5 +79,13 @@ sp_api::decl_runtime_apis! {
 			awards: Vec<NftClaimCreditAward<AccountId>>,
 			leaf_index: u32,
 		) -> Result<NftClaimCreditProof, NftClaimCreditProofError>;
+
+		/// Returns the number of credits a `check_in` by `player` adds now to their earlier
+		/// check-in for the current game, or the error that call fails with.
+		///
+		/// A refused check-in pays a fee, so a wallet checks this before it submits one. A
+		/// check-in included later can still fail, because the state can change in between.
+		#[api_version(2)]
+		fn check_in_credits(player: AccountOrPerson<AccountId>) -> Result<u32, DispatchError>;
 	}
 }

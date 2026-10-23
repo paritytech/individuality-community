@@ -320,10 +320,20 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 	pub trees: BoundedVec<CreditTreeDelivery, MaxTrees>,
 }
 
+/// Whether a player attended a game, as the game decides it once their attendance is final.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Attendance {
+	/// The player attended.
+	Attended,
+	/// The player did not attend, or did not sign up.
+	Absent,
+}
+
 /// What the game needs from the pallet that owns the NFT claim credits.
 ///
 /// The credits are bookkeeping the game triggers but does not own: a `Person` vote earns one, the
-/// attendance backfill completes the set, and a game that ends or is cancelled gives up its slots.
+/// attendance backfill completes the set and pays out the pre-game check-ins, and a game that ends
+/// or is cancelled gives up its slots.
 /// The pallet holding them reads the game's own state, so the dependency runs that way and the
 /// game reaches it through this trait.
 ///
@@ -342,16 +352,24 @@ pub trait AwardCredits<AccountId> {
 		award_time: u32,
 	) -> u32;
 
-	/// Award every credit a freshly attended `attendee` is owed for `game_index`, one per other
-	/// member of their group in each round they played, skipping the ones already awarded.
-	fn award_attendance_credits(
+	/// Award every credit `player` is owed for `game_index` once their `attendance` is final, and
+	/// forget their check-in. Called once for every player, attendee or not.
+	///
+	/// An attendee earns one credit per other member of their group in each round they played.
+	/// Any player can be owed the credits of their check-in. Credits already awarded are skipped.
+	fn settle_attendance_credits(
 		game_index: u32,
 		rounds: u8,
 		max_group_size: u32,
 		player_count: u32,
-		attendee: &AccountOrPerson<AccountId>,
+		player: &AccountOrPerson<AccountId>,
+		attendance: Attendance,
 		award_time: u32,
 	) -> u32;
+
+	/// The most credits and the worst-case weight that a check-in adds to one
+	/// [`AwardCredits::settle_attendance_credits`].
+	fn check_in_worst_case() -> (u32, Weight);
 
 	/// How many further credits of `game_index` can be recorded right now.
 	///
@@ -367,7 +385,7 @@ pub trait AwardCredits<AccountId> {
 	/// Returns where to resume, or `None` once the game has none left.
 	fn clear_game_credits(game_index: u32, limit: u32, cursor: Option<&[u8]>) -> Option<Vec<u8>>;
 
-	/// Give up the awarded-credit slots `player` holds in `game_index`.
+	/// Give up the awarded-credit slots and the check-in `player` holds in `game_index`.
 	fn forget_player_credits(game_index: u32, player: &AccountOrPerson<AccountId>);
 
 	/// Mark every credit slot of `player` in `game_index` as awarded.
@@ -391,15 +409,20 @@ impl<AccountId> AwardCredits<AccountId> for () {
 		0
 	}
 
-	fn award_attendance_credits(
+	fn settle_attendance_credits(
 		_: u32,
 		_: u8,
 		_: u32,
 		_: u32,
 		_: &AccountOrPerson<AccountId>,
+		_: Attendance,
 		_: u32,
 	) -> u32 {
 		0
+	}
+
+	fn check_in_worst_case() -> (u32, Weight) {
+		(0, Weight::zero())
 	}
 
 	fn remaining_capacity(_: u32) -> u32 {

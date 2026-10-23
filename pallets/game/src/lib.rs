@@ -232,6 +232,7 @@ extern crate self as indiv_pallet_game;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 mod extension;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
@@ -267,7 +268,7 @@ use indiv_pallet_airdrop::types::{
 };
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
-	credit_trees::AwardCredits,
+	credit_trees::{Attendance, AwardCredits},
 	traits::{Alias, CommunicationIdentifier, Context},
 	weight_budget::OcwWeightBudget,
 };
@@ -322,7 +323,11 @@ pub mod pallet {
 	/// RFC-0022](https://github.com/paritytech/trinity-user-agents/blob/63a450d025462f113311a26408dc53627d1a268d/docs/rfcs/0022-account-derivations.md).
 	pub const PRODUCT_NAME: &[u8] = b"dim2";
 
+	/// The current storage version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -1250,7 +1255,7 @@ pub mod pallet {
 					// A `Person` vote awards immediately: the attestee earns this credit
 					// regardless of their final attendance. A `NotPerson` vote awards
 					// nothing at this point. If the attestee ends up attending, the credit
-					// is backfilled by `award_attendance_credits` when their attendance is
+					// is backfilled by `settle_attendance_credits` when their attendance is
 					// finalized.
 					if *report == Report::Person {
 						T::NftClaimCredits::award_report_credit(
@@ -2050,6 +2055,7 @@ pub mod pallet {
 				rounds: schedule.rounds,
 				pending_attendance: 0,
 				airdrops_scheduled,
+				check_in_opens: game_play_time.saturating_sub(schedule.check_in_window),
 			});
 			GameHistory::<T>::insert(index, game_play_time);
 
@@ -3011,8 +3017,8 @@ pub mod pallet {
 		///
 		/// Side effects:
 		/// - May call into `indiv_pallet_score::Pallet::set_attendance`.
-		/// - Routes attendance NFT claim credits, archives or resets player state, and may drop a
-		///   play deposit.
+		/// - Routes attendance NFT claim credits, settles the player's check-in, archives or resets
+		///   player state, and may drop a play deposit.
 		/// - Updates `last_iteration` and returns the next item from `iterator`.
 		/// - Adds the number of NFT claim credits recorded for this player to `credits_awarded`, so
 		///   the caller can debit the block capacity it reserved.
@@ -3047,20 +3053,21 @@ pub mod pallet {
 				};
 
 			// `report` defers NFT claim credit materialization to here so its weight stays linear
-			// in `(e, n)` rather than `O(e · n)`. An attendee earns one credit per group
-			// co-member in every round played; a non-attendee earns none, and unearned
-			// credits were never awarded, so there is nothing to undo.
-			if attendance {
-				*credits_awarded =
-					credits_awarded.saturating_add(T::NftClaimCredits::award_attendance_credits(
-						game_index,
-						rounds,
-						max_group_size,
-						player_count,
-						&player_id,
-						award_time,
-					));
-			}
+			// in `(e, n)` rather than `O(e · n)`. A non-attendee earns no report credits, and
+			// unearned credits were never awarded, so there is nothing to undo. A non-attendee can
+			// still be owed check-in credits, so every player settles.
+			let attendance_outcome =
+				if attendance { Attendance::Attended } else { Attendance::Absent };
+			*credits_awarded =
+				credits_awarded.saturating_add(T::NftClaimCredits::settle_attendance_credits(
+					game_index,
+					rounds,
+					max_group_size,
+					player_count,
+					&player_id,
+					attendance_outcome,
+					award_time,
+				));
 
 			let archived_player = match disposition {
 				PlayerDisposition::ArchiveKickable => Some(ArchivedPlayer::Kickable {
@@ -3172,17 +3179,20 @@ pub mod pallet {
 				Some(last) => Players::<T>::iter_from_key(last),
 			};
 
+			let (max_check_in_credits, check_in_weight) = T::NftClaimCredits::check_in_worst_case();
 			let per_player_weight =
-				<T as Config>::WeightInfo::player_process_step1_inner_loop(game.rounds as u32);
+				<T as Config>::WeightInfo::player_process_step1_inner_loop(game.rounds as u32)
+					.saturating_add(check_in_weight);
 			let award_time = T::UnixTime::now().as_secs() as u32;
 			// A player's backfill cannot be split across blocks, so a player is only processed
 			// while its worst case still fits what the credit buffers can hold and no credit ever
 			// has to be dropped. The remaining players are processed in a later block, by which
 			// time a committed tree has freed a buffer. Only the credits really awarded are
-			// debited, so players that award nothing (non-attendees) or less than their worst case
-			// (credits already awarded during reporting) do not shorten the block.
+			// debited, so players that award nothing (most non-attendees) or less than their worst
+			// case (credits already awarded during reporting or check-in) do not shorten the block.
 			let max_credits_per_player =
-				Self::max_attestations(game.rounds as u32, game.max_group_size);
+				Self::max_attestations(game.rounds as u32, game.max_group_size)
+					.saturating_add(max_check_in_credits);
 			let mut credit_capacity = T::NftClaimCredits::remaining_capacity(game.index);
 			let mut next_player = iterator.next();
 
