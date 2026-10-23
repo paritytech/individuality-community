@@ -18,15 +18,16 @@
 
 use super::{pallet::*, *};
 use crate::{
+	migration::MigrateV0ToV1,
 	mock::*,
-	types::{Credibility, NotificationReference, PersonalUsernameChoice},
+	types::{Credibility, NotificationReference, PersonalUsernameChoice, UnrecordedAllowances},
 	Error,
 };
 use codec::Encode;
 use frame_support::{
 	assert_noop, assert_ok,
 	dispatch::GetDispatchInfo,
-	traits::{Authorize, Hooks},
+	traits::{Authorize, GetStorageVersion, Hooks, OnRuntimeUpgrade, StorageVersion},
 };
 use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::{
@@ -39,7 +40,7 @@ use sp_runtime::{
 	transaction_validity::{InvalidTransaction, TransactionSource},
 	AccountId32,
 };
-use sp_statement_store::{get_allowance, StatementAllowance};
+use sp_statement_store::{get_allowance, increase_allowance_by, StatementAllowance};
 
 // --- Test Helpers ---
 
@@ -1322,6 +1323,183 @@ fn queue_full_error() {
 			Error::<Test>::QueueFull
 		);
 	})
+}
+
+/// Registers account 1 as a lite person holding `other` from another grant.
+fn register_lite_person_with_other_grant(other: &StatementAllowance) -> AccountId32 {
+	let lite_account = id_to_account(1);
+	increase_allowance_by(&lite_account, other.clone());
+	set_time_sec(100);
+	assert_ok!(Resources::register_lite_person(
+		lite_person_origin(1),
+		comm_id(b"key1"),
+		username::<Test>(b"liteuser.12"),
+		None
+	));
+	lite_account
+}
+
+/// Promotes the lite person `account` to a person with id 10.
+fn promote_to_person(account: &AccountId32) {
+	let proof = mock_lite_proof(account.clone());
+	assert_ok!(Resources::register_person(
+		person_origin_for(10, 0, 0),
+		account.clone(),
+		proof,
+		PersonalUsernameChoice::Standalone(username::<Test>(b"personuser"))
+	));
+}
+
+/// Lets the person authorisation of `account` expire and demotes it.
+fn demote_expired_person(account: &AccountId32) {
+	let auth_duration: u32 = <Test as Config>::PersonAuthDuration::get();
+	advance_time_sec(auth_duration as u64 + 1);
+	assert_ok!(Resources::demote_auth_expired(SystemOrigin::Authorized.into(), account.clone()));
+}
+
+/// Touches the person authorisation of the person with id 10.
+fn touch_person() {
+	let min_interval: u32 = <Test as Config>::MinPersonAuthUpdateInterval::get();
+	advance_time_sec(min_interval as u64 + 1);
+	assert_ok!(Resources::touch_person_authorization(person_origin_for(10, 0, 0)));
+}
+
+const OTHER_GRANT: StatementAllowance = StatementAllowance { max_count: 7, max_size: 70 };
+
+#[test]
+fn credibility_changes_replace_the_granted_allowance_after_limit_changes() {
+	new_test_ext().execute_with(|| {
+		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
+		promote_to_person(&account);
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT.saturating_add(PersonStatementLimit::get())
+		);
+
+		// Demotion revokes the granted person allowance, not the raised limit.
+		let raised_person = StatementAllowance { max_count: 500, max_size: 160 * 1024 };
+		PersonStatementLimit::set(&raised_person);
+		demote_expired_person(&account);
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT.saturating_add(LitePersonStatementLimit::get())
+		);
+
+		// Touch revokes the granted lite allowance, not the lowered limit.
+		LitePersonStatementLimit::set(&StatementAllowance { max_count: 1, max_size: 1 });
+		touch_person();
+		assert_eq!(get_allowance(&account), OTHER_GRANT.saturating_add(raised_person.clone()));
+		assert_eq!(ConsumerAllowances::<Test>::get(&account), Some(raised_person.into()));
+	});
+}
+
+/// Remove the record of `account` and store the current limits as the unrecorded allowances, as
+/// for a consumer that registered before the upgrade.
+fn forget_consumer_allowance(account: &AccountId32) {
+	ConsumerAllowances::<Test>::remove(account);
+	StorageVersion::new(0).put::<Resources>();
+	MigrateV0ToV1::<Test>::on_runtime_upgrade();
+}
+
+#[test]
+fn promotion_revokes_the_unrecorded_lite_allowance_without_a_record() {
+	new_test_ext().execute_with(|| {
+		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
+		forget_consumer_allowance(&account);
+		LitePersonStatementLimit::set(&StatementAllowance { max_count: 5, max_size: 2 * 1024 });
+
+		promote_to_person(&account);
+
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT.saturating_add(PersonStatementLimit::get())
+		);
+	});
+}
+
+#[test]
+fn demotion_revokes_the_unrecorded_person_allowance_without_a_record() {
+	new_test_ext().execute_with(|| {
+		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
+		promote_to_person(&account);
+		forget_consumer_allowance(&account);
+		PersonStatementLimit::set(&StatementAllowance { max_count: 40, max_size: 8 * 1024 });
+
+		demote_expired_person(&account);
+
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT.saturating_add(LitePersonStatementLimit::get())
+		);
+	});
+}
+
+#[test]
+fn touch_revokes_the_unrecorded_lite_allowance_without_a_record() {
+	new_test_ext().execute_with(|| {
+		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
+		promote_to_person(&account);
+		demote_expired_person(&account);
+		forget_consumer_allowance(&account);
+		LitePersonStatementLimit::set(&StatementAllowance { max_count: 5, max_size: 2 * 1024 });
+
+		touch_person();
+
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT.saturating_add(PersonStatementLimit::get())
+		);
+	});
+}
+
+#[test]
+fn promotion_revokes_the_current_lite_limit_without_an_unrecorded_allowance() {
+	new_test_ext().execute_with(|| {
+		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
+		let granted = LitePersonStatementLimit::get();
+		ConsumerAllowances::<Test>::remove(&account);
+		let lowered = StatementAllowance { max_count: 5, max_size: 2 * 1024 };
+		LitePersonStatementLimit::set(&lowered);
+
+		promote_to_person(&account);
+
+		assert_eq!(
+			get_allowance(&account),
+			OTHER_GRANT
+				.saturating_add(granted)
+				.saturating_add(PersonStatementLimit::get())
+				.saturating_sub(lowered)
+		);
+	});
+}
+
+#[test]
+fn migration_v1_stores_the_current_limits_as_the_unrecorded_allowances() {
+	new_test_ext().execute_with(|| {
+		StorageVersion::new(0).put::<Resources>();
+
+		MigrateV0ToV1::<Test>::on_runtime_upgrade();
+
+		assert_eq!(
+			UnrecordedConsumerAllowances::<Test>::get(),
+			Some(UnrecordedAllowances {
+				lite: LitePersonStatementLimit::get().into(),
+				person: PersonStatementLimit::get().into(),
+			})
+		);
+		assert_eq!(Resources::on_chain_storage_version(), StorageVersion::new(1));
+	});
+}
+
+#[test]
+fn migration_v1_runs_only_from_version_zero() {
+	new_test_ext().execute_with(|| {
+		StorageVersion::new(1).put::<Resources>();
+
+		MigrateV0ToV1::<Test>::on_runtime_upgrade();
+
+		assert!(!UnrecordedConsumerAllowances::<Test>::exists());
+	});
 }
 
 #[test]

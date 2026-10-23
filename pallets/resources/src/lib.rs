@@ -40,6 +40,7 @@ extern crate alloc;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
+pub mod migration;
 pub mod types;
 pub mod weights;
 
@@ -59,6 +60,7 @@ use frame_system::offchain::{CreateAuthorizedTransaction, SubmitTransaction};
 use indiv_support::{
 	context::{build_product_context, personhood, ProductContextSuffix},
 	labels::is_lite_person_label,
+	statement_allowance::GrantedStatementAllowance,
 	traits::{
 		Alias, AllocateStorage, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar,
 		Context, MembershipProver, RingExponent, Username,
@@ -71,7 +73,7 @@ use sp_runtime::traits::{IdentifyAccount, Verify};
 use types::{
 	ConsumerInfo, Credibility, LongTermStorageAllocation, MembershipCollection,
 	NotificationReference, PersonalUsernameChoice, ReservationQueueEntryOf,
-	StmtStoreAllowanceEntry,
+	StmtStoreAllowanceEntry, UnrecordedAllowances,
 };
 use verifiable::GenerateVerifiable;
 
@@ -86,7 +88,10 @@ pub mod pallet {
 	const LOG_TARGET: &str = "runtime::indiv-pallet-resources";
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -321,6 +326,23 @@ pub mod pallet {
 	/// Accounts used to identify consumers mapped to their consumer information.
 	#[pallet::storage]
 	pub type Consumers<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, ConsumerInfo>;
+
+	/// The personhood statement allowance granted to each consumer.
+	///
+	/// A change of credibility revokes the recorded amount, so a change of
+	/// `LitePersonStatementLimit` or `PersonStatementLimit` in between does not skew the allowance
+	/// of the account. A consumer without an entry revokes the matching allowance in
+	/// [`UnrecordedConsumerAllowances`].
+	#[pallet::storage]
+	pub type ConsumerAllowances<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AccountId, GrantedStatementAllowance>;
+
+	/// The statement allowances that consumers without a [`ConsumerAllowances`] entry hold.
+	///
+	/// When the value is not set, the pallet uses the current `LitePersonStatementLimit` and
+	/// `PersonStatementLimit`.
+	#[pallet::storage]
+	pub type UnrecordedConsumerAllowances<T: Config> = StorageValue<_, UnrecordedAllowances>;
 
 	/// Accounts associated with a statement store slot through an anonymous allowance, per period.
 	///
@@ -761,10 +783,11 @@ pub mod pallet {
 
 			if was_demoted {
 				// A person's allowance should be given back.
-				let person_allowance = T::PersonStatementLimit::get();
-				let lite_person_allowance = T::LitePersonStatementLimit::get();
-				let remaining_allowance = person_allowance.saturating_sub(lite_person_allowance);
-				increase_allowance_by(account.clone().into(), remaining_allowance);
+				Self::set_consumer_allowance(
+					&account,
+					T::PersonStatementLimit::get(),
+					Self::unrecorded_allowances().lite.into(),
+				);
 			}
 
 			Self::deposit_event(Event::PersonAuthorizationTouched { account });
@@ -853,9 +876,11 @@ pub mod pallet {
 			ensure_authorized(origin)?;
 			let consumer_info = Self::validate_demotion(&account)?;
 			if let Credibility::Person { alias, last_update, .. } = consumer_info.credibility {
-				let allowance = T::PersonStatementLimit::get()
-					.saturating_sub(T::LitePersonStatementLimit::get());
-				decrease_allowance_by(account.clone().into(), allowance);
+				Self::set_consumer_allowance(
+					&account,
+					T::LitePersonStatementLimit::get(),
+					Self::unrecorded_allowances().person.into(),
+				);
 				Consumers::<T>::insert(
 					&account,
 					ConsumerInfo {
@@ -1463,11 +1488,11 @@ pub mod pallet {
 			// Set the consumer's record.
 			Consumers::<T>::insert(linked_lite_identity, linked_consumer_info);
 
-			// Increase the allowance by the difference between the lite person allowance the user
-			// already has and the full person allowance they now have.
-			let allowance =
-				T::PersonStatementLimit::get().saturating_sub(T::LitePersonStatementLimit::get());
-			increase_allowance_by(linked_lite_identity.clone().into(), allowance);
+			Self::set_consumer_allowance(
+				linked_lite_identity,
+				T::PersonStatementLimit::get(),
+				Self::unrecorded_allowances().lite.into(),
+			);
 
 			Self::deposit_event(Event::PersonRegistered {
 				alias,
@@ -1763,10 +1788,45 @@ pub mod pallet {
 			frame_system::Pallet::<T>::inc_sufficients(&account);
 
 			// A new lite person has been registered, so the initial allowance should be given
-			increase_allowance_by(account.clone().into(), T::LitePersonStatementLimit::get());
+			Self::set_consumer_allowance(
+				&account,
+				T::LitePersonStatementLimit::get(),
+				StatementAllowance::default(),
+			);
 
 			Self::deposit_event(Event::LitePersonRegistered { account });
 			Ok(())
+		}
+
+		/// The allowances in [`UnrecordedConsumerAllowances`], or the current limits when it is not
+		/// set.
+		pub(crate) fn unrecorded_allowances() -> UnrecordedAllowances {
+			UnrecordedConsumerAllowances::<T>::get().unwrap_or_else(Self::current_allowances)
+		}
+
+		/// The current `LitePersonStatementLimit` and `PersonStatementLimit`.
+		pub(crate) fn current_allowances() -> UnrecordedAllowances {
+			UnrecordedAllowances {
+				lite: T::LitePersonStatementLimit::get().into(),
+				person: T::PersonStatementLimit::get().into(),
+			}
+		}
+
+		/// Replace the personhood statement allowance of `account` with `allowance` and record it
+		/// in [`ConsumerAllowances`].
+		///
+		/// The pallet revokes the recorded allowance, or `unrecorded` when `account` has no record.
+		/// It grants before it revokes, because a depleted dimension removes the whole allowance
+		/// of the account.
+		fn set_consumer_allowance(
+			account: &T::AccountId,
+			allowance: StatementAllowance,
+			unrecorded: StatementAllowance,
+		) {
+			let previous = ConsumerAllowances::<T>::get(account).map_or(unrecorded, Into::into);
+			increase_allowance_by(account.clone().into(), allowance.clone());
+			decrease_allowance_by(account.clone().into(), previous);
+			ConsumerAllowances::<T>::insert(account, GrantedStatementAllowance::from(allowance));
 		}
 
 		/// Validate that `account` is in the reservation queue for `username` and that its
