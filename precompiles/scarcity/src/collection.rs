@@ -17,6 +17,7 @@
 //! The per-collection ERC-721 precompile.
 
 use super::*;
+use frame_support::traits::UnixTime;
 use frame_system::RawOrigin;
 use indiv_pallet_scarcity::{
 	weights::WeightInfo as _, ItemDefs, ItemIndex, OnCollectionDeleted, OnPurseOccupied,
@@ -101,6 +102,11 @@ where
 				Safety::Checked { data: &[] },
 				env,
 			),
+			// Pledges, see the crate documentation.
+			IScarcityCollectionCalls::pledgeOf(call) => Self::pledge_of(collection, call, env),
+			IScarcityCollectionCalls::pledge(call) => Self::pledge(collection, call, env),
+			IScarcityCollectionCalls::seize(call) => Self::seize(collection, call, env),
+			IScarcityCollectionCalls::release(call) => Self::release(collection, call, env),
 			// Approvals: unsupported by the purse model, see the crate documentation.
 			IScarcityCollectionCalls::approve(_) |
 			IScarcityCollectionCalls::setApprovalForAll(_) => {
@@ -212,6 +218,9 @@ pub(crate) fn is_mutating(input: &IScarcityCollectionCalls) -> bool {
 		IScarcityCollectionCalls::transferFrom(_) |
 		IScarcityCollectionCalls::safeTransferFrom_0(_) |
 		IScarcityCollectionCalls::safeTransferFrom_1(_) |
+		IScarcityCollectionCalls::pledge(_) |
+		IScarcityCollectionCalls::seize(_) |
+		IScarcityCollectionCalls::release(_) |
 		IScarcityCollectionCalls::approve(_) |
 		IScarcityCollectionCalls::setApprovalForAll(_) |
 		IScarcityCollectionCalls::defineItem(_) |
@@ -235,6 +244,7 @@ pub(crate) fn is_mutating(input: &IScarcityCollectionCalls) -> bool {
 		IScarcityCollectionCalls::tokenOfOwnerByIndex(_) |
 		IScarcityCollectionCalls::getApproved(_) |
 		IScarcityCollectionCalls::isApprovedForAll(_) |
+		IScarcityCollectionCalls::pledgeOf(_) |
 		IScarcityCollectionCalls::locked(_) |
 		IScarcityCollectionCalls::royaltyInfo(_) |
 		IScarcityCollectionCalls::contractURI(_) |
@@ -254,6 +264,11 @@ pub(crate) fn is_mutating(input: &IScarcityCollectionCalls) -> bool {
 		IScarcityCollectionCalls::hasItemMetadata(_) |
 		IScarcityCollectionCalls::hasInstanceMetadata(_) => false,
 	}
+}
+
+/// The pallet's clock, in Unix seconds, against which a pledge has effect.
+fn now<T: indiv_pallet_scarcity::Config>() -> u64 {
+	<T as indiv_pallet_scarcity::Config>::UnixTime::now().as_secs()
 }
 
 impl<T, const PREFIX: u16> ScarcityCollection<T, PREFIX>
@@ -344,12 +359,13 @@ where
 		call: &IScarcityCollection::lockedCall,
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
-		// The instance lookup, then the definition carrying the flag.
-		charge_reads(env, 3)?;
+		// The instance lookup, the definition carrying the flag and the clock.
+		charge_reads(env, 4)?;
 		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let transferability =
 			Scarcity::<T>::transferability_of(&nft).map_err(revert_scarcity::<T>)?;
-		let locked = transferability == Transferability::Soulbound;
+		let locked = transferability == Transferability::Soulbound ||
+			Scarcity::<T>::live_pledge(&nft, now::<T>()).is_some();
 		Ok(IScarcityCollection::lockedCall::abi_encode_returns(&locked))
 	}
 
@@ -398,7 +414,7 @@ where
 	/// Answers `None` for every misconfiguration: an unset key, a receiver that is not an address
 	/// or is the zero address, basis points that do not decode, and a share above 100%. The values
 	/// are raw metadata bytes, so this read is the only place that can reject them.
-	fn royalty_terms(nft: &Nft) -> Result<Option<([u8; 20], u128)>, Error> {
+	fn royalty_terms(nft: &NftOf<T>) -> Result<Option<([u8; 20], u128)>, Error> {
 		let (Some(receiver), Some(basis_points)) = (
 			Self::item_bytes(nft, ROYALTY_RECEIVER_KEY)?,
 			Self::item_bytes(nft, ROYALTY_BASIS_POINTS_KEY)?,
@@ -428,7 +444,7 @@ where
 	///
 	/// The reserved keys are shorter than any sane `MaxKeyLen`, so the revert here reports a
 	/// runtime misconfiguration rather than anything a collection can cause.
-	fn item_bytes(nft: &Nft, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+	fn item_bytes(nft: &NftOf<T>, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
 		let key =
 			MetadataKeyOf::<T>::try_from(key.to_vec()).map_err(|_| revert(ERR_KEY_TOO_LONG))?;
 		Ok(Scarcity::<T>::item_metadata_of(nft.collection, nft.item, &key)
@@ -563,7 +579,10 @@ where
 	/// Move a token on its holder's own authority.
 	///
 	/// The caller must be the holder. Without an approval mechanism there is no third party to
-	/// resolve, so the ERC-721 spender cases all collapse to this one.
+	/// resolve, so the ERC-721 spender cases all collapse to this one. A pledgee moves a pledged
+	/// token through `seize` only: ERC-5192 requires the EIP-721 transfer functions to throw
+	/// while `locked()` answers true. The holder of a pledged token is refused ahead of the move's
+	/// charges.
 	fn transfer_from(
 		collection: CollectionId,
 		transfer: Transfer<'_>,
@@ -574,24 +593,49 @@ where
 		if *transfer.to == Address::ZERO {
 			return Err(revert(ERR_ZERO_DESTINATION));
 		}
-		// Collection-membership validation reads and both reverse address mappings.
-		charge_reads(env, 4)?;
+		// Collection-membership validation reads, both reverse address mappings and the clock.
+		charge_reads(env, 5)?;
 		let (holder, nft) = live_instance::<T>(collection, transfer.token)?;
 		if account_of::<T>(transfer.from) != holder {
 			return Err(revert(ERR_WRONG_HOLDER));
 		}
-		if caller_account::<T>(env)? != holder {
-			return Err(revert(ERR_NOT_HOLDER));
+		let caller = caller_account::<T>(env)?;
+		let pledge = Scarcity::<T>::live_pledge(&nft, now::<T>());
+		if caller != holder {
+			let reason = if pledge.is_some_and(|pledge| pledge.pledgee == caller) {
+				ERR_PLEDGEE_TRANSFER
+			} else {
+				ERR_NOT_HOLDER
+			};
+			return Err(revert(reason));
 		}
+		if pledge.is_some() {
+			return Err(revert(ERR_PLEDGED));
+		}
+		Self::move_by_holder(&holder, nft.instance, &transfer, env)?;
+		if let Safety::Checked { data } = safety {
+			// A revert here unwinds the move above with the rest of the frame.
+			if let Acknowledgement::Unavailable = Self::acknowledge_receipt(&transfer, data, env)? {
+				return Err(revert(ERR_CONTRACT_RECEIVER));
+			}
+		}
+		Ok(Vec::new())
+	}
+
+	/// Move a token on its holder's authority and log the move.
+	///
+	/// Charges the pallet entry and the registration of the destination.
+	/// `WeightInfo::transfer_by_holder` does not cover the registration: the extrinsic adds the
+	/// same term to its own annotation, and the benchmark runtime wires no handler.
+	fn move_by_holder(
+		holder: &T::AccountId,
+		instance: InstanceId,
+		transfer: &Transfer<'_>,
+		env: &mut impl Ext<T = T>,
+	) -> Result<(), Error> {
 		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
-		// The move registers its destination. `WeightInfo::transfer_by_holder` does not cover that:
-		// the extrinsic adds the same term to its own annotation, and the benchmark runtime wires
-		// no handler.
-		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
-			T::AccountId,
-		>>::on_purse_occupied_weight())?;
-		let to = account_of::<T>(transfer.to);
-		Scarcity::<T>::do_transfer_by_holder(&holder, nft.instance, to)
+		env.charge(Self::registration_weight())?;
+		Scarcity::<T>::do_transfer_by_holder(holder, instance, account_of::<T>(transfer.to))
 			.map_err(revert_scarcity::<T>)?;
 		deposit_event(
 			env,
@@ -600,14 +644,120 @@ where
 				to: *transfer.to,
 				tokenId: *transfer.token,
 			},
-		)?;
-		if let Safety::Checked { data } = safety {
-			// A revert here unwinds the move above with the rest of the frame.
-			if let Acknowledgement::Unavailable = Self::acknowledge_receipt(&transfer, data, env)? {
-				return Err(revert(ERR_CONTRACT_RECEIVER));
-			}
+		)
+	}
+
+	/// What registering a move's destination costs.
+	fn registration_weight() -> Weight {
+		<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<T::AccountId>>::on_purse_occupied_weight()
+	}
+
+	fn pledge_of(
+		collection: CollectionId,
+		call: &IScarcityCollection::pledgeOfCall,
+		env: &mut impl Ext<T = T>,
+	) -> Result<Vec<u8>, Error> {
+		// The instance lookup and the clock.
+		charge_reads(env, 3)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let (pledgee, until) = match Scarcity::<T>::live_pledge(&nft, now::<T>()) {
+			Some(pledge) => (address_of::<T>(&pledge.pledgee), pledge.until),
+			None => (Address::ZERO, 0),
+		};
+		Ok(IScarcityCollection::pledgeOfCall::abi_encode_returns(
+			&IScarcityCollection::pledgeOfReturn { pledgee, until },
+		))
+	}
+
+	/// Pledge a token on its holder's authority, paid by the holder.
+	fn pledge(
+		collection: CollectionId,
+		call: &IScarcityCollection::pledgeCall,
+		env: &mut impl Ext<T = T>,
+	) -> Result<Vec<u8>, Error> {
+		if call.pledgee == Address::ZERO {
+			return Err(revert(ERR_ZERO_PLEDGEE));
 		}
+		// Collection-membership validation reads and the pledgee's reverse address mapping.
+		charge_reads(env, 3)?;
+		let (holder, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		if caller_account::<T>(env)? != holder {
+			return Err(revert(ERR_NOT_HOLDER));
+		}
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::pledge())?;
+		let pledgee = account_of::<T>(&call.pledgee);
+		Scarcity::<T>::do_pledge_by_holder(&holder, nft.instance, pledgee, call.until)
+			.map_err(revert_scarcity::<T>)?;
+		deposit_event(env, IScarcityCollection::Locked { tokenId: call.tokenId })?;
 		Ok(Vec::new())
+	}
+
+	/// Move a pledged token on its pledgee's authority.
+	fn seize(
+		collection: CollectionId,
+		call: &IScarcityCollection::seizeCall,
+		env: &mut impl Ext<T = T>,
+	) -> Result<Vec<u8>, Error> {
+		// See `mint` on why the zero address is rejected.
+		if call.to == Address::ZERO {
+			return Err(revert(ERR_ZERO_DESTINATION));
+		}
+		// Collection-membership validation reads, the destination's reverse address mapping and
+		// the clock.
+		charge_reads(env, 4)?;
+		let (holder, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let caller = caller_account::<T>(env)?;
+		Self::ensure_pledgee(&nft, &caller)?;
+		let holder_address = address_of::<T>(&holder);
+		// See `force_transfer` on why the address is compared as well as the account.
+		if call.to == holder_address && account_of::<T>(&call.to) != holder {
+			return Err(revert(ERR_SELF_TRANSFER));
+		}
+		// The pallet entry and the registration of the destination, which `WeightInfo::seize`
+		// does not cover. Charged past the refusals above; a refusal the pallet makes, such as an
+		// occupied destination, is charged in full.
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::seize())?;
+		env.charge(Self::registration_weight())?;
+		Scarcity::<T>::do_seize(&caller, nft.instance, account_of::<T>(&call.to))
+			.map_err(revert_scarcity::<T>)?;
+		deposit_event(env, IScarcityCollection::Unlocked { tokenId: call.tokenId })?;
+		deposit_event(
+			env,
+			IScarcityCollection::Transfer {
+				from: holder_address,
+				to: call.to,
+				tokenId: call.tokenId,
+			},
+		)?;
+		Ok(Vec::new())
+	}
+
+	/// Drop a pledge on its pledgee's authority.
+	fn release(
+		collection: CollectionId,
+		call: &IScarcityCollection::releaseCall,
+		env: &mut impl Ext<T = T>,
+	) -> Result<Vec<u8>, Error> {
+		// Collection-membership validation reads and the clock.
+		charge_reads(env, 3)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let caller = caller_account::<T>(env)?;
+		Self::ensure_pledgee(&nft, &caller)?;
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::release())?;
+		Scarcity::<T>::do_release(&caller, nft.instance).map_err(revert_scarcity::<T>)?;
+		deposit_event(env, IScarcityCollection::Unlocked { tokenId: call.tokenId })?;
+		Ok(Vec::new())
+	}
+
+	/// Refuse a caller that holds no pledge with effect on `nft`, ahead of the pallet's charge.
+	fn ensure_pledgee(nft: &NftOf<T>, caller: &T::AccountId) -> Result<(), Error> {
+		if Scarcity::<T>::live_pledge(nft, now::<T>())
+			.is_some_and(|pledge| pledge.pledgee == *caller)
+		{
+			Ok(())
+		} else {
+			Err(revert(ERR_NOT_PLEDGEE))
+		}
 	}
 
 	/// Ask the destination of a `safeTransferFrom` to acknowledge the token it now holds.
@@ -657,11 +807,9 @@ where
 			return Err(revert(ERR_SELF_TRANSFER));
 		}
 		// The move registers its destination, which the benchmark does not cover. See
-		// `transfer_from`. Charged past the rejections above so a revert does not pay for a
+		// `move_by_holder`. Charged past the rejections above so a revert does not pay for a
 		// registration that never happens.
-		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
-			T::AccountId,
-		>>::on_purse_occupied_weight())?;
+		env.charge(Self::registration_weight())?;
 		Scarcity::<T>::force_transfer(RawOrigin::Signed(who).into(), nft.instance, to)
 			.map_err(revert_scarcity::<T>)?;
 		deposit_event(
