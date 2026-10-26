@@ -46,9 +46,6 @@ fn consumer_registration_params(
 		signature: MultiSignature::from(lite_pair.sign(b"placeholder")),
 		account: lite_account.clone(),
 		identifier_key: [7; 65],
-		username: indiv_support::traits::Username::try_from(b"liteperson.12".to_vec())
-			.expect("valid username"),
-		reserved_username: None,
 	};
 	params.signature = MultiSignature::from(lite_pair.sign(&params.signing_payload(verifier)));
 	params
