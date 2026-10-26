@@ -124,6 +124,8 @@ sp-trie = { workspace = true }
 
 [features]
 default = ["std"]
+# Emits FRAME call and hook spans for local replays (frame-trace). Never deploy a runtime built with it.
+with-tracing = ["frame-executive/with-tracing", "sp-io/with-tracing"]
 std = [
 	"assets-common/std",
 	"codec/std",
