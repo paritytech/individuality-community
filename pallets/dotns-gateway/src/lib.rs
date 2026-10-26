@@ -60,7 +60,7 @@ pub use weights::WeightInfo;
 
 use frame_support::traits::{OriginTrait, UnixTime};
 use indiv_support::{
-	context::{build_product_context, personhood, signing_payload},
+	context::{build_product_context, personhood},
 	traits::{Alias, MembershipProver, RevisionIndex, RingExponent, RingIndex},
 };
 use sp_runtime::traits::{IdentifyAccount, Verify};
@@ -600,11 +600,24 @@ pub mod pallet {
 			)?;
 			Ok(validated.alias)
 		}
+	}
 
+	#[pallet::extra_constants]
+	impl<T: Config> Pallet<T> {
+		/// The personhood signing context on this network. An account signs this context
+		/// followed by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> indiv_support::traits::Context {
+			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
 		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
 		/// `msg`.
 		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
-			signing_payload(personhood::PRODUCT_NAME, &T::Suffix::get(), msg)
+			[&Self::signing_context()[..], msg].concat()
 		}
 
 		pub fn proof_context() -> indiv_support::traits::Context {

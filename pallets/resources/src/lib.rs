@@ -58,7 +58,7 @@ use frame_support::{
 };
 use frame_system::offchain::{CreateAuthorizedTransaction, SubmitTransaction};
 use indiv_support::{
-	context::{build_product_context, personhood, signing_payload, ProductContextSuffix},
+	context::{build_product_context, personhood, ProductContextSuffix},
 	labels::is_lite_person_label,
 	traits::{
 		Alias, AllocateStorage, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar,
@@ -1506,11 +1506,24 @@ pub mod pallet {
 		pub fn resources_context() -> Context {
 			Self::build_context(personhood::RESOURCES)
 		}
+	}
 
+	#[pallet::extra_constants]
+	impl<T: Config> Pallet<T> {
+		/// The personhood signing context on this network. An account signs this context
+		/// followed by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
 		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
 		/// `msg`.
 		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
-			signing_payload(personhood::PRODUCT_NAME, &T::Suffix::get(), msg)
+			[&Self::signing_context()[..], msg].concat()
 		}
 
 		/// Returns the message a lite consumer account signs to link itself to `alias` in

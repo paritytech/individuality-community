@@ -267,7 +267,6 @@ use indiv_pallet_airdrop::types::{
 };
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
-	context::signing_payload,
 	credit_trees::AwardCredits,
 	traits::{Alias, CommunicationIdentifier, Context},
 	weight_budget::OcwWeightBudget,
@@ -1872,11 +1871,25 @@ pub mod pallet {
 		}
 	}
 
+	#[pallet::extra_constants]
+	impl<T: Config> Pallet<T> {
+		/// The game's signing context on this network. An account signs this context followed
+		/// by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(
+				PRODUCT_NAME,
+				&<T as indiv_pallet_score::Config>::Suffix::get(),
+			)
+		}
+	}
+
 	impl<T: Config> Pallet<T> {
 		/// Returns the bytes an account signs for `msg`: the game's signing context followed by
 		/// `msg`.
 		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
-			signing_payload(PRODUCT_NAME, &<T as indiv_pallet_score::Config>::Suffix::get(), msg)
+			[&Self::signing_context()[..], msg].concat()
 		}
 
 		/// Check the count and the variant of the airdrop VRF entries against the player's

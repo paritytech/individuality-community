@@ -111,13 +111,18 @@ const fn signing_suffix() -> [u8; 32] {
 	bytes
 }
 
+/// The signing context of `product_name.network_suffix`: its product context under [`SIGNING`].
+pub fn signing_context(product_name: &[u8], network_suffix: &[u8]) -> Context {
+	build_product_context(product_name, network_suffix, SIGNING)
+}
+
 /// Returns the signing context of `product_name.network_suffix` followed by `msg`.
 ///
 /// An account signs these bytes, not `msg` alone, when it signs a message that is not a
 /// transaction. The context binds the signature to the product and the network. It also stops
 /// the signature from being valid for a transaction.
 pub fn signing_payload(product_name: &[u8], network_suffix: &[u8], msg: &[u8]) -> Vec<u8> {
-	[&build_product_context(product_name, network_suffix, SIGNING)[..], msg].concat()
+	[&signing_context(product_name, network_suffix)[..], msg].concat()
 }
 
 /// Context suffix allocations owned by the personhood product.
@@ -319,5 +324,9 @@ mod tests {
 		// Payload is the product context followed by the message.
 		assert_eq!(personhood_payload, [&personhood[..], b"msg"].concat());
 		assert_eq!(game_payload, [&game[..], b"msg"].concat());
+
+		// The context on its own is the same one.
+		assert_eq!(signing_context(personhood::PRODUCT_NAME, b"paseo"), personhood);
+		assert_eq!(signing_context(b"dim2", b"paseo"), game);
 	}
 }
