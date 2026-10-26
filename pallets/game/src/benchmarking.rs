@@ -231,7 +231,10 @@ mod benches {
 			.map(|airdrop_index| {
 				let event_id =
 					pallet::Pallet::<T>::airdrop_event_id(game_index, airdrop_index as u8);
-				let context = indiv_pallet_airdrop::context_for_event(&event_id);
+				let context = indiv_pallet_airdrop::Pallet::<T>::context_for_event(
+					pallet::PRODUCT_NAME,
+					&event_id,
+				);
 				let (proof, _alias) = <<T as indiv_pallet_airdrop::Config>::BenchmarkHelper
 					as indiv_pallet_airdrop::benchmarking::BenchmarkHelper<T>>::build_membership_proof(
 						&context, &message, 0,
@@ -1352,6 +1355,7 @@ mod benches {
 				has_ever_reached_personhood: true,
 				recognition: indiv_pallet_score::Recognition::ExternallyRecognized,
 				last_attended_game: None,
+				attended_games_while_recognized: 0,
 			},
 		);
 		let deposit = T::PlayDeposit::new(&caller, pallet::PlayDepositAmount::<T>::get())?;
@@ -2321,6 +2325,7 @@ mod benches {
 				has_ever_reached_personhood: true,
 				recognition: indiv_pallet_score::Recognition::ExternallyRecognized,
 				last_attended_game: Some(game.index),
+				attended_games_while_recognized: 0,
 			},
 		);
 

@@ -134,7 +134,7 @@ pub struct RingCollectionState<MaxMissing: Get<u32>, MaxDeleted: Get<u32>> {
 	/// Updated from each batch's `next_ring_index`. Used as the scan range for missing detection.
 	pub next_ring_index: u32,
 	/// Lowest ring index the gap scan has not examined yet. The scan resumes here and advances by
-	/// at most one page per batch, so a jump larger than a page is finished by later batches.
+	/// at most one page per scan call, so a jump larger than a page is finished by later calls.
 	/// Two kinds of index below it are never revisited: one that replay abandoned, and one the
 	/// notifier deleted after the scan passed it while `deleted_indices` was at capacity.
 	pub next_scan_index: u32,
@@ -144,6 +144,9 @@ pub struct RingCollectionState<MaxMissing: Get<u32>, MaxDeleted: Get<u32>> {
 	/// Ring indices known to have been deleted by the notifier.
 	/// Tracked to avoid falsely marking deleted rings as missing.
 	pub deleted_indices: BoundedBTreeSet<RingIndex, MaxDeleted>,
+	/// Unix time in seconds when the last batch for this collection was stored.
+	/// The gap scan and replay batch cooldowns count from it.
+	pub last_batch_received_time: u64,
 }
 
 /// Subscription status tracking.
@@ -169,7 +172,7 @@ pub enum SubscriptionStatus {
 	Terminated,
 }
 
-/// State for tracking updates processing timestamps and sequence numbers.
+/// State for tracking the last processed sequence number and the replay request timestamp.
 #[derive(
 	Encode,
 	Decode,
@@ -185,8 +188,6 @@ pub enum SubscriptionStatus {
 pub struct UpdatesProcessingState {
 	/// Sequence number of the last successfully processed ring root updates batch.
 	pub last_processed_sequence: SequenceNumber,
-	/// Unix timestamp (in seconds) when the last batch was received.
-	pub last_batch_received_time: u64,
 	/// Unix timestamp (in seconds) when the last replay request was sent.
 	pub last_replay_request_time: u64,
 }
