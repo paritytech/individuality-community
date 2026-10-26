@@ -974,6 +974,13 @@ mod benches {
 		);
 		let mut iterator = Players::<T>::iter_from_key(target_player.clone());
 		let mut credits_awarded = 0;
+		// Worst case: the player moves to a next limit.
+		let granted = T::PlayerStatementLimit::get();
+		let next = granted.clone().saturating_add(StatementAllowance::new(1, 1));
+		PlayerStatementLimits::<T>::put(PlayerStatementLimitsRecord {
+			granted: granted.into(),
+			next: Some(next.into()),
+		});
 
 		#[block]
 		{

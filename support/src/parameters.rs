@@ -36,6 +36,12 @@ impl From<StatementAllowanceParameter> for StatementAllowance {
 	}
 }
 
+impl From<StatementAllowance> for StatementAllowanceParameter {
+	fn from(value: StatementAllowance) -> Self {
+		Self { max_size: value.max_size, max_count: value.max_count }
+	}
+}
+
 /// Adapts a [`StatementAllowanceParameter`] getter to the SDK allowance type.
 pub struct StatementAllowanceGetter<Parameter>(PhantomData<Parameter>);
 impl<Parameter: Get<StatementAllowanceParameter>> Get<StatementAllowance>

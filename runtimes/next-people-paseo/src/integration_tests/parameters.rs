@@ -71,6 +71,10 @@ fn parameters_default_to_the_initial_configuration() {
 			StatementAllowance { max_size: 1024 * 1024, max_count: 200 }
 		);
 		assert_eq!(
+			<Runtime as indiv_pallet_game::Config>::PlayerStatementLimit::get(),
+			StatementAllowance { max_size: 1_000_000, max_count: 1_000_000 }
+		);
+		assert_eq!(
 			<Runtime as indiv_pallet_resources::Config>::NotificationPeriodDuration::get(),
 			24 * 60 * 60
 		);
@@ -101,6 +105,20 @@ fn signed_origins_cannot_set_parameters() {
 				)
 			),
 			DispatchError::BadOrigin
+		);
+	});
+}
+
+#[test]
+fn root_parameter_updates_change_what_the_game_pallet_reads() {
+	new_test_ext().execute_with(|| {
+		set_statement_parameter(
+			statement_storage::PlayerStatementLimit,
+			StatementAllowanceParameter { max_size: 42, max_count: 3 },
+		);
+		assert_eq!(
+			<Runtime as indiv_pallet_game::Config>::PlayerStatementLimit::get(),
+			StatementAllowance { max_size: 42, max_count: 3 }
 		);
 	});
 }
