@@ -360,12 +360,6 @@ impl sp_runtime::traits::BlockNumberProvider for ZeroRelayBlockProvider {
 	}
 }
 
-/// Relay-chain slot duration in seconds.
-const RELAY_SLOT_SECONDS: RelayBlockNumber = 6;
-/// Relay-chain blocks per day.
-const RELAY_DAY_BLOCKS: RelayBlockNumber = 24 * 60 * 60 / RELAY_SLOT_SECONDS;
-const DEFAULT_AUTHORIZATION_WINDOW_DAYS: RelayBlockNumber = 14;
-
 impl indiv_pallet_proof_of_ink::Config for Test {
 	type WeightInfo = ();
 	type Deposit = ();
@@ -378,8 +372,7 @@ impl indiv_pallet_proof_of_ink::Config for Test {
 	type Randomness = TestRandommess;
 	type DataStore = TestDataStore;
 	type RelayChainBlockNumberProvider = ZeroRelayBlockProvider;
-	type DefaultAuthorizationWindow =
-		ConstU32<{ DEFAULT_AUTHORIZATION_WINDOW_DAYS * RELAY_DAY_BLOCKS }>;
+	type DefaultAuthorizationWindow = ConstU32<{ 14 * paseo_runtime_constants::time::DAYS }>;
 	type MaxActiveReferrals = ConstU32<10>;
 	type MaxRetryAttempts = ConstU32<1>;
 	type MaxReimbursementValues = ConstU32<10>;

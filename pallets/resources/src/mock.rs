@@ -371,6 +371,16 @@ impl indiv_support::traits::AllocateStorage<AccountId32> for MockBulletinStorage
 	}
 }
 
+/// Arguments of the most recent `MockBulletinStorage::allocate_storage` call, if any.
+pub fn last_bulletin_allocation() -> Option<LastBulletinAllocation> {
+	BULLETIN_LAST_CALL.with(|last| last.borrow().clone())
+}
+
+/// Set the block number that `MockRelayBlockProvider` returns.
+pub fn set_relay_block(block: RelayBlockNumber) {
+	MOCK_RELAY_BLOCK.with(|cell| cell.set(block));
+}
+
 /// Relay-chain block number provider backed by `MOCK_RELAY_BLOCK`.
 pub struct MockRelayBlockProvider;
 impl sp_runtime::traits::BlockNumberProvider for MockRelayBlockProvider {
@@ -573,6 +583,7 @@ impl Config for Test {
 	type LongTermStorageAllowanceForLitePeople = LongTermStorageAllowanceForLitePeople;
 	type LongTermStorageDataStore = MockBulletinStorage;
 	type RelayChainBlockNumberProvider = MockRelayBlockProvider;
+	type RelayChainSlotDuration = ConstU64<6000>;
 	type LongTermStorageCleanupLimit = LongTermStorageCleanupLimit;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = BenchmarkHelper;

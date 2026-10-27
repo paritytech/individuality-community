@@ -60,7 +60,7 @@ use crate::{
 		PeopleAirdropsPrizeSource, PersonStatementLimit, StmtStoreCleanupLimit,
 		StmtStoreGraceWindow, StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
 	},
-	paseo_constants::{CENTS, UNITS},
+	paseo_constants::{CENTS, RELAY_CHAIN_SLOT_DURATION_MILLIS, UNITS},
 };
 
 /// Asset id of the external asset as registered on Paseo Asset Hub.
@@ -1365,6 +1365,7 @@ impl indiv_pallet_resources::Config for Runtime {
 	#[cfg(feature = "runtime-benchmarks")]
 	type LongTermStorageDataStore = BenchmarkBulletinDataStore;
 	type RelayChainBlockNumberProvider = RelaychainDataProvider<Runtime>;
+	type RelayChainSlotDuration = ConstU64<{ RELAY_CHAIN_SLOT_DURATION_MILLIS as u64 }>;
 	type LongTermStorageCleanupLimit = LongTermStorageCleanupLimit;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = benchmark_utils::ResourcesBenchHelper;

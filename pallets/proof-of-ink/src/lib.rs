@@ -235,6 +235,17 @@ pub mod pallet {
 		}
 	}
 
+	impl<BlockNumber> ConfigRecord<BlockNumber> {
+		/// The `(len, count)` storage budget of a slot for `allocation`.
+		pub fn allocation_size(&self, allocation: &Allocation) -> (u64, u32) {
+			match allocation {
+				Allocation::Initial | Allocation::InitDone =>
+					(self.init_alloc_len, self.init_alloc_count),
+				Allocation::Full => (self.full_alloc_len, self.full_alloc_count),
+			}
+		}
+	}
+
 	#[derive(
 		Clone, PartialEq, Eq, Debug, Encode, Decode, MaxEncodedLen, TypeInfo, DecodeWithMemTracking,
 	)]
@@ -810,13 +821,7 @@ pub mod pallet {
 					// allocation. The slot opens now and overlaps the still-active one. Slots are
 					// additive, so the candidate is briefly over-allocated.
 					let config = Configuration::<T>::get();
-					let (len, count) = match allocation {
-						Allocation::Initial | Allocation::InitDone =>
-							(config.init_alloc_len, config.init_alloc_count),
-						Allocation::Full => (config.full_alloc_len, config.full_alloc_count),
-					};
-					let (starts_at, expiration) = Self::default_authorization_window();
-					T::DataStore::allocate_storage(&account, len, count, starts_at, expiration)?;
+					Self::allocate_slot(&account, config.allocation_size(&allocation))?;
 					Candidate::Selected {
 						cred,
 						entropy,
@@ -1010,16 +1015,15 @@ pub mod pallet {
 				CommittedDesigns::<T>::insert(family_id, design_index, DesignStatus::Reserved);
 			}
 
-			let (allocation, len, count) = if alloc_count < config.fasttrack_count {
+			let allocation = if alloc_count < config.fasttrack_count {
 				// Full (64MB) storage allocation
-				(Allocation::Full, config.full_alloc_len, config.full_alloc_count)
+				Allocation::Full
 			} else {
 				// Just an initial (2MB) storage allocation
-				(Allocation::Initial, config.init_alloc_len, config.init_alloc_count)
+				Allocation::Initial
 			};
 
-			let (starts_at, expiration) = Self::default_authorization_window();
-			T::DataStore::allocate_storage(&account, len, count, starts_at, expiration)?;
+			Self::allocate_slot(&account, config.allocation_size(&allocation))?;
 			AllocationCount::<T>::put(alloc_count.saturating_add(1));
 			let status = Candidate::Selected {
 				since: frame_system::Pallet::<T>::block_number(),
@@ -1062,11 +1066,7 @@ pub mod pallet {
 			// The full slot opens now and overlaps the still-active initial slot, so the
 			// candidate can submit full evidence immediately. Slots are additive, so the
 			// candidate is briefly over-allocated.
-			let len = config.full_alloc_len;
-			let count = config.full_alloc_count;
-
-			let (starts_at, expiration) = Self::default_authorization_window();
-			T::DataStore::allocate_storage(&account, len, count, starts_at, expiration)?;
+			Self::allocate_slot(&account, config.allocation_size(&allocation))?;
 			let status = Candidate::Selected {
 				since,
 				cred,
@@ -1536,10 +1536,12 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
-		/// Window for a slot that opens now and lasts `DefaultAuthorizationWindow` relay blocks.
-		fn default_authorization_window() -> (Option<RelayBlockNumber>, RelayBlockNumber) {
+		/// Allocate a `(len, count)` slot that opens now and lasts `DefaultAuthorizationWindow`
+		/// relay-chain blocks.
+		fn allocate_slot(account: &T::AccountId, (len, count): (u64, u32)) -> DispatchResult {
 			let relay_now = T::RelayChainBlockNumberProvider::current_block_number();
-			(None, relay_now.saturating_add(T::DefaultAuthorizationWindow::get()))
+			let expiration = relay_now.saturating_add(T::DefaultAuthorizationWindow::get());
+			T::DataStore::allocate_storage(account, len, count, None, expiration)
 		}
 
 		pub(super) fn referral_ok(referrer: PersonalId, target: &T::AccountId) {

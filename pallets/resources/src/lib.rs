@@ -85,9 +85,6 @@ pub mod pallet {
 
 	const LOG_TARGET: &str = "runtime::indiv-pallet-resources";
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
-	/// Relay-chain slot duration in seconds. Converts People period boundaries to relay-chain
-	/// block windows for long-term storage slots.
-	pub(crate) const RELAY_SLOT_SECONDS: u64 = 6;
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -285,6 +282,11 @@ pub mod pallet {
 		/// Source of the current relay-chain block number. Slot windows passed to
 		/// `LongTermStorageDataStore` are relay-chain block numbers.
 		type RelayChainBlockNumberProvider: BlockNumberProvider<BlockNumber = RelayBlockNumber>;
+
+		/// Relay-chain slot duration in milliseconds. It converts long-term storage period ends
+		/// to relay-chain blocks. It must be non-zero.
+		#[pallet::constant]
+		type RelayChainSlotDuration: Get<u64>;
 
 		/// Maximum number of spent long-term storage aliases that can be cleared in a single
 		/// `clear_expired_long_term_storage_aliases` call.
@@ -631,6 +633,10 @@ pub mod pallet {
 			assert!(
 				T::LongTermStoragePeriodDuration::get() > 0,
 				"LongTermStoragePeriodDuration must be non-zero",
+			);
+			assert!(
+				T::RelayChainSlotDuration::get() > 0,
+				"RelayChainSlotDuration must be non-zero",
 			);
 			assert!(
 				T::LongTermStorageClaimsPerPeriod::get() > 0,
@@ -1646,6 +1652,12 @@ pub mod pallet {
 			(now_secs / T::LongTermStoragePeriodDuration::get() as u64) as u32
 		}
 
+		/// The timestamp, in seconds, at which the long-term storage `period` ends.
+		pub(crate) fn long_term_storage_period_end_secs(period: u32) -> u64 {
+			(u64::from(period) + 1)
+				.saturating_mul(u64::from(T::LongTermStoragePeriodDuration::get()))
+		}
+
 		/// The relay-chain block window `(starts_at, expiration)` of the slot allocated for
 		/// `period`.
 		///
@@ -1660,15 +1672,17 @@ pub mod pallet {
 			period: u32,
 		) -> (Option<RelayBlockNumber>, RelayBlockNumber) {
 			let now_secs = T::Clock::now().as_secs();
-			let period_secs = u64::from(T::LongTermStoragePeriodDuration::get());
 			let current_period = Self::long_term_storage_period_from_timestamp(now_secs);
-			let relay_now = T::RelayChainBlockNumberProvider::current_block_number();
-			// Round up so that a slot never ends before the boundary it covers.
+			// Read the relay-chain block only when an end needs an estimate. Round up so that a
+			// slot never ends before the boundary it covers.
 			let estimate_end = |of_period: u32| -> RelayBlockNumber {
-				let end_secs = u64::from(of_period.saturating_add(1)).saturating_mul(period_secs);
+				let millis_until_end = Self::long_term_storage_period_end_secs(of_period)
+					.saturating_sub(now_secs)
+					.saturating_mul(1000);
 				let blocks_until_end: RelayBlockNumber =
-					end_secs.saturating_sub(now_secs).div_ceil(RELAY_SLOT_SECONDS).saturated_into();
-				relay_now.saturating_add(blocks_until_end)
+					millis_until_end.div_ceil(T::RelayChainSlotDuration::get()).saturated_into();
+				T::RelayChainBlockNumberProvider::current_block_number()
+					.saturating_add(blocks_until_end)
 			};
 
 			let stored = LongTermStoragePeriodBoundaries::<T>::get();
@@ -1712,10 +1726,7 @@ pub mod pallet {
 
 		/// Whether the long-term storage `period` has ended and can be cleared.
 		pub(crate) fn is_long_term_storage_period_clearable(period: u32) -> bool {
-			let now_secs = T::Clock::now().as_secs();
-			let period_duration = T::LongTermStoragePeriodDuration::get() as u64;
-			let period_end = (period as u64 + 1).saturating_mul(period_duration);
-			now_secs > period_end
+			T::Clock::now().as_secs() > Self::long_term_storage_period_end_secs(period)
 		}
 
 		pub(crate) fn validate_clear_long_term_storage_period(

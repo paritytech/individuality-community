@@ -87,8 +87,11 @@ fn default_authorization_window_updates_change_what_the_proof_of_ink_pallet_read
 		set_bulletin_parameter(bulletin_storage::DefaultAuthorizationWindow, 0);
 		assert_eq!(DefaultAuthorizationWindow::get(), 1);
 
-		set_bulletin_parameter(bulletin_storage::DefaultAuthorizationWindow, 7 * 14_400);
-		assert_eq!(DefaultAuthorizationWindow::get(), 7 * 14_400);
+		set_bulletin_parameter(
+			bulletin_storage::DefaultAuthorizationWindow,
+			7 * paseo_runtime_constants::time::DAYS,
+		);
+		assert_eq!(DefaultAuthorizationWindow::get(), 7 * paseo_runtime_constants::time::DAYS);
 	});
 }
 

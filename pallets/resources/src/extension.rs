@@ -67,7 +67,7 @@ pub enum CustomValidity {
 	StmtStoreReplacementTooEarly = 228,
 	/// The requested expired statement store cleanup is not currently valid.
 	InvalidExpiredStmtStoreCleanup = 229,
-	/// The long-term storage period is outside the accepted current/grace window.
+	/// The long-term storage period is neither the current period nor the next one.
 	InvalidLongTermStoragePeriod = 230,
 	/// The long-term storage alias has already been used in this period.
 	LongTermStorageAliasAlreadySpent = 231,

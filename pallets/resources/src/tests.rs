@@ -3167,36 +3167,14 @@ mod long_term_storage {
 			System::set_block_number(1);
 			let day_secs: u64 = 24 * 60 * 60;
 			let now_secs = 3 * day_secs + 100;
-			set_time_sec(now_secs);
-			let relay_now: u32 = 1_000;
-			MOCK_RELAY_BLOCK.with(|cell| cell.set(relay_now));
-			BULLETIN_LAST_CALL.with(|cell| *cell.borrow_mut() = None);
+			let current_period = Resources::long_term_storage_period_from_timestamp(now_secs);
 
-			let current_period =
-				Resources::long_term_storage_period_from_timestamp(TestClock::now().as_secs());
-			let target_account = id_to_account(99);
+			let (starts_at, expiration) = claim_window_at(now_secs, 1_000, 7, current_period);
 
-			assert_ok!(Resources::claim_long_term_storage(
-				lts_people_origin(7),
-				current_period,
-				0,
-				target_account.clone()
-			));
-
-			let period_secs = u64::from(<Test as Config>::LongTermStoragePeriodDuration::get());
-			let current_period_end_secs = (u64::from(current_period) + 1) * period_secs;
-			let expected_expiration = relay_now +
-				(current_period_end_secs - now_secs)
-					.div_ceil(RELAY_SLOT_SECONDS)
-					.saturated_into::<u32>();
-			let expected = LastBulletinAllocation {
-				who: target_account,
-				len: 64 * 1024 * 1024,
-				count: 32,
-				starts_at: None,
-				expiration: expected_expiration,
-			};
-			assert_eq!(BULLETIN_LAST_CALL.with(|cell| cell.borrow().clone()), Some(expected));
+			assert_eq!(starts_at, None);
+			assert_eq!(expiration, 1_000 + blocks_until_period_end(now_secs, current_period));
+			let last = last_bulletin_allocation().unwrap();
+			assert_eq!((last.who, last.len, last.count), (id_to_account(99), 64 * 1024 * 1024, 32));
 		});
 	}
 
@@ -3206,40 +3184,15 @@ mod long_term_storage {
 			System::set_block_number(1);
 			let day_secs: u64 = 24 * 60 * 60;
 			let now_secs = 3 * day_secs + 100;
-			set_time_sec(now_secs);
-			let relay_now: u32 = 1_000;
-			MOCK_RELAY_BLOCK.with(|cell| cell.set(relay_now));
-			BULLETIN_LAST_CALL.with(|cell| *cell.borrow_mut() = None);
-
-			let current_period =
-				Resources::long_term_storage_period_from_timestamp(TestClock::now().as_secs());
+			let current_period = Resources::long_term_storage_period_from_timestamp(now_secs);
 			let next_period = current_period + 1;
-			let target_account = id_to_account(99);
 
-			assert_ok!(Resources::claim_long_term_storage(
-				lts_people_origin(7),
-				next_period,
-				0,
-				target_account.clone()
-			));
+			let (starts_at, expiration) = claim_window_at(now_secs, 1_000, 7, next_period);
 
-			let period_secs = u64::from(<Test as Config>::LongTermStoragePeriodDuration::get());
-			let current_period_end_secs = (u64::from(current_period) + 1) * period_secs;
-			let blocks_until_current_end: u32 = (current_period_end_secs - now_secs)
-				.div_ceil(RELAY_SLOT_SECONDS)
-				.saturated_into();
-			let period_relay_blocks: u32 =
-				period_secs.div_ceil(RELAY_SLOT_SECONDS).saturated_into();
-			let expected_starts_at = relay_now + blocks_until_current_end;
-			let expected_expiration = expected_starts_at + period_relay_blocks;
-			let expected = LastBulletinAllocation {
-				who: target_account,
-				len: 64 * 1024 * 1024,
-				count: 32,
-				starts_at: Some(expected_starts_at),
-				expiration: expected_expiration,
-			};
-			assert_eq!(BULLETIN_LAST_CALL.with(|cell| cell.borrow().clone()), Some(expected));
+			assert_eq!(starts_at, Some(1_000 + blocks_until_period_end(now_secs, current_period)));
+			assert_eq!(expiration, 1_000 + blocks_until_period_end(now_secs, next_period));
+			let last = last_bulletin_allocation().unwrap();
+			assert_eq!((last.who, last.len, last.count), (id_to_account(99), 64 * 1024 * 1024, 32));
 
 			// Forward booking spends the alias in the next period only. Replay protection is
 			// per period.
@@ -3263,22 +3216,23 @@ mod long_term_storage {
 		period: u32,
 	) -> (Option<u32>, u32) {
 		set_time_sec(now_secs);
-		MOCK_RELAY_BLOCK.with(|cell| cell.set(relay_now));
+		set_relay_block(relay_now);
 		assert_ok!(Resources::claim_long_term_storage(
 			lts_people_origin(alias_id),
 			period,
 			0,
 			id_to_account(99)
 		));
-		let last = BULLETIN_LAST_CALL.with(|cell| cell.borrow().clone()).unwrap();
+		let last = last_bulletin_allocation().unwrap();
 		(last.starts_at, last.expiration)
 	}
 
 	/// Relay-chain blocks from `now_secs` to the end of `period`, rounded up.
 	fn blocks_until_period_end(now_secs: u64, period: u32) -> u32 {
 		let period_secs = u64::from(<Test as Config>::LongTermStoragePeriodDuration::get());
-		((u64::from(period) + 1) * period_secs - now_secs)
-			.div_ceil(RELAY_SLOT_SECONDS)
+		let slot_millis = <Test as Config>::RelayChainSlotDuration::get();
+		(((u64::from(period) + 1) * period_secs - now_secs) * 1000)
+			.div_ceil(slot_millis)
 			.saturated_into()
 	}
 

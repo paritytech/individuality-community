@@ -76,14 +76,6 @@ impl<Value: Ord, Inner: Get<Value>, Minimum: Get<Value>> Get<Value> for AtLeast<
 	}
 }
 
-/// Subtracts one with saturation from a `u32` getter.
-pub struct SaturatingSubOne<Inner>(PhantomData<Inner>);
-impl<Inner: Get<u32>> Get<u32> for SaturatingSubOne<Inner> {
-	fn get() -> u32 {
-		Inner::get().saturating_sub(1)
-	}
-}
-
 /// Returns the inner value, or `Maximum` in `runtime-benchmarks` builds.
 ///
 /// Benchmark sweeps and worst-case budget checks must cover the largest value reachable in
@@ -158,12 +150,6 @@ mod tests {
 	fn at_least_preserves_in_range_values_and_clamps_the_minimum() {
 		assert_eq!(<AtLeast<ConstU32<20>, ConstU32<10>> as Get<u32>>::get(), 20);
 		assert_eq!(<AtLeast<ConstU32<10>, ConstU32<20>> as Get<u32>>::get(), 20);
-	}
-
-	#[test]
-	fn saturating_sub_one_never_underflows() {
-		assert_eq!(SaturatingSubOne::<ConstU32<0>>::get(), 0);
-		assert_eq!(SaturatingSubOne::<ConstU32<10>>::get(), 9);
 	}
 
 	#[cfg(not(feature = "runtime-benchmarks"))]
