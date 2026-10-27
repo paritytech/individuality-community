@@ -3844,8 +3844,15 @@ mod evm_fixture {
 	}
 
 	fn deploy_with_args(owner: &AccountId32, mut code: Vec<u8>, args: Vec<u8>) -> H160 {
-		// An EVM constructor reads its arguments appended to the init code, not from the call data.
-		code.extend_from_slice(&args);
+		// An EVM constructor reads its arguments appended to the init code. A PolkaVM blob, which
+		// starts with its magic bytes, would no longer parse with them appended, and its
+		// constructor reads them from the call data instead.
+		let data = if code.starts_with(b"PVM\0") {
+			args
+		} else {
+			code.extend_from_slice(&args);
+			Vec::new()
+		};
 		pallet_revive::Pallet::<Test>::bare_instantiate(
 			RuntimeOrigin::signed(owner.clone()),
 			0u32.into(),
@@ -3854,7 +3861,7 @@ mod evm_fixture {
 				deposit_limit: 1u64 << 50,
 			},
 			Code::Upload(code),
-			Vec::new(),
+			data,
 			// A fixed salt derives the address from the code, so deploying two different contracts
 			// in one test yields two different addresses.
 			Some([0u8; 32]),
