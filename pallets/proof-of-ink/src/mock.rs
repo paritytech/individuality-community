@@ -16,6 +16,7 @@
 
 use crate::*;
 use codec::DecodeWithMemTracking;
+use core::cell::{Cell, RefCell};
 use frame_support::{
 	derive_impl,
 	dispatch::GetDispatchInfo,
@@ -33,11 +34,11 @@ use sp_runtime::{
 	morph_types,
 	testing::{TestSignature, UintAuthorityId},
 	traits::{
-		Applyable, BlakeTwo256, Checkable, DispatchInfoOf, IdentityLookup,
+		Applyable, BlakeTwo256, BlockNumberProvider, Checkable, DispatchInfoOf, IdentityLookup,
 		TransactionExtension as TransactionExtensionTrait, ValidateResult,
 	},
 	transaction_validity::{InvalidTransaction, TransactionSource},
-	BuildStorage, DispatchError, TransactionOutcome, Weight,
+	BuildStorage, DispatchError, DispatchResult, TransactionOutcome, Weight,
 };
 
 pub const DENIED_PAYMENT_ACCOUNT: u64 = 111;
@@ -239,6 +240,61 @@ parameter_types! {
 
 pub type MaxActiveReferrals = ConstU32<10>;
 
+/// Relay-chain blocks per day at a 6 s slot duration.
+pub const RELAY_DAY_BLOCKS: RelayBlockNumber = 14_400;
+/// Lifetime of a storage slot, in relay-chain blocks.
+pub type DefaultAuthorizationWindow = ConstU32<{ 14 * RELAY_DAY_BLOCKS }>;
+
+/// Arguments of the most recent `MockDataStore::allocate_storage` call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LastAllocation {
+	pub who: AccountId,
+	pub len: u64,
+	pub count: u32,
+	pub starts_at: Option<RelayBlockNumber>,
+	pub expiration: RelayBlockNumber,
+}
+
+thread_local! {
+	pub static LAST_ALLOCATION: RefCell<Option<LastAllocation>> = const { RefCell::new(None) };
+	pub static MOCK_RELAY_BLOCK: Cell<RelayBlockNumber> = const { Cell::new(0) };
+}
+
+/// Records each allocation so tests can assert on the forwarded slot window.
+pub struct MockDataStore;
+impl AllocateStorage<AccountId> for MockDataStore {
+	fn allocate_storage(
+		who: &AccountId,
+		len: u64,
+		count: u32,
+		starts_at: Option<RelayBlockNumber>,
+		expiration: RelayBlockNumber,
+	) -> DispatchResult {
+		LAST_ALLOCATION.with(|last| {
+			*last.borrow_mut() =
+				Some(LastAllocation { who: *who, len, count, starts_at, expiration })
+		});
+		Ok(())
+	}
+}
+
+pub fn last_allocation() -> Option<LastAllocation> {
+	LAST_ALLOCATION.with(|last| last.borrow().clone())
+}
+
+pub fn set_relay_block(block: RelayBlockNumber) {
+	MOCK_RELAY_BLOCK.with(|cell| cell.set(block))
+}
+
+/// Relay-chain block number provider backed by `MOCK_RELAY_BLOCK`.
+pub struct MockRelayBlockProvider;
+impl BlockNumberProvider for MockRelayBlockProvider {
+	type BlockNumber = RelayBlockNumber;
+	fn current_block_number() -> RelayBlockNumber {
+		MOCK_RELAY_BLOCK.with(|cell| cell.get())
+	}
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 impl BenchmarkHelper<Test> for Test {
 	fn create_tickets(
@@ -272,7 +328,9 @@ impl crate::Config for Test {
 	type TicketSignature = TestSignature;
 	type TicketPublic = UintAuthorityId;
 	type Ticket = u64;
-	type DataStore = ();
+	type DataStore = MockDataStore;
+	type RelayChainBlockNumberProvider = MockRelayBlockProvider;
+	type DefaultAuthorizationWindow = DefaultAuthorizationWindow;
 	type MaxActiveReferrals = MaxActiveReferrals;
 	type MaxRetryAttempts = ConstU32<1>;
 	type MaxReimbursementValues = ConstU32<10>;

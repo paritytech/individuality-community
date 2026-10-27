@@ -1038,17 +1038,31 @@ impl CleanUpAlias for () {
 	}
 }
 
+/// A relay-chain block number. Storage slot windows on the remote chain are expressed in it.
+pub type RelayBlockNumber = u32;
+
 /// An abstract interface for allocating storage on a remote chain (e.g. the Bulletin chain).
+///
+/// `starts_at = None` means the slot is active immediately. `Some(block)` books a slot that opens
+/// at that relay-chain block.
 pub trait AllocateStorage<AccountId> {
-	fn allocate_storage(who: &AccountId, len: u64, count: u32) -> DispatchResult;
-	fn refresh_allocation(who: &AccountId) -> DispatchResult;
+	fn allocate_storage(
+		who: &AccountId,
+		len: u64,
+		count: u32,
+		starts_at: Option<RelayBlockNumber>,
+		expiration: RelayBlockNumber,
+	) -> DispatchResult;
 }
 
 impl<A> AllocateStorage<A> for () {
-	fn allocate_storage(_: &A, _: u64, _: u32) -> DispatchResult {
-		Ok(())
-	}
-	fn refresh_allocation(_: &A) -> DispatchResult {
+	fn allocate_storage(
+		_: &A,
+		_: u64,
+		_: u32,
+		_: Option<RelayBlockNumber>,
+		_: RelayBlockNumber,
+	) -> DispatchResult {
 		Ok(())
 	}
 }

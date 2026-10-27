@@ -11,9 +11,12 @@ use frame_support::{
 	PalletId,
 };
 use indiv_pallet_resources::types::LongTermStorageAllocation;
-use indiv_support::parameters::{
-	AtLeast, AtLeastOne, AtMost, BenchmarkMax, SaturatingSubOne, StatementAllowanceGetter,
-	StatementAllowanceParameter,
+use indiv_support::{
+	parameters::{
+		AtLeast, AtLeastOne, AtMost, BenchmarkMax, StatementAllowanceGetter,
+		StatementAllowanceParameter,
+	},
+	traits::RelayBlockNumber,
 };
 use sp_runtime::traits::AccountIdConversion;
 
@@ -73,8 +76,7 @@ pub mod dynamic_params {
 	pub mod bulletin_storage {
 		#[codec(index = 0)]
 		pub static LongTermStoragePeriodDuration: u32 = 14 * 24 * 60 * 60;
-		#[codec(index = 1)]
-		pub static LongTermStorageGraceWindow: u32 = 60 * 60;
+		// Index 1 was `LongTermStorageGraceWindow`. It is retired and must not be reused.
 		#[codec(index = 2)]
 		pub static LongTermStorageClaimsPerPeriod: u8 = 100;
 		#[codec(index = 3)]
@@ -85,6 +87,10 @@ pub mod dynamic_params {
 		#[codec(index = 5)]
 		pub static LongTermStorageAllowanceForLitePeople: LongTermStorageAllocation =
 			LongTermStorageAllocation { transactions: 10, bytes: 4 * 1024 * 1024 };
+		/// Lifetime of a proof-of-ink evidence storage slot on Bulletin, in relay-chain blocks.
+		#[codec(index = 6)]
+		pub static DefaultAuthorizationWindow: RelayBlockNumber =
+			14 * paseo_runtime_constants::time::DAYS;
 	}
 
 	/// People airdrop draw funding.
@@ -168,12 +174,6 @@ pub type NotificationPeriodDuration = dynamic_params::statement_storage::Notific
 pub type LongTermStoragePeriodDuration =
 	AtLeastOne<dynamic_params::bulletin_storage::LongTermStoragePeriodDuration>;
 
-/// Long-term storage grace window, kept smaller than [`LongTermStoragePeriodDuration`].
-pub type LongTermStorageGraceWindow = AtMost<
-	dynamic_params::bulletin_storage::LongTermStorageGraceWindow,
-	SaturatingSubOne<LongTermStoragePeriodDuration>,
->;
-
 /// Long-term storage claims per period, kept non-zero.
 pub type LongTermStorageClaimsPerPeriod =
 	AtLeastOne<dynamic_params::bulletin_storage::LongTermStorageClaimsPerPeriod>;
@@ -191,6 +191,11 @@ pub type LongTermStorageAllowanceForPeople =
 	dynamic_params::bulletin_storage::LongTermStorageAllowanceForPeople;
 pub type LongTermStorageAllowanceForLitePeople =
 	dynamic_params::bulletin_storage::LongTermStorageAllowanceForLitePeople;
+
+/// Proof-of-ink storage slot lifetime in relay-chain blocks, kept non-zero. A zero window would
+/// expire every slot on arrival.
+pub type DefaultAuthorizationWindow =
+	AtLeastOne<dynamic_params::bulletin_storage::DefaultAuthorizationWindow>;
 
 /// Fee required to register as a lite person without device attestation.
 ///

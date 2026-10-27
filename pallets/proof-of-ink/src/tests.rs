@@ -31,6 +31,11 @@ use sp_runtime::{
 };
 use verifiable::mock::Mock;
 
+/// Lifetime of a storage slot in relay-chain blocks, as configured in the mock.
+fn default_authorization_window() -> RelayBlockNumber {
+	<Test as Config>::DefaultAuthorizationWindow::get()
+}
+
 #[test]
 fn basic_initialize_works() {
 	TestExt::new().execute_with(|| {});
@@ -1000,11 +1005,17 @@ fn commit_works() {
 			Some(Candidate::Selected { allocation, .. })
 			if allocation == Allocation::Full
 		));
-		// TODO(paritytech/individuality#1121): assert that correct storage has been allocated when
-		// it's implemented e.g.:
-		// assert_eq!(DataStore::<Test>::check_storage(CANDIDATE),
-		// 	(config.full_alloc_len, config.full_alloc_count)
-		// );
+		let config = Configuration::<Test>::get();
+		assert_eq!(
+			last_allocation(),
+			Some(LastAllocation {
+				who: CANDIDATE,
+				len: config.full_alloc_len,
+				count: config.full_alloc_count,
+				starts_at: None,
+				expiration: default_authorization_window(),
+			})
+		);
 
 		// Existing candidate can commit initial now that the fast_tracks are used up
 		assert_ok!(mock_candidate(INITIAL_CANDIDATE, None, None, None, false));
@@ -1025,11 +1036,16 @@ fn commit_works() {
 			Some(Candidate::Selected { allocation, .. })
 			if allocation == Allocation::Initial
 		));
-		// TODO(paritytech/individuality#1121): assert that correct storage has been allocated when
-		// it's implemented e.g.:
-		// assert_eq!(DataStore::<Test>::check_storage(INITIAL_CANDIDATE),
-		// 	(config.init_alloc_len, config.init_alloc_count)
-		// );
+		assert_eq!(
+			last_allocation(),
+			Some(LastAllocation {
+				who: INITIAL_CANDIDATE,
+				len: config.init_alloc_len,
+				count: config.init_alloc_count,
+				starts_at: None,
+				expiration: default_authorization_window(),
+			})
+		);
 
 		// Existing candidate cannot commit with invalid ID
 		assert_ok!(mock_candidate(ID_CANDIDATE, None, None, None, false));
@@ -1086,11 +1102,16 @@ fn commit_works() {
 			Some(Candidate::Selected { allocation, .. })
 			if allocation == Allocation::Initial
 		));
-		// TODO(paritytech/individuality#1121): assert that correct storage has been allocated when
-		// it's implemented e.g.:
-		// assert_eq!(DataStore::<Test>::check_storage(CANDIDATE),
-		// 	(config.full_alloc_len, config.full_alloc_count)
-		// );
+		assert_eq!(
+			last_allocation(),
+			Some(LastAllocation {
+				who: ID_CANDIDATE,
+				len: config.init_alloc_len,
+				count: config.init_alloc_count,
+				starts_at: None,
+				expiration: default_authorization_window(),
+			})
+		);
 
 		// Ensure the max allocation config is respected
 		assert_ok!(mock_candidate(OVERALLOCATED_CANDIDATE, None, None, None, false));
@@ -1155,6 +1176,7 @@ fn allocate_full_works() {
 
 		advance_by(1);
 		let alloc_count = AllocationCount::<Test>::get();
+		set_relay_block(1_000);
 		assert_ok!(PoI::allocate_full(RuntimeOrigin::signed(CANDIDATE)));
 		System::assert_last_event(Event::FullyAllocated { account_id: CANDIDATE }.into());
 		assert!(matches!(
@@ -1163,6 +1185,40 @@ fn allocate_full_works() {
 			if allocation == Allocation::Full
 		));
 		assert!(alloc_count == AllocationCount::<Test>::get());
+		// The new slot carries the full allocation, not the difference to the initial one.
+		let config = Configuration::<Test>::get();
+		assert_eq!(
+			last_allocation(),
+			Some(LastAllocation {
+				who: CANDIDATE,
+				len: config.full_alloc_len,
+				count: config.full_alloc_count,
+				starts_at: None,
+				expiration: 1_000 + default_authorization_window(),
+			})
+		);
+	});
+}
+
+#[test]
+fn commit_anchors_slot_expiration_to_relay_block() {
+	TestExt::new().execute_with(|| {
+		const CANDIDATE: AccountId = 9;
+
+		advance_by(1);
+		assert_ok!(mock_designs());
+		assert_ok!(mock_candidate(CANDIDATE, None, None, None, false));
+		advance_by(1);
+		set_relay_block(123_456);
+		assert_ok!(PoI::commit(
+			RuntimeOrigin::signed(CANDIDATE),
+			InkChoice::DesignedElective(0, 0),
+			None
+		));
+
+		let allocation = last_allocation().expect("commit allocates storage");
+		assert_eq!(allocation.starts_at, None);
+		assert_eq!(allocation.expiration, 123_456 + default_authorization_window());
 	});
 }
 
@@ -2809,6 +2865,7 @@ fn retry_granted_emits_event() {
 
 		// Judge with Truth(False). `failed` increments from 0 to 1. Since 1 is not greater
 		// than MaxRetryAttempts (also 1), a retry is granted instead of removing the candidate.
+		set_relay_block(2_000);
 		assert_ok!(PoI::judged(RuntimeOrigin::root(), ticket, ctx, Judgement::Truth(False)));
 		System::assert_has_event(Event::RetryGranted { account_id: CANDIDATE, failures: 1 }.into());
 
@@ -2816,6 +2873,53 @@ fn retry_granted_emits_event() {
 			Candidates::<Test>::get(CANDIDATE),
 			Some(Candidate::Selected { failed: 1, .. })
 		));
+
+		// The retry opens a fresh slot sized to the candidate's full allocation.
+		let config = Configuration::<Test>::get();
+		assert_eq!(
+			last_allocation(),
+			Some(LastAllocation {
+				who: CANDIDATE,
+				len: config.full_alloc_len,
+				count: config.full_alloc_count,
+				starts_at: None,
+				expiration: 2_000 + default_authorization_window(),
+			})
+		);
+	});
+}
+
+#[test]
+fn retry_allocates_initial_budget_for_initial_candidate() {
+	TestExt::new().execute_with(|| {
+		advance_by(1);
+		assert_ok!(mock_designs());
+
+		const CANDIDATE: u64 = 100;
+		let (ticket, ctx) = prepare_for_judgement(CANDIDATE);
+		assert_ok!(mock_candidate(
+			CANDIDATE,
+			None,
+			Some((InkChoice::DesignedElective(0, 0), Allocation::Initial)),
+			Some(ticket),
+			false
+		));
+
+		set_relay_block(3_000);
+		assert_ok!(PoI::judged(RuntimeOrigin::root(), ticket, ctx, Judgement::Truth(False)));
+		System::assert_has_event(Event::RetryGranted { account_id: CANDIDATE, failures: 1 }.into());
+
+		let config = Configuration::<Test>::get();
+		assert_eq!(
+			last_allocation(),
+			Some(LastAllocation {
+				who: CANDIDATE,
+				len: config.init_alloc_len,
+				count: config.init_alloc_count,
+				starts_at: None,
+				expiration: 3_000 + default_authorization_window(),
+			})
+		);
 	});
 }
 

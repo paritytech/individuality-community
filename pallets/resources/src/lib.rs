@@ -61,13 +61,13 @@ use indiv_support::{
 	labels::is_lite_person_label,
 	traits::{
 		Alias, AllocateStorage, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar,
-		Context, MembershipProver, RingExponent, Username,
+		Context, MembershipProver, RelayBlockNumber, RingExponent, Username,
 	},
 	tx_priority,
 	utils::BigEndianU32,
 	weight_budget::OcwWeightBudget,
 };
-use sp_runtime::traits::{IdentifyAccount, Verify};
+use sp_runtime::traits::{BlockNumberProvider, IdentifyAccount, Verify};
 use types::{
 	ConsumerInfo, Credibility, LongTermStorageAllocation, MembershipCollection,
 	NotificationReference, PersonalUsernameChoice, ReservationQueueEntryOf,
@@ -80,11 +80,14 @@ pub mod pallet {
 	use super::*;
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
-	use sp_runtime::traits::Zero;
+	use sp_runtime::{traits::Zero, SaturatedConversion};
 	use sp_statement_store::{decrease_allowance_by, increase_allowance_by, StatementAllowance};
 
 	const LOG_TARGET: &str = "runtime::indiv-pallet-resources";
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
+	/// Relay-chain slot duration in seconds. Converts People period boundaries to relay-chain
+	/// block windows for long-term storage slots.
+	pub(crate) const RELAY_SLOT_SECS: u64 = 6;
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -270,16 +273,6 @@ pub mod pallet {
 		/// This parameter can be changed at any time.
 		type LongTermStorageClaimsPerPeriod: Get<u8>;
 
-		/// Extra time, in seconds, during which the previous long-term storage period is still
-		/// accepted after a rollover.
-		///
-		/// Extra time, in seconds, during which the previous long-term storage period is accepted
-		/// after a rollover.
-		///
-		/// Changing this value requires a migration that updates the existing state.
-		#[pallet::constant]
-		type LongTermStorageGraceWindow: Get<u32>;
-
 		/// The long-term storage allocation granted per claim for people.
 		type LongTermStorageAllowanceForPeople: Get<LongTermStorageAllocation>;
 
@@ -288,6 +281,10 @@ pub mod pallet {
 
 		/// The data store used to allocate long-term storage on a remote chain.
 		type LongTermStorageDataStore: AllocateStorage<Self::AccountId>;
+
+		/// Source of the current relay-chain block number. Slot windows passed to
+		/// `LongTermStorageDataStore` are relay-chain block numbers.
+		type RelayChainBlockNumberProvider: BlockNumberProvider<BlockNumber = RelayBlockNumber>;
 
 		/// Maximum number of spent long-term storage aliases that can be cleared in a single
 		/// `clear_expired_long_term_storage_aliases` call.
@@ -625,10 +622,6 @@ pub mod pallet {
 			assert!(
 				T::LongTermStoragePeriodDuration::get() > 0,
 				"LongTermStoragePeriodDuration must be non-zero",
-			);
-			assert!(
-				T::LongTermStorageGraceWindow::get() < T::LongTermStoragePeriodDuration::get(),
-				"LongTermStorageGraceWindow must be smaller than LongTermStoragePeriodDuration",
 			);
 			assert!(
 				T::LongTermStorageClaimsPerPeriod::get() > 0,
@@ -1058,8 +1051,7 @@ pub mod pallet {
 		/// validation.
 		///
 		/// Parameters:
-		/// * `period`: the claiming period. Must be the current period or the previous one if
-		///   within the grace window.
+		/// * `period`: the claiming period. Must be the current period or the next one.
 		/// * `counter`: the claim counter within the period. Must be less than
 		///   `LongTermStorageClaimsPerPeriod`. Each counter produces a distinct alias.
 		/// * `account_id`: the account to authorize for storage on the remote chain.
@@ -1080,12 +1072,16 @@ pub mod pallet {
 
 			SpentLongTermStorageAliases::<T>::insert(BigEndianU32::from(period), alias, ());
 
+			let (starts_at, expiration) = Self::long_term_storage_window(period);
+
 			// The alias is consumed regardless of allocation success, so a failing remote chain
 			// cannot be used to spam this extrinsic with the same proof.
 			if T::LongTermStorageDataStore::allocate_storage(
 				&account_id,
 				allocation.bytes,
 				allocation.transactions,
+				starts_at,
+				expiration,
 			)
 			.is_err()
 			{
@@ -1112,7 +1108,7 @@ pub mod pallet {
 		/// Clear spent long-term storage aliases for an expired period.
 		///
 		/// This is a permissionless call authorized via the `authorize` attribute. It can be
-		/// called by anyone once a period has fully expired (past the grace window).
+		/// called by anyone once a period has ended.
 		///
 		/// Parameters:
 		/// * `period`: the expired period to clear aliases for.
@@ -1641,27 +1637,65 @@ pub mod pallet {
 			(now_secs / T::LongTermStoragePeriodDuration::get() as u64) as u32
 		}
 
+		/// The relay-chain block window `(starts_at, expiration)` of the slot allocated for
+		/// `period`.
+		///
+		/// A claim for the next period books a slot ahead of time: `starts_at` is the relay-chain
+		/// block of the current period boundary and the slot lasts one period from there. Any
+		/// other period is the current one, because the transaction extension rejects every
+		/// other value before dispatch. It gets a slot that is active now: `starts_at` is `None`
+		/// and the slot ends at the current period boundary.
+		///
+		/// Seconds convert to relay-chain blocks at `RELAY_SLOT_SECS` and round up, so a slot
+		/// never ends before the boundary it covers. The remote chain stores the window as
+		/// opaque relay-chain block numbers.
+		pub fn long_term_storage_window(
+			period: u32,
+		) -> (Option<RelayBlockNumber>, RelayBlockNumber) {
+			let now_secs = T::Clock::now().as_secs();
+			let period_secs = u64::from(T::LongTermStoragePeriodDuration::get());
+			let current_period = Self::long_term_storage_period_from_timestamp(now_secs);
+
+			let current_period_end_secs =
+				u64::from(current_period.saturating_add(1)).saturating_mul(period_secs);
+			// Round up so the window covers the whole period. Truncation can end the slot one
+			// relay block early. `LongTermStoragePeriodDuration` is a `u32` in seconds, so the
+			// block count of one period fits in `RelayBlockNumber`.
+			let blocks_until_current_end: RelayBlockNumber = current_period_end_secs
+				.saturating_sub(now_secs)
+				.div_ceil(RELAY_SLOT_SECS)
+				.saturated_into();
+			let period_relay_blocks: RelayBlockNumber =
+				period_secs.div_ceil(RELAY_SLOT_SECS).saturated_into();
+			let relay_now = T::RelayChainBlockNumberProvider::current_block_number();
+
+			if period == current_period.saturating_add(1) {
+				let starts_at = relay_now.saturating_add(blocks_until_current_end);
+				let expiration = starts_at.saturating_add(period_relay_blocks);
+				(Some(starts_at), expiration)
+			} else {
+				let expiration = relay_now.saturating_add(blocks_until_current_end);
+				(None, expiration)
+			}
+		}
+
 		pub fn is_accepted_long_term_storage_period(period: u32) -> bool {
 			let now_secs = T::Clock::now().as_secs();
 			let current_period = Self::long_term_storage_period_from_timestamp(now_secs);
 			if period == current_period {
 				return true;
 			}
-			let now_secs_minus_grace =
-				now_secs.saturating_sub(u64::from(T::LongTermStorageGraceWindow::get()));
-			let previous_period_in_grace =
-				Self::long_term_storage_period_from_timestamp(now_secs_minus_grace);
-			period == previous_period_in_grace
+			// Forward booking: the next period can be claimed before the current one ends, so a
+			// renewal has its slot waiting.
+			period == current_period.saturating_add(1)
 		}
 
-		/// Whether the long-term storage `period` is past its grace window and can be cleared.
+		/// Whether the long-term storage `period` has ended and can be cleared.
 		pub(crate) fn is_long_term_storage_period_clearable(period: u32) -> bool {
 			let now_secs = T::Clock::now().as_secs();
 			let period_duration = T::LongTermStoragePeriodDuration::get() as u64;
-			let grace = T::LongTermStorageGraceWindow::get() as u64;
-			let period_claimable_until =
-				(period as u64 + 1).saturating_mul(period_duration).saturating_add(grace);
-			now_secs > period_claimable_until
+			let period_end = (period as u64 + 1).saturating_mul(period_duration);
+			now_secs > period_end
 		}
 
 		pub(crate) fn validate_clear_long_term_storage_period(

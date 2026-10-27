@@ -1042,7 +1042,7 @@ mod benches {
 		n: Linear<1, { T::LongTermStorageCleanupLimit::get() }>,
 	) -> Result<(), BenchmarkError> {
 		// Place time inside period 0 so the claim dispatches accept it as the current period,
-		// then advance past period end + grace window to make it clearable.
+		// then advance past the period end to make it clearable.
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(100));
 		let past_period: u32 = 0;
 		let past_period_key = indiv_support::utils::BigEndianU32::from(past_period);
@@ -1064,8 +1064,7 @@ mod benches {
 		}
 
 		let period_duration = T::LongTermStoragePeriodDuration::get() as u64;
-		let grace = T::LongTermStorageGraceWindow::get() as u64;
-		let clearable_after = (u64::from(past_period) + 1) * period_duration + grace + 1;
+		let clearable_after = (u64::from(past_period) + 1) * period_duration + 1;
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(clearable_after));
 
 		#[extrinsic_call]
@@ -1089,8 +1088,7 @@ mod benches {
 		);
 
 		let period_duration = T::LongTermStoragePeriodDuration::get() as u64;
-		let grace = T::LongTermStorageGraceWindow::get() as u64;
-		let clearable_after = (u64::from(past_period) + 1) * period_duration + grace + 1;
+		let clearable_after = (u64::from(past_period) + 1) * period_duration + 1;
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(clearable_after));
 
 		let call =

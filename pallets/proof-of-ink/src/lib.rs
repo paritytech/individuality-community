@@ -41,7 +41,7 @@ use indiv_support::traits::{
 };
 use scale_info::TypeInfo;
 use sp_arithmetic::traits::Saturating;
-use sp_runtime::traits::{BadOrigin, IdentifyAccount, Verify};
+use sp_runtime::traits::{BadOrigin, BlockNumberProvider, IdentifyAccount, Verify};
 use sp_std::vec;
 use verifiable::GenerateVerifiable;
 
@@ -61,7 +61,7 @@ pub use benchmarking::BenchmarkHelper;
 pub use pallet::*;
 pub use weights::WeightInfo;
 
-pub use indiv_support::traits::AllocateStorage;
+pub use indiv_support::traits::{AllocateStorage, RelayBlockNumber};
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -129,6 +129,15 @@ pub mod pallet {
 
 		/// The storage allocator.
 		type DataStore: AllocateStorage<Self::AccountId>;
+
+		/// Source of the current relay-chain block number. Slot expirations passed to
+		/// `DataStore` are relay-chain block numbers.
+		type RelayChainBlockNumberProvider: BlockNumberProvider<BlockNumber = RelayBlockNumber>;
+
+		/// Lifetime of a storage slot, in relay-chain blocks. Every slot this pallet allocates
+		/// ends at the current relay-chain block plus this value.
+		#[pallet::constant]
+		type DefaultAuthorizationWindow: Get<RelayBlockNumber>;
 
 		/// The maximum number of active referrals a user can have open.
 		/// It cannot exceed 200.
@@ -797,8 +806,17 @@ pub mod pallet {
 						account_id: account.clone(),
 						failures: failed,
 					});
-					// Allow a new submission.
-					T::DataStore::refresh_allocation(&account)?;
+					// Allow a new submission with a fresh slot sized to the candidate's current
+					// allocation. The slot opens now and overlaps the still-active one. Slots are
+					// additive, so the candidate is briefly over-allocated.
+					let config = Configuration::<T>::get();
+					let (len, count) = match allocation {
+						Allocation::Initial | Allocation::InitDone =>
+							(config.init_alloc_len, config.init_alloc_count),
+						Allocation::Full => (config.full_alloc_len, config.full_alloc_count),
+					};
+					let (starts_at, expiration) = Self::default_authorization_window();
+					T::DataStore::allocate_storage(&account, len, count, starts_at, expiration)?;
 					Candidate::Selected {
 						cred,
 						entropy,
@@ -1000,7 +1018,8 @@ pub mod pallet {
 				(Allocation::Initial, config.init_alloc_len, config.init_alloc_count)
 			};
 
-			T::DataStore::allocate_storage(&account, len, count)?;
+			let (starts_at, expiration) = Self::default_authorization_window();
+			T::DataStore::allocate_storage(&account, len, count, starts_at, expiration)?;
 			AllocationCount::<T>::put(alloc_count.saturating_add(1));
 			let status = Candidate::Selected {
 				since: frame_system::Pallet::<T>::block_number(),
@@ -1040,10 +1059,14 @@ pub mod pallet {
 
 			let config = Configuration::<T>::get();
 			let allocation = Allocation::Full;
-			let len = config.full_alloc_len.saturating_sub(config.init_alloc_len);
-			let count = config.full_alloc_count.saturating_sub(config.init_alloc_count);
+			// The full slot opens now and overlaps the still-active initial slot, so the
+			// candidate can submit full evidence immediately. Slots are additive, so the
+			// candidate is briefly over-allocated.
+			let len = config.full_alloc_len;
+			let count = config.full_alloc_count;
 
-			T::DataStore::allocate_storage(&account, len, count)?;
+			let (starts_at, expiration) = Self::default_authorization_window();
+			T::DataStore::allocate_storage(&account, len, count, starts_at, expiration)?;
 			let status = Candidate::Selected {
 				since,
 				cred,
@@ -1513,6 +1536,12 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
+		/// Window for a slot that opens now and lasts `DefaultAuthorizationWindow` relay blocks.
+		fn default_authorization_window() -> (Option<RelayBlockNumber>, RelayBlockNumber) {
+			let relay_now = T::RelayChainBlockNumberProvider::current_block_number();
+			(None, relay_now.saturating_add(T::DefaultAuthorizationWindow::get()))
+		}
+
 		pub(super) fn referral_ok(referrer: PersonalId, target: &T::AccountId) {
 			People::<T>::mutate_extant(referrer, |person| {
 				person.active_referrals.retain(|x| x != target);

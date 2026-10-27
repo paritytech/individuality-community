@@ -78,6 +78,21 @@ fn parameters_default_to_the_initial_configuration() {
 }
 
 #[test]
+fn default_authorization_window_updates_change_what_the_proof_of_ink_pallet_reads() {
+	type DefaultAuthorizationWindow =
+		<Runtime as indiv_pallet_proof_of_ink::Config>::DefaultAuthorizationWindow;
+	new_test_ext().execute_with(|| {
+		assert_eq!(DefaultAuthorizationWindow::get(), 14 * paseo_runtime_constants::time::DAYS);
+
+		set_bulletin_parameter(bulletin_storage::DefaultAuthorizationWindow, 0);
+		assert_eq!(DefaultAuthorizationWindow::get(), 1);
+
+		set_bulletin_parameter(bulletin_storage::DefaultAuthorizationWindow, 7 * 14_400);
+		assert_eq!(DefaultAuthorizationWindow::get(), 7 * 14_400);
+	});
+}
+
+#[test]
 fn prize_source_updates_change_what_the_people_airdrops_pallet_reads() {
 	type PrizeSource = <Runtime as indiv_pallet_people_airdrops::Config>::PrizeSource;
 	new_test_ext().execute_with(|| {
@@ -231,18 +246,6 @@ fn governance_cannot_break_bulletin_storage_invariants() {
 		assert_eq!(
 			<Runtime as indiv_pallet_resources::Config>::LongTermStoragePeriodDuration::get(),
 			100
-		);
-
-		// The grace window stays smaller than the period duration.
-		set_bulletin_parameter(bulletin_storage::LongTermStorageGraceWindow, u32::MAX);
-		assert_eq!(
-			<Runtime as indiv_pallet_resources::Config>::LongTermStorageGraceWindow::get(),
-			99
-		);
-		set_bulletin_parameter(bulletin_storage::LongTermStorageGraceWindow, 50);
-		assert_eq!(
-			<Runtime as indiv_pallet_resources::Config>::LongTermStorageGraceWindow::get(),
-			50
 		);
 
 		// The claim limit stays non-zero.

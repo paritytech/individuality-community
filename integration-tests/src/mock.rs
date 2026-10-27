@@ -40,7 +40,7 @@ use indiv_pallet_people::{
 use indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipantInfo;
 use indiv_support::{
 	crypto::{BandersnatchSuite, BandersnatchVrfVerifiable, GenerateVerifiable},
-	traits::{AllocateStorage, Context, RevisionIndex, RingIndex, RI_ZERO},
+	traits::{AllocateStorage, Context, RelayBlockNumber, RevisionIndex, RingIndex, RI_ZERO},
 };
 use rand::{prelude::ThreadRng, Rng};
 use sp_arithmetic::Percent;
@@ -350,6 +350,22 @@ impl indiv_pallet_proof_of_ink::BenchmarkHelper<Test> for Test {
 	fn setup_currency() {}
 }
 
+/// `BlockNumberProvider` that reports relay-chain block 0. The tests here do not depend on the
+/// relay-chain block number.
+pub struct ZeroRelayBlockProvider;
+impl sp_runtime::traits::BlockNumberProvider for ZeroRelayBlockProvider {
+	type BlockNumber = RelayBlockNumber;
+	fn current_block_number() -> RelayBlockNumber {
+		0
+	}
+}
+
+/// Relay-chain slot duration in seconds.
+const RELAY_SLOT_SECS: RelayBlockNumber = 6;
+/// Relay-chain blocks per day.
+const RELAY_DAY_BLOCKS: RelayBlockNumber = 24 * 60 * 60 / RELAY_SLOT_SECS;
+const DEFAULT_AUTHORIZATION_WINDOW_DAYS: RelayBlockNumber = 14;
+
 impl indiv_pallet_proof_of_ink::Config for Test {
 	type WeightInfo = ();
 	type Deposit = ();
@@ -361,6 +377,9 @@ impl indiv_pallet_proof_of_ink::Config for Test {
 	type Oracle = MobRule;
 	type Randomness = TestRandommess;
 	type DataStore = TestDataStore;
+	type RelayChainBlockNumberProvider = ZeroRelayBlockProvider;
+	type DefaultAuthorizationWindow =
+		ConstU32<{ DEFAULT_AUTHORIZATION_WINDOW_DAYS * RELAY_DAY_BLOCKS }>;
 	type MaxActiveReferrals = ConstU32<10>;
 	type MaxRetryAttempts = ConstU32<1>;
 	type MaxReimbursementValues = ConstU32<10>;
@@ -403,10 +422,13 @@ impl Randomness<[u8; 32], u64> for TestRandommess {
 
 pub struct TestDataStore;
 impl AllocateStorage<u64> for TestDataStore {
-	fn allocate_storage(_who: &u64, _len: u64, _count: u32) -> DispatchResult {
-		Ok(())
-	}
-	fn refresh_allocation(_who: &u64) -> DispatchResult {
+	fn allocate_storage(
+		_who: &u64,
+		_len: u64,
+		_count: u32,
+		_starts_at: Option<RelayBlockNumber>,
+		_expiration: RelayBlockNumber,
+	) -> DispatchResult {
 		Ok(())
 	}
 }

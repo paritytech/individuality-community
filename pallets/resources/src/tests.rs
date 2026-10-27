@@ -37,7 +37,7 @@ use sp_core::Get;
 use sp_runtime::{
 	traits::DispatchTransaction,
 	transaction_validity::{InvalidTransaction, TransactionSource},
-	AccountId32,
+	AccountId32, SaturatedConversion,
 };
 use sp_statement_store::{get_allowance, StatementAllowance};
 
@@ -2906,16 +2906,15 @@ mod long_term_storage {
 	}
 
 	#[test]
-	fn previous_period_accepted_within_grace_window() {
+	fn previous_period_rejected_just_after_boundary() {
 		new_test_ext().execute_with(|| {
 			let day_secs: u64 = 24 * 60 * 60;
-			let grace_secs: u64 = <Test as Config>::LongTermStorageGraceWindow::get() as u64;
 
-			// Set time to just after period boundary but within grace.
-			set_time_sec(4 * day_secs + grace_secs / 2);
+			// One second into period 4.
+			set_time_sec(4 * day_secs + 1);
 
 			let previous_period = 3u32;
-			assert!(Resources::is_accepted_long_term_storage_period(previous_period));
+			assert!(!Resources::is_accepted_long_term_storage_period(previous_period));
 		});
 	}
 
@@ -2936,9 +2935,8 @@ mod long_term_storage {
 				(),
 			);
 
-			// Advance time past period end + grace window.
-			let grace_secs: u64 = <Test as Config>::LongTermStorageGraceWindow::get() as u64;
-			set_time_sec(4 * day_secs + grace_secs + 1);
+			// Advance time past the period end.
+			set_time_sec(4 * day_secs + 1);
 
 			// Verify authorization succeeds.
 			let call =
@@ -2986,16 +2984,15 @@ mod long_term_storage {
 	}
 
 	#[test]
-	fn cleanup_recent_period_within_grace_fails() {
+	fn cleanup_allowed_right_after_period_end() {
 		new_test_ext().execute_with(|| {
 			let day_secs: u64 = 24 * 60 * 60;
-			let grace_secs: u64 = <Test as Config>::LongTermStorageGraceWindow::get() as u64;
 
-			// We're in period 4, within grace window of period 3's end.
-			set_time_sec(4 * day_secs + grace_secs / 2);
+			// One second into period 4, so period 3 has ended.
+			set_time_sec(4 * day_secs + 1);
 
 			let previous_period = 3u32;
-			assert!(Resources::validate_clear_long_term_storage_period(previous_period).is_err());
+			assert_ok!(Resources::validate_clear_long_term_storage_period(previous_period));
 		});
 	}
 
@@ -3093,10 +3090,8 @@ mod long_term_storage {
 	fn cleanup_authorize_rejects_when_nothing_to_clear() {
 		new_test_ext().execute_with(|| {
 			let day_secs: u64 = 24 * 60 * 60;
-			let grace_secs: u64 = <Test as Config>::LongTermStorageGraceWindow::get() as u64;
-
-			// Advance past period end + grace so the period-expiry check passes.
-			set_time_sec(4 * day_secs + grace_secs + 1);
+			// Advance past the period end so the period-expiry check passes.
+			set_time_sec(4 * day_secs + 1);
 
 			// No entries inserted for the expired period.
 			let period = 3u32;
@@ -3140,11 +3135,10 @@ mod long_term_storage {
 				id_to_alias(7),
 			));
 
-			// Advance past period end + grace so the OCW triggers cleanup.
-			let grace_secs: u64 = <Test as Config>::LongTermStorageGraceWindow::get() as u64;
+			// Advance past the period end so the OCW triggers cleanup.
 			let period_duration: u64 =
 				<Test as Config>::LongTermStoragePeriodDuration::get() as u64;
-			set_time_sec((period as u64 + 1) * period_duration + grace_secs + 1);
+			set_time_sec((period as u64 + 1) * period_duration + 1);
 			advance_to_block(3);
 
 			// The OCW should have submitted a cleanup tx that drained the period.
@@ -3164,6 +3158,119 @@ mod long_term_storage {
 				cleared_emitted,
 				"expected a LongTermStorageAliasesCleared event for the period"
 			);
+		});
+	}
+
+	#[test]
+	fn current_period_routes_to_window_with_no_starts_at() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			let day_secs: u64 = 24 * 60 * 60;
+			let now_secs = 3 * day_secs + 100;
+			set_time_sec(now_secs);
+			let relay_now: u32 = 1_000;
+			MOCK_RELAY_BLOCK.with(|cell| cell.set(relay_now));
+			BULLETIN_LAST_CALL.with(|cell| *cell.borrow_mut() = None);
+
+			let current_period =
+				Resources::long_term_storage_period_from_timestamp(TestClock::now().as_secs());
+			let target_account = id_to_account(99);
+
+			assert_ok!(Resources::claim_long_term_storage(
+				lts_people_origin(7),
+				current_period,
+				0,
+				target_account.clone()
+			));
+
+			let period_secs = u64::from(<Test as Config>::LongTermStoragePeriodDuration::get());
+			let current_period_end_secs = (u64::from(current_period) + 1) * period_secs;
+			let expected_expiration = relay_now +
+				(current_period_end_secs - now_secs)
+					.div_ceil(RELAY_SLOT_SECS)
+					.saturated_into::<u32>();
+			let expected = LastBulletinAllocation {
+				who: target_account,
+				len: 64 * 1024 * 1024,
+				count: 32,
+				starts_at: None,
+				expiration: expected_expiration,
+			};
+			assert_eq!(BULLETIN_LAST_CALL.with(|cell| cell.borrow().clone()), Some(expected));
+		});
+	}
+
+	#[test]
+	fn next_period_routes_to_window_with_starts_at() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			let day_secs: u64 = 24 * 60 * 60;
+			let now_secs = 3 * day_secs + 100;
+			set_time_sec(now_secs);
+			let relay_now: u32 = 1_000;
+			MOCK_RELAY_BLOCK.with(|cell| cell.set(relay_now));
+			BULLETIN_LAST_CALL.with(|cell| *cell.borrow_mut() = None);
+
+			let current_period =
+				Resources::long_term_storage_period_from_timestamp(TestClock::now().as_secs());
+			let next_period = current_period + 1;
+			let target_account = id_to_account(99);
+
+			assert_ok!(Resources::claim_long_term_storage(
+				lts_people_origin(7),
+				next_period,
+				0,
+				target_account.clone()
+			));
+
+			let period_secs = u64::from(<Test as Config>::LongTermStoragePeriodDuration::get());
+			let current_period_end_secs = (u64::from(current_period) + 1) * period_secs;
+			let blocks_until_current_end: u32 =
+				(current_period_end_secs - now_secs).div_ceil(RELAY_SLOT_SECS).saturated_into();
+			let period_relay_blocks: u32 = period_secs.div_ceil(RELAY_SLOT_SECS).saturated_into();
+			let expected_starts_at = relay_now + blocks_until_current_end;
+			let expected_expiration = expected_starts_at + period_relay_blocks;
+			let expected = LastBulletinAllocation {
+				who: target_account,
+				len: 64 * 1024 * 1024,
+				count: 32,
+				starts_at: Some(expected_starts_at),
+				expiration: expected_expiration,
+			};
+			assert_eq!(BULLETIN_LAST_CALL.with(|cell| cell.borrow().clone()), Some(expected));
+
+			// Forward booking spends the alias in the next period only. Replay protection is
+			// per period.
+			assert!(SpentLongTermStorageAliases::<Test>::contains_key(
+				BigEndianU32::from(next_period),
+				id_to_alias(7)
+			));
+			assert!(!SpentLongTermStorageAliases::<Test>::contains_key(
+				BigEndianU32::from(current_period),
+				id_to_alias(7)
+			));
+		});
+	}
+
+	#[test]
+	fn next_period_accepted_by_validity_check() {
+		new_test_ext().execute_with(|| {
+			let day_secs: u64 = 24 * 60 * 60;
+			set_time_sec(3 * day_secs + 100);
+			let current_period =
+				Resources::long_term_storage_period_from_timestamp(TestClock::now().as_secs());
+			assert!(Resources::is_accepted_long_term_storage_period(current_period + 1));
+		});
+	}
+
+	#[test]
+	fn period_plus_two_rejected_by_validity_check() {
+		new_test_ext().execute_with(|| {
+			let day_secs: u64 = 24 * 60 * 60;
+			set_time_sec(3 * day_secs + 100);
+			let current_period =
+				Resources::long_term_storage_period_from_timestamp(TestClock::now().as_secs());
+			assert!(!Resources::is_accepted_long_term_storage_period(current_period + 2));
 		});
 	}
 }
@@ -4400,11 +4507,7 @@ mod dynamic_parameters {
 			let period = 3u32;
 			let period_key = BigEndianU32::from(period);
 			SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(1), ());
-			set_time_sec(
-				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
-					LongTermStorageGraceWindow::get() as u64 +
-					1,
-			);
+			set_time_sec((period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 + 1);
 			let limit = LongTermStorageCleanupLimit::get();
 			let clear = |limit: u32| {
 				Resources::clear_expired_long_term_storage_aliases(
@@ -4435,11 +4538,7 @@ mod dynamic_parameters {
 			for i in 0..total {
 				SpentLongTermStorageAliases::<Test>::insert(period_key, id_to_alias(i as u64), ());
 			}
-			set_time_sec(
-				(period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 +
-					LongTermStorageGraceWindow::get() as u64 +
-					1,
-			);
+			set_time_sec((period as u64 + 1) * LongTermStoragePeriodDuration::get() as u64 + 1);
 
 			// A lowered limit removes fewer entries per offchain-worker run.
 			let lowered = 2;

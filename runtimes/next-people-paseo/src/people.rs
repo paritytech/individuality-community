@@ -35,7 +35,9 @@ use indiv_support::traits::PersonalId;
 use indiv_support::traits::{Alias, RingIndex};
 use indiv_support::{
 	fungibles::CombineAssetsWithHolder,
-	traits::{AllocateStorage, Context, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER},
+	traits::{
+		AllocateStorage, Context, RelayBlockNumber, PEOPLE_IDENTIFIER, PEOPLE_LITE_IDENTIFIER,
+	},
 	utils::TypedGetToGet,
 };
 use paseo_runtime_constants::system_parachain::{
@@ -50,14 +52,13 @@ use xcm::v5::{Location, WeightLimit};
 
 use crate::{
 	parameters::{
-		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePersonRegistrationFee,
-		LitePersonStatementLimit, LiteStmtStoreSlotsPerPeriod,
+		AccountsApiAllowance, DefaultAuthorizationWindow, LiteNotificationSlotsPerPeriod,
+		LitePersonRegistrationFee, LitePersonStatementLimit, LiteStmtStoreSlotsPerPeriod,
 		LongTermStorageAllowanceForLitePeople, LongTermStorageAllowanceForPeople,
-		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
-		LongTermStoragePeriodDuration, NotificationAllowance, NotificationPeriodDuration,
-		NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource, PersonStatementLimit,
-		StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreReplacementCooldown,
-		StmtStoreSlotsPerPeriod,
+		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStoragePeriodDuration,
+		NotificationAllowance, NotificationPeriodDuration, NotificationSlotsPerPeriod,
+		PeopleAirdropsPrizeSource, PersonStatementLimit, StmtStoreCleanupLimit,
+		StmtStoreGraceWindow, StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -575,6 +576,8 @@ impl indiv_pallet_proof_of_ink::Config for Runtime {
 	type DataStore = BulletinDataStore;
 	#[cfg(feature = "runtime-benchmarks")]
 	type DataStore = BenchmarkBulletinDataStore;
+	type RelayChainBlockNumberProvider = RelaychainDataProvider<Runtime>;
+	type DefaultAuthorizationWindow = DefaultAuthorizationWindow;
 	type MaxActiveReferrals = ConstU32<10>;
 	type MaxRetryAttempts = ConstU32<1>;
 	type MaxReimbursementValues = ConstU32<50>;
@@ -1354,7 +1357,6 @@ impl indiv_pallet_resources::Config for Runtime {
 	type MaxReservationQueueLength = MaxReservationQueueLength;
 	type ManagerOrigin = EnsureRoot<AccountId>;
 	type LongTermStoragePeriodDuration = LongTermStoragePeriodDuration;
-	type LongTermStorageGraceWindow = LongTermStorageGraceWindow;
 	type LongTermStorageClaimsPerPeriod = LongTermStorageClaimsPerPeriod;
 	type LongTermStorageAllowanceForPeople = LongTermStorageAllowanceForPeople;
 	type LongTermStorageAllowanceForLitePeople = LongTermStorageAllowanceForLitePeople;
@@ -1362,6 +1364,7 @@ impl indiv_pallet_resources::Config for Runtime {
 	type LongTermStorageDataStore = BulletinDataStore;
 	#[cfg(feature = "runtime-benchmarks")]
 	type LongTermStorageDataStore = BenchmarkBulletinDataStore;
+	type RelayChainBlockNumberProvider = RelaychainDataProvider<Runtime>;
 	type LongTermStorageCleanupLimit = LongTermStorageCleanupLimit;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = benchmark_utils::ResourcesBenchHelper;
@@ -1379,11 +1382,13 @@ pub const COINAGE_ASSET_UNIT: Balance = 10u128.pow(4);
 pub struct BenchmarkBulletinDataStore;
 #[cfg(feature = "runtime-benchmarks")]
 impl AllocateStorage<AccountId> for BenchmarkBulletinDataStore {
-	fn allocate_storage(_who: &AccountId, _len: u64, _count: u32) -> DispatchResult {
-		Ok(())
-	}
-
-	fn refresh_allocation(_who: &AccountId) -> DispatchResult {
+	fn allocate_storage(
+		_who: &AccountId,
+		_len: u64,
+		_count: u32,
+		_starts_at: Option<RelayBlockNumber>,
+		_expiration: RelayBlockNumber,
+	) -> DispatchResult {
 		Ok(())
 	}
 }
@@ -1800,24 +1805,21 @@ enum BulletinPallets<AccountId: Encode> {
 }
 
 /// Call encoding for Bulletin TransactionStorage calls invoked over XCM.
+///
+/// The call index follows paritytech/polkadot-bulletin-chain PR #509.
 #[derive(Encode, Decode)]
 enum TransactionStorageCalls<AccountId: Encode> {
-	// call index: 3
-	// pub fn authorize_account(
+	// call index: 18
+	// pub fn authorize_account_window(
 	// 	origin: OriginFor<T>,
 	// 	who: T::AccountId,
 	// 	transactions: u32,
 	// 	bytes: u64,
+	// 	starts_at: Option<u32>,
+	// 	expiration: u32,
 	// )
-	#[codec(index = 3)]
-	AuthorizeAccount(AccountId, u32, u64),
-	// call index: 7
-	// pub fn refresh_account_authorization(
-	// 	origin: OriginFor<T>,
-	// 	who: T::AccountId,
-	// )
-	#[codec(index = 7)]
-	RefreshAccountAuthorization(AccountId),
+	#[codec(index = 18)]
+	AuthorizeAccountWindow(AccountId, u32, u64, Option<RelayBlockNumber>, RelayBlockNumber),
 }
 
 /// XCM router used by `BulletinDataStore`. Under `runtime-benchmarks` it swaps to a
@@ -1832,22 +1834,21 @@ type BulletinXcmRouter = xcm_config::XcmRouter;
 #[allow(unused)]
 pub struct BulletinDataStore;
 impl AllocateStorage<AccountId> for BulletinDataStore {
-	fn allocate_storage(who: &AccountId, len: u64, count: u32) -> DispatchResult {
+	fn allocate_storage(
+		who: &AccountId,
+		len: u64,
+		count: u32,
+		starts_at: Option<RelayBlockNumber>,
+		expiration: RelayBlockNumber,
+	) -> DispatchResult {
 		Self::send(
-			BulletinPallets::TransactionStorage(TransactionStorageCalls::AuthorizeAccount(
+			BulletinPallets::TransactionStorage(TransactionStorageCalls::AuthorizeAccountWindow(
 				who.clone(),
 				count,
 				len,
+				starts_at,
+				expiration,
 			))
-			.encode(),
-		)
-	}
-
-	fn refresh_allocation(who: &AccountId) -> DispatchResult {
-		Self::send(
-			BulletinPallets::TransactionStorage(
-				TransactionStorageCalls::RefreshAccountAuthorization(who.clone()),
-			)
 			.encode(),
 		)
 	}

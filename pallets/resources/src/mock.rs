@@ -327,27 +327,56 @@ impl indiv_pallet_members::Config for Test {
 	type BenchmarkHelper = ();
 }
 
+/// Arguments of the most recent `MockBulletinStorage::allocate_storage` call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LastBulletinAllocation {
+	pub who: AccountId32,
+	pub len: u64,
+	pub count: u32,
+	pub starts_at: Option<RelayBlockNumber>,
+	pub expiration: RelayBlockNumber,
+}
+
 thread_local! {
 	pub static MOCK_UNIX_TIME: RefCell<Duration> = RefCell::new(Default::default());
 	pub static BULLETIN_STORAGE_SHOULD_FAIL: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+	pub static BULLETIN_LAST_CALL: RefCell<Option<LastBulletinAllocation>> = const { RefCell::new(None) };
+	pub static MOCK_RELAY_BLOCK: core::cell::Cell<RelayBlockNumber> = const { core::cell::Cell::new(0) };
 }
 
 pub struct MockBulletinStorage;
 
 impl indiv_support::traits::AllocateStorage<AccountId32> for MockBulletinStorage {
-	fn allocate_storage(_who: &AccountId32, _len: u64, _count: u32) -> sp_runtime::DispatchResult {
+	fn allocate_storage(
+		who: &AccountId32,
+		len: u64,
+		count: u32,
+		starts_at: Option<RelayBlockNumber>,
+		expiration: RelayBlockNumber,
+	) -> sp_runtime::DispatchResult {
+		BULLETIN_LAST_CALL.with(|last| {
+			*last.borrow_mut() = Some(LastBulletinAllocation {
+				who: who.clone(),
+				len,
+				count,
+				starts_at,
+				expiration,
+			});
+		});
 		if BULLETIN_STORAGE_SHOULD_FAIL.with(|f| f.get()) {
 			Err(sp_runtime::DispatchError::Other("mock bulletin failure"))
 		} else {
 			Ok(())
 		}
 	}
-	fn refresh_allocation(_who: &AccountId32) -> sp_runtime::DispatchResult {
-		if BULLETIN_STORAGE_SHOULD_FAIL.with(|f| f.get()) {
-			Err(sp_runtime::DispatchError::Other("mock bulletin failure"))
-		} else {
-			Ok(())
-		}
+}
+
+/// Relay-chain block number provider backed by `MOCK_RELAY_BLOCK`.
+pub struct MockRelayBlockProvider;
+impl sp_runtime::traits::BlockNumberProvider for MockRelayBlockProvider {
+	type BlockNumber = RelayBlockNumber;
+	fn current_block_number() -> RelayBlockNumber {
+		MOCK_RELAY_BLOCK.with(|cell| cell.get())
 	}
 }
 
@@ -484,7 +513,6 @@ parameter_types! {
 	pub storage StmtStoreReplacementCooldown: u32 = 60 * 60; // 1 hour
 	pub storage StmtStoreGraceWindow: u32 = 2 * 24 * 60 * 60;
 	pub const LongTermStoragePeriodDuration: u32 = 24 * 60 * 60;
-	pub const LongTermStorageGraceWindow: u32 = 60 * 60;
 	pub storage LongTermStorageClaimsPerPeriod: u8 = 10;
 	pub storage LongTermStorageCleanupLimit: u32 = 50;
 	pub LongTermStorageAllowanceForPeople: LongTermStorageAllocation = LongTermStorageAllocation {
@@ -540,11 +568,11 @@ impl Config for Test {
 	type PersonStatementLimit = PersonStatementLimit;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type LongTermStoragePeriodDuration = LongTermStoragePeriodDuration;
-	type LongTermStorageGraceWindow = LongTermStorageGraceWindow;
 	type LongTermStorageClaimsPerPeriod = LongTermStorageClaimsPerPeriod;
 	type LongTermStorageAllowanceForPeople = LongTermStorageAllowanceForPeople;
 	type LongTermStorageAllowanceForLitePeople = LongTermStorageAllowanceForLitePeople;
 	type LongTermStorageDataStore = MockBulletinStorage;
+	type RelayChainBlockNumberProvider = MockRelayBlockProvider;
 	type LongTermStorageCleanupLimit = LongTermStorageCleanupLimit;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = BenchmarkHelper;
