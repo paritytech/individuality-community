@@ -177,3 +177,25 @@ pub struct LongTermStorageAllocation {
 	/// Maximum total bytes allowed.
 	pub bytes: u64,
 }
+
+/// Relay-chain end blocks of the long-term storage period `period` and of the period after it.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+	Debug,
+	TypeInfo,
+	MaxEncodedLen,
+)]
+pub struct LongTermStoragePeriodEnds {
+	/// The period that `current` ends.
+	pub period: u32,
+	/// Relay-chain block at which `period` ends.
+	pub current: RelayBlockNumber,
+	/// Relay-chain block at which `period + 1` ends. `None` until a claim books `period + 1`.
+	pub next: Option<RelayBlockNumber>,
+}

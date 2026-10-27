@@ -361,9 +361,9 @@ impl sp_runtime::traits::BlockNumberProvider for ZeroRelayBlockProvider {
 }
 
 /// Relay-chain slot duration in seconds.
-const RELAY_SLOT_SECS: RelayBlockNumber = 6;
+const RELAY_SLOT_SECONDS: RelayBlockNumber = 6;
 /// Relay-chain blocks per day.
-const RELAY_DAY_BLOCKS: RelayBlockNumber = 24 * 60 * 60 / RELAY_SLOT_SECS;
+const RELAY_DAY_BLOCKS: RelayBlockNumber = 24 * 60 * 60 / RELAY_SLOT_SECONDS;
 const DEFAULT_AUTHORIZATION_WINDOW_DAYS: RelayBlockNumber = 14;
 
 impl indiv_pallet_proof_of_ink::Config for Test {

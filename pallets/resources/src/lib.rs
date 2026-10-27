@@ -69,8 +69,8 @@ use indiv_support::{
 };
 use sp_runtime::traits::{BlockNumberProvider, IdentifyAccount, Verify};
 use types::{
-	ConsumerInfo, Credibility, LongTermStorageAllocation, MembershipCollection,
-	NotificationReference, PersonalUsernameChoice, ReservationQueueEntryOf,
+	ConsumerInfo, Credibility, LongTermStorageAllocation, LongTermStoragePeriodEnds,
+	MembershipCollection, NotificationReference, PersonalUsernameChoice, ReservationQueueEntryOf,
 	StmtStoreAllowanceEntry,
 };
 use verifiable::GenerateVerifiable;
@@ -87,7 +87,7 @@ pub mod pallet {
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
 	/// Relay-chain slot duration in seconds. Converts People period boundaries to relay-chain
 	/// block windows for long-term storage slots.
-	pub(crate) const RELAY_SLOT_SECS: u64 = 6;
+	pub(crate) const RELAY_SLOT_SECONDS: u64 = 6;
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -377,6 +377,15 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type SpentLongTermStorageAliases<T: Config> =
 		StorageDoubleMap<_, Identity, BigEndianU32, Blake2_128Concat, Alias, (), OptionQuery>;
+
+	/// Relay-chain end blocks of the current long-term storage period and, once booked, of the
+	/// next one.
+	///
+	/// Every slot for a period ends at the same block, and a slot for the next period starts at
+	/// the block the current one ends. Each end is estimated from the clock once, then reused.
+	#[pallet::storage]
+	pub type LongTermStoragePeriodBoundaries<T: Config> =
+		StorageValue<_, LongTermStoragePeriodEnds, OptionQuery>;
 
 	/// Reverse lookup from `username` to the `AccountId` that has registered it. The `owner` value
 	/// should be a key in the `Consumers` map. There can be at most 2 usernames pointing to the
@@ -1640,43 +1649,54 @@ pub mod pallet {
 		/// The relay-chain block window `(starts_at, expiration)` of the slot allocated for
 		/// `period`.
 		///
-		/// A claim for the next period books a slot ahead of time: `starts_at` is the relay-chain
-		/// block of the current period boundary and the slot lasts one period from there. Any
-		/// other period is the current one, because the transaction extension rejects every
-		/// other value before dispatch. It gets a slot that is active now: `starts_at` is `None`
-		/// and the slot ends at the current period boundary.
+		/// The current period gets a slot that is active now (`starts_at` is `None`). The next
+		/// period gets a slot that starts where the current one ends. The transaction extension
+		/// rejects every other period before dispatch.
 		///
-		/// Seconds convert to relay-chain blocks at `RELAY_SLOT_SECS` and round up, so a slot
-		/// never ends before the boundary it covers. The remote chain stores the window as
-		/// opaque relay-chain block numbers.
-		pub fn long_term_storage_window(
+		/// Each period end is estimated from the clock the first time a claim needs it and is
+		/// stored in `LongTermStoragePeriodBoundaries`. Later claims reuse it, so slots of
+		/// consecutive periods chain without a gap or an overlap.
+		pub(crate) fn long_term_storage_window(
 			period: u32,
 		) -> (Option<RelayBlockNumber>, RelayBlockNumber) {
 			let now_secs = T::Clock::now().as_secs();
 			let period_secs = u64::from(T::LongTermStoragePeriodDuration::get());
 			let current_period = Self::long_term_storage_period_from_timestamp(now_secs);
-
-			let current_period_end_secs =
-				u64::from(current_period.saturating_add(1)).saturating_mul(period_secs);
-			// Round up so the window covers the whole period. Truncation can end the slot one
-			// relay block early. `LongTermStoragePeriodDuration` is a `u32` in seconds, so the
-			// block count of one period fits in `RelayBlockNumber`.
-			let blocks_until_current_end: RelayBlockNumber = current_period_end_secs
-				.saturating_sub(now_secs)
-				.div_ceil(RELAY_SLOT_SECS)
-				.saturated_into();
-			let period_relay_blocks: RelayBlockNumber =
-				period_secs.div_ceil(RELAY_SLOT_SECS).saturated_into();
 			let relay_now = T::RelayChainBlockNumberProvider::current_block_number();
+			// Round up so that a slot never ends before the boundary it covers.
+			let estimate_end = |of_period: u32| -> RelayBlockNumber {
+				let end_secs = u64::from(of_period.saturating_add(1)).saturating_mul(period_secs);
+				let blocks_until_end: RelayBlockNumber =
+					end_secs.saturating_sub(now_secs).div_ceil(RELAY_SLOT_SECONDS).saturated_into();
+				relay_now.saturating_add(blocks_until_end)
+			};
 
-			if period == current_period.saturating_add(1) {
-				let starts_at = relay_now.saturating_add(blocks_until_current_end);
-				let expiration = starts_at.saturating_add(period_relay_blocks);
-				(Some(starts_at), expiration)
+			let stored = LongTermStoragePeriodBoundaries::<T>::get();
+			let mut ends = match stored {
+				Some(ends) if ends.period == current_period => ends,
+				Some(LongTermStoragePeriodEnds { period, next: Some(next), .. })
+					if period.saturating_add(1) == current_period =>
+					LongTermStoragePeriodEnds { period: current_period, current: next, next: None },
+				_ => LongTermStoragePeriodEnds {
+					period: current_period,
+					current: estimate_end(current_period),
+					next: None,
+				},
+			};
+
+			let window = if period == current_period.saturating_add(1) {
+				let next = *ends.next.get_or_insert_with(|| {
+					estimate_end(period).max(ends.current.saturating_add(1))
+				});
+				(Some(ends.current), next)
 			} else {
-				let expiration = relay_now.saturating_add(blocks_until_current_end);
-				(None, expiration)
+				(None, ends.current)
+			};
+
+			if stored.as_ref() != Some(&ends) {
+				LongTermStoragePeriodBoundaries::<T>::put(ends);
 			}
+			window
 		}
 
 		pub fn is_accepted_long_term_storage_period(period: u32) -> bool {

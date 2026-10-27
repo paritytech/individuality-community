@@ -2718,7 +2718,7 @@ mod notification {
 
 mod long_term_storage {
 	use super::*;
-	use crate::types::MembershipCollection;
+	use crate::types::{LongTermStoragePeriodEnds, MembershipCollection};
 	use indiv_support::utils::BigEndianU32;
 
 	#[test]
@@ -3187,7 +3187,7 @@ mod long_term_storage {
 			let current_period_end_secs = (u64::from(current_period) + 1) * period_secs;
 			let expected_expiration = relay_now +
 				(current_period_end_secs - now_secs)
-					.div_ceil(RELAY_SLOT_SECS)
+					.div_ceil(RELAY_SLOT_SECONDS)
 					.saturated_into::<u32>();
 			let expected = LastBulletinAllocation {
 				who: target_account,
@@ -3225,9 +3225,11 @@ mod long_term_storage {
 
 			let period_secs = u64::from(<Test as Config>::LongTermStoragePeriodDuration::get());
 			let current_period_end_secs = (u64::from(current_period) + 1) * period_secs;
-			let blocks_until_current_end: u32 =
-				(current_period_end_secs - now_secs).div_ceil(RELAY_SLOT_SECS).saturated_into();
-			let period_relay_blocks: u32 = period_secs.div_ceil(RELAY_SLOT_SECS).saturated_into();
+			let blocks_until_current_end: u32 = (current_period_end_secs - now_secs)
+				.div_ceil(RELAY_SLOT_SECONDS)
+				.saturated_into();
+			let period_relay_blocks: u32 =
+				period_secs.div_ceil(RELAY_SLOT_SECONDS).saturated_into();
 			let expected_starts_at = relay_now + blocks_until_current_end;
 			let expected_expiration = expected_starts_at + period_relay_blocks;
 			let expected = LastBulletinAllocation {
@@ -3249,6 +3251,100 @@ mod long_term_storage {
 				BigEndianU32::from(current_period),
 				id_to_alias(7)
 			));
+		});
+	}
+
+	/// Sets the clock and the relay-chain block, claims long-term storage for `period` with a
+	/// fresh alias and returns the `(starts_at, expiration)` window sent to the data store.
+	fn claim_window_at(
+		now_secs: u64,
+		relay_now: u32,
+		alias_id: u64,
+		period: u32,
+	) -> (Option<u32>, u32) {
+		set_time_sec(now_secs);
+		MOCK_RELAY_BLOCK.with(|cell| cell.set(relay_now));
+		assert_ok!(Resources::claim_long_term_storage(
+			lts_people_origin(alias_id),
+			period,
+			0,
+			id_to_account(99)
+		));
+		let last = BULLETIN_LAST_CALL.with(|cell| cell.borrow().clone()).unwrap();
+		(last.starts_at, last.expiration)
+	}
+
+	/// Relay-chain blocks from `now_secs` to the end of `period`, rounded up.
+	fn blocks_until_period_end(now_secs: u64, period: u32) -> u32 {
+		let period_secs = u64::from(<Test as Config>::LongTermStoragePeriodDuration::get());
+		((u64::from(period) + 1) * period_secs - now_secs)
+			.div_ceil(RELAY_SLOT_SECONDS)
+			.saturated_into()
+	}
+
+	#[test]
+	fn forward_slots_chain_across_rollover() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			let day_secs: u64 = 24 * 60 * 60;
+			let period = 3;
+
+			let (_, booked_expiration) = claim_window_at(3 * day_secs + 100, 1_000, 1, period + 1);
+
+			// In the next period the relay chain has drifted from the clock, so a fresh estimate
+			// of the boundary differs from the booked one.
+			let now_secs = 4 * day_secs + 50;
+			let (_, current_end) = claim_window_at(now_secs, 15_404, 2, period + 1);
+			let (starts_at, _) = claim_window_at(now_secs, 15_404, 3, period + 2);
+
+			assert_ne!(15_404 + blocks_until_period_end(now_secs, period + 1), booked_expiration);
+			assert_eq!(current_end, booked_expiration);
+			assert_eq!(starts_at, Some(booked_expiration));
+		});
+	}
+
+	#[test]
+	fn every_claim_in_a_period_gets_the_same_window() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			let day_secs: u64 = 24 * 60 * 60;
+			let period = 3;
+
+			let first_current = claim_window_at(3 * day_secs + 100, 1_000, 1, period);
+			let first_next = claim_window_at(3 * day_secs + 100, 1_000, 2, period + 1);
+			let second_current = claim_window_at(3 * day_secs + 5_000, 1_900, 3, period);
+			let second_next = claim_window_at(3 * day_secs + 5_000, 1_900, 4, period + 1);
+
+			assert_ne!(
+				1_900 + blocks_until_period_end(3 * day_secs + 5_000, period),
+				first_current.1
+			);
+			assert_eq!(second_current, first_current);
+			assert_eq!(second_next, first_next);
+			assert_eq!(first_next.0, Some(first_current.1));
+		});
+	}
+
+	#[test]
+	fn window_is_estimated_again_after_a_gap() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			let day_secs: u64 = 24 * 60 * 60;
+
+			claim_window_at(3 * day_secs + 100, 1_000, 1, 3);
+			claim_window_at(3 * day_secs + 100, 1_000, 2, 4);
+
+			// No claim in period 4, so the stored ends are stale in period 5.
+			let now_secs = 5 * day_secs + 300;
+			let relay_now = 40_000;
+			let (starts_at, expiration) = claim_window_at(now_secs, relay_now, 3, 5);
+
+			assert_eq!(starts_at, None);
+			assert_eq!(expiration, relay_now + blocks_until_period_end(now_secs, 5));
+			assert_eq!(
+				LongTermStoragePeriodBoundaries::<Test>::get(),
+				Some(LongTermStoragePeriodEnds { period: 5, current: expiration, next: None })
+			);
 		});
 	}
 
