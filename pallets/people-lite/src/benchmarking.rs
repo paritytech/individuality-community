@@ -17,13 +17,16 @@
 //! People lite pallet benchmarks
 
 use super::*;
+use crate::migration::v1::LazyMigrationV0ToV1;
 use alloc::vec::Vec;
 use codec::Encode;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_support::{
 	assert_ok,
 	dispatch::{DispatchInfo, RawOrigin},
-	traits::Get,
+	migrations::SteppedMigration,
+	traits::{Get, StorageVersion},
+	weights::WeightMeter,
 };
 use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::traits::AppendOnlyMembers;
@@ -430,10 +433,19 @@ mod benches {
 		let message = Pallet::<T>::registration_message(&candidate, &ring_vrf_key);
 		let proof_of_ownership = CryptoOf::<T>::sign(&secret, &message).unwrap();
 
+		// Reach the threshold so the call takes the throttled path.
+		let threshold = T::PaidRegistrationThreshold::get();
+		frame_support::storage::unhashed::put(
+			&crate::LitePeople::<T>::counter_storage_final_key(),
+			&threshold,
+		);
+
 		#[extrinsic_call]
 		_(RawOrigin::Signed(candidate.clone()), ring_vrf_key, proof_of_ownership, None);
 
 		assert!(crate::LitePeople::<T>::contains_key(&candidate));
+		assert_eq!(crate::LitePeople::<T>::count(), threshold.saturating_add(1));
+		assert_eq!(crate::PaidRegistrations::<T>::get().registrations, 1);
 		frame_system::Pallet::<T>::assert_last_event(
 			crate::Event::<T>::PersonRegisteredWithFee { candidate }.into(),
 		);
@@ -551,6 +563,30 @@ mod benches {
 		}
 
 		Ok(())
+	}
+
+	#[benchmark]
+	fn migrate_v1_step() {
+		let account: T::AccountId = whitelisted_caller();
+		let (_, member) = lite_member_from::<T>(b"migrate", 0);
+		crate::migration::v1::v0::LitePeople::<T>::insert(
+			&account,
+			crate::LitePersonInfo {
+				ring_vrf_key: member,
+				method: RecognitionMethod::UniqueDevice(whitelisted_caller()),
+			},
+		);
+		StorageVersion::new(0).put::<Pallet<T>>();
+		let mut meter = WeightMeter::with_limit(T::WeightInfo::migrate_v1_step());
+		let cursor;
+
+		#[block]
+		{
+			cursor = LazyMigrationV0ToV1::<T>::step(None, &mut meter).unwrap();
+		}
+
+		assert_eq!(cursor, Some(account));
+		assert_eq!(crate::LitePeople::<T>::count(), 1);
 	}
 
 	impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
