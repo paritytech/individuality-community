@@ -33,8 +33,10 @@ pragma solidity ^0.8.30;
 ///
 /// A holder moves a token on its own authority: the caller must be the current holder.
 /// A purse key holds at most one token, while a deployed contract holds any number and moves each
-/// with @custom:function transferFrom. Anyone can send a token to a contract, so a contract that
-/// holds other people's tokens keeps its own record of who sent what.
+/// with @custom:function transferFrom. Anyone can send a token to a contract, and the contract
+/// cannot learn the sender. A contract that credits senders records each claimant before the push,
+/// when @custom:function ownerOf still returns the claimant, and credits only tokens it has a
+/// record for.
 /// Approvals are not supported, so @custom:function approve and @custom:function setApprovalForAll revert, @custom:function getApproved
 /// returns the zero address and @custom:function isApprovedForAll returns false.
 /// @custom:reverts "unknown collection"

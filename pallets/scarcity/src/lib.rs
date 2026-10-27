@@ -38,9 +38,11 @@
 //! contracts. An instance that arrives at one is stored in [`ContractNfts`], keyed by the contract
 //! and the instance, so a contract holds any number. [`ContractNftCount`] keeps the number per
 //! contract and collection. An unsolicited instance blocks nothing at a contract, because there is
-//! no single key to fill. The pallet picks the map when an instance arrives and finds it again
-//! through [`Instances`]. A contract that is later removed keeps what it holds, and an instance a
-//! key received before it became a contract stays in [`NftsByOwner`]. A contract cannot sign, so it
+//! no single key to fill. An arriving instance does not record its sender, so a contract that
+//! credits senders records the claimant while the claimant still holds the instance. The pallet
+//! picks the map when an instance arrives and finds it again through
+//! [`Instances`]. A contract that is later removed keeps what it holds, and an instance a key
+//! received before it became a contract stays in [`NftsByOwner`]. A contract cannot sign, so it
 //! moves its instances through [`Pallet::do_transfer_by_holder`] and never through the fee-less
 //! [`Pallet::transfer`].
 //!

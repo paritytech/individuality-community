@@ -141,10 +141,21 @@
 //! sender uses `transferFrom` or the native transfer.
 //!
 //! Anyone can send a token to a contract. An unwanted token blocks nothing, because a contract has
-//! no single key to fill. A native push emits no EVM `Transfer` log and calls nothing, so a
-//! contract that holds other people's tokens keeps its own record of who sent what and checks each
-//! token it acts on with `ownerOf`. The collection owner keeps `forceTransfer` and `forceBurn` over
-//! tokens that a contract holds.
+//! no single key to fill. The collection owner keeps `forceTransfer` and `forceBurn` over tokens
+//! that a contract holds.
+//!
+//! A contract cannot learn who sent a token. No push calls the contract, and after the push
+//! `ownerOf` names the contract. A contract that credits senders records each claimant before the
+//! push:
+//!
+//! - The claimant calls the contract while it holds the token, and the contract checks
+//!   `ownerOf(tokenId) == msg.sender`. Only the holder passes, so a front-run gains nothing.
+//! - The claimant is the purse key, so it needs funds to call the contract.
+//! - The current holder can replace a record, which goes stale when the token moves.
+//! - After the push, the contract checks that `ownerOf(tokenId)` names it and credits only a token
+//!   it has a record for.
+//!
+//! The `StakeVault` fixture in `indiv-precompile-fixtures` follows these rules.
 //!
 //! `tokenOfOwnerByIndex` lists a contract's tokens of this collection after the one token a purse
 //! can hold. It walks the contract's tokens of every collection in storage order up to the index,

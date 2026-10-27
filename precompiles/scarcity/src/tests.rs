@@ -4510,4 +4510,256 @@ mod evm_fixture {
 			assert_eq!(last.proof_size() - first.proof_size(), 2 * PROOF_SIZE_PER_READ);
 		});
 	}
+
+	alloy::sol! {
+		interface IStakeVault {
+			function reserve(uint256 tokenId) external;
+			function confirm(uint256[] calldata tokenIds) external;
+			function withdraw(uint256 tokenId, address to) external;
+			function entries(uint256 tokenId) external view returns (address player, uint8 status);
+
+			error NotHolder();
+			error NotReserved();
+			error NotReceived();
+			error NotStaker();
+			error BatchTooLarge();
+		}
+	}
+
+	/// `StakeVault`'s `Status::Reserved`.
+	const RESERVED: u8 = 1;
+	/// `StakeVault`'s `Status::Staked`.
+	const STAKED: u8 = 2;
+
+	/// A collection with one item and a deployed `StakeVault` that takes its tokens.
+	///
+	/// Built inside `execute_with`, because it writes pallet state.
+	struct StakeWorld {
+		alice: AccountId32,
+		collection: CollectionId,
+		item: indiv_pallet_scarcity::ItemIndex,
+		vault: H160,
+	}
+
+	impl StakeWorld {
+		fn new(code: Vec<u8>) -> Self {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let constructor = alloy::sol_types::SolValue::abi_encode(&alloy_address(
+				collection_address(collection),
+			));
+			let vault = deploy_with_args(&alice, code, constructor);
+			Self { alice, collection, item, vault }
+		}
+
+		/// A funded purse key holding one token, which can call the vault and the collection.
+		fn player(&self, byte: u8) -> (H160, AccountId32, InstanceId) {
+			mint_to_funded_purse(&self.alice, self.collection, self.item, byte)
+		}
+
+		/// Move `token` from `from` to `to`, on `from`'s authority.
+		fn push(&self, from: &(H160, AccountId32), token: InstanceId, to: H160) {
+			call_ok(
+				&from.1,
+				collection_address(self.collection),
+				IScarcityCollection::transferFromCall {
+					from: alloy_address(from.0),
+					to: alloy_address(to),
+					tokenId: U256::from(token),
+				}
+				.abi_encode(),
+			);
+		}
+
+		fn reserve(&self, caller: &AccountId32, token: InstanceId) {
+			call_ok(
+				caller,
+				self.vault,
+				IStakeVault::reserveCall { tokenId: U256::from(token) }.abi_encode(),
+			);
+		}
+
+		fn confirm_input(tokens: &[InstanceId]) -> Vec<u8> {
+			IStakeVault::confirmCall {
+				tokenIds: tokens.iter().map(|token| U256::from(*token)).collect(),
+			}
+			.abi_encode()
+		}
+
+		/// The player and status the vault records for `token`.
+		fn entry(&self, token: InstanceId) -> (Address, u8) {
+			let data = call_ok(
+				&self.alice,
+				self.vault,
+				IStakeVault::entriesCall { tokenId: U256::from(token) }.abi_encode(),
+			);
+			let entry = IStakeVault::entriesCall::abi_decode_returns(&data).unwrap();
+			(entry.player, entry.status)
+		}
+
+		/// Assert the vault's call reverts with exactly the custom error `error`.
+		fn reverts_with<E: SolError>(&self, caller: &AccountId32, input: Vec<u8>, error: E) {
+			let output = call_precompile(caller, self.vault, input);
+			assert!(output.did_revert(), "expected a revert, got success: {output:?}");
+			assert_eq!(output.data, error.abi_encode());
+		}
+	}
+
+	fn assert_vault_credits_the_claimant(code: Vec<u8>) {
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (address, account, token) = world.player(0xB1);
+			let (destination_address, destination) = purse(0xB2);
+
+			world.reserve(&account, token);
+			assert_eq!(world.entry(token), (alloy_address(address), RESERVED));
+			world.push(&(address, account.clone()), token, world.vault);
+			call_ok(&world.alice, world.vault, StakeWorld::confirm_input(&[token]));
+			assert_eq!(world.entry(token), (alloy_address(address), STAKED));
+
+			world.reverts_with(
+				&world.alice,
+				IStakeVault::withdrawCall {
+					tokenId: U256::from(token),
+					to: alloy_address(destination_address),
+				}
+				.abi_encode(),
+				IStakeVault::NotStaker {},
+			);
+			call_ok(
+				&account,
+				world.vault,
+				IStakeVault::withdrawCall {
+					tokenId: U256::from(token),
+					to: alloy_address(destination_address),
+				}
+				.abi_encode(),
+			);
+
+			assert_eq!(Instances::<Test>::get(token), Some(destination));
+			assert_eq!(world.entry(token), (Address::ZERO, 0));
+		});
+	}
+
+	#[test]
+	fn evm_stake_vault_credits_the_claimant() {
+		assert_vault_credits_the_claimant(fixture_code("StakeVault"));
+	}
+
+	#[test]
+	fn polkavm_stake_vault_credits_the_claimant() {
+		assert_vault_credits_the_claimant(resolc_code("StakeVault"));
+	}
+
+	#[test]
+	fn stake_vault_refuses_a_reservation_from_a_non_holder() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (_, _, token) = world.player(0xB1);
+			let (_, front_runner, _) = world.player(0xB2);
+
+			world.reverts_with(
+				&front_runner,
+				IStakeVault::reserveCall { tokenId: U256::from(token) }.abi_encode(),
+				IStakeVault::NotHolder {},
+			);
+			assert_eq!(world.entry(token), (Address::ZERO, 0));
+		});
+	}
+
+	#[test]
+	fn stake_vault_lets_a_new_holder_replace_a_stale_reservation() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (first_address, first, token) = world.player(0xB1);
+			let (second_address, second) = purse(0xB2);
+			Balances::make_free_balance_be(&second, u64::MAX / 2);
+
+			world.reserve(&first, token);
+			world.push(&(first_address, first), token, second_address);
+			world.reserve(&second, token);
+			world.push(&(second_address, second), token, world.vault);
+			call_ok(&world.alice, world.vault, StakeWorld::confirm_input(&[token]));
+
+			assert_eq!(world.entry(token), (alloy_address(second_address), STAKED));
+		});
+	}
+
+	#[test]
+	fn stake_vault_does_not_credit_a_token_pushed_without_a_reservation() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (address, account, token) = world.player(0xB1);
+
+			world.push(&(address, account.clone()), token, world.vault);
+
+			world.reverts_with(
+				&world.alice,
+				StakeWorld::confirm_input(&[token]),
+				IStakeVault::NotReserved {},
+			);
+			// The vault holds the token, so its sender can no longer reserve it.
+			world.reverts_with(
+				&account,
+				IStakeVault::reserveCall { tokenId: U256::from(token) }.abi_encode(),
+				IStakeVault::NotHolder {},
+			);
+		});
+	}
+
+	#[test]
+	fn stake_vault_does_not_confirm_a_token_before_it_arrives() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (_, account, token) = world.player(0xB1);
+
+			world.reserve(&account, token);
+
+			world.reverts_with(
+				&world.alice,
+				StakeWorld::confirm_input(&[token]),
+				IStakeVault::NotReceived {},
+			);
+			assert_eq!(world.entry(token).1, RESERVED);
+		});
+	}
+
+	#[test]
+	fn stake_vault_confirms_a_batch_of_stakes() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let players = (0xB1..0xB4).map(|byte| world.player(byte)).collect::<Vec<_>>();
+			for (address, account, token) in &players {
+				world.reserve(account, *token);
+				world.push(&(*address, account.clone()), *token, world.vault);
+			}
+			let tokens = players.iter().map(|(_, _, token)| *token).collect::<Vec<_>>();
+
+			call_ok(&world.alice, world.vault, StakeWorld::confirm_input(&tokens));
+
+			for (address, _, token) in &players {
+				assert_eq!(world.entry(*token), (alloy_address(*address), STAKED));
+			}
+		});
+	}
+
+	#[test]
+	fn stake_vault_refuses_a_batch_above_its_limit() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+
+			world.reverts_with(
+				&world.alice,
+				StakeWorld::confirm_input(&[0; 17]),
+				IStakeVault::BatchTooLarge {},
+			);
+		});
+	}
 }
