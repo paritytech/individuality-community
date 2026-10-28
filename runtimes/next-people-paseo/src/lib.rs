@@ -1644,13 +1644,19 @@ impl_runtime_apis! {
 		}
 	}
 
-	impl indiv_pallet_game::runtime_api::PalletGameApi<Block, Balance> for Runtime {
+	#[api_version(2)]
+	impl indiv_pallet_game::runtime_api::PalletGameApi<Block, Balance, AccountId> for Runtime {
 		fn play_deposit() -> Balance {
 			indiv_pallet_game::PlayDepositAmount::<Runtime>::get()
 		}
+
+		fn check_in_credits(
+			player: indiv_support::identity::AccountOrPerson<AccountId>,
+		) -> Result<u32, sp_runtime::DispatchError> {
+			Game::check_in_credits(player)
+		}
 	}
 
-	#[api_version(2)]
 	impl indiv_pallet_nft_credits::runtime_api::NftCreditsApi<Block, AccountId, BlockNumber> for Runtime {
 		fn nft_claim_credit_roots(
 			claimant: indiv_support::identity::AccountOrPerson<AccountId>,
@@ -1671,12 +1677,6 @@ impl_runtime_apis! {
 			leaf_index: u32,
 		) -> Result<indiv_pallet_nft_credits::NftClaimCreditProof, indiv_pallet_nft_credits::NftClaimCreditProofError> {
 			NftCredits::nft_claim_credit_proof_from_awards(tree_block, awards, leaf_index)
-		}
-
-		fn check_in_credits(
-			player: indiv_support::identity::AccountOrPerson<AccountId>,
-		) -> Result<u32, sp_runtime::DispatchError> {
-			NftCredits::check_in_credits(player)
 		}
 	}
 

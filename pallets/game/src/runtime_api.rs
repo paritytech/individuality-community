@@ -19,14 +19,26 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use codec::Codec;
+use indiv_support::identity::AccountOrPerson;
+use sp_runtime::DispatchError;
 
 sp_api::decl_runtime_apis! {
-	/// The API to query the deposit for gameplay.
-	pub trait PalletGameApi<Balance>
+	/// The API to query the deposit for gameplay and what a check-in grants.
+	#[api_version(2)]
+	pub trait PalletGameApi<Balance, AccountId>
 	where
 		Balance: Codec,
+		AccountId: Codec,
 	{
 		/// Returns the deposit necessary to play a game.
 		fn play_deposit() -> Balance;
+
+		/// Returns the number of credits a `check_in` by `player` grants now for the current game,
+		/// or the error that call fails with.
+		///
+		/// A refused check-in pays a fee, so a wallet checks this before it submits one. A
+		/// check-in included later can still fail, because the state can change in between.
+		#[api_version(2)]
+		fn check_in_credits(player: AccountOrPerson<AccountId>) -> Result<u32, DispatchError>;
 	}
 }

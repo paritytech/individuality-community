@@ -585,12 +585,24 @@ impl WeightInfo for MockWeightInfo {
 	fn on_game_cancelled(_n: u32) -> Weight {
 		Weight::zero()
 	}
+	fn set_tenure_thresholds() -> Weight {
+		Weight::zero()
+	}
+	/// Non-zero and scales with `n`, so a check-in that awards fewer credits than
+	/// `MaxTenureThresholds` refunds a measurable amount.
+	fn check_in(n: u32) -> Weight {
+		Weight::from_parts(600 + 10 * n as u64, 60 + n as u64)
+	}
 }
 
 parameter_types! {
 	pub storage PeopleVoteWeight: u8 = 1;
 	pub storage CandidateVoteWeight: u8 = 1;
 	pub const PlayDepositDefault: u64 = 2;
+	pub const MaxTenureThresholds: u32 = 4;
+	/// Zero, one and two games.
+	pub DefaultTenureThresholds: indiv_pallet_game::TenureThresholdsOf<Test> =
+		frame_support::BoundedVec::truncate_from(vec![0, 1, 2]);
 }
 
 thread_local! {
@@ -1594,6 +1606,8 @@ pub fn mock_key(
 /// only who owns the credits differs.
 impl indiv_pallet_game::Config for Test {
 	type NftClaimCredits = MockNftClaimCredits;
+	type MaxTenureThresholds = MaxTenureThresholds;
+	type DefaultTenureThresholds = DefaultTenureThresholds;
 	type WeightInfo = MockWeightInfo;
 	type UnixTime = Test;
 	type MaxRounds = ConstUint<10>;

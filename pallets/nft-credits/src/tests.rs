@@ -3516,7 +3516,11 @@ mod migration {
 mod check_in {
 	use super::*;
 	use frame_support::{assert_err_ignore_postinfo, dispatch::GetDispatchInfo};
-	use indiv_pallet_game::CancellingStep;
+	// The check-in is the game's, so its calls, storage, errors, events and weights shadow this
+	// pallet's of the same name.
+	use indiv_pallet_game::{
+		Call, CancellingStep, CheckIns, Error, Event, GamesAttended, TenureThresholds, WeightInfo,
+	};
 	use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
 	use indiv_pallet_score::{Participants, Recognition};
 	use indiv_support::traits::{
@@ -3544,7 +3548,7 @@ mod check_in {
 	}
 
 	fn set_thresholds(thresholds: Vec<GamesAttended>) {
-		assert_ok!(NftCredits::set_tenure_thresholds(
+		assert_ok!(Game::set_tenure_thresholds(
 			RuntimeOrigin::root(),
 			BoundedVec::truncate_from(thresholds)
 		));
@@ -3636,7 +3640,7 @@ mod check_in {
 	}
 
 	fn check_in(who: &AccountId32) -> DispatchResultWithPostInfo {
-		NftCredits::check_in(RuntimeOrigin::signed(who.clone()))
+		Game::check_in(RuntimeOrigin::signed(who.clone()))
 	}
 
 	fn slots(game: GameIdx, who: &AccountId32) -> AwardedCredits {
@@ -3866,7 +3870,7 @@ mod check_in {
 			));
 			set_time(OPENS);
 
-			assert_ok!(NftCredits::check_in(runtime_origin_for_alias(&alias)));
+			assert_ok!(Game::check_in(runtime_origin_for_alias(&alias)));
 
 			let player = AccountOrPerson::Person(alias);
 			assert_eq!(CheckIns::<Test>::get(game, &player), Some(1));
@@ -3883,7 +3887,7 @@ mod check_in {
 			let game = set_up_alice();
 			set_time(OPENS);
 
-			assert_ok!(NftCredits::check_in(
+			assert_ok!(Game::check_in(
 				indiv_pallet_score::Origin::<Test>::AccountParticipant(ALICE).into()
 			));
 
@@ -3899,13 +3903,10 @@ mod check_in {
 			set_tenure(&ALICE, 2);
 			let alice = AccountOrPerson::Account(ALICE);
 			set_time(OPENS);
-			assert_eq!(NftCredits::check_in_credits(alice.clone()), Ok(2));
+			assert_eq!(Game::check_in_credits(alice.clone()), Ok(2));
 			assert_ok!(check_in(&ALICE));
 
-			assert_eq!(
-				NftCredits::check_in_credits(alice),
-				Err(Error::<Test>::AlreadyCheckedIn.into())
-			);
+			assert_eq!(Game::check_in_credits(alice), Err(Error::<Test>::AlreadyCheckedIn.into()));
 		});
 	}
 
@@ -3913,21 +3914,15 @@ mod check_in {
 	fn check_in_credits_reports_why_a_check_in_fails() {
 		new_test_ext().execute_with(|| {
 			let alice = AccountOrPerson::Account(ALICE);
-			assert_eq!(
-				NftCredits::check_in_credits(alice.clone()),
-				Err(Error::<Test>::NoGame.into())
-			);
+			assert_eq!(Game::check_in_credits(alice.clone()), Err(Error::<Test>::NoGame.into()));
 
 			set_up_alice();
 			set_time(OPENS - 1);
-			assert_eq!(
-				NftCredits::check_in_credits(alice),
-				Err(Error::<Test>::CheckInClosed.into())
-			);
+			assert_eq!(Game::check_in_credits(alice), Err(Error::<Test>::CheckInClosed.into()));
 
 			set_time(OPENS);
 			assert_eq!(
-				NftCredits::check_in_credits(AccountOrPerson::Account(BOB)),
+				Game::check_in_credits(AccountOrPerson::Account(BOB)),
 				Err(Error::<Test>::NotRegistered.into())
 			);
 		});
@@ -4104,10 +4099,10 @@ mod check_in {
 	fn the_default_thresholds_apply_until_set() {
 		new_test_ext().execute_with(|| {
 			assert_eq!(TenureThresholds::<Test>::get().into_inner(), vec![0, 1, 2]);
-			assert_eq!(NftCredits::tenure_credit_count(0), 1);
-			assert_eq!(NftCredits::tenure_credit_count(1), 2);
-			assert_eq!(NftCredits::tenure_credit_count(2), 3);
-			assert_eq!(NftCredits::tenure_credit_count(5), 3);
+			assert_eq!(Game::tenure_credit_count(0), 1);
+			assert_eq!(Game::tenure_credit_count(1), 2);
+			assert_eq!(Game::tenure_credit_count(2), 3);
+			assert_eq!(Game::tenure_credit_count(5), 3);
 		});
 	}
 
@@ -4116,7 +4111,7 @@ mod check_in {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			assert_noop!(
-				NftCredits::set_tenure_thresholds(
+				Game::set_tenure_thresholds(
 					RuntimeOrigin::signed(ALICE),
 					BoundedVec::truncate_from(vec![1])
 				),
@@ -4140,7 +4135,7 @@ mod check_in {
 		new_test_ext().execute_with(|| {
 			for unsorted in [vec![2, 1], vec![1, 1]] {
 				assert_noop!(
-					NftCredits::set_tenure_thresholds(
+					Game::set_tenure_thresholds(
 						RuntimeOrigin::root(),
 						BoundedVec::truncate_from(unsorted)
 					),

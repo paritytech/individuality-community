@@ -170,14 +170,3 @@ pub enum NftClaimCreditProofError {
 	/// are not the block's awards, or not in leaf order.
 	RootMismatch,
 }
-
-/// When a player's check-in credits are paid, decided by their recognition in indiv-pallet-score.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PayoutCondition {
-	/// Paid at check-in, or by the attendance backfill if the credit buffers are full. For a
-	/// person, who is unique.
-	Always,
-	/// Paid by the attendance backfill if the player attends. For an account that is not a
-	/// person, of which one party can control any number.
-	IfAttended,
-}

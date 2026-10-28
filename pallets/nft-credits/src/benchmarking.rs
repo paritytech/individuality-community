@@ -21,7 +21,6 @@ use super::*;
 use codec::Encode;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
-use indiv_pallet_game::{GameInfo, Player, PlayerCredibility};
 use sp_runtime::{traits::One, transaction_validity::TransactionSource};
 
 /// What the benchmarks cannot set up themselves, because only the runtime knows how its XCM
@@ -292,151 +291,9 @@ mod benches {
 		Ok(())
 	}
 
-	// Setting a full list of thresholds, which is the largest value the call writes.
-	#[benchmark]
-	fn set_tenure_thresholds() -> Result<(), BenchmarkError> {
-		let origin = <T as indiv_pallet_game::Config>::ManagerOrigin::try_successful_origin()
-			.map_err(|_| BenchmarkError::Weightless)?;
-		let thresholds = full_tenure_thresholds::<T>();
-
-		#[extrinsic_call]
-		_(origin as T::RuntimeOrigin, thresholds.clone());
-
-		assert_eq!(TenureThresholds::<T>::get(), thresholds);
-
-		Ok(())
-	}
-
-	// A check-in that awards `n` credits at once. The thresholds are a full list, so the read of
-	// `TenureThresholds` is the largest it can be, and the caller is a person whose tenure reaches
-	// the first `n`.
-	//
-	// The block's buffer is one award short of full, so the check-in fills the last chunk of one
-	// tree and spills into the next block's buffer. That reads the most keys a check-in can.
-	#[benchmark]
-	fn check_in(n: Linear<1, { T::MaxTenureThresholds::get() }>) -> Result<(), BenchmarkError> {
-		let caller: T::AccountId = whitelisted_caller();
-		let player = AccountOrPerson::Account(caller.clone());
-		let now = set_up_recognised_player::<T>(&caller, n)?;
-		// Not the genesis block, whose buffer would count as built already.
-		frame_system::Pallet::<T>::set_block_number(10u32.into());
-		fill_buffer_but_one::<T>(1, 10u32.into(), now as u32);
-
-		#[extrinsic_call]
-		_(RawOrigin::Signed(caller));
-
-		assert_eq!(AwardedNftClaimCredits::<T>::get(1, &player).count(), n);
-		assert_eq!(
-			CreditBuffers::<T>::get(BlockNumberFor::<T>::from(10u32)).map(|b| b.awards),
-			Some(AWARDS_PER_TREE)
-		);
-
-		Ok(())
-	}
-
-	// The attendance backfill paying out a check-in of `n` credits, none of them awarded at
-	// check-in. The player is a participant, so the payout reads their recognition. The buffer is
-	// one award short of full, as in `check_in`.
-	#[benchmark]
-	fn settle_check_in(
-		n: Linear<1, { T::MaxTenureThresholds::get() }>,
-	) -> Result<(), BenchmarkError> {
-		let caller: T::AccountId = whitelisted_caller();
-		indiv_pallet_score::Pallet::<T>::onboard_for_recognition(&caller)?;
-		let player = AccountOrPerson::Account(caller);
-		frame_system::Pallet::<T>::set_block_number(10u32.into());
-		fill_buffer_but_one::<T>(1, 10u32.into(), 1_000_000);
-		CheckIns::<T>::insert(1, &player, n);
-
-		#[block]
-		{
-			Pallet::<T>::settle_check_in(1, &player, Attendance::Attended, 1_000_000);
-		}
-
-		assert_eq!(AwardedNftClaimCredits::<T>::get(1, &player).count(), n);
-		assert!(!CheckIns::<T>::contains_key(1, &player));
-
-		Ok(())
-	}
-
 	// No `impl_benchmark_test_suite!`: a mock for this pallet is a mock of the whole game it sits
 	// on, which the game crate already has, so its tests are the ones that run these paths. The
 	// benchmarks themselves are exercised by `frame-omni-bencher` against the runtime.
-}
-
-/// Makes `caller` a person that attended `n` games while recognised, signed up for game 1 and
-/// inside its check-in window, with a full list of thresholds that their tenure reaches the first
-/// `n` of.
-///
-/// Returns the current time.
-fn set_up_recognised_player<T: Config>(
-	caller: &T::AccountId,
-	n: u32,
-) -> Result<u64, BenchmarkError> {
-	TenureThresholds::<T>::put(full_tenure_thresholds::<T>());
-
-	let player = AccountOrPerson::Account(caller.clone());
-	indiv_pallet_score::Pallet::<T>::onboard_for_recognition(caller)?;
-	Participants::<T>::mutate(&player, |participant| {
-		let participant = participant.as_mut().expect("the caller is onboarded");
-		participant.recognition = Recognition::ExternallyRecognized;
-		participant.attended_games_while_recognized = n;
-	});
-	Players::<T>::insert(
-		&player,
-		Player {
-			first_game: 1,
-			registered: true,
-			sent_report: false,
-			early_attendance_enactment: None,
-			yes_person: 0,
-			no_not_person: 0,
-			expected_max_vote_weight: 0,
-			vote_weight: 0,
-			credibility: PlayerCredibility::Recognized,
-		},
-	);
-
-	let now = 1_000_000u64;
-	let game_date = (now + 1_000) as u32;
-	indiv_pallet_game::Game::<T>::put(GameInfo {
-		index: 1,
-		registration_ends: game_date - 100,
-		shuffle_deadline: game_date - 10,
-		game_date,
-		report_ends: game_date + 1_000,
-		state: GameState::Registration { next_player_index: 1 },
-		max_group_size: <T as indiv_pallet_game::Config>::MaxGroupSize::get(),
-		rounds: 1,
-		pending_attendance: 0,
-		airdrops_scheduled: 0,
-		check_in_opens: now as u32,
-	});
-	<T as Config>::BenchmarkHelper::set_unix_time(now);
-
-	Ok(now)
-}
-
-/// [`Config::MaxTenureThresholds`] thresholds one game apart, starting at one game.
-fn full_tenure_thresholds<T: Config>() -> TenureThresholdsOf<T> {
-	BoundedVec::truncate_from((1..=T::MaxTenureThresholds::get()).collect::<Vec<_>>())
-}
-
-/// Fills the buffer of `block` with awards of `game_index` to one short of [`AWARDS_PER_TREE`],
-/// chunk by chunk.
-fn fill_buffer_but_one<T: Config>(game_index: GameIdx, block: BlockNumberFor<T>, timestamp: u32) {
-	let filler = AWARDS_PER_TREE - 1;
-	for chunk in 0..filler.div_ceil(AWARDS_PER_CHUNK) {
-		let awards = (chunk * AWARDS_PER_CHUNK..filler.min((chunk + 1) * AWARDS_PER_CHUNK))
-			.map(|i| NftClaimCreditAward {
-				claimant: AccountOrPerson::Person(sp_io::hashing::blake2_256(&i.encode())),
-				credit: sp_io::hashing::blake2_256(&(i, b"filler").encode()),
-			})
-			.collect::<Vec<_>>();
-		NftClaimCreditAwards::<T>::insert(block, chunk, BoundedVec::truncate_from(awards));
-	}
-	CreditBuffers::<T>::insert(block, CreditBuffer { game_index, timestamp, awards: filler });
-	CreditBufferCursor::<T>::put(block);
 }
 
 /// The `timestamp` the first benchmarked root commits to. The value is arbitrary, because

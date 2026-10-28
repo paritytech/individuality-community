@@ -332,8 +332,8 @@ pub enum Attendance {
 /// What the game needs from the pallet that owns the NFT claim credits.
 ///
 /// The credits are bookkeeping the game triggers but does not own: a `Person` vote earns one, the
-/// attendance backfill completes the set and pays out the pre-game check-ins, and a game that ends
-/// or is cancelled gives up its slots.
+/// attendance backfill completes the set, a check-in earns one per tenure threshold, and a game
+/// that ends or is cancelled gives up its slots.
 /// The pallet holding them reads the game's own state, so the dependency runs that way and the
 /// game reaches it through this trait.
 ///
@@ -352,11 +352,11 @@ pub trait AwardCredits<AccountId> {
 		award_time: u32,
 	) -> u32;
 
-	/// Award every credit `player` is owed for `game_index` once their `attendance` is final, and
-	/// forget their check-in. Called once for every player, attendee or not.
+	/// Award every report credit `player` earned in `game_index` once their `attendance` is final.
+	/// Called once for every player, attendee or not.
 	///
 	/// An attendee earns one credit per other member of their group in each round they played.
-	/// Any player can be owed the credits of their check-in. Credits already awarded are skipped.
+	/// Credits already awarded are skipped.
 	fn settle_attendance_credits(
 		game_index: u32,
 		rounds: u8,
@@ -367,9 +367,17 @@ pub trait AwardCredits<AccountId> {
 		award_time: u32,
 	) -> u32;
 
-	/// The most credits and the worst-case weight that a check-in adds to one
-	/// [`AwardCredits::settle_attendance_credits`].
-	fn check_in_worst_case() -> (u32, Weight);
+	/// Award `player` the first `count` check-in credits of `game_index`, as far as
+	/// [`AwardCredits::remaining_capacity`] allows. Credits already awarded are skipped.
+	///
+	/// The credit at `index` is for the tenure threshold at `index`, so a later call with a larger
+	/// `count` awards only the credits still missing.
+	fn award_check_in_credits(
+		game_index: u32,
+		player: &AccountOrPerson<AccountId>,
+		count: u32,
+		award_time: u32,
+	) -> u32;
 
 	/// How many further credits of `game_index` can be recorded right now.
 	///
@@ -385,7 +393,7 @@ pub trait AwardCredits<AccountId> {
 	/// Returns where to resume, or `None` once the game has none left.
 	fn clear_game_credits(game_index: u32, limit: u32, cursor: Option<&[u8]>) -> Option<Vec<u8>>;
 
-	/// Give up the awarded-credit slots and the check-in `player` holds in `game_index`.
+	/// Give up the awarded-credit slots `player` holds in `game_index`.
 	fn forget_player_credits(game_index: u32, player: &AccountOrPerson<AccountId>);
 
 	/// Mark every credit slot of `player` in `game_index` as awarded.
@@ -394,6 +402,13 @@ pub trait AwardCredits<AccountId> {
 	/// for, and a slot set that was never filled would measure none of it.
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_award_every_slot(game_index: u32, player: &AccountOrPerson<AccountId>);
+
+	/// Fill the current block's credit buffer with awards of `game_index` to one short of full.
+	///
+	/// Setup a benchmark cannot do for itself: the next award then fills the buffer and spills
+	/// into the next block's, which is the most an award costs.
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_fill_buffer_but_one(game_index: u32);
 }
 
 /// For a runtime that plays games without minting anything from them.
@@ -421,8 +436,8 @@ impl<AccountId> AwardCredits<AccountId> for () {
 		0
 	}
 
-	fn check_in_worst_case() -> (u32, Weight) {
-		(0, Weight::zero())
+	fn award_check_in_credits(_: u32, _: &AccountOrPerson<AccountId>, _: u32, _: u32) -> u32 {
+		0
 	}
 
 	fn remaining_capacity(_: u32) -> u32 {
@@ -437,4 +452,7 @@ impl<AccountId> AwardCredits<AccountId> for () {
 
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_award_every_slot(_: u32, _: &AccountOrPerson<AccountId>) {}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_fill_buffer_but_one(_: u32) {}
 }

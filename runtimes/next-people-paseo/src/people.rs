@@ -665,6 +665,8 @@ impl indiv_pallet_game::Config for Runtime {
 	type MaxGameSchedules = ConstU32<12>;
 	type MaxAttendanceHistoryDepth = ConstU32<12>;
 	type NftClaimCredits = NftCredits;
+	type MaxTenureThresholds = MaxTenureThresholds;
+	type DefaultTenureThresholds = DefaultTenureThresholds;
 	type DefaultPhaseDurations = GamePhaseDurations;
 	type AccountSignature = Signature;
 	type PlayerStatementLimit = PlayerStatementLimit;
@@ -773,8 +775,6 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// `integrity_test` is what holds this to the budget. A block records at most one tree block, so
 	// a call per block removes them eight times faster than they are made.
 	type MaxAwardBlocksPerSweep = ConstU32<8>;
-	type MaxTenureThresholds = MaxTenureThresholds;
-	type DefaultTenureThresholds = DefaultTenureThresholds;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
 }
@@ -793,7 +793,7 @@ parameter_types! {
 	/// Thresholds at 0, 1, 2, 4, 8 and 13 games attended while recognised. A player earns one
 	/// check-in credit per game for each threshold their tenure reaches. Every player reaches the
 	/// first, and a person earns 6 credits a game from 13 games on.
-	pub DefaultTenureThresholds: BoundedVec<indiv_pallet_nft_credits::GamesAttended, MaxTenureThresholds> =
+	pub DefaultTenureThresholds: BoundedVec<indiv_pallet_game::GamesAttended, MaxTenureThresholds> =
 		BoundedVec::truncate_from(vec![0, 1, 2, 4, 8, 13]);
 }
 
