@@ -1843,7 +1843,8 @@ pub mod pallet {
 								nft.instance
 							);
 						}
-						*count = count.and_then(|count| count.checked_sub(1)).filter(|next| *next > 0);
+						*count =
+							count.and_then(|count| count.checked_sub(1)).filter(|next| *next > 0);
 					});
 					ContractNfts::<T>::remove((holder, nft.collection, nft.instance));
 				},
