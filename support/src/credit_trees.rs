@@ -323,7 +323,8 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 /// What the game needs from the pallet that owns the NFT claim credits.
 ///
 /// The credits are bookkeeping the game triggers but does not own: a `Person` vote earns one, the
-/// attendance backfill completes the set, and a game that ends or is cancelled gives up its slots.
+/// attendance backfill completes the set, a check-in earns one per tenure threshold, and a game
+/// that ends or is cancelled gives up its slots.
 /// The pallet holding them reads the game's own state, so the dependency runs that way and the
 /// game reaches it through this trait.
 ///
@@ -353,6 +354,18 @@ pub trait AwardCredits<AccountId> {
 		award_time: u32,
 	) -> u32;
 
+	/// Award `player` the first `count` check-in credits of `game_index`, as far as
+	/// [`AwardCredits::remaining_capacity`] allows. Credits already awarded are skipped.
+	///
+	/// The credit at `index` is for the tenure threshold at `index`, so a later call with a larger
+	/// `count` awards only the credits still missing.
+	fn award_check_in_credits(
+		game_index: u32,
+		player: &AccountOrPerson<AccountId>,
+		count: u32,
+		award_time: u32,
+	) -> u32;
+
 	/// How many further credits of `game_index` can be recorded right now.
 	///
 	/// A caller that cannot split its awards across blocks checks this first, and defers or refuses
@@ -376,6 +389,13 @@ pub trait AwardCredits<AccountId> {
 	/// for, and a slot set that was never filled would measure none of it.
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_award_every_slot(game_index: u32, player: &AccountOrPerson<AccountId>);
+
+	/// Fill the current block's credit buffer with awards of `game_index` to one short of full.
+	///
+	/// Setup a benchmark cannot do for itself: the next award then fills the buffer and spills
+	/// into the next block's, which is the most an award costs.
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_fill_buffer_but_one(game_index: u32);
 }
 
 /// For a runtime that plays games without minting anything from them.
@@ -402,6 +422,10 @@ impl<AccountId> AwardCredits<AccountId> for () {
 		0
 	}
 
+	fn award_check_in_credits(_: u32, _: &AccountOrPerson<AccountId>, _: u32, _: u32) -> u32 {
+		0
+	}
+
 	fn remaining_capacity(_: u32) -> u32 {
 		u32::MAX
 	}
@@ -414,4 +438,7 @@ impl<AccountId> AwardCredits<AccountId> for () {
 
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_award_every_slot(_: u32, _: &AccountOrPerson<AccountId>) {}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_fill_buffer_but_one(_: u32) {}
 }

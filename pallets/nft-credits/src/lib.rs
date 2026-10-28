@@ -28,7 +28,7 @@
 //! One earning has three names here, one per stage:
 //!
 //! - A *credit* ([`indiv_support::credit_trees::NftClaimCredit`]) is the hash of one successful
-//!   report. A player earns credits and capacity is counted in them.
+//!   report or of one check-in threshold. A player earns credits and capacity is counted in them.
 //! - An *award* ([`NftClaimCreditAward`]) is a credit paired with its claimant. Storage holds
 //!   awards, so chunk and buffer sizes count them.
 //! - A *leaf* ([`indiv_support::credit_trees::NftClaimCreditLeaf`]) is the hash of an award, at a
@@ -51,6 +51,13 @@
 //! credit is awarded once however many times both award paths reach it. Each award is appended to
 //! the buffer of the block that commits it in [`NftClaimCreditAwards`] and emitted as
 //! `NftClaimCreditAwarded`, in leaf order.
+//!
+//! ## Check-in credits
+//!
+//! The game pallet's `check_in` grants a player one credit per tenure threshold they reach, and
+//! decides when to pay them. This pallet awards them like any other credit. A check-in credit takes
+//! an [`AwardedNftClaimCredits`] slot after the report slots, so a player receives it at most once
+//! per game.
 //!
 //! ## Committing
 //!
@@ -215,6 +222,16 @@ pub const AWARDS_PER_TREE: u32 = CHUNKS_PER_TREE * AWARDS_PER_CHUNK;
 /// `StorageWeightReclaim` admits reports until what they really record fills the block, which no
 /// compile-time figure states exactly.
 pub const MAX_PENDING_CREDIT_TREES: u32 = 8;
+
+/// The prefix of the preimage of a report credit, see [`Pallet::compute_nft_claim_credit`].
+///
+/// A fixed-size array encodes without a length prefix, so the preimage starts with these bytes.
+pub const REPORT_CREDIT_PREFIX: [u8; 17] = *b"polkadot-pop-game";
+
+/// The prefix of the preimage of a check-in credit, see [`Pallet::compute_check_in_credit`].
+///
+/// It differs from [`REPORT_CREDIT_PREFIX`], so a check-in credit never equals a report credit.
+pub const CHECK_IN_CREDIT_PREFIX: [u8; 21] = *b"polkadot-pop-check-in";
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-credits";
 
@@ -892,7 +909,7 @@ impl<T: Config> Pallet<T> {
 	/// walks the group. The attestee's own place goes unused.
 	///
 	/// Spacing slots by the configured `MaxGroupSize` rather than the game's keeps the
-	/// mapping independent of the group size, below `max_credit_slots`, which the
+	/// mapping independent of the group size, below `max_report_credit_slots`, which the
 	/// `integrity_test` holds to [`AwardedCredits::CAPACITY`].
 	pub fn credit_slot(round: RoundIndex, attester_position: AttesterPosition) -> CreditSlot {
 		CreditSlot::from(round)
@@ -900,16 +917,48 @@ impl<T: Config> Pallet<T> {
 			.saturating_add(attester_position)
 	}
 
-	/// The number of credit slots any game of this runtime can use.
-	pub(crate) fn max_credit_slots() -> u32 {
+	/// The number of report credit slots any game of this runtime can use.
+	pub(crate) fn max_report_credit_slots() -> u32 {
 		T::MaxRounds::get().saturating_mul(T::MaxGroupSize::get())
+	}
+
+	/// The number of credit slots any game of this runtime can use, the report slots followed by
+	/// the check-in slots.
+	pub(crate) fn max_credit_slots() -> u32 {
+		Self::max_report_credit_slots()
+			.saturating_add(<T as indiv_pallet_game::Config>::MaxTenureThresholds::get())
+	}
+
+	/// The [`AwardedNftClaimCredits`] slot of the check-in credit for the tenure threshold at
+	/// `index`.
+	///
+	/// Check-in slots start after the last report slot, so the two kinds never share a slot.
+	pub fn check_in_credit_slot(index: u32) -> CreditSlot {
+		Self::max_report_credit_slots().saturating_add(index)
+	}
+
+	/// Compute the NFT claim credit for the tenure threshold at `index` in a game.
+	///
+	/// Blake2 256 hash of
+	/// ```txt
+	/// "polkadot-pop-check-in" ++ game index ++ threshold index ++ claimant
+	/// ```
+	/// - `game_index` and `index`: unsigned 32bit.
+	/// - `claimant`: 0 ++ account id, or 1 ++ person id.
+	pub fn compute_check_in_credit(
+		game_index: GameIdx,
+		index: u32,
+		claimant: &AccountOrPerson<T::AccountId>,
+	) -> NftClaimCredit {
+		(CHECK_IN_CREDIT_PREFIX, game_index, index, claimant)
+			.using_encoded(sp_io::hashing::blake2_256)
 	}
 
 	/// Compute the NFT claim credit for a successful report.
 	///
 	/// Blake2 256 hash of
 	/// ```txt
-	/// "polkadot-pop-game" ++ game index ++ attester ++ attestee ++ round
+	/// "polkadot-pop-game" ++ game index ++ round ++ attester ++ attestee
 	/// ```
 	/// - `game_index`: unsigned 32bit.
 	/// - `attester` and `attestee`:
@@ -922,7 +971,7 @@ impl<T: Config> Pallet<T> {
 		attester: &AccountOrPerson<T::AccountId>,
 		attestee: &AccountOrPerson<T::AccountId>,
 	) -> NftClaimCredit {
-		(b"polkadot-pop-game", game_index, round, attester, attestee)
+		(REPORT_CREDIT_PREFIX, game_index, round, attester, attestee)
 			.using_encoded(sp_io::hashing::blake2_256)
 	}
 
@@ -970,8 +1019,8 @@ impl<T: Config> Pallet<T> {
 		award_time: u32,
 	) -> u32 {
 		if !AwardedCredits::within_capacity(credit_slot) {
-			// `credit_slot` is below `max_received_votes()`, which the `integrity_test`
-			// holds to the mask's capacity, so this cannot be reached.
+			// `credit_slot` is a report or check-in slot, and the `integrity_test` holds both
+			// kinds to the mask's capacity, so this cannot be reached.
 			defensive!("indiv-pallet-nft-credits: credit slot must fit the awarded credit mask");
 			return 0;
 		}
@@ -1730,7 +1779,7 @@ impl<T: Config> Pallet<T> {
 		blocks: BoundedVec<BlockNumberFor<T>, T::MaxCreditTreesPerMessage>,
 	) -> DispatchResult {
 		ensure!(!blocks.is_empty(), Error::<T>::NoBlocksToReplay);
-		ensure!(blocks.windows(2).all(|w| w[0] < w[1]), Error::<T>::UnsortedReplayBlocks);
+		ensure!(blocks.is_sorted_by(|a, b| a < b), Error::<T>::UnsortedReplayBlocks);
 
 		let message_capacity =
 			Self::max_credit_trees_per_message().ok_or(Error::<T>::ExceedsClaimsChannelCapacity)?;
@@ -1982,12 +2031,13 @@ impl<T: Config> Pallet<T> {
 	pub(crate) fn integrity_test_credits() {
 		// Every credit a claimant can earn in a game needs its own slot in
 		// `AwardedNftClaimCredits`, otherwise the overflowing ones would be awarded twice,
-		// once by `report` and once by the attendance backfill.
+		// once by `report` and once by the attendance backfill. Check-in slots come after the
+		// report slots.
+		let slots = Self::max_credit_slots();
 		assert!(
-			Self::max_credit_slots() <= AwardedCredits::CAPACITY,
+			slots <= AwardedCredits::CAPACITY,
 			"a game uses up to {slots} credit slots per claimant, more than the {capacity} \
 		of `AwardedNftClaimCredits`",
-			slots = Self::max_credit_slots(),
 			capacity = AwardedCredits::CAPACITY,
 		);
 
@@ -1999,6 +2049,16 @@ impl<T: Config> Pallet<T> {
 			e_max <= buffered,
 			"one `report` awards up to {e_max} credits, more than the {buffered} the credit \
 		buffers hold",
+		);
+
+		// The attendance backfill processes a player only while the buffers hold their report
+		// credits and their check-in credits. Below that, the game never ends.
+		let per_player =
+			e_max.saturating_add(<T as indiv_pallet_game::Config>::MaxTenureThresholds::get());
+		assert!(
+			per_player <= buffered,
+			"the attendance backfill awards one player up to {per_player} credits, more than the \
+		{buffered} the credit buffers hold",
 		);
 
 		// Empty buffers must also absorb a whole block of such reports, which is the state an idle
@@ -2169,6 +2229,28 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 		)
 	}
 
+	fn award_check_in_credits(
+		game_index: GameIdx,
+		player: &AccountOrPerson<T::AccountId>,
+		count: u32,
+		award_time: u32,
+	) -> u32 {
+		let awarded = AwardedNftClaimCredits::<T>::get(game_index, player);
+		(0..count)
+			.filter(|&index| !awarded.contains(Self::check_in_credit_slot(index)))
+			.take(Self::remaining_credit_capacity(game_index) as usize)
+			.map(|index| {
+				Self::award_nft_claim_credit(
+					game_index,
+					player,
+					Self::compute_check_in_credit(game_index, index, player),
+					Self::check_in_credit_slot(index),
+					award_time,
+				)
+			})
+			.sum()
+	}
+
 	fn remaining_capacity(game_index: GameIdx) -> u32 {
 		Self::remaining_credit_capacity(game_index)
 	}
@@ -2188,5 +2270,23 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_award_every_slot(game_index: GameIdx, player: &AccountOrPerson<T::AccountId>) {
 		AwardedNftClaimCredits::<T>::insert(game_index, player, AwardedCredits::FULL);
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_fill_buffer_but_one(game_index: GameIdx) {
+		let block = frame_system::Pallet::<T>::block_number();
+		let timestamp = T::UnixTime::now().as_secs() as u32;
+		let filler = AWARDS_PER_TREE - 1;
+		for chunk in 0..filler.div_ceil(AWARDS_PER_CHUNK) {
+			let awards = (chunk * AWARDS_PER_CHUNK..filler.min((chunk + 1) * AWARDS_PER_CHUNK))
+				.map(|i| NftClaimCreditAward {
+					claimant: AccountOrPerson::Person(sp_io::hashing::blake2_256(&i.encode())),
+					credit: sp_io::hashing::blake2_256(&(i, b"filler").encode()),
+				})
+				.collect::<Vec<_>>();
+			NftClaimCreditAwards::<T>::insert(block, chunk, BoundedVec::truncate_from(awards));
+		}
+		CreditBuffers::<T>::insert(block, CreditBuffer { game_index, timestamp, awards: filler });
+		CreditBufferCursor::<T>::put(block);
 	}
 }

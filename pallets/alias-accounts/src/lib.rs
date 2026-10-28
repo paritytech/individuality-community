@@ -812,7 +812,7 @@ pub mod pallet {
 			if accounts.is_empty() {
 				return Err(AuthorizeInvalidity::EmptyBatch.into());
 			}
-			if accounts.windows(2).any(|pair| pair[0] >= pair[1]) {
+			if !accounts.is_sorted_by(|a, b| a < b) {
 				return Err(AuthorizeInvalidity::UnsortedBatch.into());
 			}
 

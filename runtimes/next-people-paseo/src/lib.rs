@@ -280,6 +280,8 @@ pub type Migrations = (
 	indiv_pallet_score::migration::MigrateV0ToV1<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_airdrop::migration::MigrateV0ToV1<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_game::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)
@@ -936,6 +938,7 @@ impl ContainsPair<RestrictedEntity, RuntimeCall> for OperationAllowedOneTimeExce
 						RuntimeCall::Score(register { .. }) |
 						RuntimeCall::Game(sign_up_with_account { .. }) |
 						RuntimeCall::Game(report { .. }) |
+						RuntimeCall::Game(check_in { .. }) |
 						RuntimeCall::Game(offboard { .. }) |
 						RuntimeCall::Game(claim_airdrop { .. })
 				)
@@ -1642,9 +1645,16 @@ impl_runtime_apis! {
 		}
 	}
 
-	impl indiv_pallet_game::runtime_api::PalletGameApi<Block, Balance> for Runtime {
+	#[api_version(2)]
+	impl indiv_pallet_game::runtime_api::PalletGameApi<Block, Balance, AccountId> for Runtime {
 		fn play_deposit() -> Balance {
 			indiv_pallet_game::PlayDepositAmount::<Runtime>::get()
+		}
+
+		fn check_in_credits(
+			player: indiv_support::identity::AccountOrPerson<AccountId>,
+		) -> Result<u32, sp_runtime::DispatchError> {
+			Game::check_in_credits(player)
 		}
 	}
 

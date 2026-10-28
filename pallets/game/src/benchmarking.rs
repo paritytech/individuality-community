@@ -74,7 +74,7 @@ mod benches {
 		pallet_prelude::One,
 		traits::{
 			fungibles::{Create, Inspect, Mutate},
-			Consideration, ConstU32, EnsureOriginWithArg, UnixTime,
+			Consideration, ConstU32, EnsureOrigin, EnsureOriginWithArg, UnixTime,
 		},
 		BoundedVec,
 	};
@@ -295,6 +295,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			check_in_window: 0,
 		};
 
 		<T as Config>::BenchmarkHelper::set_valid_time();
@@ -325,6 +326,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -362,6 +364,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+				check_in_window: 0,
 			};
 			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
 
@@ -411,6 +414,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				pending_attendance: 0,
 				airdrops_scheduled: 0,
+				check_in_opens: 0,
 			})
 		}
 		Ok(())
@@ -425,6 +429,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+				check_in_window: 0,
 			});
 		}
 
@@ -451,6 +456,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			check_in_opens: 0,
 		};
 
 		let mut meter = WeightMeter::new();
@@ -478,6 +484,7 @@ mod benches {
 			rounds,
 			max_group_size: 2,
 			airdrops: bench_airdrops::<T>(1),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -557,6 +564,7 @@ mod benches {
 			rounds,
 			max_group_size: 2,
 			airdrops: bench_airdrops::<T>(1),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -677,6 +685,7 @@ mod benches {
 			rounds,
 			max_group_size: group_size,
 			airdrops: bench_airdrops::<T>(1),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -847,6 +856,7 @@ mod benches {
 			rounds,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			check_in_opens: 0,
 		};
 
 		let mut meter = WeightMeter::new();
@@ -871,8 +881,9 @@ mod benches {
 
 	// Per-player worst case: the target is freshly decided as Attended. The
 	// iteration runs `apply_attendance` (including score payout writes), rotates a
-	// full attendance history, awards all attendance NFT claim credits, promotes all staged
-	// candidates, and drops a deposit after the target reaches personhood.
+	// full attendance history, awards all attendance NFT claim credits, pays a check-in of
+	// `MaxTenureThresholds` credits, promotes all staged candidates, and drops a deposit after
+	// the target reaches personhood.
 	#[benchmark]
 	fn player_process_step1_inner_loop(
 		r: Linear<1, { T::MaxRounds::get() }>,
@@ -901,6 +912,7 @@ mod benches {
 			rounds,
 			pending_attendance: player_count,
 			airdrops_scheduled: 0,
+			check_in_opens: 0,
 		};
 
 		for i in 0..player_count {
@@ -955,6 +967,7 @@ mod benches {
 			let _ = attendance.try_push(i);
 		}
 		PlayerAttendanceHistory::<T>::insert(&target_player, attendance);
+		CheckIns::<T>::insert(game_index, &target_player, T::MaxTenureThresholds::get());
 
 		indiv_pallet_score::Pallet::<T>::start_attendance_report_session().unwrap();
 		let personhood_threshold = indiv_pallet_score::PersonhoodThreshold::<T>::get();
@@ -1023,6 +1036,7 @@ mod benches {
 			rounds,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			check_in_opens: 0,
 		});
 
 		let mut meter = WeightMeter::new();
@@ -1106,6 +1120,7 @@ mod benches {
 			// transition in `on_game_cancelled` (benchmarked separately). `airdrops_scheduled` is
 			// inert here; if refund logic ever moves into this path, set up a funded event.
 			airdrops_scheduled: 0,
+			check_in_opens: 0,
 		};
 
 		// No players exists for the game so `process_cancelling_step_player` should do minimal
@@ -1173,6 +1188,7 @@ mod benches {
 			rounds,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 
@@ -1260,6 +1276,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1295,6 +1312,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1330,6 +1348,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1399,6 +1418,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			check_in_window: 0,
 		};
 		Pallet::<T>::new_game(&game_schedule)?;
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1468,6 +1488,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			check_in_window: 0,
 		};
 		Pallet::<T>::new_game(&schedule)?;
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -1544,6 +1565,7 @@ mod benches {
 			rounds: rounds as u8,
 			max_group_size,
 			airdrops: bench_airdrops::<T>(1),
+			check_in_window: 0,
 		};
 		assert_ok!(Pallet::<T>::new_game(&game_schedule));
 
@@ -1767,6 +1789,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			check_in_opens: 0,
 		});
 
 		// Seed attendance history at max depth so the removal proof is worst case.
@@ -1958,6 +1981,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&game_schedule));
 
@@ -1972,6 +1996,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+				check_in_window: 0,
 			};
 			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
 
@@ -2004,6 +2029,7 @@ mod benches {
 				rounds: T::MaxRounds::get() as u8,
 				max_group_size: T::MaxGroupSize::get(),
 				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+				check_in_window: 0,
 			};
 			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
 
@@ -2051,6 +2077,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game_index = Game::<T>::get().expect("game exists").index;
@@ -2120,6 +2147,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			check_in_opens: 0,
 		});
 
 		let mut meter = WeightMeter::new();
@@ -2177,6 +2205,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		assert!(matches!(
@@ -2216,6 +2245,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		assert!(matches!(
@@ -2249,6 +2279,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(n),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game = Game::<T>::get().expect("game exists after new_game");
@@ -2289,6 +2320,7 @@ mod benches {
 			rounds: T::MaxRounds::get() as u8,
 			max_group_size: T::MaxGroupSize::get(),
 			airdrops: bench_airdrops::<T>(1),
+			check_in_window: 0,
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
 		let game = Game::<T>::get().expect("game exists after new_game");
@@ -2353,5 +2385,101 @@ mod benches {
 
 	// Implements a test for each benchmark. Execute with:
 	// `cargo test -p pallet-people --features runtime-benchmarks`.
+	// Setting a full list of thresholds, which is the largest value the call writes.
+	#[benchmark]
+	fn set_tenure_thresholds() -> Result<(), BenchmarkError> {
+		let origin = <T as Config>::ManagerOrigin::try_successful_origin()
+			.map_err(|_| BenchmarkError::Weightless)?;
+		let thresholds = full_tenure_thresholds::<T>();
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, thresholds.clone());
+
+		assert_eq!(TenureThresholds::<T>::get(), thresholds);
+
+		Ok(())
+	}
+
+	// A check-in that awards `n` credits at once. The thresholds are a full list, so the read of
+	// `TenureThresholds` is the largest it can be, and the caller is a person whose tenure reaches
+	// the first `n`.
+	//
+	// The block's credit buffer is one award short of full, so the check-in fills it and spills
+	// into the next block's buffer. That reads the most keys a check-in can.
+	#[benchmark]
+	fn check_in(n: Linear<1, { T::MaxTenureThresholds::get() }>) -> Result<(), BenchmarkError> {
+		let caller: T::AccountId = whitelisted_caller();
+		let player = AccountOrPerson::Account(caller.clone());
+		let game_index = set_up_check_in::<T>(&caller, n)?;
+		// Not the genesis block, whose buffer would count as built already.
+		frame_system::Pallet::<T>::set_block_number(10u32.into());
+		T::NftClaimCredits::benchmark_fill_buffer_but_one(game_index);
+
+		#[extrinsic_call]
+		_(RawOrigin::Signed(caller));
+
+		assert_eq!(CheckIns::<T>::get(game_index, &player), Some(n));
+
+		Ok(())
+	}
+
+	/// Makes `caller` a person that attended `n` games while recognised, signed up for a game and
+	/// inside its check-in window, with a full list of thresholds that their tenure reaches the
+	/// first `n` of.
+	///
+	/// Returns the game's index.
+	fn set_up_check_in<T: Config>(
+		caller: &T::AccountId,
+		n: u32,
+	) -> Result<GameIdx, BenchmarkError> {
+		TenureThresholds::<T>::put(full_tenure_thresholds::<T>());
+
+		let player = AccountOrPerson::Account(caller.clone());
+		indiv_pallet_score::Pallet::<T>::onboard_for_recognition(caller)?;
+		indiv_pallet_score::Participants::<T>::mutate(&player, |participant| {
+			let participant = participant.as_mut().expect("the caller is onboarded");
+			participant.recognition = indiv_pallet_score::Recognition::ExternallyRecognized;
+			participant.attended_games_while_recognized = n;
+		});
+		Players::<T>::insert(
+			&player,
+			Player {
+				first_game: 1,
+				registered: true,
+				sent_report: false,
+				early_attendance_enactment: None,
+				yes_person: 0,
+				no_not_person: 0,
+				expected_max_vote_weight: 0,
+				vote_weight: 0,
+				credibility: PlayerCredibility::Recognized,
+			},
+		);
+
+		let now = 1_000_000u32;
+		let game_index = 1;
+		Game::<T>::put(GameInfo {
+			index: game_index,
+			registration_ends: now + 900,
+			shuffle_deadline: now + 990,
+			game_date: now + 1_000,
+			report_ends: now + 2_000,
+			state: GameState::Registration { next_player_index: 1 },
+			max_group_size: T::MaxGroupSize::get(),
+			rounds: 1,
+			pending_attendance: 0,
+			airdrops_scheduled: 0,
+			check_in_opens: now,
+		});
+		<T as Config>::BenchmarkHelper::set_time(core::time::Duration::from_secs(now.into()));
+
+		Ok(game_index)
+	}
+
+	/// [`Config::MaxTenureThresholds`] thresholds one game apart, starting at one game.
+	fn full_tenure_thresholds<T: Config>() -> TenureThresholdsOf<T> {
+		BoundedVec::truncate_from((1..=T::MaxTenureThresholds::get()).collect::<Vec<_>>())
+	}
+
 	impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }

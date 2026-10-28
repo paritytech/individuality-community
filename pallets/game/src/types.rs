@@ -313,6 +313,9 @@ pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 	/// airdrop indices `0..airdrops_scheduled`. Scheduling stops at the first failure, so this
 	/// can be less than the schedule's airdrop count. Bounded by `MAX_GAME_AIRDROPS`.
 	pub airdrops_scheduled: u8,
+	/// The time from which a registered player can check in for their pre-game credits, in seconds
+	/// since Unix epoch. Check-ins close at `game_date`.
+	pub check_in_opens: u32,
 }
 
 /// The state of a game.
@@ -514,6 +517,12 @@ pub struct GameSchedule<AssetId, Balance> {
 	/// The airdrop events to schedule for this game, each drawn at its own offset relative to
 	/// the game play time. Empty skips airdrop scheduling for this game.
 	pub airdrops: BoundedVec<GameAirdrop<AssetId, Balance>, ConstU32<{ MAX_GAME_AIRDROPS as u32 }>>,
+	/// The seconds before `game_play_time` from which a registered player can check in for their
+	/// pre-game credits. Zero gives the game no check-in window.
+	///
+	/// A player must be signed up to check in, so check-ins open no earlier than the game's
+	/// registration.
+	pub check_in_window: u32,
 }
 
 /// `GameSchedule` for the runtime.
@@ -647,4 +656,16 @@ pub fn into_registration_entry<AccountId>(
 		AccountOrPerson::Account(account_id) => RegistrationEntry::Account { account_id },
 		AccountOrPerson::Person(alias) => RegistrationEntry::Alias { alias },
 	}
+}
+
+/// The number of games a player attended while recognised as a person.
+pub type GamesAttended = u32;
+
+/// Whether a player attended a game, as the game decides it once their attendance is final.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Attendance {
+	/// The player attended.
+	Attended,
+	/// The player did not attend.
+	Absent,
 }
