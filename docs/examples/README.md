@@ -6,6 +6,9 @@ Runnable TypeScript examples for performing calls against a People chain and Ass
 Each example is a small script that performs one task end to end. The calls are
 typed from the chain's own metadata.
 
+> [!NOTE]
+> As of the moment of writing _(28th October 2026)_ the [polkadot.js apps UI](https://polkadot.js.org/apps/) can submit ordinary signed transactions, but it cannot build v5 general transactions. It therefore cannot submit `#[pallet::authorize]` calls (e.g. `People.create_people_collection`) or use the custom origin extensions in pipeline v1 (`AsPerson`, `VerifyMultiSignature`, …). Use PAPI for these. [`lib/general-signer.ts`](lib/general-signer.ts) builds a v5 general transaction on pipeline v0.
+
 | Script | Side | What it does |
 |---|---|---|
 | `game_scheduling.ts` | operations | Schedule a game (`Game.schedule_games`). |
