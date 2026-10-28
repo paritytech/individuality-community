@@ -1186,7 +1186,10 @@ mod benches {
 
 		let msg = (Pallet::<T>::proof_of_ownership_msg_base(), &person)
 			.using_encoded(sp_io::hashing::blake2_256);
-		let signature = <T as Config>::BenchmarkHelper::sign_account(seed, &msg[..]);
+		let signature = <T as Config>::BenchmarkHelper::sign_account(
+			seed,
+			&Pallet::<T>::account_signing_payload(&msg),
+		);
 
 		let score_context = indiv_pallet_score::Pallet::<T>::score_context();
 		let origin = T::EnsurePerson::try_successful_origin(&score_context)
@@ -1417,7 +1420,10 @@ mod benches {
 		// Valid signature
 		let msg = (Pallet::<T>::proof_of_ownership_msg_base(), &person)
 			.using_encoded(sp_io::hashing::blake2_256);
-		let signature = <T as Config>::BenchmarkHelper::sign_account(seed, &msg[..]);
+		let signature = <T as Config>::BenchmarkHelper::sign_account(
+			seed,
+			&Pallet::<T>::account_signing_payload(&msg),
+		);
 
 		// Origin for the personal alias
 		let score_context = indiv_pallet_score::Pallet::<T>::score_context();

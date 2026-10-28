@@ -6096,6 +6096,7 @@ dependencies = [
  "enumflags2",
  "frame-benchmarking",
  "frame-executive",
+ "frame-metadata 23.0.1",
  "frame-metadata-hash-extension",
  "frame-support 48.1.0",
  "frame-system 48.0.0",
