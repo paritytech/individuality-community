@@ -3603,7 +3603,6 @@ mod migration {
 mod contracts {
 	use super::*;
 	use crate::{ContractNftCount, ContractNfts, Holding, Location};
-	use sp_runtime::ArithmeticError;
 
 	const CONTRACT: u64 = 50;
 	const OTHER_CONTRACT: u64 = 51;
@@ -3931,25 +3930,31 @@ mod contracts {
 		});
 	}
 
-	/// A move whose source count underflows fails before it writes, on every path that takes an
-	/// instance out of a contract.
+	/// A missing source count does not block any path that takes an instance out of a contract.
 	#[test]
-	fn a_source_count_underflow_moves_nothing() {
-		new_test_ext().execute_with(|| {
-			setup_item();
-			MockContracts::add(CONTRACT);
-			mint(0, CONTRACT);
-			ContractNftCount::<Test>::remove(CONTRACT, 0);
-			let underflow = Err(ArithmeticError::Underflow.into());
+	fn a_missing_source_count_does_not_block_a_move() {
+		let moves: [fn() -> DispatchResult; 3] = [
+			|| Scarcity::do_transfer_by_holder(&CONTRACT, 0, RECIPIENT),
+			|| Scarcity::do_force_transfer(&OWNER, 0, RECIPIENT),
+			|| Scarcity::do_force_burn(&OWNER, 0).map(|_| ()),
+		];
+		for take_out in moves {
+			new_test_ext().execute_with(|| {
+				setup_item();
+				MockContracts::add(CONTRACT);
+				mint(0, CONTRACT);
+				ContractNftCount::<Test>::remove(CONTRACT, 0);
 
-			assert_eq!(Scarcity::do_transfer_by_holder(&CONTRACT, 0, RECIPIENT), underflow);
-			assert_eq!(Scarcity::do_force_transfer(&OWNER, 0, RECIPIENT), underflow);
-			assert_eq!(Scarcity::do_force_burn(&OWNER, 0).map(|_| ()), underflow);
+				assert_ok!(take_out());
 
-			assert_eq!(contract_instances(CONTRACT), vec![0]);
-			assert_eq!(Instances::<Test>::get(0).map(|location| location.holder), Some(CONTRACT));
-			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT));
-		});
+				assert!(contract_instances(CONTRACT).is_empty());
+				assert!(!ContractNftCount::<Test>::contains_key(CONTRACT, 0));
+				assert_ne!(
+					Instances::<Test>::get(0).map(|location| location.holder),
+					Some(CONTRACT)
+				);
+			});
+		}
 	}
 
 	#[test]

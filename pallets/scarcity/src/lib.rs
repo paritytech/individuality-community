@@ -35,11 +35,11 @@
 //!
 //! A contract is the exception to the one-NFT rule. [`Config::ContractAccounts`] decides
 //! which accounts are contracts. An instance that arrives at one is stored in [`ContractNfts`],
-//! keyed by the contract and the instance, so a contract holds any number and an unsolicited
-//! instance blocks nothing. Every other account is a purse key, including a contract whose
-//! constructor still runs (see [`ContractAccounts::is_contract`]). An arriving instance does not
-//! record its sender, so a contract that credits senders records the claimant while the claimant
-//! still holds the instance.
+//! keyed by the contract, the collection and the instance, so a contract holds any number and an
+//! unsolicited instance blocks nothing. Every other account is a purse key, including a contract
+//! whose constructor still runs (see [`ContractAccounts::is_contract`]). An arriving instance does
+//! not record its sender, so a contract that credits senders records the claimant while the
+//! claimant still holds the instance.
 //!
 //! One aggregate consideration ticket backs all state of a collection. This keeps an ownership
 //! handoff constant-time without constraining the runtime to fungible balance holds. Ownership
@@ -471,9 +471,7 @@ pub mod pallet {
 	}
 
 	/// Where a live instance is held.
-	#[derive(
-		Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, MaxEncodedLen,
-	)]
+	#[frame_support::stored]
 	pub struct Location<AccountId> {
 		/// The purse key or contract that holds the instance.
 		pub holder: AccountId,
@@ -1709,7 +1707,7 @@ pub mod pallet {
 				Collections::<T>::get(nft.collection).ok_or(Error::<T>::UnknownCollection)?;
 			ensure!(info.owner == *owner, Error::<T>::NoPermission);
 
-			Self::take(&purse, &nft, holding)?;
+			Self::take(&purse, &nft, holding);
 			Self::do_burn(purse, nft)
 		}
 
@@ -1728,7 +1726,7 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			Self::take(&from, &nft, holding)?;
+			Self::take(&from, &nft, holding);
 			let nft =
 				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
@@ -1743,15 +1741,11 @@ pub mod pallet {
 		/// A purse key answers from [`NftsByOwner`] alone. A contract also reads [`Instances`] for
 		/// the collection that keys [`ContractNfts`].
 		pub fn nft_held_by(holder: &T::AccountId, instance: InstanceId) -> Option<(Nft, Holding)> {
-			match NftsByOwner::<T>::get(holder) {
-				Some(nft) if nft.instance == instance => Some((nft, Holding::Purse)),
-				_ => {
-					let location = Instances::<T>::get(instance)
-						.filter(|location| location.holder == *holder)?;
-					ContractNfts::<T>::get((holder, location.collection, instance))
-						.map(|nft| (nft, Holding::Contract))
-				},
-			}
+			Self::purse_nft(holder, instance).or_else(|| {
+				let location =
+					Instances::<T>::get(instance).filter(|location| location.holder == *holder)?;
+				Self::contract_nft(holder, location.collection, instance)
+			})
 		}
 
 		/// The instance `instance` at `location`, and the map that holds it.
@@ -1759,11 +1753,23 @@ pub mod pallet {
 			location: &Location<T::AccountId>,
 			instance: InstanceId,
 		) -> Option<(Nft, Holding)> {
-			match NftsByOwner::<T>::get(&location.holder) {
-				Some(nft) if nft.instance == instance => Some((nft, Holding::Purse)),
-				_ => ContractNfts::<T>::get((&location.holder, location.collection, instance))
-					.map(|nft| (nft, Holding::Contract)),
-			}
+			Self::purse_nft(&location.holder, instance)
+				.or_else(|| Self::contract_nft(&location.holder, location.collection, instance))
+		}
+
+		fn purse_nft(holder: &T::AccountId, instance: InstanceId) -> Option<(Nft, Holding)> {
+			NftsByOwner::<T>::get(holder)
+				.filter(|nft| nft.instance == instance)
+				.map(|nft| (nft, Holding::Purse))
+		}
+
+		fn contract_nft(
+			holder: &T::AccountId,
+			collection: CollectionId,
+			instance: InstanceId,
+		) -> Option<(Nft, Holding)> {
+			ContractNfts::<T>::get((holder, collection, instance))
+				.map(|nft| (nft, Holding::Contract))
 		}
 
 		/// The holder of the live instance `instance`, the instance and the map that holds it.
@@ -1818,28 +1824,30 @@ pub mod pallet {
 
 		/// Remove `nft` from `holder` in the map that holds it.
 		///
-		/// Fails before it writes, so a caller takes before any other write. Clears the backoff
-		/// lock of a purse, which keeps every `Locked` entry paired with an NFT. A contract cannot
-		/// sign, so it never has a lock.
-		fn take(holder: &T::AccountId, nft: &Nft, holding: Holding) -> DispatchResult {
+		/// Clears the backoff lock of a purse, which keeps every `Locked` entry paired with an NFT.
+		/// A contract cannot sign, so it never has a lock. A missing contract count is logged and
+		/// does not stop the removal, so the collection owner can still force-burn the instance.
+		fn take(holder: &T::AccountId, nft: &Nft, holding: Holding) {
 			match holding {
 				Holding::Purse => {
 					NftsByOwner::<T>::remove(holder);
 					Locked::<T>::remove(holder);
 				},
 				Holding::Contract => {
-					ContractNftCount::<T>::try_mutate_exists(holder, nft.collection, |count| {
-						let next = count
-							.unwrap_or_default()
-							.checked_sub(1)
-							.ok_or(ArithmeticError::Underflow)?;
-						*count = (next > 0).then_some(next);
-						Ok::<_, DispatchError>(())
-					})?;
+					ContractNftCount::<T>::mutate_exists(holder, nft.collection, |count| {
+						if count.is_none() {
+							log::error!(
+								target: crate::LOG_TARGET,
+								"ContractNftCount of {holder:?} for collection {} is absent for held instance {}",
+								nft.collection,
+								nft.instance
+							);
+						}
+						*count = count.and_then(|count| count.checked_sub(1)).filter(|next| *next > 0);
+					});
 					ContractNfts::<T>::remove((holder, nft.collection, nft.instance));
 				},
 			}
-			Ok(())
 		}
 
 		/// Transferability of the definition `nft` was minted from.
@@ -1885,7 +1893,7 @@ pub mod pallet {
 
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			Self::take(holder, &nft, holding)?;
+			Self::take(holder, &nft, holding);
 			let nft =
 				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;

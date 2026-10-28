@@ -5170,6 +5170,7 @@ dependencies = [
 name = "indiv-pallet-scarcity"
 version = "0.1.0"
 dependencies = [
+ "derive-where",
  "frame-benchmarking",
  "frame-support 48.1.0",
  "frame-system 48.0.0",

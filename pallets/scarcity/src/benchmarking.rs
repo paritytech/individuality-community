@@ -94,6 +94,12 @@ fn held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> Option<Nft> {
 	Pallet::<T>::nft_held_by(holder, instance).map(|(nft, _)| nft)
 }
 
+/// The instance `instance`, after a check that `holder` holds it and [`Instances`] names it.
+fn assert_held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> Nft {
+	assert_eq!(Instances::<T>::get(instance).map(|location| location.holder), Some(holder.clone()));
+	held::<T>(holder, instance).expect("holder holds the instance")
+}
+
 #[benchmarks(
 	where
 		T::RuntimeCall: From<Call<T>>
@@ -155,11 +161,7 @@ mod benchmarks {
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller), collection, item, destination.clone(), metadata);
 
-		assert!(held::<T>(&destination, instance).is_some());
-		assert_eq!(
-			Instances::<T>::get(instance).map(|location| location.holder),
-			Some(destination)
-		);
+		assert_held::<T>(&destination, instance);
 		assert_eq!(InstanceMetadataCount::<T>::get(instance), m);
 		Ok(())
 	}
@@ -179,11 +181,7 @@ mod benchmarks {
 		#[extrinsic_call]
 		_(origin, destination.clone());
 
-		assert!(held::<T>(&destination, instance).is_some());
-		assert_eq!(
-			Instances::<T>::get(instance).map(|location| location.holder),
-			Some(destination)
-		);
+		assert_held::<T>(&destination, instance);
 		Ok(())
 	}
 
@@ -330,9 +328,7 @@ mod benchmarks {
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller), instance, to.clone());
 
-		let nft = held::<T>(&to, instance).expect("destination owns the transferred NFT");
-		assert_eq!(nft.state_nonce, 1);
-		assert_eq!(Instances::<T>::get(instance).map(|location| location.holder), Some(to));
+		assert_eq!(assert_held::<T>(&to, instance).state_nonce, 1);
 		assert!(held::<T>(&from, instance).is_none());
 		Ok(())
 	}
@@ -356,9 +352,7 @@ mod benchmarks {
 		#[extrinsic_call]
 		_(RawOrigin::Signed(from.clone()), instance, to.clone());
 
-		let nft = held::<T>(&to, instance).expect("destination holds the transferred NFT");
-		assert_eq!(nft.state_nonce, 1);
-		assert_eq!(Instances::<T>::get(instance).map(|location| location.holder), Some(to));
+		assert_eq!(assert_held::<T>(&to, instance).state_nonce, 1);
 		assert!(held::<T>(&from, instance).is_none());
 		Ok(())
 	}

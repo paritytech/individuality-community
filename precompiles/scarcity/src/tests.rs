@@ -18,7 +18,7 @@ use super::*;
 use crate::mock::*;
 
 use frame_support::{assert_ok, traits::Currency};
-use indiv_pallet_scarcity::{ContractNftCount, Location};
+use indiv_pallet_scarcity::{ContractNftCount, Instances, Location};
 use pallet_revive::{
 	precompiles::alloy::{
 		primitives::Bytes,
@@ -1588,6 +1588,26 @@ fn holder_transfer_does_not_cross_collections() {
 		);
 
 		assert_eq!(NftsByOwner::<Test>::get(&holder).unwrap().instance, instance);
+	});
+}
+
+/// An `Instances` entry whose holder does not hold the instance answers as an unknown token.
+#[test]
+fn a_location_without_its_instance_is_an_unknown_token() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let (_, holder, instance) = mint_to_funded_purse(&alice, collection, item, 0xBD);
+
+		NftsByOwner::<Test>::remove(&holder);
+
+		call_reverted_with(
+			&alice,
+			collection_address(collection),
+			IScarcityCollection::ownerOfCall { tokenId: U256::from(instance) }.abi_encode(),
+			ERR_UNKNOWN_TOKEN,
+		);
 	});
 }
 

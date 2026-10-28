@@ -104,15 +104,20 @@ pub fn address_of<T: pallet_revive::Config>(account: &T::AccountId) -> Address {
 	Address::from(<T as pallet_revive::Config>::AddressMapper::to_address(account).0)
 }
 
-/// Charge `n` worst-case database reads before performing them.
+/// The weight of `n` worst-case database reads.
 ///
 /// Prices each read at one `DbWeight` read plus [`PROOF_SIZE_PER_READ`] of proof size.
+pub fn read_weight<T: frame_system::Config>(n: u64) -> Weight {
+	let ref_time = <T as frame_system::Config>::DbWeight::get().reads(n).ref_time();
+	Weight::from_parts(ref_time, n.saturating_mul(PROOF_SIZE_PER_READ))
+}
+
+/// Charge `n` worst-case database reads before performing them, priced as [`read_weight`].
 pub fn charge_reads<T: pallet_revive::Config>(
 	env: &mut impl Ext<T = T>,
 	n: u64,
 ) -> Result<(), Error> {
-	let ref_time = <T as frame_system::Config>::DbWeight::get().reads(n).ref_time();
-	env.charge(Weight::from_parts(ref_time, n.saturating_mul(PROOF_SIZE_PER_READ)))?;
+	env.charge(read_weight::<T>(n))?;
 	Ok(())
 }
 

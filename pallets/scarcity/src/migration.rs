@@ -202,6 +202,10 @@ pub mod v3 {
 	///
 	/// Before this version no contract holds an instance, so every holder is a purse key and
 	/// [`NftsByOwner`] gives the collection.
+	///
+	/// It translates every [`Instances`] entry in one block and reads two entries per instance.
+	/// Schedule it only on a chain whose instance count fits one block's weight. A chain with more
+	/// instances needs a multi-block migration.
 	pub struct MigrateToLocations<T>(PhantomData<T>);
 
 	impl<T: Config> UncheckedOnRuntimeUpgrade for MigrateToLocations<T> {
