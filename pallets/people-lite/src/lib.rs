@@ -20,6 +20,18 @@
 //! The spam prevention mechanism must limit how many calls the origins
 //! `LitePerson` and `LiteAlias` can do.
 //! The recommended approach is to use pallet-origin-restriction.
+//!
+//! ## Lite people cap
+//!
+//! The pallet registers at most `MaxLitePeople` lite people. The cap applies to attested
+//! registrations ([`Call::attest`]) and paid registrations ([`Call::register_with_fee`]).
+//!
+//! ## Paid registration throttling
+//!
+//! From `PaidRegistrationThreshold` lite people on, the pallet accepts at most
+//! `PaidRegistrationsPerPeriod` paid registrations per `PaidRegistrationPeriod` seconds. Attested
+//! registrations count towards the threshold but are not throttled, since governance bounds them
+//! through attestation allowances. A zero `PaidRegistrationPeriod` disables the throttling.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::borrowed_box)]
@@ -31,7 +43,7 @@ use frame_support::{
 	traits::{
 		fungible::{Inspect, Mutate},
 		tokens::Preservation,
-		IsSubType,
+		IsSubType, UnixTime,
 	},
 	PalletId,
 };
@@ -45,11 +57,11 @@ use indiv_support::{
 };
 use sp_runtime::{
 	traits::{AccountIdConversion, Dispatchable, IdentifyAccount, Verify},
-	Saturating,
+	SaturatedConversion, Saturating,
 };
 use types::{
 	CryptoOf, LiteConsumerRegistrationParamsOf, LitePersonInfo, LitePersonInfoOf, MemberOf,
-	ProofOf, RecognitionMethod, SignatureOf,
+	PaidRegistrationWindow, ProofOf, RecognitionMethod, SignatureOf,
 };
 use verifiable::GenerateVerifiable;
 
@@ -82,7 +94,10 @@ pub mod pallet {
 	/// Fixed-width namespaced storage identifier for the lite people collection.
 	pub use indiv_support::traits::PEOPLE_LITE_IDENTIFIER as LITE_PEOPLE_MEMBER_IDENTIFIER;
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	/// Native balance used to pay the lite-person registration fee.
@@ -121,6 +136,27 @@ pub mod pallet {
 		/// The getter can use a dynamic parameter or future pricing adapter without changing this
 		/// pallet.
 		type RegistrationFee: Get<BalanceOf<Self>>;
+
+		/// Maximum number of lite people, attested as well as paid.
+		///
+		/// Lowering it below the number of lite people removes no lite person.
+		type MaxLitePeople: Get<u32>;
+
+		/// Clock that defines the paid registration periods.
+		type Clock: UnixTime;
+
+		/// Number of lite people from which paid registrations are throttled.
+		type PaidRegistrationThreshold: Get<u32>;
+
+		/// Length of a paid registration period in seconds.
+		///
+		/// Zero disables the throttling. A change can reset the current period's count.
+		type PaidRegistrationPeriod: Get<u32>;
+
+		/// Number of paid registrations accepted per period once the threshold is reached.
+		///
+		/// Zero stops paid registrations beyond the threshold.
+		type PaidRegistrationsPerPeriod: Get<u32>;
 
 		/// Runtime-wide network suffix used to derive product contexts.
 		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
@@ -190,9 +226,12 @@ pub mod pallet {
 		LiteAlias(RevisedContextualAlias),
 	}
 
+	/// Registered lite people.
+	///
+	/// The counter gives the number of lite people for the cap and the throttling.
 	#[pallet::storage]
 	pub type LitePeople<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::AccountId, LitePersonInfoOf<T>>;
+		CountedStorageMap<_, Blake2_128Concat, T::AccountId, LitePersonInfoOf<T>>;
 
 	/// Conversion of a lite contextual alias to an account ID.
 	#[pallet::storage]
@@ -203,6 +242,13 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type AccountToAlias<T: Config> =
 		StorageMap<_, Blake2_128Concat, T::AccountId, RevisedContextualAlias, OptionQuery>;
+
+	/// Paid registrations accepted in the latest throttled period.
+	///
+	/// The pallet updates it only while the number of lite people is at or above
+	/// `PaidRegistrationThreshold`. An entry from an earlier period counts as zero registrations.
+	#[pallet::storage]
+	pub type PaidRegistrations<T: Config> = StorageValue<_, PaidRegistrationWindow, ValueQuery>;
 
 	/// Whether the lite people member collection has been created.
 	#[pallet::storage]
@@ -282,6 +328,10 @@ pub mod pallet {
 		LitePeopleCollectionNotCreated,
 		/// The consumer registration account does not match the candidate.
 		InvalidConsumerRegistrationAccount,
+		/// The paid registrations allowed in the current period are used up.
+		PaidRegistrationLimitReached,
+		/// The number of lite people reached `MaxLitePeople`.
+		TooManyLitePeople,
 	}
 
 	#[pallet::call]
@@ -386,6 +436,7 @@ pub mod pallet {
 				.checked_sub(1)
 				.ok_or(Error::<T>::NoAttestationAllowance)?;
 			Self::ensure_lite_collection_created()?;
+			Self::ensure_below_lite_people_cap()?;
 
 			let msg = Self::registration_message(&candidate, &ring_vrf_key);
 			ensure!(
@@ -403,19 +454,13 @@ pub mod pallet {
 				AttestationAllowance::<T>::remove(&verifier);
 			}
 
-			let ring_vrf_key_for_member_service = ring_vrf_key.clone();
-			LitePeople::<T>::insert(
+			Self::insert_lite_person(
 				&candidate,
 				LitePersonInfo {
 					ring_vrf_key,
 					method: RecognitionMethod::UniqueDevice(verifier.clone()),
 				},
-			);
-			T::MemberService::add_members(
-				LITE_PEOPLE_MEMBER_IDENTIFIER,
-				vec![ring_vrf_key_for_member_service],
 			)?;
-			frame_system::Pallet::<T>::inc_sufficients(&candidate);
 			Self::deposit_event(Event::PersonAttested { candidate, verifier: verifier.clone() });
 
 			// If provided with additional params and signature to register as lite consumer,
@@ -435,6 +480,10 @@ pub mod pallet {
 		/// On success, this call transfers the configured fee to the pallet pot, stores lite
 		/// registration data in `LitePeople` and adds the ring VRF key to the lite member
 		/// collection. The fee is not refunded.
+		///
+		/// Once the number of lite people reaches `PaidRegistrationThreshold`, the call fails with
+		/// [`Error::PaidRegistrationLimitReached`] after `PaidRegistrationsPerPeriod` paid
+		/// registrations in the current period.
 		///
 		/// The lite member collection must already have been created via the
 		/// `migration::CreateLitePeopleCollection` runtime upgrade or
@@ -473,6 +522,8 @@ pub mod pallet {
 				);
 			}
 			Self::ensure_lite_collection_created()?;
+			let count = Self::ensure_below_lite_people_cap()?;
+			Self::throttle_paid_registration(count)?;
 
 			let msg = Self::registration_message(&candidate, &ring_vrf_key);
 			ensure!(
@@ -487,16 +538,10 @@ pub mod pallet {
 				Preservation::Preserve,
 			)?;
 			debug_assert_eq!(transferred, registration_fee);
-			let ring_vrf_key_for_member_service = ring_vrf_key.clone();
-			LitePeople::<T>::insert(
+			Self::insert_lite_person(
 				&candidate,
 				LitePersonInfo { ring_vrf_key, method: RecognitionMethod::Fee },
-			);
-			T::MemberService::add_members(
-				LITE_PEOPLE_MEMBER_IDENTIFIER,
-				vec![ring_vrf_key_for_member_service],
 			)?;
-			frame_system::Pallet::<T>::inc_sufficients(&candidate);
 			Self::deposit_event(Event::PersonRegisteredWithFee { candidate: candidate.clone() });
 
 			if let Some(params) = consumer_registration {
@@ -710,6 +755,55 @@ pub mod pallet {
 			)?;
 			LitePeopleCollectionCreated::<T>::put(true);
 			Self::deposit_event(Event::<T>::CollectionCreated);
+			Ok(())
+		}
+
+		/// Store `info` for `candidate` and add its ring VRF key to the lite member
+		/// collection.
+		///
+		/// The caller must call [`Self::ensure_below_lite_people_cap`] first.
+		fn insert_lite_person(
+			candidate: &T::AccountId,
+			info: LitePersonInfoOf<T>,
+		) -> DispatchResult {
+			LitePeople::<T>::insert(candidate, &info);
+			T::MemberService::add_members(LITE_PEOPLE_MEMBER_IDENTIFIER, vec![info.ring_vrf_key])?;
+			frame_system::Pallet::<T>::inc_sufficients(candidate);
+			Ok(())
+		}
+
+		/// Ensure the lite people count is below `MaxLitePeople` and return the count.
+		///
+		/// Fails with [`Error::TooManyLitePeople`] otherwise. Registrations check it before the
+		/// paid registration throttle, so a caller at the cap does not get a period error.
+		fn ensure_below_lite_people_cap() -> Result<u32, DispatchError> {
+			let count = LitePeople::<T>::count();
+			ensure!(count < T::MaxLitePeople::get(), Error::<T>::TooManyLitePeople);
+			Ok(count)
+		}
+
+		/// Record one paid registration in the current period once `count` lite people reach
+		/// `PaidRegistrationThreshold`.
+		///
+		/// Fails with [`Error::PaidRegistrationLimitReached`] when the period has no registrations
+		/// left.
+		fn throttle_paid_registration(count: u32) -> DispatchResult {
+			let period_length = T::PaidRegistrationPeriod::get();
+			if period_length == 0 || count < T::PaidRegistrationThreshold::get() {
+				return Ok(());
+			}
+			let period =
+				(T::Clock::now().as_secs() / u64::from(period_length)).saturated_into::<u32>();
+			let mut window = PaidRegistrations::<T>::get();
+			if window.period != period {
+				window = PaidRegistrationWindow { period, registrations: 0 };
+			}
+			ensure!(
+				window.registrations < T::PaidRegistrationsPerPeriod::get(),
+				Error::<T>::PaidRegistrationLimitReached
+			);
+			window.registrations.saturating_inc();
+			PaidRegistrations::<T>::put(window);
 			Ok(())
 		}
 
