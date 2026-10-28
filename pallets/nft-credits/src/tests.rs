@@ -1395,6 +1395,47 @@ fn credit_roots_api_omits_a_tree_block_before_its_root_is_recorded() {
 }
 
 #[test]
+fn credit_blocks_api_reports_a_block_as_pending_then_committed_then_removed() {
+	new_test_ext().execute_with(|| {
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 100,
+			rounds: 1,
+			max_group_size: 2,
+			..Default::default()
+		};
+		start_game_in_reporting_phase(&schedule, &[ALICE, BOB]);
+		let tree_block = System::block_number();
+		let report: FullReport<Test> =
+			vec![vec![Report::Person].try_into().unwrap()].try_into().unwrap();
+		assert_ok!(Game::report(RuntimeOrigin::signed(ALICE), report));
+		let bob = AccountOrPerson::Account(BOB);
+
+		assert_eq!(
+			NftCredits::nft_claim_credit_blocks(&bob),
+			vec![(tree_block, NftClaimCreditBlockState::Pending)]
+		);
+
+		advance_process();
+		let credit_root =
+			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
+		assert_eq!(
+			NftCredits::nft_claim_credit_blocks(&bob),
+			vec![(tree_block, NftClaimCreditBlockState::Committed(credit_root))]
+		);
+
+		assert_ok!(NftCredits::receive_tree_deletions(
+			claims_chain_origin(),
+			bounded_vec![tree_block]
+		));
+		assert_eq!(
+			NftCredits::nft_claim_credit_blocks(&bob),
+			vec![(tree_block, NftClaimCreditBlockState::Removed)]
+		);
+		assert_eq!(NftCredits::nft_claim_credit_blocks(&AccountOrPerson::Account(EVE)), vec![]);
+	});
+}
+
+#[test]
 fn credit_apis_walk_a_wallet_from_claimant_to_verified_proof() {
 	// The whole off-chain path in two queries: the roots API names the tree blocks, the proofs
 	// API turns one of them into proofs that verify against the root it named.
@@ -1805,7 +1846,7 @@ mod credit_tree_delivery {
 
 			assert!(CreditTreeDeliveryQueue::<Test>::get().is_empty());
 			assert!(recorded_events().contains(&RuntimeEvent::NftCredits(
-				Event::CreditTreesSent { trees: bounded_vec![10, 12] }
+				Event::CreditTreesSent { trees: bounded_vec![(0, 10), (1, 12)] }
 			)));
 			// The trees themselves stay: a claimant still needs them to build a proof.
 			assert_eq!(NftClaimCreditRoots::<Test>::get(10), Some(first));
@@ -1926,9 +1967,9 @@ mod credit_tree_delivery {
 			assert_eq!(batch.trees[0].block, 12);
 			assert!(CreditTreeDeliveryQueue::<Test>::get().is_empty());
 			// Only the tree that was sent is listed, and the sequence spent on the one that was
-			// not is reported on its own, which is what keeps the run alignable.
+			// not is reported on its own.
 			assert!(recorded_events().contains(&RuntimeEvent::NftCredits(
-				Event::CreditTreesSent { trees: bounded_vec![12] }
+				Event::CreditTreesSent { trees: bounded_vec![(1, 12)] }
 			)));
 			assert!(recorded_events().contains(&RuntimeEvent::NftCredits(
 				Event::CreditTreeDeliverySkipped { sequence: 0, block: 10 }

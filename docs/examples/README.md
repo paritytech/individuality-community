@@ -14,6 +14,8 @@ typed from the chain's own metadata.
 | `dotns.ts` | operations | Set the dotNS dispatcher and grant attestation allowance (`DotnsGateway.*`). Runs against the Asset Hub. |
 | `coinage.ts` | usage | Build coin calls — split / transfer / load / unload (`Coinage.*`, encode-only). |
 | `game_participation.ts` | usage | Sign up for a game and build a report (`Game.sign_up_with_account` / `report`). |
+| `nft_minting.ts` | usage | Play a game for NFT claim credits, follow them to the Asset Hub and claim them (`Game.*`, `NftClaims.claim`). Needs the dual-chain network. |
+| `nft_status.ts` | usage | Print the stage of every NFT claim credit of a claimant as it changes (`NftCreditsApi` / `NftClaimsApi`). Needs the dual-chain network. |
 
 ## Setup
 
@@ -34,11 +36,23 @@ The `generated/` directory is for local generated artifacts: keep the relay
 bundle under `generated/relaychain-bin/`, and expect `pnpm run spec:people` to
 write `generated/people-chain-spec.json`.
 
-To **refresh the types from a live chain** after a runtime change:
+### Chain metadata
+
+Refresh the committed metadata in the same PR when an example starts to use a
+runtime item that is new or changed. A runtime change that no example uses does
+not need a refresh.
+
+Fetch the metadata from running chains, for example the local
+[People + Asset Hub](#people--asset-hub-dual-chain) network:
 ```bash
-PEOPLE_RPC=wss://<people-rpc> pnpm run papi:add
-ASSET_HUB_RPC=wss://<asset-hub-rpc> pnpm run papi:add:assethub
+PEOPLE_RPC=ws://127.0.0.1:10010 pnpm run papi:add
+ASSET_HUB_RPC=ws://127.0.0.1:10020 pnpm run papi:add:assethub
+pnpm run typecheck
 ```
+
+`papi add` also writes `wsUrl`, `genesis` and `codeHash` into
+`.papi/polkadot-api.json`. Remove them before you commit, so that each entry
+keeps only `metadata` and the config does not refer to a local endpoint.
 
 ## Running an example
 
@@ -184,10 +198,8 @@ The `chunks` step needs the chunk pages on disk first — generate them with the
 tool: `internal/members-notifier-soak/scripts/gen-chunks.sh` writes them to `chunks/r2e9/` here.
 
 `open-hrmp.ts` talks to the relay with PAPI's untyped API, so the relay is **not** part of the
-committed descriptors and `pnpm run setup` stays offline. The People + Asset Hub descriptors are
-committed (`.papi/metadata/*.scale`); refresh them against the live local RPCs with
-`PEOPLE_RPC=ws://127.0.0.1:10010 pnpm run papi:add` and
-`ASSET_HUB_RPC=ws://127.0.0.1:10020 pnpm run papi:add:assethub` if metadata diverges.
+committed metadata and `pnpm run setup` stays offline. To refresh the People and Asset Hub
+metadata from this network, see [Chain metadata](#chain-metadata).
 
 ## Notes
 
