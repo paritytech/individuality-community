@@ -25,7 +25,8 @@ struct NewCheckIn {
 	game_index: GameIdx,
 	/// The credits the player is granted with this check-in. Never zero.
 	credits: u32,
-	payout_condition: PayoutCondition,
+	/// Whether the player is a person, who receives the credits at check-in.
+	is_person: bool,
 }
 
 impl<T: Config> Pallet<T> {
@@ -72,32 +73,29 @@ impl<T: Config> Pallet<T> {
 
 		let participant = Participants::<T>::get(player);
 		let tenure = participant.as_ref().map_or(0, |p| p.attended_games_while_recognized);
-		let recognition = participant.map(|p| p.recognition);
+		let is_person = Self::is_person(participant.map(|p| p.recognition).as_ref());
 
 		let credits = Self::tenure_credit_count(tenure);
 		ensure!(credits > 0, Error::<T>::NoCheckInCredit);
 
-		Ok(NewCheckIn {
-			game_index: game.index,
-			credits,
-			payout_condition: Self::payout_condition(recognition.as_ref()),
-		})
+		Ok(NewCheckIn { game_index: game.index, credits, is_person })
 	}
 
-	/// When the check-in credits of a player with `recognition` in indiv-pallet-score are paid.
+	/// Whether a player with `recognition` in indiv-pallet-score is a person, who receives their
+	/// check-in credits whether or not they attend.
 	///
-	/// Recognition only moves from not recognised to recognised to suspended, so a condition
-	/// decided later is never stricter than the one at check-in.
-	fn payout_condition(recognition: Option<&Recognition>) -> PayoutCondition {
+	/// A suspended person stays a person. Recognition only moves from not recognised to recognised
+	/// to suspended, so a player that is a person at check-in is still one after the game.
+	fn is_person(recognition: Option<&Recognition>) -> bool {
 		match recognition {
 			Some(
 				Recognition::Recognized(_) |
 				Recognition::Suspended(_) |
 				Recognition::ExternallyRecognized,
-			) => PayoutCondition::Always,
+			) => true,
 			// One party can control any number of accounts that are not persons, so attendance is
 			// what an account pays for its credits with.
-			Some(Recognition::NotRecognized) | None => PayoutCondition::IfAttended,
+			Some(Recognition::NotRecognized) | None => false,
 		}
 	}
 
@@ -106,17 +104,18 @@ impl<T: Config> Pallet<T> {
 	///
 	/// Returns the number of credits it awards now. The weight scales with this number.
 	pub(crate) fn do_check_in(player: AccountOrPerson<T::AccountId>) -> Result<u32, DispatchError> {
-		let NewCheckIn { game_index, credits, payout_condition } = Self::new_check_in(&player)?;
+		let NewCheckIn { game_index, credits, is_person } = Self::new_check_in(&player)?;
 
-		let awarded = match payout_condition {
-			// The attendance backfill awards the credits that do not fit the buffers now.
-			PayoutCondition::Always => T::NftClaimCredits::award_check_in_credits(
+		// The attendance backfill awards the credits that do not fit the buffers now.
+		let awarded = if is_person {
+			T::NftClaimCredits::award_check_in_credits(
 				game_index,
 				&player,
 				credits,
 				T::UnixTime::now().as_secs() as u32,
-			),
-			PayoutCondition::IfAttended => 0,
+			)
+		} else {
+			0
 		};
 
 		CheckIns::<T>::insert(game_index, &player, credits);
@@ -125,11 +124,11 @@ impl<T: Config> Pallet<T> {
 		Ok(awarded)
 	}
 
-	/// Awards the credits of `player`'s check-in for `game_index` if their [`PayoutCondition`]
-	/// holds given `attendance`, and removes the check-in.
+	/// Awards the credits of `player`'s check-in for `game_index` if they are a person or
+	/// `attendance` is [`Attendance::Attended`], and removes the check-in.
 	///
-	/// The condition follows the player's recognition now, not at check-in, so a candidate that
-	/// became a person since is paid whether or not they attend.
+	/// The recognition is read now, not at check-in, so a candidate that became a person since
+	/// is paid whether or not they attend.
 	///
 	/// Returns the number of credits awarded. The caller reserves room for
 	/// [`Config::MaxTenureThresholds`] credits first.
@@ -141,9 +140,7 @@ impl<T: Config> Pallet<T> {
 	) -> u32 {
 		let Some(credits) = CheckIns::<T>::take(game_index, player) else { return 0 };
 		let recognition = Participants::<T>::get(player).map(|p| p.recognition);
-		if Self::payout_condition(recognition.as_ref()) == PayoutCondition::IfAttended &&
-			attendance == Attendance::Absent
-		{
+		if !Self::is_person(recognition.as_ref()) && attendance == Attendance::Absent {
 			return 0;
 		}
 		T::NftClaimCredits::award_check_in_credits(game_index, player, credits, award_time)

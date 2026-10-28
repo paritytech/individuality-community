@@ -189,14 +189,14 @@
 //! ## Payout
 //!
 //! A paid credit is awarded through [`Config::NftClaimCredits`] and becomes mintable once it
-//! reaches the NFT claims chain. [`CheckIns`] records a player's credits, and [`PayoutCondition`]
-//! decides when they are paid:
+//! reaches the NFT claims chain. [`CheckIns`] records a player's credits. When they are paid
+//! depends on the player's recognition in indiv-pallet-score:
 //!
-//! - [`Always`](PayoutCondition::Always): for a person, who is unique, whether recognised by
-//!   indiv-pallet-score, suspended or recognised by another DIM. The credits are paid at check-in
-//!   as far as the credit buffers have room, and the rest after the game.
-//! - [`IfAttended`](PayoutCondition::IfAttended): for an account that is not a person, of which one
-//!   party can control any number. The credits are paid after the game if the player attends.
+//! - A person is unique, whether recognised by indiv-pallet-score, suspended or recognised by
+//!   another DIM. A person receives the credits at check-in as far as the credit buffers have room,
+//!   and the rest after the game.
+//! - One party can control any number of accounts that are not persons. Such an account receives
+//!   the credits after the game if it attends.
 //!
 //! "After the game" is the attendance backfill, which runs once attendance is final. It reads the
 //! recognition again, so a candidate that becomes a person after checking in is paid without
@@ -1927,7 +1927,8 @@ pub mod pallet {
 		/// Checks the caller in for the current game.
 		///
 		/// The caller receives one credit for each of the [`TenureThresholds`] their tenure
-		/// reaches. [`PayoutCondition`] decides when the credits are paid.
+		/// reaches. A person receives them at check-in, and an account that is not a person after
+		/// the game if it attends, see [Payout](crate#payout).
 		///
 		/// The game must be in its check-in window, from `check_in_opens` until it starts, and must
 		/// not be cancelling. The caller must be signed up for it. On success the call pays no fee.
