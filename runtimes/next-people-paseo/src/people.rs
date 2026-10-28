@@ -790,16 +790,12 @@ parameter_types! {
 	/// The check-in credits a player earns in one game at most. Each takes a credit slot after the
 	/// game's 18 report slots, out of the 128 a claimant has per game.
 	pub const MaxTenureThresholds: u32 = 16;
-	/// Thresholds at 0, 1, 2, 4, 8 and 13 weeks of recognition. A player earns one check-in credit
-	/// per game for each threshold their tenure reaches. Every player reaches the first, and a
-	/// person earns 6 credits a game from 13 weeks on.
-	pub DefaultTenureThresholds: BoundedVec<u64, MaxTenureThresholds> = BoundedVec::truncate_from(
-		[0, 1, 2, 4, 8, 13].into_iter().map(|weeks| weeks * WEEK_IN_SECONDS).collect::<Vec<_>>()
-	);
+	/// Thresholds at 0, 1, 2, 4, 8 and 13 games attended while recognised. A player earns one
+	/// check-in credit per game for each threshold their tenure reaches. Every player reaches the
+	/// first, and a person earns 6 credits a game from 13 games on.
+	pub DefaultTenureThresholds: BoundedVec<indiv_pallet_nft_credits::GamesAttended, MaxTenureThresholds> =
+		BoundedVec::truncate_from(vec![0, 1, 2, 4, 8, 13]);
 }
-
-/// A week in seconds.
-const WEEK_IN_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// Origin check for the parachain the credit trees are delivered to. Only that chain may name the
 /// roots this chain deletes.

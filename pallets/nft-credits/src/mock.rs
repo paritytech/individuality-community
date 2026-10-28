@@ -178,13 +178,10 @@ parameter_types! {
 	/// Below `root_ttl`, as the `integrity_test` requires.
 	pub storage AwardRetentionTtl: u64 = 24 * 60 * 60;
 	pub const MaxTenureThresholds: u32 = 4;
-	/// Zero, one and two weeks.
+	/// Zero, one and two games.
 	pub DefaultTenureThresholds: crate::TenureThresholdsOf<Test> =
-		frame_support::BoundedVec::truncate_from(vec![0, WEEK, 2 * WEEK]);
+		frame_support::BoundedVec::truncate_from(vec![0, 1, 2]);
 }
-
-/// A week in seconds.
-pub const WEEK: u64 = 7 * 24 * 60 * 60;
 
 /// Captures the XCM messages the pallet sends to the NFT claims chain and can be made to fail
 /// so that a test can drive the retry path.

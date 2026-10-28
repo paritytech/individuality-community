@@ -22,10 +22,7 @@ use codec::Encode;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin};
 use indiv_pallet_game::{GameInfo, Player, PlayerCredibility};
-use indiv_support::traits::AddOnlyPeopleTrait;
 use sp_runtime::{traits::One, transaction_validity::TransactionSource};
-
-type PeopleOf<T> = <T as indiv_pallet_score::Config>::People;
 
 /// What the benchmarks cannot set up themselves, because only the runtime knows how its XCM
 /// channels and its clock are made.
@@ -312,7 +309,7 @@ mod benches {
 
 	// A check-in that awards `n` credits at once. The thresholds are a full list, so the read of
 	// `TenureThresholds` is the largest it can be, and the caller is a person whose tenure reaches
-	// the first `n`, so the check-in reads their recognition history.
+	// the first `n`.
 	//
 	// The block's buffer is one award short of full, so the check-in fills the last chunk of one
 	// tree and spills into the next block's buffer. That reads the most keys a check-in can.
@@ -367,8 +364,9 @@ mod benches {
 	// benchmarks themselves are exercised by `frame-omni-bencher` against the runtime.
 }
 
-/// Makes `caller` a person recognised for `n` seconds, signed up for game 1 and inside its
-/// check-in window, with a full list of thresholds that their tenure reaches the first `n` of.
+/// Makes `caller` a person that attended `n` games while recognised, signed up for game 1 and
+/// inside its check-in window, with a full list of thresholds that their tenure reaches the first
+/// `n` of.
 ///
 /// Returns the current time.
 fn set_up_recognised_player<T: Config>(
@@ -376,18 +374,13 @@ fn set_up_recognised_player<T: Config>(
 	n: u32,
 ) -> Result<u64, BenchmarkError> {
 	TenureThresholds::<T>::put(full_tenure_thresholds::<T>());
-	let recognised_at = 1_000_000u64;
-	<T as Config>::BenchmarkHelper::set_unix_time(recognised_at);
 
 	let player = AccountOrPerson::Account(caller.clone());
 	indiv_pallet_score::Pallet::<T>::onboard_for_recognition(caller)?;
-	PeopleOf::<T>::initialize_people_collection();
-	let personal_id = PeopleOf::<T>::reserve_new_id();
-	let (key, _) = PeopleOf::<T>::mock_key(personal_id);
-	PeopleOf::<T>::recognize_personhood(personal_id, Some(key))?;
 	Participants::<T>::mutate(&player, |participant| {
-		participant.as_mut().expect("the caller is onboarded").recognition =
-			Recognition::Recognized(personal_id);
+		let participant = participant.as_mut().expect("the caller is onboarded");
+		participant.recognition = Recognition::ExternallyRecognized;
+		participant.attended_games_while_recognized = n;
 	});
 	Players::<T>::insert(
 		&player,
@@ -404,7 +397,7 @@ fn set_up_recognised_player<T: Config>(
 		},
 	);
 
-	let now = recognised_at + u64::from(n);
+	let now = 1_000_000u64;
 	let game_date = (now + 1_000) as u32;
 	indiv_pallet_game::Game::<T>::put(GameInfo {
 		index: 1,
@@ -417,18 +410,16 @@ fn set_up_recognised_player<T: Config>(
 		rounds: 1,
 		pending_attendance: 0,
 		airdrops_scheduled: 0,
-		check_in_opens: recognised_at as u32,
+		check_in_opens: now as u32,
 	});
 	<T as Config>::BenchmarkHelper::set_unix_time(now);
 
 	Ok(now)
 }
 
-/// [`Config::MaxTenureThresholds`] thresholds one second apart, starting at one second.
+/// [`Config::MaxTenureThresholds`] thresholds one game apart, starting at one game.
 fn full_tenure_thresholds<T: Config>() -> TenureThresholdsOf<T> {
-	BoundedVec::truncate_from(
-		(1..=T::MaxTenureThresholds::get()).map(u64::from).collect::<Vec<_>>(),
-	)
+	BoundedVec::truncate_from((1..=T::MaxTenureThresholds::get()).collect::<Vec<_>>())
 }
 
 /// Fills the buffer of `block` with awards of `game_index` to one short of [`AWARDS_PER_TREE`],

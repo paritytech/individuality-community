@@ -80,8 +80,8 @@ sp_api::decl_runtime_apis! {
 			leaf_index: u32,
 		) -> Result<NftClaimCreditProof, NftClaimCreditProofError>;
 
-		/// Returns the number of credits a `check_in` by `player` adds now to their earlier
-		/// check-in for the current game, or the error that call fails with.
+		/// Returns the number of credits a `check_in` by `player` grants now for the current game,
+		/// or the error that call fails with.
 		///
 		/// A refused check-in pays a fee, so a wallet checks this before it submits one. A
 		/// check-in included later can still fail, because the state can change in between.
