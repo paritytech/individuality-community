@@ -142,6 +142,11 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxFutureSkewSeconds: Get<u64>;
 
+		/// Minimum stem length, in bytes, of a label the gateway issues or reserves.
+		///
+		/// Must equal the `PopRules` governance-reserved floor plus one.
+		type MinStemLength: Get<u32>;
+
 		/// Unix time source.
 		type UnixTime: UnixTime;
 
@@ -571,6 +576,11 @@ pub mod pallet {
 			link: &Link,
 		) -> [u8; 32] {
 			(who, label, link).using_encoded(sp_io::hashing::blake2_256)
+		}
+
+		/// Returns whether `stem` reaches [`Config::MinStemLength`].
+		pub(crate) fn is_stem_long_enough(stem: &[u8]) -> bool {
+			stem.len() >= T::MinStemLength::get() as usize
 		}
 
 		/// Calls `RootGatewayDispatcher` with the given ABI-encoded `calldata`

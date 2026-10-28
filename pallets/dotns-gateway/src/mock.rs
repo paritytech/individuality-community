@@ -467,6 +467,7 @@ parameter_types! {
 		frame_support::weights::Weight::from_parts(500_000_000, 50_000);
 	pub const MockMaxValiditySeconds: u64 = 600;
 	pub const MockMaxFutureSkewSeconds: u64 = 15;
+	pub storage MockMinStemLength: u32 = 6;
 }
 
 impl crate::Config for Test {
@@ -478,6 +479,7 @@ impl crate::Config for Test {
 	type MaxContractCallWeight = MockMaxContractCallWeight;
 	type MaxValiditySeconds = MockMaxValiditySeconds;
 	type MaxFutureSkewSeconds = MockMaxFutureSkewSeconds;
+	type MinStemLength = MockMinStemLength;
 	type UnixTime = MockUnixTime;
 	type AttestationAllowanceManager = EnsureRoot<u64>;
 	type DispatcherAddressManager = EnsureRoot<u64>;
