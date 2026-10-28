@@ -162,10 +162,9 @@ use indiv_pallet_game::{
 use indiv_pallet_game::WeightInfo as GameWeightInfo;
 use indiv_support::{
 	credit_trees::{
-		authorize_expiry_sweep, drain_due_expiries, expiry_deadline, oldest_expiry, Attendance,
-		AwardCredits, CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpirySweepTx,
-		ExpiryTimestamp, NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence,
-		ROOT_TTL_GRACE,
+		authorize_expiry_sweep, drain_due_expiries, expiry_deadline, oldest_expiry, AwardCredits,
+		CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpirySweepTx, ExpiryTimestamp,
+		NftClaimCredit, NftClaimCreditLeaf, NftClaimCreditTree, TreeSequence, ROOT_TTL_GRACE,
 	},
 	identity::AccountOrPerson,
 	offchain::{submit_authorized, RETRY_WINDOW, TX_LONGEVITY},
@@ -2212,26 +2211,22 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 		)
 	}
 
-	fn settle_attendance_credits(
+	fn award_attendance_credits(
 		game_index: GameIdx,
 		rounds: RoundIndex,
 		max_group_size: u32,
 		player_count: u32,
-		player: &AccountOrPerson<T::AccountId>,
-		attendance: Attendance,
+		attendee: &AccountOrPerson<T::AccountId>,
 		award_time: u32,
 	) -> u32 {
-		match attendance {
-			Attendance::Attended => Self::award_attendance_credits(
-				game_index,
-				rounds,
-				max_group_size,
-				player_count,
-				player,
-				award_time,
-			),
-			Attendance::Absent => 0,
-		}
+		Self::award_attendance_credits(
+			game_index,
+			rounds,
+			max_group_size,
+			player_count,
+			attendee,
+			award_time,
+		)
 	}
 
 	fn award_check_in_credits(

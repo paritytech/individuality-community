@@ -19,7 +19,6 @@
 use super::*;
 use frame_support::{ensure, pallet_prelude::DispatchError};
 use indiv_pallet_score::{Participants, Recognition};
-use indiv_support::credit_trees::Attendance;
 
 /// A check-in that [`Pallet::check_in`] accepts.
 struct NewCheckIn {

@@ -320,15 +320,6 @@ pub struct CreditTreeBatch<MaxTrees: Get<u32>> {
 	pub trees: BoundedVec<CreditTreeDelivery, MaxTrees>,
 }
 
-/// Whether a player attended a game, as the game decides it once their attendance is final.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Attendance {
-	/// The player attended.
-	Attended,
-	/// The player did not attend, or did not sign up.
-	Absent,
-}
-
 /// What the game needs from the pallet that owns the NFT claim credits.
 ///
 /// The credits are bookkeeping the game triggers but does not own: a `Person` vote earns one, the
@@ -352,18 +343,14 @@ pub trait AwardCredits<AccountId> {
 		award_time: u32,
 	) -> u32;
 
-	/// Award every report credit `player` earned in `game_index` once their `attendance` is final.
-	/// Called once for every player, attendee or not.
-	///
-	/// An attendee earns one credit per other member of their group in each round they played.
-	/// Credits already awarded are skipped.
-	fn settle_attendance_credits(
+	/// Award every credit a freshly attended `attendee` is owed for `game_index`, one per other
+	/// member of their group in each round they played, skipping the ones already awarded.
+	fn award_attendance_credits(
 		game_index: u32,
 		rounds: u8,
 		max_group_size: u32,
 		player_count: u32,
-		player: &AccountOrPerson<AccountId>,
-		attendance: Attendance,
+		attendee: &AccountOrPerson<AccountId>,
 		award_time: u32,
 	) -> u32;
 
@@ -424,13 +411,12 @@ impl<AccountId> AwardCredits<AccountId> for () {
 		0
 	}
 
-	fn settle_attendance_credits(
+	fn award_attendance_credits(
 		_: u32,
 		_: u8,
 		_: u32,
 		_: u32,
 		_: &AccountOrPerson<AccountId>,
-		_: Attendance,
 		_: u32,
 	) -> u32 {
 		0

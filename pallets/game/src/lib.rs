@@ -301,7 +301,7 @@ use indiv_pallet_airdrop::types::{
 };
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
-	credit_trees::{Attendance, AwardCredits},
+	credit_trees::AwardCredits,
 	traits::{Alias, CommunicationIdentifier, Context},
 	weight_budget::OcwWeightBudget,
 };
@@ -1356,7 +1356,7 @@ pub mod pallet {
 					// A `Person` vote awards immediately: the attestee earns this credit
 					// regardless of their final attendance. A `NotPerson` vote awards
 					// nothing at this point. If the attestee ends up attending, the credit
-					// is backfilled by `settle_attendance_credits` when their attendance is
+					// is backfilled by `award_attendance_credits` when their attendance is
 					// finalized.
 					if *report == Report::Person {
 						T::NftClaimCredits::award_report_credit(
@@ -3213,21 +3213,23 @@ pub mod pallet {
 				};
 
 			// `report` defers NFT claim credit materialization to here so its weight stays linear
-			// in `(e, n)` rather than `O(e · n)`. A non-attendee earns no report credits, and
-			// unearned credits were never awarded, so there is nothing to undo. A non-attendee can
-			// still receive check-in credits, so every player settles.
+			// in `(e, n)` rather than `O(e · n)`. An attendee earns one credit per group
+			// co-member in every round played; a non-attendee earns none, and unearned
+			// credits were never awarded, so there is nothing to undo.
+			if attendance {
+				*credits_awarded =
+					credits_awarded.saturating_add(T::NftClaimCredits::award_attendance_credits(
+						game_index,
+						rounds,
+						max_group_size,
+						player_count,
+						&player_id,
+						award_time,
+					));
+			}
+			// A non-attendee can still receive check-in credits, so every player settles.
 			let attendance_outcome =
 				if attendance { Attendance::Attended } else { Attendance::Absent };
-			*credits_awarded =
-				credits_awarded.saturating_add(T::NftClaimCredits::settle_attendance_credits(
-					game_index,
-					rounds,
-					max_group_size,
-					player_count,
-					&player_id,
-					attendance_outcome,
-					award_time,
-				));
 			*credits_awarded = credits_awarded.saturating_add(Self::settle_check_in(
 				game_index,
 				&player_id,

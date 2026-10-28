@@ -661,6 +661,15 @@ pub fn into_registration_entry<AccountId>(
 /// The number of games a player attended while recognised as a person.
 pub type GamesAttended = u32;
 
+/// Whether a player attended a game, as the game decides it once their attendance is final.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Attendance {
+	/// The player attended.
+	Attended,
+	/// The player did not attend.
+	Absent,
+}
+
 /// When a player's check-in credits are paid, decided by their recognition in indiv-pallet-score.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PayoutCondition {
