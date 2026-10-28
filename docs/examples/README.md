@@ -7,10 +7,7 @@ Each example is a small script that performs one task end to end. The calls are
 typed from the chain's own metadata.
 
 > [!NOTE]
-> The polkadot.js apps UI cannot submit extrinsics to this chain: it supports
-> neither v5 general transactions nor the custom transaction extensions. Use PAPI
-> instead. [`lib/general-signer.ts`](lib/general-signer.ts) builds a v5 general
-> transaction.
+> The [polkadot.js apps UI](https://polkadot.js.org/apps/) can submit ordinary signed transactions, but it cannot build v5 general transactions. It therefore cannot submit `#[pallet::authorize]` calls (e.g. `People.create_people_collection`) or use the custom origin extensions in pipeline v1 (`AsPerson`, `VerifyMultiSignature`, …). Use PAPI for these. [`lib/general-signer.ts`](lib/general-signer.ts) builds a v5 general transaction on pipeline v0.
 
 | Script | Side | What it does |
 |---|---|---|
