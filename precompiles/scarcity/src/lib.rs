@@ -140,9 +140,13 @@
 //! `safeTransferFrom` into a contract reverts, because the receiver callback is unavailable, so a
 //! sender uses `transferFrom` or the native transfer.
 //!
-//! Anyone can send a token to a contract. An unwanted token blocks nothing, because a contract has
-//! no single key to fill. The collection owner keeps `forceTransfer` and `forceBurn` over tokens
-//! that a contract holds.
+//! Anyone can send a token to a contract, and an unwanted token blocks nothing. The collection
+//! owner keeps `forceTransfer` and `forceBurn` over tokens that a contract holds.
+//!
+//! `pallet-revive` records a contract only when its constructor returns, so [`ReviveContracts`]
+//! treats an address under construction as a purse key. A constructor receives at most one token
+//! at its own address, and a token sent to the precomputed address in advance makes that receipt
+//! revert. A contract that needs tokens receives them after deployment.
 //!
 //! A contract cannot learn who sent a token. No push calls the contract, and after the push
 //! `ownerOf` names the contract. A contract that credits senders records each claimant before the

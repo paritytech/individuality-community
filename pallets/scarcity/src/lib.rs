@@ -22,40 +22,29 @@
 //! ownership, supply, metadata, and deposits; it knows nothing about what an item means. Item
 //! semantics and access-control policy can live in a higher-level runtime pallet or collection
 //! contract. At this storage layer the collection owner has full control over its definitions,
-//! metadata, and live instances, including force-transfer and force-burn. A runtime must
-//! separately expose Scarcity calls to its chosen contract environment; this crate does not
-//! provide a contract adapter.
+//! metadata, and live instances, including force-transfer and force-burn. A runtime exposes the
+//! pallet to `pallet-revive` contracts through `indiv-precompile-scarcity`.
 //!
 //! Purse keys are coinage-style receiving addresses, not identities: the pallet applies no
-//! destination consent. Any collection owner can mint into — or force-transfer an instance to —
+//! destination consent. Any collection owner can mint into, or force-transfer an instance to,
 //! any empty purse key, and because each key holds at most one NFT, an unsolicited instance
 //! blocks that key from receiving anything else until its holder burns it or transfers it away.
 //! Holders should treat purse keys as disposable, minting to fresh keys they control, and
 //! runtimes or contracts that need receive-consent or long-lived well-known destinations must
 //! enforce that policy above this storage layer.
 //!
-//! A contract is the exception to the one-NFT rule. [`Config::ContractAccounts`] names the
-//! contracts. An instance that arrives at one is stored in [`ContractNfts`], keyed by the contract
-//! and the instance, so a contract holds any number. [`ContractNftCount`] keeps the number per
-//! contract and collection. An unsolicited instance blocks nothing at a contract, because there is
-//! no single key to fill. An arriving instance does not record its sender, so a contract that
-//! credits senders records the claimant while the claimant still holds the instance. The pallet
-//! picks the map when an instance arrives and finds it again through
-//! [`Instances`]. A contract that is later removed keeps what it holds, and an instance a key
-//! received before it became a contract stays in [`NftsByOwner`]. A contract cannot sign, so it
-//! moves its instances through [`Pallet::do_transfer_by_holder`] and never through the fee-less
-//! [`Pallet::transfer`].
+//! A contract is the exception to the one-NFT rule. [`Config::ContractAccounts`] decides
+//! which accounts are contracts. An instance that arrives at one is stored in [`ContractNfts`],
+//! keyed by the contract and the instance, so a contract holds any number and an unsolicited
+//! instance blocks nothing. Every other account is a purse key, including a contract whose
+//! constructor still runs (see [`ContractAccounts::is_contract`]). An arriving instance does not
+//! record its sender, so a contract that credits senders records the claimant while the claimant
+//! still holds the instance.
 //!
-//! The current collection owner backs all collection state with one aggregate consideration
-//! ticket. To transfer that responsibility safely, the owner first nominates a successor and the
-//! successor claims the collection. Claiming atomically creates an equivalent ticket for the
-//! successor, drops the former owner's ticket, and transfers collection authority. This lets the
-//! successor reject an unwanted or unaffordable collection while allowing the runtime to choose
-//! how storage consideration is implemented.
-//!
-//! Footprints count logical records and their encoded payloads rather than exact trie keys and
-//! hash prefixes. A runtime can account for backend overhead in its per-record base price and
-//! calibrate its byte price to the desired storage policy.
+//! One aggregate consideration ticket backs all state of a collection. This keeps an ownership
+//! handoff constant-time without constraining the runtime to fungible balance holds. Ownership
+//! moves by nomination and then claim, so the successor can reject an unwanted or unaffordable
+//! collection.
 //!
 //! Cleanup proceeds from leaves to roots so every call remains bounded. The collection owner
 //! force-burns live instances (or holders burn their own), removes item metadata, deletes empty
@@ -65,10 +54,7 @@
 //!
 //! Collection metadata supplies defaults inherited by every item definition, and item metadata
 //! supplies defaults shared by every instance minted from that definition. A minted instance may
-//! override either scope without affecting other instances. [`Pallet::instance_metadata_of`]
-//! resolves one key in instance, item, then collection order. [`Pallet::item_metadata_of`]
-//! resolves the item and collection scopes, while [`Pallet::collection_metadata_of`] reads only
-//! the collection scope.
+//! override either scope without affecting other instances.
 //!
 //! Keys and values are bounded raw bytes. Numeric metadata is a convention rather than a pallet
 //! type: games should use SCALE-encoded `u128` values when they need a shared numeric convention,
@@ -86,8 +72,7 @@
 //! [replay rules](extension#replay).
 //!
 //! Each instance carries [`Config::MaximumMoves`] feeless moves, spends one per transfer, and any
-//! paid move refills them. The budget bounds the block space one mint buys, as Coinage's
-//! `MaximumAge` does for coins. The holder refills it with
+//! paid move refills them, like Coinage's `MaximumAge` for coins. The holder refills it with
 //! [`transfer_by_holder`](Pallet::transfer_by_holder), which the purse key signs and pays for.
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -242,6 +227,9 @@ impl<AccountId> OnPurseOccupied<AccountId> for () {
 /// Benchmarks measure the check, so a runtime wires its real implementation for them too.
 pub trait ContractAccounts<AccountId> {
 	/// Whether `account` is a contract.
+	///
+	/// An implementation can answer false while a contract's constructor runs. The address then
+	/// receives as a purse key: one instance at most, and none if it already holds one.
 	fn is_contract(account: &AccountId) -> bool;
 
 	/// Makes [`Self::is_contract`] true for `account`, so that a benchmark takes the contract
@@ -555,7 +543,7 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type NextInstanceId<T> = StorageValue<_, InstanceId, ValueQuery>;
 
-	/// One NFT per owner key — the coinage model.
+	/// One NFT per owner key, as in the coinage model.
 	#[pallet::storage]
 	pub type NftsByOwner<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, Nft>;
 
@@ -816,9 +804,9 @@ pub mod pallet {
 
 		/// Cost mechanism backing one collection's aggregate storage deposit.
 		///
-		/// The input is the exact sum produced by the deposit converters below. Keeping one
-		/// ticket per collection makes ownership handoff constant-time without constraining the
-		/// runtime to fungible balance holds.
+		/// The input is the exact sum produced by the deposit converters below. Each converter
+		/// receives logical records and encoded payload bytes, not trie keys, so it prices trie
+		/// and hash-prefix overhead through its per-record base.
 		type Consideration: Consideration<Self::AccountId, BalanceOf<Self>>;
 
 		/// Price of a collection record.
@@ -832,8 +820,7 @@ pub mod pallet {
 
 		/// Price of one metadata entry.
 		///
-		/// The footprint contains one logical record plus the encoded key and value. Trie-key and
-		/// hash-prefix overhead can be priced through the converter's per-record base.
+		/// The footprint contains one logical record plus the encoded key and value.
 		type MetadataDeposit: Convert<Footprint, BalanceOf<Self>>;
 
 		/// Maximum byte length of one metadata key.
