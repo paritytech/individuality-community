@@ -303,9 +303,9 @@ where
 	///
 	/// A purse holds at most one instance, at index 0. A contract's tokens in `ContractNfts`
 	/// follow, in storage order, which is stable while the contract's holdings do not change.
-	/// Reaching them walks the contract's tokens of every collection, one charged read per token
-	/// passed. It does not make the collection ERC-721 Enumerable, which also needs
-	/// `totalSupply` and `tokenByIndex`.
+	/// Reaching index `i` reads `i + 1` of the contract's tokens of this collection, and a token
+	/// of another collection adds no read. It does not make the collection ERC-721 Enumerable,
+	/// which also needs `totalSupply` and `tokenByIndex`.
 	fn token_of_owner_by_index(
 		collection: CollectionId,
 		call: &IScarcityCollection::tokenOfOwnerByIndexCall,
@@ -332,24 +332,17 @@ where
 		if remaining >= ContractNftCount::<T>::get(&owner, collection) {
 			return Err(revert(ERR_INDEX_OUT_OF_RANGE));
 		}
-		let mut held = ContractNfts::<T>::iter_prefix_values(&owner);
-		loop {
-			charge_reads(env, 1)?;
-			let Some(nft) = held.next() else {
-				log::error!(
-					target: LOG_TARGET,
-					"ContractNftCount of {owner:?} for collection {collection} exceeds its ContractNfts entries"
-				);
-				return Err(revert(ERR_INDEX_OUT_OF_RANGE));
-			};
-			if nft.collection != collection {
-				continue;
-			}
-			if remaining == 0 {
-				return Self::encode_token(nft.instance);
-			}
-			remaining -= 1;
-		}
+		charge_reads(env, u64::from(remaining) + 1)?;
+		let Some(nft) =
+			ContractNfts::<T>::iter_prefix_values((&owner, collection)).nth(remaining as usize)
+		else {
+			log::error!(
+				target: LOG_TARGET,
+				"ContractNftCount of {owner:?} for collection {collection} exceeds its ContractNfts entries"
+			);
+			return Err(revert(ERR_INDEX_OUT_OF_RANGE));
+		};
+		Self::encode_token(nft.instance)
 	}
 
 	fn encode_token(instance: InstanceId) -> Result<Vec<u8>, Error> {

@@ -162,8 +162,8 @@
 //! The `StakeVault` fixture in `indiv-precompile-fixtures` follows these rules.
 //!
 //! `tokenOfOwnerByIndex` lists a contract's tokens of this collection after the one token a purse
-//! can hold. It walks the contract's tokens of every collection in storage order up to the index,
-//! with one charged read per token.
+//! can hold. It walks the contract's tokens of this collection in storage order up to the index,
+//! with one charged read per token, so a token of another collection adds no cost.
 //!
 //! A deleted contract keeps its tokens, and nothing moves them out on the holder's authority until
 //! code is deployed at its address again. A token that an address received before it carried code
@@ -469,18 +469,18 @@ fn live_instance<T: indiv_pallet_scarcity::Config + pallet_revive::Config>(
 	env: &mut impl Ext<T = T>,
 ) -> Result<(T::AccountId, Nft), Error> {
 	let id: InstanceId = u64::try_from(*token).map_err(|_| revert(ERR_UNKNOWN_TOKEN))?;
-	let holder = Instances::<T>::get(id).ok_or_else(|| revert(ERR_UNKNOWN_TOKEN))?;
-	let nft = match NftsByOwner::<T>::get(&holder) {
+	let location = Instances::<T>::get(id)
+		.filter(|location| location.collection == collection)
+		.ok_or_else(|| revert(ERR_UNKNOWN_TOKEN))?;
+	let nft = match NftsByOwner::<T>::get(&location.holder) {
 		Some(nft) if nft.instance == id => nft,
 		_ => {
 			charge_reads(env, 1)?;
-			ContractNfts::<T>::get(&holder, id).ok_or_else(|| revert(ERR_UNKNOWN_TOKEN))?
+			ContractNfts::<T>::get((&location.holder, collection, id))
+				.ok_or_else(|| revert(ERR_UNKNOWN_TOKEN))?
 		},
 	};
-	if nft.collection != collection {
-		return Err(revert(ERR_UNKNOWN_TOKEN));
-	}
-	Ok((holder, nft))
+	Ok((location.holder, nft))
 }
 
 /// Convert one raw key to the pallet's bounded metadata key.

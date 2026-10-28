@@ -85,7 +85,7 @@ fn make_contract<T: Config>(
 		Pallet::<T>::do_mint(owner.clone(), collection, item, scratch.clone(), Vec::new())?;
 	let nft = NftsByOwner::<T>::take(&scratch).expect("scratch purse holds the minted NFT");
 	NftsByOwner::<T>::insert(contract, nft);
-	Instances::<T>::insert(instance, contract);
+	Instances::<T>::insert(instance, Location { holder: contract.clone(), collection });
 	Ok(())
 }
 
@@ -156,7 +156,10 @@ mod benchmarks {
 		_(RawOrigin::Signed(caller), collection, item, destination.clone(), metadata);
 
 		assert!(held::<T>(&destination, instance).is_some());
-		assert_eq!(Instances::<T>::get(instance), Some(destination));
+		assert_eq!(
+			Instances::<T>::get(instance).map(|location| location.holder),
+			Some(destination)
+		);
 		assert_eq!(InstanceMetadataCount::<T>::get(instance), m);
 		Ok(())
 	}
@@ -177,7 +180,10 @@ mod benchmarks {
 		_(origin, destination.clone());
 
 		assert!(held::<T>(&destination, instance).is_some());
-		assert_eq!(Instances::<T>::get(instance), Some(destination));
+		assert_eq!(
+			Instances::<T>::get(instance).map(|location| location.holder),
+			Some(destination)
+		);
 		Ok(())
 	}
 
@@ -326,7 +332,7 @@ mod benchmarks {
 
 		let nft = held::<T>(&to, instance).expect("destination owns the transferred NFT");
 		assert_eq!(nft.state_nonce, 1);
-		assert_eq!(Instances::<T>::get(instance), Some(to));
+		assert_eq!(Instances::<T>::get(instance).map(|location| location.holder), Some(to));
 		assert!(held::<T>(&from, instance).is_none());
 		Ok(())
 	}
@@ -352,7 +358,7 @@ mod benchmarks {
 
 		let nft = held::<T>(&to, instance).expect("destination holds the transferred NFT");
 		assert_eq!(nft.state_nonce, 1);
-		assert_eq!(Instances::<T>::get(instance), Some(to));
+		assert_eq!(Instances::<T>::get(instance).map(|location| location.holder), Some(to));
 		assert!(held::<T>(&from, instance).is_none());
 		Ok(())
 	}

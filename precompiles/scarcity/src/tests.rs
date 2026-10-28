@@ -1266,7 +1266,7 @@ fn holder_transfer_moves_the_token() {
 		assert_eq!(moved.collection, collection);
 		// Any outstanding native authorization is invalidated by the move.
 		assert_eq!(moved.state_nonce, nonce_before + 1);
-		assert_eq!(Instances::<Test>::get(instance), Some(to));
+		assert_eq!(Instances::<Test>::get(instance).map(|location| location.holder), Some(to));
 		assert_contract_event(
 			target,
 			IScarcityCollection::Transfer {
@@ -4363,7 +4363,7 @@ mod evm_fixture {
 				.collect::<Vec<_>>();
 
 			assert_eq!(
-				indiv_pallet_scarcity::ContractNfts::<Test>::iter_prefix(&vault_account).count(),
+				indiv_pallet_scarcity::ContractNfts::<Test>::iter_prefix((&vault_account,)).count(),
 				3
 			);
 			assert_eq!(owner_of(collection, tokens[1]).into_array(), vault.0);
@@ -4518,6 +4518,37 @@ mod evm_fixture {
 		});
 	}
 
+	#[test]
+	fn token_of_owner_by_index_ignores_tokens_of_other_collections() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let other_collection = setup_collection(&alice);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			for _ in 0..2 {
+				mint_into(&alice, collection, &vault_account);
+			}
+			let weight_of_last = || {
+				call_full(
+					&alice,
+					collection_address(collection),
+					token_of_owner_by_index_input(vault, 1),
+				)
+				.weight_consumed
+			};
+			let (last, before) = (token_of_owner_by_index(collection, vault, 1), weight_of_last());
+
+			for _ in 0..3 {
+				mint_into(&alice, other_collection, &vault_account);
+			}
+
+			assert_eq!(token_of_owner_by_index(collection, vault, 1), last);
+			assert_eq!(weight_of_last(), before);
+		});
+	}
+
 	alloy::sol! {
 		interface IStakeVault {
 			function reserve(uint256 tokenId) external;
@@ -4644,7 +4675,10 @@ mod evm_fixture {
 				.abi_encode(),
 			);
 
-			assert_eq!(Instances::<Test>::get(token), Some(destination));
+			assert_eq!(
+				Instances::<Test>::get(token).map(|location| location.holder),
+				Some(destination)
+			);
 			assert_eq!(world.entry(token), (Address::ZERO, 0));
 		});
 	}

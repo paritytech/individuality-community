@@ -103,7 +103,10 @@ fn scarcity_purse_test_state(state_nonce: u64) -> (sp_io::TestExternalities, Acc
 				moves: 0,
 			},
 		);
-		indiv_pallet_scarcity::Instances::<Runtime>::insert(0, &from);
+		indiv_pallet_scarcity::Instances::<Runtime>::insert(
+			0,
+			indiv_pallet_scarcity::Location { holder: from.clone(), collection: 0 },
+		);
 		// The holder transfer resolves its item's transferability, so the definition the
 		// instance names has to exist as it would on a chain that minted it.
 		indiv_pallet_scarcity::ItemDefs::<Runtime>::insert(
@@ -286,7 +289,10 @@ fn an_unfunded_purse_cannot_refill_the_move_budget() {
 		let nft = indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&from)
 			.expect("the purse keeps the NFT");
 		assert_eq!((nft.state_nonce, nft.moves), (0, spent));
-		assert_eq!(indiv_pallet_scarcity::Instances::<Runtime>::get(0), Some(from));
+		assert_eq!(
+			indiv_pallet_scarcity::Instances::<Runtime>::get(0).map(|location| location.holder),
+			Some(from)
+		);
 		assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&to));
 	});
 }
@@ -396,9 +402,10 @@ fn a_feeless_push_into_a_contract_lands_next_to_what_it_holds() {
 		);
 		assert!(matches!(result, Ok(Ok(_))), "transaction failed: {result:?}");
 
-		let mut instances =
-			indiv_pallet_scarcity::ContractNfts::<Runtime>::iter_key_prefix(&contract)
-				.collect::<Vec<_>>();
+		let mut instances = indiv_pallet_scarcity::ContractNfts::<Runtime>::iter_key_prefix((
+			&contract, collection,
+		))
+		.collect::<Vec<_>>();
 		instances.sort_unstable();
 		assert_eq!(instances, vec![held, pushed]);
 		assert_eq!(Scarcity::balance_of(&contract, collection), 2);
