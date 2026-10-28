@@ -32,6 +32,15 @@ pragma solidity ^0.8.30;
 /// reverts.
 ///
 /// A holder moves a token on its own authority: the caller must be the current holder.
+/// A purse key receives a token only while it holds none. A deployed contract holds any number and
+/// moves each with @custom:function transferFrom. An address whose code is gone keeps what it
+/// holds, so it can hold more than one token. Anyone can send a token to a contract, and the
+/// contract cannot learn the sender. A native push emits no `Transfer` log and makes no receiver
+/// call, so a contract checks that @custom:function ownerOf returns `address(this)` and does not
+/// wait for an event. A contract that credits senders records each claimant before the push, when
+/// @custom:function ownerOf still returns the claimant, and credits only tokens it has a record
+/// for. Anyone can raise a contract's @custom:function balanceOf and extend its
+/// @custom:function tokenOfOwnerByIndex list, so a contract does not base its logic on either.
 /// Approvals are not supported, so @custom:function approve and @custom:function setApprovalForAll revert, @custom:function getApproved
 /// returns the zero address and @custom:function isApprovedForAll returns false.
 /// @custom:reverts "unknown collection"
@@ -40,10 +49,10 @@ pragma solidity ^0.8.30;
 /// @custom:security-contact admin@parity.io
 interface IScarcityCollection {
     /// @notice ERC-721 standard event. Emitted by @custom:function mint, @custom:function transferFrom, @custom:function safeTransferFrom,
-    /// @custom:function forceTransfer and @custom:function forceBurn when `tokenId` moves between purse keys, including mints
+    /// @custom:function forceTransfer and @custom:function forceBurn when `tokenId` moves between holders, including mints
     /// (from the zero address) and burns (to the zero address).
-    /// @param from The purse key the instance left, or the zero address on a mint.
-    /// @param to The purse key the instance arrived at, or the zero address on a burn.
+    /// @param from The holder the instance left, or the zero address on a mint.
+    /// @param to The holder the instance arrived at, or the zero address on a burn.
     /// @param tokenId The permanent instance identifier that moved.
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
 
@@ -125,32 +134,34 @@ interface IScarcityCollection {
     /// @return supported True when `interfaceId` is one of the supported interfaces.
     function supportsInterface(bytes4 interfaceId) external view returns (bool supported);
 
-    /// @notice Number of tokens of this collection held by `owner`, always 0 or 1.
-    /// @dev ERC-721 standard function. A purse key holds at most one instance. Minting registers
-    /// its destination, so a holder that was minted to answers correctly whatever its balance. A
-    /// key that received its instance by transfer instead, or whose account has since been reaped,
-    /// answers 0 unless it is registered for some other reason, because its address cannot
-    /// otherwise be resolved back; prefer @custom:function ownerOf.
+    /// @notice Number of tokens of this collection held by `owner`.
+    /// @dev ERC-721 standard function. A purse key holds one instance at most and a contract holds
+    /// any number. An address whose code is gone keeps what it held as a contract. Minting
+    /// registers its destination, so a holder that was minted to answers correctly whatever its
+    /// balance. A key that received its instance by transfer instead, or whose account has since
+    /// been reaped, answers 0 unless it is registered for some other reason, because its address
+    /// cannot otherwise be resolved back; prefer @custom:function ownerOf. A contract's address
+    /// always resolves.
     /// @param owner The address to query.
-    /// @return balance 1 when `owner` holds an instance of this collection, otherwise 0.
+    /// @return balance The number of instances of this collection that `owner` holds.
     /// @custom:reverts "balance query for the zero address"
     function balanceOf(address owner) external view returns (uint256 balance);
 
-    /// @notice The purse key holding `tokenId`.
+    /// @notice The purse key or contract holding `tokenId`.
     /// @dev ERC-721 standard function. The address is stable and correct for every holder, unlike
     /// @custom:function balanceOf, so prefer this to establish ownership.
     /// @param tokenId The instance to look up.
-    /// @return owner The purse key currently holding `tokenId`.
+    /// @return owner The purse key or contract currently holding `tokenId`.
     /// @custom:reverts "unknown token"
     function ownerOf(uint256 tokenId) external view returns (address owner);
 
-    /// @notice Move `tokenId` to the empty purse key `to` on the caller's holder authority, then
-    /// require a code-carrying `to` to acknowledge the token.
+    /// @notice Move `tokenId` to `to` on the caller's holder authority, then require a
+    /// code-carrying `to` to acknowledge the token.
     /// @dev ERC-721 standard function. The caller must be the current holder. `data` is forwarded
     /// to the receiver callback, which this precompile cannot make yet, so a code-carrying `to`
     /// always reverts. The acknowledgement runs after the move and unwinds it on failure.
     /// @param from The current holder.
-    /// @param to The empty purse key to move the instance to.
+    /// @param to The empty purse key or the contract to move the instance to.
     /// @param tokenId The instance to move.
     /// @param data Forwarded to the receiver callback unread.
     /// @custom:reverts "destination is the zero address"
@@ -168,7 +179,7 @@ interface IScarcityCollection {
     /// @notice As the four-argument @custom:function safeTransferFrom, with empty `data`.
     /// @dev ERC-721 standard function.
     /// @param from The current holder.
-    /// @param to The empty purse key to move the instance to.
+    /// @param to The empty purse key or the contract to move the instance to.
     /// @param tokenId The instance to move.
     /// @custom:reverts "destination is the zero address"
     /// @custom:reverts "unknown token"
@@ -182,12 +193,13 @@ interface IScarcityCollection {
     /// @custom:emits Transfer
     function safeTransferFrom(address from, address to, uint256 tokenId) external;
 
-    /// @notice Move `tokenId` to the empty purse key `to` on the caller's holder authority.
+    /// @notice Move `tokenId` to the empty purse key or contract `to` on the caller's holder
+    /// authority.
     /// @dev ERC-721 standard function. The caller must be the current holder. Unlike
     /// @custom:function safeTransferFrom, a code-carrying `to` is accepted without an
     /// acknowledgement.
     /// @param from The current holder.
-    /// @param to The empty purse key to move the instance to.
+    /// @param to The empty purse key or the contract to move the instance to.
     /// @param tokenId The instance to move.
     /// @custom:reverts "destination is the zero address"
     /// @custom:reverts "unknown token"
@@ -248,13 +260,15 @@ interface IScarcityCollection {
     /// @custom:reverts "unknown token"
     function tokenURI(uint256 tokenId) external view returns (string memory uri);
 
-    /// @notice The token `owner` holds, for `index` 0 only.
+    /// @notice The token of this collection at `index` among those `owner` holds.
     /// @dev The only ERC-721 Enumerable function served, so the interface is not claimed. A purse
-    /// key holds at most one instance, so every index above 0 is out of range. Resolving `owner`
-    /// has the same limitation as @custom:function balanceOf. Served for wallets.
+    /// key holds one instance at most, at index 0. A contract's tokens follow in storage order,
+    /// which changes when the contract's holdings change. Reaching index `n` of a contract costs
+    /// gas for each of its tokens of this collection up to `n`. Resolving `owner` has the same
+    /// limitation as @custom:function balanceOf. Served for wallets.
     /// @param owner The holder to query.
-    /// @param index The index into the holder's tokens; only 0 is valid.
-    /// @return tokenId The token held at index 0.
+    /// @param index The index into the holder's tokens, below @custom:function balanceOf.
+    /// @return tokenId The token held at `index`.
     /// @custom:reverts "balance query for the zero address"
     /// @custom:reverts "token index out of range for this owner"
     function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256 tokenId);
@@ -318,13 +332,13 @@ interface IScarcityCollection {
     /// @custom:reverts "collection owner cannot pay the storage deposit"
     function defineItem(bool soulbound, bytes[] calldata keys, bytes[] calldata values) external returns (uint32 item);
 
-    /// @notice Mint one instance of `item` into the empty purse key `to` with instance-level
-    /// metadata overrides.
+    /// @notice Mint one instance of `item` into the empty purse key or contract `to` with
+    /// instance-level metadata overrides.
     /// @dev This precompile's own function, not part of any ERC standard. Only the collection owner
     /// may call this. `keys` and `values` are parallel overrides validated as in
     /// @custom:function defineItem.
     /// @param item The item definition to mint an instance of.
-    /// @param to The empty purse key to mint into.
+    /// @param to The empty purse key or the contract to mint into.
     /// @param keys Instance-level metadata override keys.
     /// @param values Metadata values positionally paired with `keys`.
     /// @return tokenId The permanent instance identifier, matching the emitted @custom:emits Transfer.
@@ -347,11 +361,11 @@ interface IScarcityCollection {
         external
         returns (uint256 tokenId);
 
-    /// @notice Move a live instance of this collection to the empty purse key `to`.
+    /// @notice Move a live instance of this collection to the empty purse key or contract `to`.
     /// @dev This precompile's own function, not part of any ERC standard. Only the collection owner
     /// may call this. It ignores whether the instance is soulbound.
     /// @param tokenId The instance to move.
-    /// @param to The empty purse key to move the instance to.
+    /// @param to The empty purse key or the contract to move the instance to.
     /// @custom:reverts "destination is the zero address"
     /// @custom:reverts "caller is not the collection owner"
     /// @custom:reverts "unknown token"

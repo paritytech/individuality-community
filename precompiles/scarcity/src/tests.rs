@@ -18,6 +18,7 @@ use super::*;
 use crate::mock::*;
 
 use frame_support::{assert_ok, traits::Currency};
+use indiv_pallet_scarcity::{ContractNftCount, Instances, Location};
 use pallet_revive::{
 	precompiles::alloy::{
 		primitives::Bytes,
@@ -1266,7 +1267,7 @@ fn holder_transfer_moves_the_token() {
 		assert_eq!(moved.collection, collection);
 		// Any outstanding native authorization is invalidated by the move.
 		assert_eq!(moved.state_nonce, nonce_before + 1);
-		assert_eq!(Instances::<Test>::get(instance), Some(to));
+		assert_eq!(Instances::<Test>::get(instance).map(|location| location.holder), Some(to));
 		assert_contract_event(
 			target,
 			IScarcityCollection::Transfer {
@@ -1587,6 +1588,26 @@ fn holder_transfer_does_not_cross_collections() {
 		);
 
 		assert_eq!(NftsByOwner::<Test>::get(&holder).unwrap().instance, instance);
+	});
+}
+
+/// An `Instances` entry whose holder does not hold the instance answers as an unknown token.
+#[test]
+fn a_location_without_its_instance_is_an_unknown_token() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let (_, holder, instance) = mint_to_funded_purse(&alice, collection, item, 0xBD);
+
+		NftsByOwner::<Test>::remove(&holder);
+
+		call_reverted_with(
+			&alice,
+			collection_address(collection),
+			IScarcityCollection::ownerOfCall { tokenId: U256::from(instance) }.abi_encode(),
+			ERR_UNKNOWN_TOKEN,
+		);
 	});
 }
 
@@ -3844,8 +3865,15 @@ mod evm_fixture {
 	}
 
 	fn deploy_with_args(owner: &AccountId32, mut code: Vec<u8>, args: Vec<u8>) -> H160 {
-		// An EVM constructor reads its arguments appended to the init code, not from the call data.
-		code.extend_from_slice(&args);
+		// An EVM constructor reads its arguments appended to the init code. A PolkaVM blob, which
+		// starts with its magic bytes, would no longer parse with them appended, and its
+		// constructor reads them from the call data instead.
+		let data = if code.starts_with(b"PVM\0") {
+			args
+		} else {
+			code.extend_from_slice(&args);
+			Vec::new()
+		};
 		pallet_revive::Pallet::<Test>::bare_instantiate(
 			RuntimeOrigin::signed(owner.clone()),
 			0u32.into(),
@@ -3854,7 +3882,7 @@ mod evm_fixture {
 				deposit_limit: 1u64 << 50,
 			},
 			Code::Upload(code),
-			Vec::new(),
+			data,
 			// A fixed salt derives the address from the code, so deploying two different contracts
 			// in one test yields two different addresses.
 			Some([0u8; 32]),
@@ -4280,6 +4308,749 @@ mod evm_fixture {
 					.unwrap()
 					.0,
 				ERC721_METADATA_INTERFACE_ID
+			);
+		});
+	}
+
+	alloy::sol! {
+		interface ITokenVault {
+			function release(address collection, uint256 tokenId, address to) external;
+			function held(address collection) external view returns (uint256 count);
+		}
+	}
+
+	/// The account of a deployed contract, which holds its tokens in `ContractNfts`.
+	fn contract_account(contract: H160) -> AccountId32 {
+		<Test as pallet_revive::Config>::AddressMapper::to_account_id(&contract)
+	}
+
+	fn mint_into(owner: &AccountId32, collection: CollectionId, holder: &AccountId32) -> u64 {
+		let item = setup_item(owner, collection);
+		indiv_pallet_scarcity::Pallet::<Test>::do_mint(
+			owner.clone(),
+			collection,
+			item,
+			holder.clone(),
+			alloc::vec![],
+		)
+		.unwrap()
+	}
+
+	fn balance_of(collection: CollectionId, owner: H160) -> U256 {
+		let data = call_ok(
+			&id_to_account(1),
+			collection_address(collection),
+			IScarcityCollection::balanceOfCall { owner: alloy_address(owner) }.abi_encode(),
+		);
+		IScarcityCollection::balanceOfCall::abi_decode_returns(&data).unwrap()
+	}
+
+	fn owner_of(collection: CollectionId, token: u64) -> Address {
+		let data = call_ok(
+			&id_to_account(1),
+			collection_address(collection),
+			IScarcityCollection::ownerOfCall { tokenId: U256::from(token) }.abi_encode(),
+		);
+		IScarcityCollection::ownerOfCall::abi_decode_returns(&data).unwrap()
+	}
+
+	fn token_of_owner_by_index_input(owner: H160, index: u64) -> Vec<u8> {
+		IScarcityCollection::tokenOfOwnerByIndexCall {
+			owner: alloy_address(owner),
+			index: U256::from(index),
+		}
+		.abi_encode()
+	}
+
+	fn token_of_owner_by_index(collection: CollectionId, owner: H160, index: u64) -> u64 {
+		let data = call_ok(
+			&id_to_account(1),
+			collection_address(collection),
+			token_of_owner_by_index_input(owner, index),
+		);
+		IScarcityCollection::tokenOfOwnerByIndexCall::abi_decode_returns(&data)
+			.unwrap()
+			.to::<u64>()
+	}
+
+	fn assert_vault_holds_and_releases(code: Vec<u8>) {
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			let tokens = (0..3)
+				.map(|_| mint_into(&alice, collection, &vault_account))
+				.collect::<Vec<_>>();
+
+			assert_eq!(ContractNfts::<Test>::iter_prefix((&vault_account,)).count(), 3);
+			assert_eq!(owner_of(collection, tokens[1]).into_array(), vault.0);
+			assert_eq!(balance_of(collection, vault), U256::from(3));
+			let target = alloy_address(collection_address(collection));
+			let data =
+				call_ok(&alice, vault, ITokenVault::heldCall { collection: target }.abi_encode());
+			assert_eq!(ITokenVault::heldCall::abi_decode_returns(&data).unwrap(), U256::from(3));
+
+			let (bob_address, bob) = purse(0xB0);
+			System::reset_events();
+			call_ok(
+				&alice,
+				vault,
+				ITokenVault::releaseCall {
+					collection: target,
+					tokenId: U256::from(tokens[1]),
+					to: alloy_address(bob_address),
+				}
+				.abi_encode(),
+			);
+
+			assert_eq!(NftsByOwner::<Test>::get(&bob).map(|nft| nft.instance), Some(tokens[1]));
+			assert_eq!(balance_of(collection, vault), U256::from(2));
+			assert_contract_event(
+				collection_address(collection),
+				IScarcityCollection::Transfer {
+					from: alloy_address(vault),
+					to: alloy_address(bob_address),
+					tokenId: U256::from(tokens[1]),
+				},
+			);
+		});
+	}
+
+	#[test]
+	fn evm_contract_holds_several_tokens_and_releases_them() {
+		assert_vault_holds_and_releases(fixture_code("TokenVault"));
+	}
+
+	#[test]
+	fn polkavm_contract_holds_several_tokens_and_releases_them() {
+		assert_vault_holds_and_releases(resolc_code("TokenVault"));
+	}
+
+	/// `safeTransferFrom` into a deployed contract reverts after the move wrote `ContractNfts`, so
+	/// the frame rollback has to unwind the move and its count.
+	#[test]
+	fn safe_transfer_into_a_contract_moves_nothing() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			let (sender_address, sender, token) =
+				mint_to_funded_purse(&alice, collection, item, 0xA2);
+			let (from, to, token_id) =
+				(alloy_address(sender_address), alloy_address(vault), U256::from(token));
+			System::reset_events();
+
+			for input in [
+				IScarcityCollection::safeTransferFrom_0Call {
+					from,
+					to,
+					tokenId: token_id,
+					data: Bytes::new(),
+				}
+				.abi_encode(),
+				IScarcityCollection::safeTransferFrom_1Call { from, to, tokenId: token_id }
+					.abi_encode(),
+			] {
+				call_reverted_with(
+					&sender,
+					collection_address(collection),
+					input,
+					ERR_CONTRACT_RECEIVER,
+				);
+			}
+
+			assert_eq!(NftsByOwner::<Test>::get(&sender).map(|nft| nft.instance), Some(token));
+			assert_eq!(Instances::<Test>::get(token).map(|location| location.holder), Some(sender));
+			assert_eq!(ContractNfts::<Test>::iter_prefix((&vault_account,)).count(), 0);
+			assert_eq!(ContractNftCount::<Test>::get(&vault_account, collection), 0);
+			assert_no_contract_event();
+		});
+	}
+
+	/// The collection owner mints into a contract, forces a token out of it and into it, and
+	/// burns a token it holds. Each step logs `Transfer` with the contract's address and updates
+	/// the contract's count.
+	#[test]
+	fn the_collection_owner_mints_moves_and_burns_at_a_contract() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			let target = collection_address(collection);
+			let count = || ContractNftCount::<Test>::get(&vault_account, collection);
+			let mint = || {
+				System::reset_events();
+				let data = call_ok(
+					&alice,
+					target,
+					IScarcityCollection::mintCall {
+						item,
+						to: alloy_address(vault),
+						keys: alloc::vec![],
+						values: alloc::vec![],
+					}
+					.abi_encode(),
+				);
+				IScarcityCollection::mintCall::abi_decode_returns(&data).unwrap()
+			};
+
+			let first = mint();
+			assert_contract_event(
+				target,
+				IScarcityCollection::Transfer {
+					from: Address::ZERO,
+					to: alloy_address(vault),
+					tokenId: first,
+				},
+			);
+			let second = mint();
+			assert_eq!(count(), 2);
+			assert_eq!(owner_of(collection, second.to::<u64>()).into_array(), vault.0);
+
+			let (purse_address, purse_account) = purse(0xA3);
+			System::reset_events();
+			call_ok(
+				&alice,
+				target,
+				IScarcityCollection::forceTransferCall {
+					tokenId: first,
+					to: alloy_address(purse_address),
+				}
+				.abi_encode(),
+			);
+			assert_only_contract_event(
+				target,
+				IScarcityCollection::Transfer {
+					from: alloy_address(vault),
+					to: alloy_address(purse_address),
+					tokenId: first,
+				},
+			);
+			assert_eq!(count(), 1);
+			assert_eq!(
+				NftsByOwner::<Test>::get(&purse_account).map(|nft| U256::from(nft.instance)),
+				Some(first)
+			);
+
+			System::reset_events();
+			call_ok(
+				&alice,
+				target,
+				IScarcityCollection::forceTransferCall { tokenId: first, to: alloy_address(vault) }
+					.abi_encode(),
+			);
+			assert_only_contract_event(
+				target,
+				IScarcityCollection::Transfer {
+					from: alloy_address(purse_address),
+					to: alloy_address(vault),
+					tokenId: first,
+				},
+			);
+			assert_eq!(count(), 2);
+
+			System::reset_events();
+			call_ok(
+				&alice,
+				target,
+				IScarcityCollection::forceBurnCall { tokenId: second }.abi_encode(),
+			);
+			assert_only_contract_event(
+				target,
+				IScarcityCollection::Transfer {
+					from: alloy_address(vault),
+					to: Address::ZERO,
+					tokenId: second,
+				},
+			);
+			assert_eq!(count(), 1);
+			assert_eq!(Instances::<Test>::get(second.to::<u64>()), None);
+		});
+	}
+
+	/// Only the contract moves a token it holds. The sender that pushed the token and the
+	/// collection owner both name the contract as `from` and both revert.
+	#[test]
+	fn only_the_contract_moves_a_token_it_holds() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let vault = deploy(&alice, code);
+			let (sender_address, sender, token) =
+				mint_to_funded_purse(&alice, collection, item, 0xA1);
+			call_ok(
+				&sender,
+				collection_address(collection),
+				IScarcityCollection::transferFromCall {
+					from: alloy_address(sender_address),
+					to: alloy_address(vault),
+					tokenId: U256::from(token),
+				}
+				.abi_encode(),
+			);
+			assert!(ContractNfts::<Test>::contains_key((
+				contract_account(vault),
+				collection,
+				token
+			)));
+
+			for caller in [&sender, &alice] {
+				call_reverted_with(
+					caller,
+					collection_address(collection),
+					IScarcityCollection::transferFromCall {
+						from: alloy_address(vault),
+						to: alloy_address(sender_address),
+						tokenId: U256::from(token),
+					}
+					.abi_encode(),
+					ERR_NOT_HOLDER,
+				);
+			}
+
+			assert_eq!(owner_of(collection, token).into_array(), vault.0);
+			assert!(NftsByOwner::<Test>::get(&sender).is_none());
+		});
+	}
+
+	#[test]
+	fn an_unwanted_token_does_not_block_a_contract() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let vault = deploy(&alice, code);
+			mint_into(&alice, collection, &contract_account(vault));
+			let (sender_address, sender) = purse(0xC0);
+			let token = mint_into(&alice, collection, &sender);
+
+			call_ok(
+				&sender,
+				collection_address(collection),
+				IScarcityCollection::transferFromCall {
+					from: alloy_address(sender_address),
+					to: alloy_address(vault),
+					tokenId: U256::from(token),
+				}
+				.abi_encode(),
+			);
+
+			assert_eq!(owner_of(collection, token).into_array(), vault.0);
+			assert_eq!(balance_of(collection, vault), U256::from(2));
+		});
+	}
+
+	#[test]
+	fn token_of_owner_by_index_lists_a_contracts_tokens_of_this_collection() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let other_collection = setup_collection(&alice);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			let first = mint_into(&alice, collection, &vault_account);
+			mint_into(&alice, other_collection, &vault_account);
+			let second = mint_into(&alice, collection, &vault_account);
+
+			let mut listed = (0..2)
+				.map(|index| token_of_owner_by_index(collection, vault, index))
+				.collect::<Vec<_>>();
+			listed.sort_unstable();
+
+			assert_eq!(listed, vec![first, second]);
+			call_reverted_with(
+				&alice,
+				collection_address(collection),
+				token_of_owner_by_index_input(vault, 2),
+				ERR_INDEX_OUT_OF_RANGE,
+			);
+		});
+	}
+
+	/// A contract that received one token before it had code holds it in its purse, at index 0.
+	/// Its `ContractNfts` tokens follow, so a walk over `0..balanceOf` names each token once.
+	#[test]
+	fn token_of_owner_by_index_lists_a_contracts_purse_token_first() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			let (_, scratch) = purse(0xD1);
+			let in_purse = mint_into(&alice, collection, &scratch);
+			let nft = NftsByOwner::<Test>::take(&scratch).unwrap();
+			NftsByOwner::<Test>::insert(&vault_account, nft);
+			Instances::<Test>::insert(
+				in_purse,
+				Location { holder: vault_account.clone(), collection },
+			);
+			let mut held = (0..2)
+				.map(|_| mint_into(&alice, collection, &vault_account))
+				.collect::<Vec<_>>();
+			assert_eq!(balance_of(collection, vault), U256::from(3));
+
+			let mut listed = (0..3)
+				.map(|index| token_of_owner_by_index(collection, vault, index))
+				.collect::<Vec<_>>();
+
+			assert_eq!(listed[0], in_purse);
+			listed.sort_unstable();
+			held.push(in_purse);
+			held.sort_unstable();
+			assert_eq!(listed, held);
+			call_reverted_with(
+				&alice,
+				collection_address(collection),
+				token_of_owner_by_index_input(vault, 3),
+				ERR_INDEX_OUT_OF_RANGE,
+			);
+		});
+	}
+
+	#[test]
+	fn a_token_a_contract_holds_costs_one_read_more_to_find() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let vault = deploy(&alice, code);
+			let held_by_contract = mint_into(&alice, collection, &contract_account(vault));
+			let held_by_purse = mint_into(&alice, collection, &purse(0xD0).1);
+			let weight_of = |token: u64| {
+				call_full(
+					&alice,
+					collection_address(collection),
+					IScarcityCollection::ownerOfCall { tokenId: U256::from(token) }.abi_encode(),
+				)
+				.weight_consumed
+			};
+
+			let (contract, purse) = (weight_of(held_by_contract), weight_of(held_by_purse));
+
+			assert_eq!(contract.proof_size() - purse.proof_size(), PROOF_SIZE_PER_READ);
+		});
+	}
+
+	#[test]
+	fn token_of_owner_by_index_charges_for_each_token_it_passes() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			for _ in 0..3 {
+				mint_into(&alice, collection, &vault_account);
+			}
+			let weight_at = |index| {
+				call_full(
+					&alice,
+					collection_address(collection),
+					token_of_owner_by_index_input(vault, index),
+				)
+				.weight_consumed
+			};
+
+			let (first, last) = (weight_at(0), weight_at(2));
+
+			// Index 2 passes two more tokens than index 0, one charged read each.
+			assert_eq!(last.proof_size() - first.proof_size(), 2 * PROOF_SIZE_PER_READ);
+		});
+	}
+
+	#[test]
+	fn token_of_owner_by_index_ignores_tokens_of_other_collections() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let other_collection = setup_collection(&alice);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			for _ in 0..2 {
+				mint_into(&alice, collection, &vault_account);
+			}
+			let weight_of_last = || {
+				call_full(
+					&alice,
+					collection_address(collection),
+					token_of_owner_by_index_input(vault, 1),
+				)
+				.weight_consumed
+			};
+			let (last, before) = (token_of_owner_by_index(collection, vault, 1), weight_of_last());
+
+			for _ in 0..3 {
+				mint_into(&alice, other_collection, &vault_account);
+			}
+
+			assert_eq!(token_of_owner_by_index(collection, vault, 1), last);
+			assert_eq!(weight_of_last(), before);
+		});
+	}
+
+	alloy::sol! {
+		interface IStakeVault {
+			function reserve(uint256 tokenId) external;
+			function confirm(uint256[] calldata tokenIds) external;
+			function withdraw(uint256 tokenId, address to) external;
+			function entries(uint256 tokenId) external view returns (address player, uint8 status);
+
+			error NotHolder();
+			error NotReserved();
+			error NotReceived();
+			error NotStaker();
+			error BatchTooLarge();
+		}
+	}
+
+	/// `StakeVault`'s `Status::Reserved`.
+	const RESERVED: u8 = 1;
+	/// `StakeVault`'s `Status::Staked`.
+	const STAKED: u8 = 2;
+
+	/// A collection with one item and a deployed `StakeVault` that takes its tokens.
+	///
+	/// Built inside `execute_with`, because it writes pallet state.
+	struct StakeWorld {
+		alice: AccountId32,
+		collection: CollectionId,
+		item: indiv_pallet_scarcity::ItemIndex,
+		vault: H160,
+	}
+
+	impl StakeWorld {
+		fn new(code: Vec<u8>) -> Self {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let constructor = alloy::sol_types::SolValue::abi_encode(&alloy_address(
+				collection_address(collection),
+			));
+			let vault = deploy_with_args(&alice, code, constructor);
+			Self { alice, collection, item, vault }
+		}
+
+		/// A funded purse key holding one token, which can call the vault and the collection.
+		fn player(&self, byte: u8) -> (H160, AccountId32, InstanceId) {
+			mint_to_funded_purse(&self.alice, self.collection, self.item, byte)
+		}
+
+		/// Move `token` from `from` to `to`, on `from`'s authority.
+		fn push(&self, from: &(H160, AccountId32), token: InstanceId, to: H160) {
+			call_ok(
+				&from.1,
+				collection_address(self.collection),
+				IScarcityCollection::transferFromCall {
+					from: alloy_address(from.0),
+					to: alloy_address(to),
+					tokenId: U256::from(token),
+				}
+				.abi_encode(),
+			);
+		}
+
+		fn reserve(&self, caller: &AccountId32, token: InstanceId) {
+			call_ok(
+				caller,
+				self.vault,
+				IStakeVault::reserveCall { tokenId: U256::from(token) }.abi_encode(),
+			);
+		}
+
+		fn confirm_input(tokens: &[InstanceId]) -> Vec<u8> {
+			IStakeVault::confirmCall {
+				tokenIds: tokens.iter().map(|token| U256::from(*token)).collect(),
+			}
+			.abi_encode()
+		}
+
+		/// The player and status the vault records for `token`.
+		fn entry(&self, token: InstanceId) -> (Address, u8) {
+			let data = call_ok(
+				&self.alice,
+				self.vault,
+				IStakeVault::entriesCall { tokenId: U256::from(token) }.abi_encode(),
+			);
+			let entry = IStakeVault::entriesCall::abi_decode_returns(&data).unwrap();
+			(entry.player, entry.status)
+		}
+
+		/// Assert the vault's call reverts with exactly the custom error `error`.
+		fn reverts_with<E: SolError>(&self, caller: &AccountId32, input: Vec<u8>, error: E) {
+			let output = call_precompile(caller, self.vault, input);
+			assert!(output.did_revert(), "expected a revert, got success: {output:?}");
+			assert_eq!(output.data, error.abi_encode());
+		}
+	}
+
+	fn assert_vault_credits_the_claimant(code: Vec<u8>) {
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (address, account, token) = world.player(0xB1);
+			let (destination_address, destination) = purse(0xB2);
+
+			world.reserve(&account, token);
+			assert_eq!(world.entry(token), (alloy_address(address), RESERVED));
+			world.push(&(address, account.clone()), token, world.vault);
+			call_ok(&world.alice, world.vault, StakeWorld::confirm_input(&[token]));
+			assert_eq!(world.entry(token), (alloy_address(address), STAKED));
+
+			world.reverts_with(
+				&world.alice,
+				IStakeVault::withdrawCall {
+					tokenId: U256::from(token),
+					to: alloy_address(destination_address),
+				}
+				.abi_encode(),
+				IStakeVault::NotStaker {},
+			);
+			call_ok(
+				&account,
+				world.vault,
+				IStakeVault::withdrawCall {
+					tokenId: U256::from(token),
+					to: alloy_address(destination_address),
+				}
+				.abi_encode(),
+			);
+
+			assert_eq!(
+				Instances::<Test>::get(token).map(|location| location.holder),
+				Some(destination)
+			);
+			assert_eq!(world.entry(token), (Address::ZERO, 0));
+		});
+	}
+
+	#[test]
+	fn evm_stake_vault_credits_the_claimant() {
+		assert_vault_credits_the_claimant(fixture_code("StakeVault"));
+	}
+
+	#[test]
+	fn polkavm_stake_vault_credits_the_claimant() {
+		assert_vault_credits_the_claimant(resolc_code("StakeVault"));
+	}
+
+	#[test]
+	fn stake_vault_refuses_a_reservation_from_a_non_holder() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (_, _, token) = world.player(0xB1);
+			let (_, front_runner, _) = world.player(0xB2);
+
+			world.reverts_with(
+				&front_runner,
+				IStakeVault::reserveCall { tokenId: U256::from(token) }.abi_encode(),
+				IStakeVault::NotHolder {},
+			);
+			assert_eq!(world.entry(token), (Address::ZERO, 0));
+		});
+	}
+
+	#[test]
+	fn stake_vault_lets_a_new_holder_replace_a_stale_reservation() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (first_address, first, token) = world.player(0xB1);
+			let (second_address, second) = purse(0xB2);
+			Balances::make_free_balance_be(&second, u64::MAX / 2);
+
+			world.reserve(&first, token);
+			world.push(&(first_address, first), token, second_address);
+			world.reserve(&second, token);
+			world.push(&(second_address, second), token, world.vault);
+			call_ok(&world.alice, world.vault, StakeWorld::confirm_input(&[token]));
+
+			assert_eq!(world.entry(token), (alloy_address(second_address), STAKED));
+		});
+	}
+
+	#[test]
+	fn stake_vault_does_not_credit_a_token_pushed_without_a_reservation() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (address, account, token) = world.player(0xB1);
+
+			world.push(&(address, account.clone()), token, world.vault);
+
+			world.reverts_with(
+				&world.alice,
+				StakeWorld::confirm_input(&[token]),
+				IStakeVault::NotReserved {},
+			);
+			// The vault holds the token, so its sender can no longer reserve it.
+			world.reverts_with(
+				&account,
+				IStakeVault::reserveCall { tokenId: U256::from(token) }.abi_encode(),
+				IStakeVault::NotHolder {},
+			);
+		});
+	}
+
+	#[test]
+	fn stake_vault_does_not_confirm_a_token_before_it_arrives() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (_, account, token) = world.player(0xB1);
+
+			world.reserve(&account, token);
+
+			world.reverts_with(
+				&world.alice,
+				StakeWorld::confirm_input(&[token]),
+				IStakeVault::NotReceived {},
+			);
+			assert_eq!(world.entry(token).1, RESERVED);
+		});
+	}
+
+	#[test]
+	fn stake_vault_confirms_a_batch_of_stakes() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let players = (0xB1..0xB4).map(|byte| world.player(byte)).collect::<Vec<_>>();
+			for (address, account, token) in &players {
+				world.reserve(account, *token);
+				world.push(&(*address, account.clone()), *token, world.vault);
+			}
+			let tokens = players.iter().map(|(_, _, token)| *token).collect::<Vec<_>>();
+
+			call_ok(&world.alice, world.vault, StakeWorld::confirm_input(&tokens));
+
+			for (address, _, token) in &players {
+				assert_eq!(world.entry(*token), (alloy_address(*address), STAKED));
+			}
+		});
+	}
+
+	#[test]
+	fn stake_vault_refuses_a_batch_above_its_limit() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+
+			world.reverts_with(
+				&world.alice,
+				StakeWorld::confirm_input(&[0; 17]),
+				IStakeVault::BatchTooLarge {},
 			);
 		});
 	}

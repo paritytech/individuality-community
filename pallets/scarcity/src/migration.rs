@@ -18,8 +18,8 @@
 //! Storage migrations for the Scarcity pallet.
 
 use crate::{
-	BalanceOf, CollectionId, Config, InstanceId, ItemDefinition, ItemDefs, ItemIndex, Nft,
-	NftsByOwner, Pallet, Transferability,
+	BalanceOf, CollectionId, Config, InstanceId, Instances, ItemDefinition, ItemDefs, ItemIndex,
+	Location, Nft, NftsByOwner, Pallet, Transferability,
 };
 use frame_support::{
 	migrations::VersionedMigration, pallet_prelude::*, traits::UncheckedOnRuntimeUpgrade,
@@ -177,6 +177,71 @@ pub mod v2 {
 			// silently skipped.
 			let after = NftsByOwner::<T>::iter().count() as u32;
 			ensure!(before == after, "an NFT did not survive the migration");
+			Ok(())
+		}
+	}
+}
+
+/// Adds the collection to every [`Instances`] entry.
+///
+/// [`ContractNfts`](crate::ContractNfts) is keyed by contract, collection and instance, so a
+/// lookup by instance needs the collection. An entry written before the change holds only the
+/// holder, and it no longer decodes under the current type.
+pub type MigrateV2ToV3<T> = VersionedMigration<
+	2,
+	3,
+	v3::MigrateToLocations<T>,
+	Pallet<T>,
+	<T as frame_system::Config>::DbWeight,
+>;
+
+pub mod v3 {
+	use super::*;
+
+	/// Use [`MigrateV2ToV3`] rather than this directly.
+	///
+	/// Before this version no contract holds an instance, so every holder is a purse key and
+	/// [`NftsByOwner`] gives the collection.
+	///
+	/// It translates every [`Instances`] entry in one block and reads two entries per instance.
+	/// Schedule it only on a chain whose instance count fits one block's weight. A chain with more
+	/// instances needs a multi-block migration.
+	pub struct MigrateToLocations<T>(PhantomData<T>);
+
+	impl<T: Config> UncheckedOnRuntimeUpgrade for MigrateToLocations<T> {
+		fn on_runtime_upgrade() -> Weight {
+			let mut translated = 0u64;
+			Instances::<T>::translate(|instance, holder: T::AccountId| {
+				translated.saturating_inc();
+				let Some(nft) =
+					NftsByOwner::<T>::get(&holder).filter(|nft| nft.instance == instance)
+				else {
+					log::error!(
+						target: LOG_TARGET,
+						"Instances entry {instance} has no matching NftsByOwner entry; removed"
+					);
+					return None;
+				};
+				Some(Location { holder, collection: nft.collection })
+			});
+			log::info!(target: LOG_TARGET, "translated {translated} instance locations");
+			T::DbWeight::get()
+				.reads_writes(translated.saturating_mul(2).saturating_add(1), translated)
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
+			// Keys, not entries: the values do not decode under the current type yet.
+			Ok((Instances::<T>::iter_keys().count() as u32).encode())
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+			let before = u32::decode(&mut &state[..]).map_err(|_| {
+				sp_runtime::TryRuntimeError::Other("pre_upgrade state is not a u32")
+			})?;
+			let after = Instances::<T>::iter().count() as u32;
+			ensure!(before == after, "an instance location did not survive the migration");
 			Ok(())
 		}
 	}
