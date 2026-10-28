@@ -33,8 +33,8 @@
 //! `indiv-pallet-scarcity::do_transfer_by_holder`. The caller must be the holder: the pallet has no
 //! approval mechanism to resolve a spender against, so `approve` and `setApprovalForAll` revert
 //! and their getters answer with the empty values (zero address and `false`) that keep
-//! read-driven indexers working. Only an eth-derived purse or a contract can be an EVM caller at
-//! all, so this path serves EVM-native holders and contracts; wallet users move tokens over the
+//! read-driven indexers working. Every holder is mapped in `pallet-revive`, so any holder can be
+//! the caller. A caller moves only what it holds. Wallet users can also move tokens over the
 //! fee-less native extrinsic.
 //!
 //! `safeTransferFrom` owes a destination that carries code the ERC-721 acknowledgement: after
@@ -131,14 +131,15 @@
 //!
 //! # Contracts
 //!
-//! A purse key holds one token, while a contract holds any number. A runtime names its contracts
-//! through `indiv-pallet-scarcity`'s `ContractAccounts`, and [`ReviveContracts`] answers from
-//! `pallet-revive`: an account is a contract while code is deployed at its address. A token that
-//! arrives at a contract is stored in the pallet's `ContractNfts`, keyed by the contract and the
-//! instance. `ownerOf` names the contract, and `balanceOf` counts every token of the collection
-//! the contract holds. The contract moves a token out with `transferFrom`, as every holder does.
-//! `safeTransferFrom` into a contract reverts, because the receiver callback is unavailable, so a
-//! sender uses `transferFrom` or the native transfer.
+//! A purse key receives a token only while it holds none. A contract holds any number. A runtime
+//! names its contracts through `indiv-pallet-scarcity`'s `ContractAccounts`, and
+//! [`ReviveContracts`] answers from `pallet-revive`: an account is a contract while code is
+//! deployed at its address. A token that arrives at a contract is stored in the pallet's
+//! `ContractNfts`, keyed by the contract, the collection and the instance. `ownerOf` names the
+//! contract, and `balanceOf` counts every token of the collection the contract holds. The contract
+//! moves a token out with `transferFrom`, as every holder does. `safeTransferFrom` into a contract
+//! reverts, because the receiver callback is unavailable, so a sender uses `transferFrom` or the
+//! native transfer.
 //!
 //! Anyone can send a token to a contract, and an unwanted token blocks nothing. The collection
 //! owner keeps `forceTransfer` and `forceBurn` over tokens that a contract holds.
@@ -359,16 +360,9 @@ where
 /// Answers `indiv-pallet-scarcity`'s `ContractAccounts` from `pallet-revive`: an account is a
 /// contract while code is deployed at its address.
 ///
-/// The check reads one `AccountInfoOf` entry. With `runtime-benchmarks` it also reads a marker
-/// that `set_contract` writes, because a benchmark cannot deploy code at an arbitrary account.
+/// The check reads one `AccountInfoOf` entry. With `runtime-benchmarks`, `set_contract` writes a
+/// real contract entry there, so a benchmark measures the same check as production.
 pub struct ReviveContracts<T>(PhantomData<T>);
-
-#[cfg(feature = "runtime-benchmarks")]
-fn benchmark_contract_key(address: &H160) -> Vec<u8> {
-	let mut key = b":scarcity:benchmark_contract:".to_vec();
-	key.extend_from_slice(address.as_bytes());
-	key
-}
 
 impl<T> ContractAccounts<T::AccountId> for ReviveContracts<T>
 where
@@ -376,17 +370,17 @@ where
 {
 	fn is_contract(account: &T::AccountId) -> bool {
 		let address = <T as pallet_revive::Config>::AddressMapper::to_address(account);
-		let contract = pallet_revive::AccountInfo::<T>::is_contract(&address);
-		#[cfg(feature = "runtime-benchmarks")]
-		let contract =
-			contract || frame_support::storage::unhashed::exists(&benchmark_contract_key(&address));
-		contract
+		pallet_revive::AccountInfo::<T>::is_contract(&address)
 	}
 
 	#[cfg(feature = "runtime-benchmarks")]
 	fn set_contract(account: &T::AccountId) {
 		let address = <T as pallet_revive::Config>::AddressMapper::to_address(account);
-		frame_support::storage::unhashed::put(&benchmark_contract_key(&address), &());
+		match pallet_revive::ContractInfo::<T>::new(&address, Default::default(), H256::zero()) {
+			Ok(info) => pallet_revive::AccountInfo::<T>::insert_contract(&address, info),
+			Err(error) if error == pallet_revive::Error::<T>::DuplicateContract.into() => {},
+			Err(error) => panic!("cannot make {address:?} a benchmark contract: {error:?}"),
+		}
 	}
 }
 

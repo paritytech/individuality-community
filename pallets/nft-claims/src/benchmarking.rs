@@ -117,6 +117,7 @@ mod benches {
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
 			claimable_tree::<T>(&kind, n)?;
 		let mint_to: T::AccountId = account("purse", 0, 0);
+		T::Nfts::set_worst_case_destination(&mint_to);
 
 		#[extrinsic_call]
 		claim(
@@ -146,6 +147,7 @@ mod benches {
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
 			claimable_tree::<T>(&kind, n)?;
 		let mint_to: T::AccountId = account("purse", 0, 0);
+		T::Nfts::set_worst_case_destination(&mint_to);
 
 		#[extrinsic_call]
 		claim(
@@ -176,6 +178,7 @@ mod benches {
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
 			claimable_tree::<T>(&kind, n)?;
 		let mint_to: T::AccountId = account("purse", 0, 0);
+		T::Nfts::set_worst_case_destination(&mint_to);
 		// Every other leaf is spent, so this claim completes the tree.
 		spend_every_leaf_but::<T>(leaf_index);
 
@@ -208,6 +211,7 @@ mod benches {
 		let (origin, _claimant, credits, leaf_index, sibling_hashes) =
 			claimable_tree::<T>(&kind, n)?;
 		let mint_to: T::AccountId = account("purse", 0, 0);
+		T::Nfts::set_worst_case_destination(&mint_to);
 		// Every other leaf is spent, so this claim completes the tree.
 		spend_every_leaf_but::<T>(leaf_index);
 

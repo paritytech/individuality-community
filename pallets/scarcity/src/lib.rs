@@ -110,6 +110,10 @@ pub trait MintWithoutDeposit<AccountId> {
 	/// A caller whose own benchmark mints against a runtime with those hooks wired measures
 	/// them too, so regenerating its weights double-counts this.
 	fn mint_hook_weight(pairs: u32) -> frame_support::weights::Weight;
+
+	/// Makes `to` the costliest mint destination, for a caller's benchmark.
+	#[cfg(feature = "runtime-benchmarks")]
+	fn set_worst_case_destination(to: &AccountId);
 }
 
 /// Read-only view of a collection for runtime pallets that gate work on collection state
@@ -625,7 +629,7 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type Locked<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, LockInfo>;
 
-	/// Every instance event names its collection and both purse keys involved.
+	/// Every instance event names its collection and both holders involved.
 	///
 	/// Off-chain consumers reconstruct per-collection views from these events alone, and the
 	/// state a lookup would need is already gone by the time a burn is observed.
@@ -648,28 +652,28 @@ pub mod pallet {
 		ItemDefined { collection: CollectionId, item: ItemIndex },
 		/// An unused item definition was deleted and its deposit released.
 		ItemDeleted { collection: CollectionId, item: ItemIndex },
-		/// An instance was minted into an empty purse key.
+		/// An instance was minted into an empty purse key or a contract.
 		Minted {
 			instance: InstanceId,
 			collection: CollectionId,
 			item: ItemIndex,
 			owner: T::AccountId,
 		},
-		/// A holder moved an instance from one purse key to another.
+		/// A holder moved an instance to another purse key or contract.
 		Transferred {
 			instance: InstanceId,
 			collection: CollectionId,
 			from: T::AccountId,
 			to: T::AccountId,
 		},
-		/// A collection owner forced an instance from one purse key to another.
+		/// A collection owner forced an instance to another purse key or contract.
 		ForceTransferred {
 			instance: InstanceId,
 			collection: CollectionId,
 			from: T::AccountId,
 			to: T::AccountId,
 		},
-		/// An instance was permanently removed from the purse key that held it.
+		/// An instance was permanently removed from the purse key or contract that held it.
 		Burned { instance: InstanceId, collection: CollectionId, owner: T::AccountId },
 		/// A collection-level metadata default was inserted or overwritten.
 		CollectionMetadataSet { collection: CollectionId, key: MetadataKeyOf<T> },
@@ -937,9 +941,9 @@ pub mod pallet {
 			Self::do_define_item(owner, collection, transferability, metadata).map(|_| ())
 		}
 
-		/// Mint an instance of an immutable item definition into an empty purse key.
+		/// Mint an instance of an immutable item definition into an empty purse key or a contract.
 		///
-		/// The destination gives no consent; any empty key is a valid target. See the module
+		/// Any empty key or contract is a valid destination, without its consent. See the module
 		/// documentation on purse-key occupancy.
 		///
 		/// `metadata` contains instance-specific overrides. Item metadata remains the shared
@@ -985,7 +989,7 @@ pub mod pallet {
 			// names.
 			let moves = nft.moves.saturating_add(1);
 			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves, ..nft };
-			Self::place(&to, &nft, destination)?;
+			Self::place(&to, &nft, destination);
 			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance: nft.instance,
@@ -1695,7 +1699,10 @@ pub mod pallet {
 			Ok(actual_metadata_count)
 		}
 
-		fn do_force_burn(owner: &T::AccountId, instance: InstanceId) -> Result<u32, DispatchError> {
+		pub(crate) fn do_force_burn(
+			owner: &T::AccountId,
+			instance: InstanceId,
+		) -> Result<u32, DispatchError> {
 			let (purse, nft, holding) =
 				Self::holding_of(instance).ok_or(Error::<T>::UnknownInstance)?;
 			let info =
@@ -1706,7 +1713,7 @@ pub mod pallet {
 			Self::do_burn(purse, nft)
 		}
 
-		fn do_force_transfer(
+		pub(crate) fn do_force_transfer(
 			owner: &T::AccountId,
 			instance: InstanceId,
 			to: T::AccountId,
@@ -1725,7 +1732,7 @@ pub mod pallet {
 			let nft =
 				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
-			Self::place(&to, &nft, destination)?;
+			Self::place(&to, &nft, destination);
 			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::ForceTransferred { instance, collection, from, to });
 			Ok(())
@@ -1741,7 +1748,8 @@ pub mod pallet {
 				_ => {
 					let location = Instances::<T>::get(instance)
 						.filter(|location| location.holder == *holder)?;
-					Self::nft_at(&location, instance)
+					ContractNfts::<T>::get((holder, location.collection, instance))
+						.map(|nft| (nft, Holding::Contract))
 				},
 			}
 		}
@@ -1791,26 +1799,28 @@ pub mod pallet {
 		}
 
 		/// Store `nft` at `to` in the map [`Self::destination_of`] chose.
-		fn place(to: &T::AccountId, nft: &Nft, holding: Holding) -> DispatchResult {
+		///
+		/// Cannot fail, so a move that has taken an instance always places it. The contract's
+		/// count saturates, because no contract can hold `u32::MAX` instances of one collection.
+		fn place(to: &T::AccountId, nft: &Nft, holding: Holding) {
 			match holding {
 				Holding::Purse => NftsByOwner::<T>::insert(to, nft),
 				Holding::Contract => {
-					ContractNftCount::<T>::try_mutate(to, nft.collection, |count| {
-						*count = count.checked_add(1).ok_or(ArithmeticError::Overflow)?;
-						Ok::<_, DispatchError>(())
-					})?;
+					ContractNftCount::<T>::mutate(to, nft.collection, |count| {
+						*count = count.saturating_add(1)
+					});
 					ContractNfts::<T>::insert((to, nft.collection, nft.instance), nft);
 				},
 			}
 			let location = Location { holder: to.clone(), collection: nft.collection };
 			Instances::<T>::insert(nft.instance, location);
-			Ok(())
 		}
 
 		/// Remove `nft` from `holder` in the map that holds it.
 		///
-		/// Clears the backoff lock of a purse, which keeps every `Locked` entry paired with an
-		/// NFT. A contract cannot sign, so it never has a lock.
+		/// Fails before it writes, so a caller takes before any other write. Clears the backoff
+		/// lock of a purse, which keeps every `Locked` entry paired with an NFT. A contract cannot
+		/// sign, so it never has a lock.
 		fn take(holder: &T::AccountId, nft: &Nft, holding: Holding) -> DispatchResult {
 			match holding {
 				Holding::Purse => {
@@ -1818,7 +1828,6 @@ pub mod pallet {
 					Locked::<T>::remove(holder);
 				},
 				Holding::Contract => {
-					ContractNfts::<T>::remove((holder, nft.collection, nft.instance));
 					ContractNftCount::<T>::try_mutate_exists(holder, nft.collection, |count| {
 						let next = count
 							.unwrap_or_default()
@@ -1827,6 +1836,7 @@ pub mod pallet {
 						*count = (next > 0).then_some(next);
 						Ok::<_, DispatchError>(())
 					})?;
+					ContractNfts::<T>::remove((holder, nft.collection, nft.instance));
 				},
 			}
 			Ok(())
@@ -1879,7 +1889,7 @@ pub mod pallet {
 			let nft =
 				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
-			Self::place(&to, &nft, destination)?;
+			Self::place(&to, &nft, destination);
 			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance,
@@ -2008,7 +2018,7 @@ pub mod pallet {
 			let collection_owner = info.owner.clone();
 			Collections::<T>::insert(collection, info);
 			ItemDefs::<T>::insert(collection, item, definition);
-			Self::place(&to, &nft, destination)?;
+			Self::place(&to, &nft, destination);
 			InstanceMetadataCount::<T>::insert(instance, 0);
 			if let Some(deposit) = instance_deposit {
 				InstanceDeposits::<T>::insert(instance, deposit);
@@ -2045,6 +2055,12 @@ pub mod pallet {
 		fn mint_hook_weight(pairs: u32) -> frame_support::weights::Weight {
 			T::OnPurseOccupied::on_purse_occupied_weight()
 				.saturating_add(T::MetadataPolicy::validate_weight(pairs))
+		}
+
+		/// A contract, which also writes [`ContractNftCount`].
+		#[cfg(feature = "runtime-benchmarks")]
+		fn set_worst_case_destination(to: &T::AccountId) {
+			T::ContractAccounts::set_contract(to);
 		}
 	}
 
@@ -2139,7 +2155,7 @@ pub mod pallet {
 			for ((holder, collection, instance), nft) in ContractNfts::<T>::iter() {
 				if nft.instance != instance || nft.collection != collection {
 					return Err(TryRuntimeError::Other(
-						"ContractNfts entry is keyed by a different instance",
+						"ContractNfts entry is keyed by a different collection or instance",
 					));
 				}
 				if instance >= next_instance {
@@ -2168,9 +2184,6 @@ pub mod pallet {
 				*contract_counts.entry((holder, nft.collection)).or_default() += 1;
 			}
 			for (holder, collection, count) in ContractNftCount::<T>::iter() {
-				if count == 0 {
-					return Err(TryRuntimeError::Other("ContractNftCount entry is zero"));
-				}
 				if contract_counts.remove(&(holder, collection)) != Some(count) {
 					return Err(TryRuntimeError::Other(
 						"ContractNftCount does not match stored ContractNfts entries",

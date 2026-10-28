@@ -18,6 +18,7 @@ use super::*;
 use crate::mock::*;
 
 use frame_support::{assert_ok, traits::Currency};
+use indiv_pallet_scarcity::{ContractNftCount, Location};
 use pallet_revive::{
 	precompiles::alloy::{
 		primitives::Bytes,
@@ -4362,10 +4363,7 @@ mod evm_fixture {
 				.map(|_| mint_into(&alice, collection, &vault_account))
 				.collect::<Vec<_>>();
 
-			assert_eq!(
-				indiv_pallet_scarcity::ContractNfts::<Test>::iter_prefix((&vault_account,)).count(),
-				3
-			);
+			assert_eq!(ContractNfts::<Test>::iter_prefix((&vault_account,)).count(), 3);
 			assert_eq!(owner_of(collection, tokens[1]).into_array(), vault.0);
 			assert_eq!(balance_of(collection, vault), U256::from(3));
 			let target = alloy_address(collection_address(collection));
@@ -4386,10 +4384,7 @@ mod evm_fixture {
 				.abi_encode(),
 			);
 
-			assert_eq!(
-				indiv_pallet_scarcity::NftsByOwner::<Test>::get(&bob).map(|nft| nft.instance),
-				Some(tokens[1])
-			);
+			assert_eq!(NftsByOwner::<Test>::get(&bob).map(|nft| nft.instance), Some(tokens[1]));
 			assert_eq!(balance_of(collection, vault), U256::from(2));
 			assert_contract_event(
 				collection_address(collection),
@@ -4410,6 +4405,201 @@ mod evm_fixture {
 	#[test]
 	fn polkavm_contract_holds_several_tokens_and_releases_them() {
 		assert_vault_holds_and_releases(resolc_code("TokenVault"));
+	}
+
+	/// `safeTransferFrom` into a deployed contract reverts after the move wrote `ContractNfts`, so
+	/// the frame rollback has to unwind the move and its count.
+	#[test]
+	fn safe_transfer_into_a_contract_moves_nothing() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			let (sender_address, sender, token) =
+				mint_to_funded_purse(&alice, collection, item, 0xA2);
+			let (from, to, token_id) =
+				(alloy_address(sender_address), alloy_address(vault), U256::from(token));
+			System::reset_events();
+
+			for input in [
+				IScarcityCollection::safeTransferFrom_0Call {
+					from,
+					to,
+					tokenId: token_id,
+					data: Bytes::new(),
+				}
+				.abi_encode(),
+				IScarcityCollection::safeTransferFrom_1Call { from, to, tokenId: token_id }
+					.abi_encode(),
+			] {
+				call_reverted_with(
+					&sender,
+					collection_address(collection),
+					input,
+					ERR_CONTRACT_RECEIVER,
+				);
+			}
+
+			assert_eq!(NftsByOwner::<Test>::get(&sender).map(|nft| nft.instance), Some(token));
+			assert_eq!(Instances::<Test>::get(token).map(|location| location.holder), Some(sender));
+			assert_eq!(ContractNfts::<Test>::iter_prefix((&vault_account,)).count(), 0);
+			assert_eq!(ContractNftCount::<Test>::get(&vault_account, collection), 0);
+			assert_no_contract_event();
+		});
+	}
+
+	/// The collection owner mints into a contract, forces a token out of it and into it, and
+	/// burns a token it holds. Each step logs `Transfer` with the contract's address and updates
+	/// the contract's count.
+	#[test]
+	fn the_collection_owner_mints_moves_and_burns_at_a_contract() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			let target = collection_address(collection);
+			let count = || ContractNftCount::<Test>::get(&vault_account, collection);
+			let mint = || {
+				System::reset_events();
+				let data = call_ok(
+					&alice,
+					target,
+					IScarcityCollection::mintCall {
+						item,
+						to: alloy_address(vault),
+						keys: alloc::vec![],
+						values: alloc::vec![],
+					}
+					.abi_encode(),
+				);
+				IScarcityCollection::mintCall::abi_decode_returns(&data).unwrap()
+			};
+
+			let first = mint();
+			assert_contract_event(
+				target,
+				IScarcityCollection::Transfer {
+					from: Address::ZERO,
+					to: alloy_address(vault),
+					tokenId: first,
+				},
+			);
+			let second = mint();
+			assert_eq!(count(), 2);
+			assert_eq!(owner_of(collection, second.to::<u64>()).into_array(), vault.0);
+
+			let (purse_address, purse_account) = purse(0xA3);
+			System::reset_events();
+			call_ok(
+				&alice,
+				target,
+				IScarcityCollection::forceTransferCall {
+					tokenId: first,
+					to: alloy_address(purse_address),
+				}
+				.abi_encode(),
+			);
+			assert_only_contract_event(
+				target,
+				IScarcityCollection::Transfer {
+					from: alloy_address(vault),
+					to: alloy_address(purse_address),
+					tokenId: first,
+				},
+			);
+			assert_eq!(count(), 1);
+			assert_eq!(
+				NftsByOwner::<Test>::get(&purse_account).map(|nft| U256::from(nft.instance)),
+				Some(first)
+			);
+
+			System::reset_events();
+			call_ok(
+				&alice,
+				target,
+				IScarcityCollection::forceTransferCall { tokenId: first, to: alloy_address(vault) }
+					.abi_encode(),
+			);
+			assert_only_contract_event(
+				target,
+				IScarcityCollection::Transfer {
+					from: alloy_address(purse_address),
+					to: alloy_address(vault),
+					tokenId: first,
+				},
+			);
+			assert_eq!(count(), 2);
+
+			System::reset_events();
+			call_ok(
+				&alice,
+				target,
+				IScarcityCollection::forceBurnCall { tokenId: second }.abi_encode(),
+			);
+			assert_only_contract_event(
+				target,
+				IScarcityCollection::Transfer {
+					from: alloy_address(vault),
+					to: Address::ZERO,
+					tokenId: second,
+				},
+			);
+			assert_eq!(count(), 1);
+			assert_eq!(Instances::<Test>::get(second.to::<u64>()), None);
+		});
+	}
+
+	/// Only the contract moves a token it holds. The sender that pushed the token and the
+	/// collection owner both name the contract as `from` and both revert.
+	#[test]
+	fn only_the_contract_moves_a_token_it_holds() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let vault = deploy(&alice, code);
+			let (sender_address, sender, token) =
+				mint_to_funded_purse(&alice, collection, item, 0xA1);
+			call_ok(
+				&sender,
+				collection_address(collection),
+				IScarcityCollection::transferFromCall {
+					from: alloy_address(sender_address),
+					to: alloy_address(vault),
+					tokenId: U256::from(token),
+				}
+				.abi_encode(),
+			);
+			assert!(ContractNfts::<Test>::contains_key((
+				contract_account(vault),
+				collection,
+				token
+			)));
+
+			for caller in [&sender, &alice] {
+				call_reverted_with(
+					caller,
+					collection_address(collection),
+					IScarcityCollection::transferFromCall {
+						from: alloy_address(vault),
+						to: alloy_address(sender_address),
+						tokenId: U256::from(token),
+					}
+					.abi_encode(),
+					ERR_NOT_HOLDER,
+				);
+			}
+
+			assert_eq!(owner_of(collection, token).into_array(), vault.0);
+			assert!(NftsByOwner::<Test>::get(&sender).is_none());
+		});
 	}
 
 	#[test]
@@ -4462,6 +4652,47 @@ mod evm_fixture {
 				&alice,
 				collection_address(collection),
 				token_of_owner_by_index_input(vault, 2),
+				ERR_INDEX_OUT_OF_RANGE,
+			);
+		});
+	}
+
+	/// A contract that received one token before it had code holds it in its purse, at index 0.
+	/// Its `ContractNfts` tokens follow, so a walk over `0..balanceOf` names each token once.
+	#[test]
+	fn token_of_owner_by_index_lists_a_contracts_purse_token_first() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let vault = deploy(&alice, code);
+			let vault_account = contract_account(vault);
+			let (_, scratch) = purse(0xD1);
+			let in_purse = mint_into(&alice, collection, &scratch);
+			let nft = NftsByOwner::<Test>::take(&scratch).unwrap();
+			NftsByOwner::<Test>::insert(&vault_account, nft);
+			Instances::<Test>::insert(
+				in_purse,
+				Location { holder: vault_account.clone(), collection },
+			);
+			let mut held = (0..2)
+				.map(|_| mint_into(&alice, collection, &vault_account))
+				.collect::<Vec<_>>();
+			assert_eq!(balance_of(collection, vault), U256::from(3));
+
+			let mut listed = (0..3)
+				.map(|index| token_of_owner_by_index(collection, vault, index))
+				.collect::<Vec<_>>();
+
+			assert_eq!(listed[0], in_purse);
+			listed.sort_unstable();
+			held.push(in_purse);
+			held.sort_unstable();
+			assert_eq!(listed, held);
+			call_reverted_with(
+				&alice,
+				collection_address(collection),
+				token_of_owner_by_index_input(vault, 3),
 				ERR_INDEX_OUT_OF_RANGE,
 			);
 		});

@@ -1906,7 +1906,10 @@ fn pool_rejects_occupied_destination_without_lock() {
 		define(0);
 		mint(0, RECIPIENT);
 		mint(1, OTHER);
-		assert!(validate_transfer(RECIPIENT, OTHER).is_err());
+		assert_invalidity(
+			validate_transfer(RECIPIENT, OTHER).err().expect("an occupied key is refused"),
+			CustomInvalidity::DestinationOccupied,
+		);
 		assert!(NftsByOwner::<Test>::contains_key(RECIPIENT));
 		assert_eq!(Locked::<Test>::get(RECIPIENT), None);
 	});
@@ -3599,7 +3602,8 @@ mod migration {
 
 mod contracts {
 	use super::*;
-	use crate::{ContractNftCount, ContractNfts, Holding};
+	use crate::{ContractNftCount, ContractNfts, Holding, Location};
+	use sp_runtime::ArithmeticError;
 
 	const CONTRACT: u64 = 50;
 	const OTHER_CONTRACT: u64 = 51;
@@ -3899,6 +3903,55 @@ mod contracts {
 		});
 	}
 
+	/// A contract deployed again at the same address finds what it held, and the instance it
+	/// received while it had no code stays in its purse.
+	#[test]
+	fn a_redeployed_contract_still_holds_its_instances() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+			mint(0, CONTRACT);
+			MockContracts::remove(CONTRACT);
+			mint(0, CONTRACT);
+
+			MockContracts::add(CONTRACT);
+
+			assert_eq!(contract_instances(CONTRACT), vec![0, 1]);
+			assert_eq!(NftsByOwner::<Test>::get(CONTRACT).map(|nft| nft.instance), Some(2));
+			assert_eq!(Scarcity::balance_of(&CONTRACT, 0), 3);
+			// The address is a contract again, so its occupied purse does not block a mint.
+			mint(0, CONTRACT);
+			assert_eq!(contract_instances(CONTRACT), vec![0, 1, 3]);
+			assert_ok!(Scarcity::do_transfer_by_holder(&CONTRACT, 0, RECIPIENT));
+			assert_ok!(Scarcity::do_transfer_by_holder(&CONTRACT, 2, OTHER));
+			assert_eq!(contract_instances(CONTRACT), vec![1, 3]);
+			assert!(!NftsByOwner::<Test>::contains_key(CONTRACT));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// A move whose source count underflows fails before it writes, on every path that takes an
+	/// instance out of a contract.
+	#[test]
+	fn a_source_count_underflow_moves_nothing() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+			ContractNftCount::<Test>::remove(CONTRACT, 0);
+			let underflow = Err(ArithmeticError::Underflow.into());
+
+			assert_eq!(Scarcity::do_transfer_by_holder(&CONTRACT, 0, RECIPIENT), underflow);
+			assert_eq!(Scarcity::do_force_transfer(&OWNER, 0, RECIPIENT), underflow);
+			assert_eq!(Scarcity::do_force_burn(&OWNER, 0).map(|_| ()), underflow);
+
+			assert_eq!(contract_instances(CONTRACT), vec![0]);
+			assert_eq!(Instances::<Test>::get(0).map(|location| location.holder), Some(CONTRACT));
+			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT));
+		});
+	}
+
 	#[test]
 	fn try_state_detects_a_wrong_contract_count() {
 		new_test_ext().execute_with(|| {
@@ -3907,6 +3960,18 @@ mod contracts {
 			mint(0, CONTRACT);
 
 			ContractNftCount::<Test>::insert(CONTRACT, 0, 2);
+
+			assert_try_state_error("ContractNftCount does not match stored ContractNfts entries");
+		});
+	}
+
+	#[test]
+	fn try_state_detects_a_zero_contract_count() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+
+			ContractNftCount::<Test>::insert(CONTRACT, 0, 0);
 
 			assert_try_state_error("ContractNftCount does not match stored ContractNfts entries");
 		});
@@ -3936,6 +4001,89 @@ mod contracts {
 			NftsByOwner::<Test>::insert(CONTRACT, nft);
 
 			assert_try_state_error("instance is in both NftsByOwner and ContractNfts");
+		});
+	}
+
+	#[test]
+	fn try_state_detects_a_contract_entry_under_the_wrong_key() {
+		for (collection, instance) in [(1, 0), (0, 1)] {
+			new_test_ext().execute_with(|| {
+				setup_item();
+				MockContracts::add(CONTRACT);
+				mint(0, CONTRACT);
+
+				let nft = ContractNfts::<Test>::take((CONTRACT, 0, 0)).unwrap();
+				ContractNfts::<Test>::insert((CONTRACT, collection, instance), nft);
+
+				assert_try_state_error(
+					"ContractNfts entry is keyed by a different collection or instance",
+				);
+			});
+		}
+	}
+
+	#[test]
+	fn try_state_detects_a_contract_instance_past_the_next_id() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			let nft = ContractNfts::<Test>::take((CONTRACT, 0, 0)).unwrap();
+			ContractNfts::<Test>::insert((CONTRACT, 0, 7), Nft { instance: 7, ..nft });
+
+			assert_try_state_error("NFT instance is not below NextInstanceId");
+		});
+	}
+
+	#[test]
+	fn try_state_detects_a_contract_entry_without_its_location() {
+		for location in [
+			Location { holder: OTHER_CONTRACT, collection: 0 },
+			Location { holder: CONTRACT, collection: 1 },
+		] {
+			new_test_ext().execute_with(|| {
+				setup_item();
+				MockContracts::add(CONTRACT);
+				mint(0, CONTRACT);
+
+				Instances::<Test>::insert(0, location);
+
+				assert_try_state_error("ContractNfts entry has no matching Instances entry");
+			});
+		}
+	}
+
+	#[test]
+	fn try_state_detects_a_purse_entry_under_the_wrong_collection() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+
+			Instances::<Test>::insert(0, Location { holder: RECIPIENT, collection: 1 });
+
+			assert_try_state_error("NftsByOwner entry has no matching Instances entry");
+		});
+	}
+
+	/// The location names a contract that does not hold the instance. The supply is lowered to
+	/// match, so only the reverse index is inconsistent.
+	#[test]
+	fn try_state_detects_a_location_without_its_instance() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			ContractNfts::<Test>::remove((CONTRACT, 0, 0));
+			ContractNftCount::<Test>::remove(CONTRACT, 0);
+			ItemDefs::<Test>::mutate(0, 0, |definition| {
+				definition.as_mut().unwrap().live_supply = 0
+			});
+
+			assert_try_state_error(
+				"Instances entry has no matching NftsByOwner or ContractNfts entry",
+			);
 		});
 	}
 }

@@ -198,6 +198,51 @@ fn a_spent_move_budget_stops_a_feeless_transfer() {
 	});
 }
 
+/// A feeless move into a purse key that already holds an instance is refused at validation as
+/// `DestinationOccupied`, so it earns no backoff lock.
+#[test]
+fn a_feeless_transfer_to_an_occupied_purse_is_refused() {
+	let (mut ext, from) = scarcity_purse_test_state(0);
+	ext.execute_with(|| {
+		let to = AccountId::from([2u8; 32]);
+		indiv_pallet_scarcity::NftsByOwner::<Runtime>::insert(
+			&to,
+			indiv_pallet_scarcity::Nft {
+				instance: 1,
+				collection: 0,
+				item: 0,
+				minted_at: 0,
+				last_moved: 0,
+				state_nonce: 0,
+				moves: 0,
+			},
+		);
+		let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer {
+			to: to.clone(),
+		});
+		let info = call.get_dispatch_info();
+		let result = scarcity_tx_extension(0, 0).dispatch_transaction(
+			RuntimeOrigin::signed(from.clone()),
+			call,
+			&info,
+			0,
+			INDIVIDUALITY_EXTENSION_VERSION,
+		);
+
+		assert_eq!(
+			result.unwrap_err(),
+			TransactionValidityError::Invalid(InvalidTransaction::Custom(
+				indiv_pallet_scarcity::extension::CustomInvalidity::DestinationOccupied as u8
+			)),
+		);
+		assert_eq!(
+			indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&from).map(|nft| nft.instance),
+			Some(0)
+		);
+		assert!(!indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&from));
+	});
+}
+
 /// A purse that holds only PGAS pays for the move that refills a spent budget
 /// (paritytech/individuality#1270). Without this path an instance is stuck once its feeless
 /// moves are gone.
