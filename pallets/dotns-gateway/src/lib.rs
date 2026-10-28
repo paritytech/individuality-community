@@ -306,6 +306,21 @@ pub mod pallet {
 		NotLiteLabelOwner,
 		/// The `RootGatewayDispatcher` contract address has not been set.
 		DispatcherAddressNotSet,
+		/// The label stem is shorter than [`Config::MinStemLength`].
+		StemTooShort,
+	}
+
+	#[pallet::hooks]
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		fn integrity_test() {
+			// The longest lite stem leaves room for `.` and the shortest digit suffix.
+			let max_stem = (MAX_LABEL_LENGTH as usize)
+				.saturating_sub(indiv_support::labels::MIN_LITE_USERNAME_DIGITS + 1);
+			assert!(
+				T::MinStemLength::get() as usize <= max_stem,
+				"MinStemLength must leave room for a lite stem"
+			);
+		}
 	}
 
 	// ========== Extrinsics ==========
@@ -358,6 +373,10 @@ pub mod pallet {
 			ensure!(lite_label.is_valid_lite(), Error::<T>::InvalidName);
 			if let Some(ref label) = reserved_base_label {
 				ensure!(label.is_valid_person(), Error::<T>::InvalidName);
+			}
+			ensure!(Self::is_stem_long_enough(lite_label.lite_base()), Error::<T>::StemTooShort);
+			if let Some(ref label) = reserved_base_label {
+				ensure!(Self::is_stem_long_enough(label), Error::<T>::StemTooShort);
 			}
 
 			let now = <T as Config>::UnixTime::now().as_secs();
