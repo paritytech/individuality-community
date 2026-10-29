@@ -70,6 +70,9 @@ type GameWeights = <Runtime as indiv_pallet_game::Config>::WeightInfo;
 /// The player counts to print the phase durations for.
 const PLAYER_COUNTS: [u64; 3] = [10_000, 100_000, 1_000_000];
 
+/// The player count the airdrop sweep prints the registration of.
+const AIRDROP_SWEEP_PLAYERS: u64 = 10_000;
+
 /// What the estimate prints from: the runtime's limits and game configuration, and the cost of
 /// each phase's work.
 struct Estimate {
@@ -104,7 +107,12 @@ fn game_processing_time_estimate() {
 
 	// The declared weight of a report covers the early enactment of every co-player.
 	let budget = OcwWeightBudget::from_normal_max::<Runtime>();
-	for path in paths.sign_ups.all().chain(paths.reports.all()) {
+	for path in paths
+		.sign_ups
+		.all()
+		.chain(paths.reports.all())
+		.chain(paths.airdrop_sweep.iter().flat_map(|row| row.all()))
+	{
 		budget.assert_fits(path.name, path.declared);
 	}
 	for (name, work) in [("shuffle", hooks.shuffle), ("player process", hooks.player_process)] {
@@ -128,4 +136,5 @@ fn game_processing_time_estimate() {
 	estimate.print_players_per_window();
 	estimate.print_phase_durations();
 	estimate.print_phase_windows();
+	estimate.print_airdrop_sweep();
 }

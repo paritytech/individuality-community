@@ -221,6 +221,35 @@ impl Estimate {
 			);
 		}
 	}
+
+	/// The registration of `AIRDROP_SWEEP_PLAYERS` by the airdrop entries each sign-up carries.
+	pub(super) fn print_airdrop_sweep(&self) {
+		let Self { limits, phases, paths, .. } = self;
+		let Some(first) = paths.airdrop_sweep.first() else { return };
+		println!();
+		println!("--- Airdrop sweep ---");
+		println!(
+			"registration of {AIRDROP_SWEEP_PLAYERS} players who all sign up by one path, by the \
+			airdrop entries each sign-up carries: sign-ups per block / registration, * overruns \
+			the default window. A player who is not recognized enters by VRF, a recognized one by \
+			ring proof"
+		);
+		print!("{:>10}", "airdrops");
+		for path in first.all() {
+			print!("{:>24}", path.name);
+		}
+		println!();
+		let registration_blocks = window_blocks(phases.registration);
+		for row in &paths.airdrop_sweep {
+			print!("{:>10}", row.airdrops);
+			for path in row.all() {
+				let per_block = limits.txs_per_block(path);
+				let blocks = AIRDROP_SWEEP_PLAYERS.div_ceil(per_block.units);
+				print!("{:>24}", format!("{per_block} / {}", fit(blocks, registration_blocks)));
+			}
+			println!();
+		}
+	}
 }
 
 /// A weight in milliseconds and KiB.

@@ -23,6 +23,12 @@ use indiv_pallet_people::extension::{AsPerson, AsPersonInfo};
 use indiv_support::crypto::BandersnatchSuite;
 use verifiable::ring::ring_signature_size;
 
+/// The airdrop entry counts of the airdrop sweep.
+const AIRDROP_COUNTS: [u8; 5] = [0, 1, 2, 4, MAX_GAME_AIRDROPS];
+
+/// The airdrop entries of a sign-up.
+type Airdrops = AirdropVrfs<indiv_pallet_airdrop::ProofOf<Runtime>>;
+
 /// A way to submit a sign-up or a report, with what `CheckWeight` books for one transaction.
 pub(super) struct TxPath {
 	pub(super) name: &'static str,
@@ -73,6 +79,9 @@ impl TxPath {
 pub(super) struct Paths {
 	pub(super) sign_ups: SignUps,
 	pub(super) reports: Reports,
+	/// The sign-ups by the number of airdrop entries they carry, one row per count in
+	/// `AIRDROP_COUNTS`.
+	pub(super) airdrop_sweep: Vec<AirdropSweepRow>,
 }
 
 /// The sign-up paths, split by whether the transaction carries a ring proof.
@@ -107,64 +116,26 @@ pub(super) struct Reports {
 	pub(super) ring_proof: TxPath,
 }
 
+/// The sign-ups carrying `airdrops` entries. A player who is not recognized enters an airdrop by
+/// VRF, a recognized one by ring proof.
+pub(super) struct AirdropSweepRow {
+	pub(super) airdrops: u8,
+	/// A new player signing up with its account.
+	pub(super) account_by_vrf: TxPath,
+	/// An invited player. `GameAsInvited` validates the entries as well as the call.
+	pub(super) invite_by_vrf: TxPath,
+	/// A recognized player signing up with its account.
+	pub(super) account_by_proof: TxPath,
+	/// A recognized player signing up with its alias account.
+	pub(super) alias_account_by_proof: TxPath,
+	/// A recognized player signing up with a ring proof.
+	pub(super) ring_proof_by_proof: TxPath,
+}
+
 impl Paths {
 	/// Builds the transaction of each path. The transaction extensions read the externalities.
 	pub(super) fn build(limits: &Limits, rounds: u32, group_size: u32) -> Self {
 		let player = Sr25519Keyring::Alice.pair();
-		let event_ids = (0..MAX_GAME_AIRDROPS)
-			.map(|index| airdrop_event_id_for(0, index))
-			.collect::<Vec<_>>();
-		let vrf_airdrops = build_account_airdrop_vrfs(&player, &event_ids);
-		let proof_airdrops = AirdropVrfs::Alias {
-			proofs: (0..MAX_GAME_AIRDROPS)
-				.map(|_| ring_proof())
-				.collect::<Vec<_>>()
-				.try_into()
-				.expect("the proofs are bounded by MAX_GAME_AIRDROPS"),
-			ring_index: 0,
-			revision: 0,
-		};
-		let sign_up_with_account = |airdrops| {
-			RuntimeCall::Game(indiv_pallet_game::Call::sign_up_with_account {
-				identifier_key: [0; 65],
-				airdrops,
-			})
-		};
-		let sign_up_with_alias = |airdrops| {
-			RuntimeCall::Game(indiv_pallet_game::Call::sign_up_with_alias {
-				identifier_key: [0; 65],
-				statement_account: Sr25519Keyring::Alice.to_account_id(),
-				sig: MultiSignature::from(player.sign(&[])),
-				airdrops,
-			})
-		};
-		// An invite signs up a new player, whose airdrop entries are account VRFs.
-		let sign_up_with_invite = |airdrops| {
-			RuntimeCall::Game(indiv_pallet_game::Call::sign_up_with_invite {
-				identifier_key: [0; 65],
-				airdrops,
-			})
-		};
-		let ticket = sr25519::Pair::from_seed(&[98; 32]);
-		// A lite invite also signs up a new player. `AsLiteAliasWithProof` only dispatches
-		// `set_alias_account`, so a lite alias signs up through its account.
-		let sign_up_with_account_lite_invite = |airdrops| {
-			RuntimeCall::Game(indiv_pallet_game::Call::sign_up_with_account_lite_invite {
-				account: Sr25519Keyring::Alice.to_account_id(),
-				identifier_key: [0; 65],
-				airdrops,
-			})
-		};
-		let by_ring_proof = |call: RuntimeCall| {
-			let mut tx_ext = base_tx_ext(call.clone());
-			tx_ext.0 .0 .2 = AsPerson::new(Some(AsPersonInfo::AsPersonalAliasWithProof(
-				ring_proof(),
-				0,
-				0,
-				[0; 32],
-			)));
-			finalize_uxt(call, tx_ext)
-		};
 		// A full report covers every co-player of every round.
 		let full_report: FullReport<Runtime> = (0..rounds)
 			.map(|_| {
@@ -189,26 +160,25 @@ impl Paths {
 			account_with_vrf_airdrops: TxPath::new(
 				"account, max airdrops by VRF",
 				limits,
-				&build_signed_ext(&player, sign_up_with_account(Some(vrf_airdrops.clone()))),
+				&build_signed_ext(
+					&player,
+					sign_up_with_account(vrf_airdrops(&player, MAX_GAME_AIRDROPS)),
+				),
 			),
 			alias_account: TxPath::new(
 				"alias account, no airdrop",
 				limits,
-				&build_signed_as_alias_with_account_ext(&player, sign_up_with_alias(None)),
+				&build_signed_as_alias_with_account_ext(&player, sign_up_with_alias(&player, None)),
 			),
 			invite: TxPath::new(
 				"invite, no airdrop",
 				limits,
-				&build_signed_game_invited_ext(&player, &ticket, sign_up_with_invite(None)),
+				&by_invite(&player, sign_up_with_invite(None)),
 			),
 			invite_with_vrf_airdrops: TxPath::new(
 				"invite, max airdrops by VRF",
 				limits,
-				&build_signed_game_invited_ext(
-					&player,
-					&ticket,
-					sign_up_with_invite(Some(vrf_airdrops.clone())),
-				),
+				&by_invite(&player, sign_up_with_invite(vrf_airdrops(&player, MAX_GAME_AIRDROPS))),
 			),
 			lite_alias_account: TxPath::new(
 				"lite alias account, no airdrop",
@@ -225,7 +195,7 @@ impl Paths {
 				&build_people_lite_auth_ext(
 					&player,
 					indiv_pallet_people_lite::PeopleLiteAuthData::AsLiteAliasWithAccount,
-					sign_up_with_account_lite_invite(Some(vrf_airdrops)),
+					sign_up_with_account_lite_invite(vrf_airdrops(&player, MAX_GAME_AIRDROPS)),
 				),
 			),
 		};
@@ -233,20 +203,20 @@ impl Paths {
 			account_with_proof_airdrops: TxPath::new(
 				"account, max airdrops by alias proof",
 				limits,
-				&build_signed_ext(&player, sign_up_with_account(Some(proof_airdrops.clone()))),
+				&build_signed_ext(&player, sign_up_with_account(proof_airdrops(MAX_GAME_AIRDROPS))),
 			),
 			alias_account_with_proof_airdrops: TxPath::new(
 				"alias account, max airdrops by alias proof",
 				limits,
 				&build_signed_as_alias_with_account_ext(
 					&player,
-					sign_up_with_alias(Some(proof_airdrops)),
+					sign_up_with_alias(&player, proof_airdrops(MAX_GAME_AIRDROPS)),
 				),
 			),
 			ring_proof: TxPath::new(
 				"alias ring proof, no airdrop",
 				limits,
-				&by_ring_proof(sign_up_with_alias(None)),
+				&by_ring_proof(sign_up_with_alias(&player, None)),
 			),
 			lite_alias_account_revised: TxPath::new(
 				"lite alias account revised, no airdrop",
@@ -286,8 +256,12 @@ impl Paths {
 				refunded_report,
 			),
 		};
+		let airdrop_sweep = AIRDROP_COUNTS
+			.into_iter()
+			.map(|airdrops| AirdropSweepRow::build(limits, &player, airdrops))
+			.collect();
 
-		Self { sign_ups: SignUps { without_proof, with_proof }, reports }
+		Self { sign_ups: SignUps { without_proof, with_proof }, reports, airdrop_sweep }
 	}
 }
 
@@ -327,6 +301,122 @@ impl Reports {
 	pub(super) fn all(&self) -> [&TxPath; 3] {
 		[&self.account, &self.alias_account, &self.ring_proof]
 	}
+}
+
+impl AirdropSweepRow {
+	fn build(limits: &Limits, player: &sr25519::Pair, airdrops: u8) -> Self {
+		let by_vrf = || vrf_airdrops(player, airdrops);
+		let by_proof = || proof_airdrops(airdrops);
+		Self {
+			airdrops,
+			account_by_vrf: TxPath::new(
+				"account by VRF",
+				limits,
+				&build_signed_ext(player, sign_up_with_account(by_vrf())),
+			),
+			invite_by_vrf: TxPath::new(
+				"invite by VRF",
+				limits,
+				&by_invite(player, sign_up_with_invite(by_vrf())),
+			),
+			account_by_proof: TxPath::new(
+				"account by proof",
+				limits,
+				&build_signed_ext(player, sign_up_with_account(by_proof())),
+			),
+			alias_account_by_proof: TxPath::new(
+				"alias account by proof",
+				limits,
+				&build_signed_as_alias_with_account_ext(
+					player,
+					sign_up_with_alias(player, by_proof()),
+				),
+			),
+			ring_proof_by_proof: TxPath::new(
+				"ring proof by proof",
+				limits,
+				&by_ring_proof(sign_up_with_alias(player, by_proof())),
+			),
+		}
+	}
+
+	pub(super) fn all(&self) -> [&TxPath; 5] {
+		[
+			&self.account_by_vrf,
+			&self.invite_by_vrf,
+			&self.account_by_proof,
+			&self.alias_account_by_proof,
+			&self.ring_proof_by_proof,
+		]
+	}
+}
+
+/// `count` airdrop entries by VRF, as a player who is not recognized enters them.
+fn vrf_airdrops(player: &sr25519::Pair, count: u8) -> Option<Airdrops> {
+	(count > 0).then(|| {
+		let event_ids = (0..count).map(|index| airdrop_event_id_for(0, index)).collect::<Vec<_>>();
+		build_account_airdrop_vrfs(player, &event_ids)
+	})
+}
+
+/// `count` airdrop entries by ring proof, as a recognized player enters them.
+fn proof_airdrops(count: u8) -> Option<Airdrops> {
+	(count > 0).then(|| AirdropVrfs::Alias {
+		proofs: (0..count)
+			.map(|_| ring_proof())
+			.collect::<Vec<_>>()
+			.try_into()
+			.expect("the proofs are bounded by MAX_GAME_AIRDROPS"),
+		ring_index: 0,
+		revision: 0,
+	})
+}
+
+fn sign_up_with_account(airdrops: Option<Airdrops>) -> RuntimeCall {
+	RuntimeCall::Game(indiv_pallet_game::Call::sign_up_with_account {
+		identifier_key: [0; 65],
+		airdrops,
+	})
+}
+
+fn sign_up_with_alias(player: &sr25519::Pair, airdrops: Option<Airdrops>) -> RuntimeCall {
+	RuntimeCall::Game(indiv_pallet_game::Call::sign_up_with_alias {
+		identifier_key: [0; 65],
+		statement_account: Sr25519Keyring::Alice.to_account_id(),
+		sig: MultiSignature::from(player.sign(&[])),
+		airdrops,
+	})
+}
+
+/// An invite signs up a new player, whose airdrop entries are VRFs.
+fn sign_up_with_invite(airdrops: Option<Airdrops>) -> RuntimeCall {
+	RuntimeCall::Game(indiv_pallet_game::Call::sign_up_with_invite {
+		identifier_key: [0; 65],
+		airdrops,
+	})
+}
+
+/// A lite invite also signs up a new player. `AsLiteAliasWithProof` only dispatches
+/// `set_alias_account`, so a lite alias signs up through its account.
+fn sign_up_with_account_lite_invite(airdrops: Option<Airdrops>) -> RuntimeCall {
+	RuntimeCall::Game(indiv_pallet_game::Call::sign_up_with_account_lite_invite {
+		account: Sr25519Keyring::Alice.to_account_id(),
+		identifier_key: [0; 65],
+		airdrops,
+	})
+}
+
+/// `call` signed by `player` through the `GameAsInvited` extension.
+fn by_invite(player: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsic {
+	build_signed_game_invited_ext(player, &sr25519::Pair::from_seed(&[98; 32]), call)
+}
+
+/// `call` from a person alias authenticated by a ring proof, which no signature accompanies.
+fn by_ring_proof(call: RuntimeCall) -> UncheckedExtrinsic {
+	let mut tx_ext = base_tx_ext(call.clone());
+	tx_ext.0 .0 .2 =
+		AsPerson::new(Some(AsPersonInfo::AsPersonalAliasWithProof(ring_proof(), 0, 0, [0; 32])));
+	finalize_uxt(call, tx_ext)
 }
 
 /// A ring proof of one context. Only its length matters to the estimate.
