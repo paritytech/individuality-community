@@ -51,10 +51,10 @@ fn base_name(s: &[u8]) -> BaseLabel {
 }
 
 // Canonical fixtures matching `StringUtils.isLitePersonLabel` / `isSingleLabel`.
-const ALICE_LITE: &[u8] = b"alice.42";
-const BOB_LITE: &[u8] = b"bob.42";
-const ALICE_BASE: &[u8] = b"alice";
-const BOB_BASE: &[u8] = b"bob";
+const ALICE_LITE: &[u8] = b"alicia.42";
+const BOB_LITE: &[u8] = b"bobbie.42";
+const ALICE_BASE: &[u8] = b"alicia";
+const BOB_BASE: &[u8] = b"bobbie";
 const ALICE_FULL: &[u8] = b"alicefull";
 
 fn default_chat_key() -> ChatKey {
@@ -514,6 +514,69 @@ mod reservation {
 	}
 
 	#[test]
+	fn rejects_lite_stem_below_floor() {
+		new_test_ext().execute_with(|| {
+			set_attestation_allowance(ATTESTER, 1);
+
+			assert_noop!(
+				DotnsGateway::reserve_name(
+					RuntimeOrigin::signed(ATTESTER),
+					ALICE,
+					valid_candidate_signature(ALICE),
+					base_name(b"alice.42"),
+					default_chat_key(),
+					None,
+					SIGNED_AT_NOW,
+				),
+				Error::<Test>::StemTooShort
+			);
+			assert!(get_contract_calls().is_empty());
+		});
+	}
+
+	#[test]
+	fn floor_follows_configured_value() {
+		new_test_ext().execute_with(|| {
+			set_attestation_allowance(ATTESTER, 1);
+			MockMinStemLength::set(&7);
+
+			assert_noop!(
+				DotnsGateway::reserve_name(
+					RuntimeOrigin::signed(ATTESTER),
+					ALICE,
+					valid_candidate_signature(ALICE),
+					base_name(ALICE_LITE),
+					default_chat_key(),
+					None,
+					SIGNED_AT_NOW,
+				),
+				Error::<Test>::StemTooShort
+			);
+		});
+	}
+
+	#[test]
+	fn rejects_reserved_base_label_below_floor() {
+		new_test_ext().execute_with(|| {
+			set_attestation_allowance(ATTESTER, 1);
+
+			assert_noop!(
+				DotnsGateway::reserve_name(
+					RuntimeOrigin::signed(ATTESTER),
+					ALICE,
+					valid_candidate_signature(ALICE),
+					base_name(ALICE_LITE),
+					default_chat_key(),
+					Some(base_name(b"alice")),
+					SIGNED_AT_NOW,
+				),
+				Error::<Test>::StemTooShort
+			);
+			assert!(get_contract_calls().is_empty());
+		});
+	}
+
+	#[test]
 	fn fails_when_contract_call_fails_without_revert_data() {
 		new_test_ext().execute_with(|| {
 			set_attestation_allowance(ATTESTER, 5);
@@ -758,6 +821,23 @@ mod registration {
 			},
 			other => panic!("expected Custom({expected:?}), got {other:?}"),
 		}
+	}
+
+	#[test]
+	fn rejects_label_below_floor_before_proof_check() {
+		new_test_ext().execute_with(|| {
+			let result = validate_register(
+				invalid_proof(),
+				0,
+				people_revision(),
+				offchain_signature(ALICE),
+				ALICE,
+				base_name(b"alice"),
+				Link::None(default_chat_key()),
+			);
+
+			assert_invalid_custom(&result, CustomValidity::StemTooShort);
+		});
 	}
 
 	#[test]
@@ -1097,7 +1177,7 @@ mod registration {
 		new_test_ext().execute_with(|| {
 			let link = Link::None(default_chat_key());
 			let bn = base_name(ALICE_BASE);
-			// Proof bound to (BOB, "alice", None) but call is from ALICE.
+			// Proof bound to (BOB, "alicia", None) but call is from ALICE.
 			let proof = valid_proof(alias_a(), &register_msg(BOB, &bn, &link));
 
 			let result = validate_register(

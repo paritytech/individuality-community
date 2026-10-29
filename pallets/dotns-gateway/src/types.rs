@@ -39,6 +39,9 @@ use crate::Config;
 pub type ProofOf<T> =
 	<<<T as Config>::MemberService as MembershipProver>::Crypto as GenerateVerifiable>::Proof;
 
+/// Maximum length of a [`BaseLabel`] in bytes.
+pub const MAX_LABEL_LENGTH: u32 = 32;
+
 /// A dotNS label forwarded via `RootGatewayDispatcher` to `DotnsPopController`.
 ///
 /// Format validation is applied at the call site via
@@ -48,7 +51,7 @@ pub type ProofOf<T> =
 #[derive(
 	Clone, PartialEq, Eq, Debug, Encode, Decode, MaxEncodedLen, TypeInfo, DecodeWithMemTracking,
 )]
-pub struct BaseLabel(pub BoundedVec<u8, ConstU32<32>>);
+pub struct BaseLabel(pub BoundedVec<u8, ConstU32<MAX_LABEL_LENGTH>>);
 
 impl BaseLabel {
 	/// Returns whether the label matches the lite-person PoP format

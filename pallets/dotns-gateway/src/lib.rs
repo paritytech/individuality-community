@@ -142,6 +142,11 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxFutureSkewSeconds: Get<u64>;
 
+		/// Minimum stem length, in bytes, of a label the gateway issues or reserves.
+		///
+		/// Must equal the `PopRules` governance-reserved floor plus one.
+		type MinStemLength: Get<u32>;
+
 		/// Unix time source.
 		type UnixTime: UnixTime;
 
@@ -301,6 +306,21 @@ pub mod pallet {
 		NotLiteLabelOwner,
 		/// The `RootGatewayDispatcher` contract address has not been set.
 		DispatcherAddressNotSet,
+		/// The label stem is shorter than [`Config::MinStemLength`].
+		StemTooShort,
+	}
+
+	#[pallet::hooks]
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		fn integrity_test() {
+			// The longest lite stem leaves room for `.` and the shortest digit suffix.
+			let max_stem = (MAX_LABEL_LENGTH as usize)
+				.saturating_sub(indiv_support::labels::MIN_LITE_USERNAME_DIGITS + 1);
+			assert!(
+				T::MinStemLength::get() as usize <= max_stem,
+				"MinStemLength must leave room for a lite stem"
+			);
+		}
 	}
 
 	// ========== Extrinsics ==========
@@ -354,6 +374,10 @@ pub mod pallet {
 			ensure!(lite_label.is_valid_lite(), Error::<T>::InvalidName);
 			if let Some(ref label) = reserved_base_label {
 				ensure!(label.is_valid_person(), Error::<T>::InvalidName);
+			}
+			ensure!(Self::is_stem_long_enough(lite_label.lite_base()), Error::<T>::StemTooShort);
+			if let Some(ref label) = reserved_base_label {
+				ensure!(Self::is_stem_long_enough(label), Error::<T>::StemTooShort);
 			}
 
 			let now = <T as Config>::UnixTime::now().as_secs();
@@ -572,6 +596,11 @@ pub mod pallet {
 			link: &Link,
 		) -> [u8; 32] {
 			(who, label, link).using_encoded(sp_io::hashing::blake2_256)
+		}
+
+		/// Returns whether `stem` reaches [`Config::MinStemLength`].
+		pub(crate) fn is_stem_long_enough(stem: &[u8]) -> bool {
+			stem.len() >= T::MinStemLength::get() as usize
 		}
 
 		/// Calls `RootGatewayDispatcher` with the given ABI-encoded `calldata`

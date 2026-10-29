@@ -1525,6 +1525,7 @@ impl indiv_pallet_dotns_gateway::Config for Runtime {
 	type MaxContractCallWeight = DotnsMaxContractCallWeight;
 	type MaxValiditySeconds = DotnsMaxValiditySeconds;
 	type MaxFutureSkewSeconds = DotnsMaxFutureSkewSeconds;
+	type MinStemLength = dynamic_params::dotns_gateway::MinStemLength;
 	type UnixTime = Timestamp;
 	type AttestationAllowanceManager = EnsureRoot<AccountId>;
 	type DispatcherAddressManager = EnsureRoot<AccountId>;
@@ -1868,12 +1869,12 @@ impl frame_support::traits::EnsureOriginWithArg<RuntimeOrigin, RuntimeParameters
 				origin.clone(),
 			)
 			.map(|_success| ()),
-			// Economic param.
-			AliasAccounts(dynamic_params::alias_accounts::ParametersKey::AliasFee(_)) =>
-				<EnsureRoot<AccountId> as EnsureOrigin<RuntimeOrigin>>::ensure_origin(
-					origin.clone(),
-				)
-				.map(|_success| ()),
+			// Economic param. The dotNS gateway params mirror `PopRules`, which Root upgrades.
+			AliasAccounts(dynamic_params::alias_accounts::ParametersKey::AliasFee(_)) |
+			RuntimeParametersKey::DotnsGateway(_) => <EnsureRoot<AccountId> as EnsureOrigin<
+				RuntimeOrigin,
+			>>::ensure_origin(origin.clone())
+			.map(|_success| ()),
 		}
 		.map_err(|_| origin)
 	}
@@ -1978,6 +1979,18 @@ pub mod dynamic_params {
 		/// the scan proves expensive on a chain with many mappings.
 		#[codec(index = 1)]
 		pub static StaleAliasSweepInterval: BlockNumber = HOURS;
+	}
+
+	/// Parameters about the dotns-gateway pallet.
+	#[dynamic_pallet_params]
+	#[codec(index = 4)]
+	pub mod dotns_gateway {
+		/// Minimum stem length of a gateway label.
+		///
+		/// Mirrors the `PopRules` floor, which reserves stems of five characters or fewer for
+		/// governance. Root changes it in the same referendum that upgrades `PopRules`.
+		#[codec(index = 0)]
+		pub static MinStemLength: u32 = 6;
 	}
 }
 
