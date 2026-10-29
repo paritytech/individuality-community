@@ -179,7 +179,9 @@ fn register_lite_person_for_integration(
 			})
 		});
 
-		let candidate_signature = MultiSignature::from(pair.sign(&msg));
+		let candidate_signature = MultiSignature::from(
+			pair.sign(&indiv_pallet_people_lite::Pallet::<Runtime>::account_signing_payload(&msg)),
+		);
 		let proof = Crypto::sign(&ring_secret, &msg)
 			.expect("ring key can sign the lite attestation payload");
 

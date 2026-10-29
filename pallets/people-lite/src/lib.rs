@@ -20,6 +20,18 @@
 //! The spam prevention mechanism must limit how many calls the origins
 //! `LitePerson` and `LiteAlias` can do.
 //! The recommended approach is to use pallet-origin-restriction.
+//!
+//! ## Lite people cap
+//!
+//! The pallet registers at most `MaxLitePeople` lite people. The cap applies to attested
+//! registrations ([`Call::attest`]) and paid registrations ([`Call::register_with_fee`]).
+//!
+//! ## Paid registration throttling
+//!
+//! From `PaidRegistrationThreshold` lite people on, the pallet accepts at most
+//! `PaidRegistrationsPerPeriod` paid registrations per `PaidRegistrationPeriod` seconds. Attested
+//! registrations count towards the threshold but are not throttled, since governance bounds them
+//! through attestation allowances. A zero `PaidRegistrationPeriod` disables the throttling.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::borrowed_box)]
@@ -31,11 +43,12 @@ use frame_support::{
 	traits::{
 		fungible::{Inspect, Mutate},
 		tokens::Preservation,
-		IsSubType,
+		IsSubType, UnixTime,
 	},
 	PalletId,
 };
 use indiv_support::{
+	context::personhood,
 	traits::{
 		Alias, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar, Context,
 		ContextualAlias, CountedMembers, Identifier, MembershipProver, RevisedContextualAlias,
@@ -45,11 +58,11 @@ use indiv_support::{
 };
 use sp_runtime::{
 	traits::{AccountIdConversion, Dispatchable, IdentifyAccount, Verify},
-	Saturating,
+	SaturatedConversion, Saturating,
 };
 use types::{
 	CryptoOf, LiteConsumerRegistrationParamsOf, LitePersonInfo, LitePersonInfoOf, MemberOf,
-	ProofOf, RecognitionMethod, SignatureOf,
+	PaidRegistrationWindow, ProofOf, RecognitionMethod, SignatureOf,
 };
 use verifiable::GenerateVerifiable;
 
@@ -82,7 +95,10 @@ pub mod pallet {
 	/// Fixed-width namespaced storage identifier for the lite people collection.
 	pub use indiv_support::traits::PEOPLE_LITE_IDENTIFIER as LITE_PEOPLE_MEMBER_IDENTIFIER;
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	/// Native balance used to pay the lite-person registration fee.
@@ -121,6 +137,27 @@ pub mod pallet {
 		/// The getter can use a dynamic parameter or future pricing adapter without changing this
 		/// pallet.
 		type RegistrationFee: Get<BalanceOf<Self>>;
+
+		/// Maximum number of lite people, attested as well as paid.
+		///
+		/// Lowering it below the number of lite people removes no lite person.
+		type MaxLitePeople: Get<u32>;
+
+		/// Clock that defines the paid registration periods.
+		type Clock: UnixTime;
+
+		/// Number of lite people from which paid registrations are throttled.
+		type PaidRegistrationThreshold: Get<u32>;
+
+		/// Length of a paid registration period in seconds.
+		///
+		/// Zero disables the throttling. A change can reset the current period's count.
+		type PaidRegistrationPeriod: Get<u32>;
+
+		/// Number of paid registrations accepted per period once the threshold is reached.
+		///
+		/// Zero stops paid registrations beyond the threshold.
+		type PaidRegistrationsPerPeriod: Get<u32>;
 
 		/// Runtime-wide network suffix used to derive product contexts.
 		type Suffix: Get<indiv_support::context::ProductContextNetworkSuffix>;
@@ -190,9 +227,12 @@ pub mod pallet {
 		LiteAlias(RevisedContextualAlias),
 	}
 
+	/// Registered lite people.
+	///
+	/// The counter gives the number of lite people for the cap and the throttling.
 	#[pallet::storage]
 	pub type LitePeople<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::AccountId, LitePersonInfoOf<T>>;
+		CountedStorageMap<_, Blake2_128Concat, T::AccountId, LitePersonInfoOf<T>>;
 
 	/// Conversion of a lite contextual alias to an account ID.
 	#[pallet::storage]
@@ -203,6 +243,13 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type AccountToAlias<T: Config> =
 		StorageMap<_, Blake2_128Concat, T::AccountId, RevisedContextualAlias, OptionQuery>;
+
+	/// Paid registrations accepted in the latest throttled period.
+	///
+	/// The pallet updates it only while the number of lite people is at or above
+	/// `PaidRegistrationThreshold`. An entry from an earlier period counts as zero registrations.
+	#[pallet::storage]
+	pub type PaidRegistrations<T: Config> = StorageValue<_, PaidRegistrationWindow, ValueQuery>;
 
 	/// Whether the lite people member collection has been created.
 	#[pallet::storage]
@@ -282,6 +329,10 @@ pub mod pallet {
 		LitePeopleCollectionNotCreated,
 		/// The consumer registration account does not match the candidate.
 		InvalidConsumerRegistrationAccount,
+		/// The paid registrations allowed in the current period are used up.
+		PaidRegistrationLimitReached,
+		/// The number of lite people reached `MaxLitePeople`.
+		TooManyLitePeople,
 	}
 
 	#[pallet::call]
@@ -335,10 +386,9 @@ pub mod pallet {
 		/// - one created using their ring-vrf key attesting to the ownership of the `ring_vrf_key`
 		///   key.
 		///
-		/// The message to be signed by both keys from which the signatures are generated is created
-		/// by concatenating the bytes "pop:people-lite:register using" with the encoded bytes of
-		/// the user's account (`candidate`), and the encoded bytes of the ring VRF key
-		/// (`ring_vrf_key`).
+		/// The registration message concatenates the bytes "pop:people-lite:register using", the
+		/// encoded `candidate` account and the encoded `ring_vrf_key`. The ring VRF key signs this
+		/// message. The account key signs [`Pallet::account_signing_payload`] of this message.
 		///
 		/// On success, this call:
 		/// - stores lite registration data in `LitePeople`,
@@ -349,17 +399,17 @@ pub mod pallet {
 		/// [`Call::create_lite_people_collection`]).
 		///
 		/// - `candidate`: The candidate to be recognized as a lite person.
-		/// - `candidate_signature`: The signature, provided by the candidate, to allow the attester
-		///   to complete the registration process on their behalf.
+		/// - `candidate_signature`: The candidate's account signature over the registration message
+		///   in the personhood signing context. It allows the attester to register the candidate.
 		/// - `ring_vrf_key`: The ring VRF key to be associated with the lite person.
 		/// - `ring_vrf_key_signature`: The ring VRF signature, provided by the candidate, to allow
 		///   the attester to complete the registration process. This also prove the ownership of
 		///   the ring VRF key by the candidate.
 		/// - consumer_registration: Optional parameter which can contain the necessary information
 		///   to forward a consumer registration request to the `LiteConsumerRegistrar` service. If
-		///   present, it also contains a signature created by the user in order to validate the
-		///   intent. More information on the signing payload generation available in
-		///   [types::LiteConsumerRegistrationParams::signing_payload].
+		///   present, it also contains the user's signature over the payload from
+		///   [types::LiteConsumerRegistrationParams::signing_payload] in the personhood signing
+		///   context.
 		#[pallet::call_index(2)]
 		#[pallet::weight({ if consumer_registration.is_some() {
 			<T as Config>::WeightInfo::attest().saturating_add(<T as Config>::WeightInfo::register_lite_consumer())
@@ -386,6 +436,7 @@ pub mod pallet {
 				.checked_sub(1)
 				.ok_or(Error::<T>::NoAttestationAllowance)?;
 			Self::ensure_lite_collection_created()?;
+			Self::ensure_below_lite_people_cap()?;
 
 			let msg = Self::registration_message(&candidate, &ring_vrf_key);
 			ensure!(
@@ -393,7 +444,7 @@ pub mod pallet {
 				Error::<T>::InvalidProofOfOwnership,
 			);
 			ensure!(
-				candidate_signature.verify(&msg[..], &candidate),
+				candidate_signature.verify(&Self::account_signing_payload(&msg)[..], &candidate),
 				Error::<T>::InvalidAttestationSignature,
 			);
 
@@ -403,19 +454,13 @@ pub mod pallet {
 				AttestationAllowance::<T>::remove(&verifier);
 			}
 
-			let ring_vrf_key_for_member_service = ring_vrf_key.clone();
-			LitePeople::<T>::insert(
+			Self::insert_lite_person(
 				&candidate,
 				LitePersonInfo {
 					ring_vrf_key,
 					method: RecognitionMethod::UniqueDevice(verifier.clone()),
 				},
-			);
-			T::MemberService::add_members(
-				LITE_PEOPLE_MEMBER_IDENTIFIER,
-				vec![ring_vrf_key_for_member_service],
 			)?;
-			frame_system::Pallet::<T>::inc_sufficients(&candidate);
 			Self::deposit_event(Event::PersonAttested { candidate, verifier: verifier.clone() });
 
 			// If provided with additional params and signature to register as lite consumer,
@@ -436,6 +481,10 @@ pub mod pallet {
 		/// registration data in `LitePeople` and adds the ring VRF key to the lite member
 		/// collection. The fee is not refunded.
 		///
+		/// Once the number of lite people reaches `PaidRegistrationThreshold`, the call fails with
+		/// [`Error::PaidRegistrationLimitReached`] after `PaidRegistrationsPerPeriod` paid
+		/// registrations in the current period.
+		///
 		/// The lite member collection must already have been created via the
 		/// `migration::CreateLitePeopleCollection` runtime upgrade or
 		/// [`Call::create_lite_people_collection`].
@@ -443,8 +492,9 @@ pub mod pallet {
 		/// - `ring_vrf_key`: The ring VRF key to be associated with the lite person.
 		/// - `proof_of_ownership`: The ring VRF signature proving ownership of `ring_vrf_key`.
 		/// - `consumer_registration`: Optional parameters to register the candidate as a lite
-		///   consumer. The request must contain a signature over the usual consumer payload with
-		///   the signed candidate account in both the account and verifier positions.
+		///   consumer. The request must contain a signature over the consumer payload in the
+		///   personhood signing context, with the signed candidate account in both the account and
+		///   verifier positions.
 		#[pallet::call_index(3)]
 		#[pallet::weight(if consumer_registration.is_some() {
 			<T as Config>::WeightInfo::register_with_fee()
@@ -473,6 +523,8 @@ pub mod pallet {
 				);
 			}
 			Self::ensure_lite_collection_created()?;
+			let count = Self::ensure_below_lite_people_cap()?;
+			Self::throttle_paid_registration(count)?;
 
 			let msg = Self::registration_message(&candidate, &ring_vrf_key);
 			ensure!(
@@ -487,16 +539,10 @@ pub mod pallet {
 				Preservation::Preserve,
 			)?;
 			debug_assert_eq!(transferred, registration_fee);
-			let ring_vrf_key_for_member_service = ring_vrf_key.clone();
-			LitePeople::<T>::insert(
+			Self::insert_lite_person(
 				&candidate,
 				LitePersonInfo { ring_vrf_key, method: RecognitionMethod::Fee },
-			);
-			T::MemberService::add_members(
-				LITE_PEOPLE_MEMBER_IDENTIFIER,
-				vec![ring_vrf_key_for_member_service],
 			)?;
-			frame_system::Pallet::<T>::inc_sufficients(&candidate);
 			Self::deposit_event(Event::PersonRegisteredWithFee { candidate: candidate.clone() });
 
 			if let Some(params) = consumer_registration {
@@ -631,7 +677,24 @@ pub mod pallet {
 		}
 	}
 
+	#[pallet::extra_constants]
 	impl<T: Config> Pallet<T> {
+		/// The personhood signing context on this network. An account signs this context
+		/// followed by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			[&Self::signing_context()[..], msg].concat()
+		}
+
 		/// Creates the message a candidate signs to prove ownership of a ring VRF key.
 		pub(crate) fn registration_message(
 			candidate: &T::AccountId,
@@ -664,23 +727,18 @@ pub mod pallet {
 		/// Register a lite person as a consumer by calling into the `LiteConsumerRegistrar`
 		/// service.
 		///
-		/// This action requires user consent, provided through a signature verified in this
-		/// function. The signing payload is constructed by encoding, in order, the tuple of:
-		/// - the user's account
-		/// - the verifier's account
-		/// - the user's identifier_key
-		/// - the user's chosen username, without the `.` separator and any following digits
-		/// - the user's chosen reserved_username, as an `Option`
-		///
-		/// For more information about the signing payload, check
-		/// [types::LiteConsumerRegistrationParams::signing_payload].
+		/// This action requires user consent. The user signs [`Pallet::account_signing_payload`]
+		/// of the payload from [types::LiteConsumerRegistrationParams::signing_payload].
 		pub fn register_lite_consumer(
 			params: LiteConsumerRegistrationParamsOf<T>,
 			verifier: &T::AccountId,
 		) -> DispatchResult {
 			// Verify the candidate's signature for the consumer registration.
 			ensure!(
-				params.signature.verify(&params.signing_payload(verifier)[..], &params.account),
+				params.signature.verify(
+					&Self::account_signing_payload(&params.signing_payload(verifier))[..],
+					&params.account
+				),
 				Error::<T>::InvalidAttestationSignature,
 			);
 			let account = params.account.clone();
@@ -710,6 +768,55 @@ pub mod pallet {
 			)?;
 			LitePeopleCollectionCreated::<T>::put(true);
 			Self::deposit_event(Event::<T>::CollectionCreated);
+			Ok(())
+		}
+
+		/// Store `info` for `candidate` and add its ring VRF key to the lite member
+		/// collection.
+		///
+		/// The caller must call [`Self::ensure_below_lite_people_cap`] first.
+		fn insert_lite_person(
+			candidate: &T::AccountId,
+			info: LitePersonInfoOf<T>,
+		) -> DispatchResult {
+			LitePeople::<T>::insert(candidate, &info);
+			T::MemberService::add_members(LITE_PEOPLE_MEMBER_IDENTIFIER, vec![info.ring_vrf_key])?;
+			frame_system::Pallet::<T>::inc_sufficients(candidate);
+			Ok(())
+		}
+
+		/// Ensure the lite people count is below `MaxLitePeople` and return the count.
+		///
+		/// Fails with [`Error::TooManyLitePeople`] otherwise. Registrations check it before the
+		/// paid registration throttle, so a caller at the cap does not get a period error.
+		fn ensure_below_lite_people_cap() -> Result<u32, DispatchError> {
+			let count = LitePeople::<T>::count();
+			ensure!(count < T::MaxLitePeople::get(), Error::<T>::TooManyLitePeople);
+			Ok(count)
+		}
+
+		/// Record one paid registration in the current period once `count` lite people reach
+		/// `PaidRegistrationThreshold`.
+		///
+		/// Fails with [`Error::PaidRegistrationLimitReached`] when the period has no registrations
+		/// left.
+		fn throttle_paid_registration(count: u32) -> DispatchResult {
+			let period_length = T::PaidRegistrationPeriod::get();
+			if period_length == 0 || count < T::PaidRegistrationThreshold::get() {
+				return Ok(());
+			}
+			let period =
+				(T::Clock::now().as_secs() / u64::from(period_length)).saturated_into::<u32>();
+			let mut window = PaidRegistrations::<T>::get();
+			if window.period != period {
+				window = PaidRegistrationWindow { period, registrations: 0 };
+			}
+			ensure!(
+				window.registrations < T::PaidRegistrationsPerPeriod::get(),
+				Error::<T>::PaidRegistrationLimitReached
+			);
+			window.registrations.saturating_inc();
+			PaidRegistrations::<T>::put(window);
 			Ok(())
 		}
 

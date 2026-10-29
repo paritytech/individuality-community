@@ -23,6 +23,7 @@ use frame_support::{
 	parameter_types,
 	storage::with_transaction,
 	traits::{Everything, UnixTime},
+	weights::constants::RocksDbWeight,
 };
 use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateBare, CreateTransaction, CreateTransactionBase},
@@ -74,7 +75,7 @@ impl frame_system::Config for Test {
 	type BaseCallFilter = frame_support::traits::Everything;
 	type BlockWeights = ();
 	type BlockLength = ();
-	type DbWeight = ();
+	type DbWeight = RocksDbWeight;
 	type RuntimeOrigin = RuntimeOrigin;
 	type RuntimeCall = RuntimeCall;
 	type Nonce = u64;

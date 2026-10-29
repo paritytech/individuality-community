@@ -997,10 +997,10 @@ pub mod pallet {
 		/// Parameters:
 		/// - `statement_account`: the account id to use to interact with the statement store during
 		///   the game.
-		/// - `sig`: the proof of ownership of the account `statement_account` by an alias, it is
-		///   the signature of the message `"pop:game:stmt_account_for_alias:"` concatenated to the
-		///   alias, and then hashed with `blake2_256` (blake2 256bit output). The base of the
-		///   message can be found in the constant: `proof_of_ownership_msg_base`.
+		/// - `sig`: the proof of ownership of the account `statement_account` by an alias. The
+		///   message is the `blake2_256` hash of `"pop:game:stmt_account_for_alias:"` concatenated
+		///   to the alias. The base of the message is in `proof_of_ownership_msg_base`. The
+		///   statement account signs [`Pallet::account_signing_payload`] of the hash.
 		/// - `airdrops`: optionally enters the player into the airdrop draws scheduled for this
 		///   game. Pass `None` to skip it; otherwise it holds exactly one VRF per scheduled airdrop
 		///   event (`airdrops_scheduled` in the `Game` storage), in airdrop-index order. Each entry
@@ -1874,7 +1874,27 @@ pub mod pallet {
 		}
 	}
 
+	#[pallet::extra_constants]
 	impl<T: Config> Pallet<T> {
+		/// The game's signing context on this network. An account signs this context followed
+		/// by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(
+				PRODUCT_NAME,
+				&<T as indiv_pallet_score::Config>::Suffix::get(),
+			)
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the game's signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			[&Self::signing_context()[..], msg].concat()
+		}
+
 		/// Check the count and the variant of the airdrop VRF entries against the player's
 		/// `recognized` state.
 		///
@@ -2187,7 +2207,8 @@ pub mod pallet {
 					let msg = (Self::proof_of_ownership_msg_base(), &who)
 						.using_encoded(sp_io::hashing::blake2_256);
 					ensure!(
-						statement_account_signature.verify(&msg[..], &statement_account),
+						statement_account_signature
+							.verify(&Self::account_signing_payload(&msg)[..], &statement_account),
 						Error::<T>::InvalidStatementAccountSignature,
 					);
 
