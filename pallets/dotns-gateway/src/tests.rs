@@ -441,7 +441,6 @@ mod reservation {
 				DotnsGateway::reserve_name(
 					RuntimeOrigin::signed(ATTESTER),
 					ALICE,
-
 					valid_candidate_signature(ALICE),
 					base_name(ALICE_LITE),
 					default_chat_key(),

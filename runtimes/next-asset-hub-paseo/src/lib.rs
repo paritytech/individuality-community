@@ -1871,11 +1871,10 @@ impl frame_support::traits::EnsureOriginWithArg<RuntimeOrigin, RuntimeParameters
 			.map(|_success| ()),
 			// Economic param. The dotNS gateway params mirror `PopRules`, which Root upgrades.
 			AliasAccounts(dynamic_params::alias_accounts::ParametersKey::AliasFee(_)) |
-			RuntimeParametersKey::DotnsGateway(_) =>
-				<EnsureRoot<AccountId> as EnsureOrigin<RuntimeOrigin>>::ensure_origin(
-					origin.clone(),
-				)
-				.map(|_success| ()),
+			RuntimeParametersKey::DotnsGateway(_) => <EnsureRoot<AccountId> as EnsureOrigin<
+				RuntimeOrigin,
+			>>::ensure_origin(origin.clone())
+			.map(|_success| ()),
 		}
 		.map_err(|_| origin)
 	}
