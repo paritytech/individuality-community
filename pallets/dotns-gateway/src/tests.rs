@@ -578,23 +578,6 @@ mod reservation {
 	}
 
 	#[test]
-	fn rejects_label_below_floor_before_proof_check() {
-		new_test_ext().execute_with(|| {
-			let result = validate_register(
-				invalid_proof(),
-				0,
-				people_revision(),
-				offchain_signature(ALICE),
-				ALICE,
-				base_name(b"alice"),
-				Link::None(default_chat_key()),
-			);
-
-			assert_invalid_custom(&result, CustomValidity::StemTooShort);
-		});
-	}
-
-	#[test]
 	fn fails_when_contract_call_fails_without_revert_data() {
 		new_test_ext().execute_with(|| {
 			set_attestation_allowance(ATTESTER, 5);
@@ -839,6 +822,23 @@ mod registration {
 			},
 			other => panic!("expected Custom({expected:?}), got {other:?}"),
 		}
+	}
+
+	#[test]
+	fn rejects_label_below_floor_before_proof_check() {
+		new_test_ext().execute_with(|| {
+			let result = validate_register(
+				invalid_proof(),
+				0,
+				people_revision(),
+				offchain_signature(ALICE),
+				ALICE,
+				base_name(b"alice"),
+				Link::None(default_chat_key()),
+			);
+
+			assert_invalid_custom(&result, CustomValidity::StemTooShort);
+		});
 	}
 
 	#[test]
