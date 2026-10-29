@@ -118,6 +118,7 @@ system-parachains-common = { workspace = true }
 assets-common = { workspace = true }
 
 [dev-dependencies]
+frame-metadata = { workspace = true, features = ["std"] }
 parachains-runtimes-test-utils = { workspace = true }
 parking_lot = { workspace = true }
 sp-trie = { workspace = true }
@@ -141,6 +142,7 @@ std = [
 	"frame-benchmarking?/std",
 	"frame-executive/std",
 	"frame-metadata-hash-extension/std",
+	"frame-metadata/std",
 	"frame-support/std",
 	"frame-system-benchmarking?/std",
 	"frame-system-rpc-runtime-api/std",

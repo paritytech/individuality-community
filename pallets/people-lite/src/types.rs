@@ -80,7 +80,7 @@ pub struct PaidRegistrationWindow {
 	Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
 )]
 pub struct LiteConsumerRegistrationParams<AccountId, Signature> {
-	/// The signature of the user, constructed as shown in [Self::signing_payload].
+	/// The user's signature over [Self::signing_payload] in the personhood signing context.
 	pub signature: Signature,
 	/// The account ID of the user.
 	pub account: AccountId,
@@ -93,11 +93,12 @@ pub struct LiteConsumerRegistrationParams<AccountId, Signature> {
 }
 
 impl<AccountId: Encode, Signature: Encode> LiteConsumerRegistrationParams<AccountId, Signature> {
-	/// Creates a payload to be signed by the user for a consumer registration request.
+	/// Creates the consumer registration payload. The user signs it in the personhood signing
+	/// context.
 	///
-	/// The signing payload will not contain the `.` separator and the following digits of the
-	/// username, as they can be chosen by the attester after the user settles on the primary alpha
-	/// part of the username.
+	/// The payload encodes the account, the verifier, the identifier key, the username without
+	/// the `.` separator and the following digits, and the reserved username. The attester can
+	/// choose the digits after the user settles on the alpha part of the username.
 	pub fn signing_payload(&self, verifier: &AccountId) -> alloc::vec::Vec<u8> {
 		let separator_idx =
 			self.username.iter().position(|b| *b == b'.').unwrap_or(self.username.len());
