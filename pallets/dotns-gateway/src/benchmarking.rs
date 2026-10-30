@@ -93,7 +93,8 @@ mod benchmarks {
 			reserved_base_label.as_ref().map(crate::BaseLabel::as_slice),
 			signed_at,
 		);
-		let signature = T::BenchmarkHelper::sign(&msg);
+		let signature =
+			T::BenchmarkHelper::sign(&crate::Pallet::<T>::account_signing_payload(&msg));
 
 		#[extrinsic_call]
 		_(
