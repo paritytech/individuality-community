@@ -63,11 +63,18 @@
 //! given: f(i) = group_index + i x number_of_group
 //! { f(i) ∣ i ∈ {0,1,…,max_group_size−1} and f(i) < number_of_player }
 //! or equivalently:
-//! {group_index+i⋅number_of_group∣i∈{0,1,…,max_per_group−1}}∩{0,1,…,number_of_player−1}
+//! {group_index+i⋅number_of_group∣i∈{0,1,…,max_group_size−1}}∩{0,1,…,number_of_player−1}
 //! ```
 //! After participating in the game in the given group in each round, the player will report on
 //! other players in the group. The report is a list of round reports, one for each round. Each
 //! round report is a list of reports for all other players in the group, ordered by player index.
+//!
+//! A game is cancelled unless every group holds at least `max_group_size - 1` players. A minimum
+//! of `max_group_size` would cancel every game whose player count is not a multiple of
+//! `max_group_size`, while one player fewer accepts most counts. Attendance needs a strict
+//! majority of the co-players' `Person` vote weight, so a small group is easier to collude in and
+//! a lone player passes unvoted, hence a [`Config::MinGroupSize`] of at least 2. A testnet skips
+//! the bound.
 //!
 //! Players have different vote weights and are differently distributed depending on whether they
 //! are recognized as a unique individual in pallet-score. Throughout this pallet, we use
@@ -356,14 +363,11 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxGroupSize: Get<u32>;
 
-		/// The minimum number of players in a group.
+		/// The lower bound on a game's minimum group size, which is `max_group_size - 1`.
 		///
-		/// When scheduling a game the value for `max_group_size` must be at least this minimum + 1.
-		///
-		/// In order to have no single-player groups, this value must be at least 2.
-		///
-		/// Note: the actual minimum number of players in a group is configured per game, it is
-		/// `max_group_size - 1`.
+		/// Must be non-zero. A game's `max_group_size` must be greater than this value. Set it to
+		/// at least 2 to prevent single-player groups. A testnet does not enforce the minimum
+		/// group size when a game starts.
 		#[pallet::constant]
 		type MinGroupSize: Get<u32>;
 
@@ -823,6 +827,12 @@ pub mod pallet {
 				"the game's airdrop product name must be a bare dotNS label"
 			);
 
+			assert!(T::MinGroupSize::get() > 0, "MinGroupSize must be non-zero");
+			assert!(
+				T::MinGroupSize::get() < T::MaxGroupSize::get(),
+				"MinGroupSize must be less than MaxGroupSize"
+			);
+
 			let max_votes = Self::max_received_votes();
 			assert!(
 				max_votes as u64 * T::PeopleVoteWeight::get() as u64 <= u8::MAX as u64,
@@ -1207,7 +1217,7 @@ pub mod pallet {
 					)
 					.ok_or(Error::<T>::InternalErrorInvalidState)?;
 
-				let groups_setting = GroupsSetting { max_per_group: group_size, player_count };
+				let groups_setting = GroupsSetting { full_group_size: group_size, player_count };
 
 				let group_index = groups_setting.group_index_from_player_index(reporter_index);
 				// The reporter's place in their group. They are the attester of every credit
@@ -2039,10 +2049,7 @@ pub mod pallet {
 				u32::from(schedule.rounds) <= T::MaxRounds::get(),
 				Error::<T>::InvalidGameSetup
 			);
-			ensure!(
-				schedule.max_group_size >= T::MinGroupSize::get(),
-				Error::<T>::InvalidGameSetup
-			);
+			ensure!(schedule.max_group_size > T::MinGroupSize::get(), Error::<T>::InvalidGameSetup);
 			ensure!(
 				schedule.max_group_size <= T::MaxGroupSize::get(),
 				Error::<T>::InvalidGameSetup
@@ -2628,7 +2635,7 @@ pub mod pallet {
 			rounds: u8,
 			player_count: u32,
 			recognized_count: u32,
-			max_per_group: u32,
+			full_group_size: u32,
 		) -> StepResult {
 			let mut remaining_players = match last_iteration.clone() {
 				None => PlayerToIndex::<T>::iter(),
@@ -2639,7 +2646,7 @@ pub mod pallet {
 				return StepResult::Finished;
 			};
 
-			let groups_setting = GroupsSetting { max_per_group, player_count };
+			let groups_setting = GroupsSetting { full_group_size, player_count };
 			let people_vote_weight = u32::from(T::PeopleVoteWeight::get());
 			let candidate_vote_weight = u32::from(T::CandidateVoteWeight::get());
 			let mut total_weight: u32 = 0;
@@ -3525,7 +3532,7 @@ pub mod pallet {
 						let player_count = next_player_index;
 
 						let group_setting =
-							GroupsSetting { max_per_group: game.max_group_size, player_count };
+							GroupsSetting { full_group_size: game.max_group_size, player_count };
 
 						if group_setting.acceptable_player_count::<T>() {
 							game.state = GameState::Shuffle {

@@ -673,7 +673,7 @@ impl indiv_pallet_game::Config for Runtime {
 	type PeopleVoteWeight = ConstUint<2>;
 	type CandidateVoteWeight = ConstUint<1>;
 	// This is for the testnet, the value must be at least 2 in production.
-	type MinGroupSize = ConstUint<0>;
+	type MinGroupSize = ConstUint<1>;
 	type AirdropAssetId = <Runtime as pallet_assets::Config>::AssetId;
 	type AirdropAssetBalance = Balance;
 	type Airdrop = Airdrop;
