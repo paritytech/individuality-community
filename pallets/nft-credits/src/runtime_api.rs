@@ -20,13 +20,16 @@
 //! of each of those credits. Both are reads, and a whole block's awards inside an extrinsic's proof
 //! would be paid for by every other extrinsic in the block, so neither is a call.
 
-use crate::{NftClaimCreditAward, NftClaimCreditProof, NftClaimCreditProofError};
+use crate::{
+	NftClaimCreditAward, NftClaimCreditBlockState, NftClaimCreditProof, NftClaimCreditProofError,
+};
 use alloc::vec::Vec;
 use codec::Codec;
 use indiv_support::{credit_trees::NftClaimCreditTree, identity::AccountOrPerson};
 
 sp_api::decl_runtime_apis! {
 	/// The API a wallet mints an NFT claim credit through.
+	#[api_version(2)]
 	pub trait NftCreditsApi<AccountId, BlockNumber>
 	where
 		AccountId: Codec,
@@ -35,10 +38,10 @@ sp_api::decl_runtime_apis! {
 		/// Returns the NFT claim credit roots `claimant` has at least one credit under, keyed by
 		/// the block that committed those credits, in ascending block order.
 		///
-		/// A wallet starts here and asks `nft_claim_credit_proofs` about each block returned. A
-		/// block gets its root only in the block after it, so the newest one a claimant's credit
+		/// A block gets its root only in the block after it, so the newest one a claimant's credit
 		/// landed in is left out until then, and a credit that spilled into a later buffer waits
-		/// for that buffer's tree.
+		/// for that buffer's tree. `nft_claim_credit_blocks` also returns pending blocks and
+		/// blocks whose root is removed.
 		fn nft_claim_credit_roots(
 			claimant: AccountOrPerson<AccountId>,
 		) -> Vec<(BlockNumber, NftClaimCreditTree)>;
@@ -77,5 +80,16 @@ sp_api::decl_runtime_apis! {
 			awards: Vec<NftClaimCreditAward<AccountId>>,
 			leaf_index: u32,
 		) -> Result<NftClaimCreditProof, NftClaimCreditProofError>;
+
+		/// Returns every block `claimant` has at least one credit under, with the state of the
+		/// block's tree, in ascending block order.
+		///
+		/// Unlike `nft_claim_credit_roots`, it includes pending blocks and blocks whose root is
+		/// removed. The index keeps only the newest blocks, so older ones are found only in the
+		/// `NftClaimCreditAwarded` events.
+		#[api_version(2)]
+		fn nft_claim_credit_blocks(
+			claimant: AccountOrPerson<AccountId>,
+		) -> Vec<(BlockNumber, NftClaimCreditBlockState)>;
 	}
 }

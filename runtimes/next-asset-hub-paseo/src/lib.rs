@@ -2159,6 +2159,61 @@ parameter_types! {
 	/// One PGAS is enough for modest per-claim accounting while bounding the owner's exposure to
 	/// a contract they registered.
 	pub const NftClaimsSelectorDepositLimit: Balance = UNITS;
+	/// Maximum code size in bytes of a contract registered as a collection minter.
+	///
+	/// Every call loads the whole code against [`NftClaimsSelectorWeightLimit`], at about one
+	/// byte of proof per byte of code. Revive accepts code of up to 1 MiB, which exceeds that
+	/// limit. A test asserts that this size loads within half the limit, which leaves the other
+	/// half for execution.
+	pub const NftClaimsMaxMinterCodeLen: u32 = 256 * 1024;
+}
+
+/// The prefix of revive's `CodeInfoOf` entry, which holds a code's metadata without the code.
+///
+/// Revive exports neither the map nor its `CodeInfo` type. The runtime test
+/// `minter_code_len_reads_the_deployed_code_size` fails if its layout changes.
+#[derive(codec::Decode)]
+struct ReviveCodeInfo {
+	_owner: AccountId,
+	#[codec(compact)]
+	_deposit: Balance,
+	#[codec(compact)]
+	_refcount: u64,
+	code_len: u32,
+	_code_type: pallet_revive::BytecodeType,
+	_behaviour_version: u32,
+}
+
+/// The length of the code deployed at `contract`, or `None` if no contract is deployed there.
+///
+/// Reads only the code's metadata, not the code, so the proof grows by tens of bytes and not by
+/// the code size.
+pub fn minter_code_len(contract: &sp_core::H160) -> Option<u32> {
+	use codec::DecodeAll;
+	use frame_support::{storage::storage_prefix, traits::PalletInfoAccess};
+
+	let code_hash = pallet_revive::AccountInfo::<Runtime>::load_contract(contract)?.code_hash;
+	// `CodeInfoOf` hashes its key with `Identity`.
+	let mut key =
+		storage_prefix(pallet_revive::Pallet::<Runtime>::name().as_bytes(), b"CodeInfoOf").to_vec();
+	key.extend_from_slice(code_hash.as_bytes());
+	let Some(raw) = frame_support::storage::unhashed::get_raw(&key) else {
+		log::error!(
+			target: "runtime::nft-claims",
+			"contract {contract:?} has code hash {code_hash:?} without a code info entry",
+		);
+		return None;
+	};
+	match ReviveCodeInfo::decode_all(&mut &raw[..]) {
+		Ok(info) => Some(info.code_len),
+		Err(error) => {
+			log::error!(
+				target: "runtime::nft-claims",
+				"code info of {code_hash:?} does not decode: {error:?}",
+			);
+			None
+		},
+	}
 }
 
 /// Executes a collection's registered minter contract for `pallet-nft-claims`.
@@ -2212,9 +2267,11 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 	}
 
 	fn validate(contract: sp_core::H160) -> sp_runtime::DispatchResult {
+		let code_len = minter_code_len(&contract)
+			.ok_or(indiv_pallet_nft_claims::Error::<Runtime>::MinterNotAContract)?;
 		frame_support::ensure!(
-			pallet_revive::AccountInfo::<Runtime>::is_contract(&contract),
-			indiv_pallet_nft_claims::Error::<Runtime>::MinterNotAContract
+			code_len <= NftClaimsMaxMinterCodeLen::get(),
+			indiv_pallet_nft_claims::Error::<Runtime>::MinterCodeTooLarge
 		);
 		Ok(())
 	}
@@ -4089,11 +4146,18 @@ pallet_revive::impl_runtime_apis_plus_revive_traits! {
 		}
 	}
 
+	#[api_version(2)]
 	impl indiv_pallet_nft_claims::runtime_api::NftClaimsApi<Block> for Runtime {
 		fn preview_mints(
 			queries: indiv_pallet_nft_claims::runtime_api::PreviewQueries,
 		) -> Vec<indiv_pallet_nft_claims::runtime_api::PreviewOutcome> {
 			NftClaims::preview_mints(queries)
+		}
+
+		fn credit_statuses(
+			queries: indiv_pallet_nft_claims::runtime_api::CreditStatusQueries,
+		) -> Vec<indiv_pallet_nft_claims::runtime_api::CreditStatus> {
+			NftClaims::credit_statuses(queries)
 		}
 	}
 
@@ -4428,6 +4492,22 @@ mod tests {
 		assert_eq!(decode_minter_item(&[valid, valid].concat()), None);
 		valid[0] = 1;
 		assert_eq!(decode_minter_item(&valid), None);
+	}
+
+	#[test]
+	fn a_minter_of_the_maximum_code_size_loads_within_half_the_ceiling() {
+		use pallet_revive::WeightInfo as _;
+		type ReviveWeights = <Runtime as pallet_revive::Config>::WeightInfo;
+
+		let max = NftClaimsMaxMinterCodeLen::get();
+		let half = NftClaimsSelectorWeightLimit::get().saturating_div(2);
+		// Revive charges the load as the per-byte part of these weights.
+		let pvm = ReviveWeights::call_with_pvm_code_per_byte(max)
+			.saturating_sub(ReviveWeights::call_with_pvm_code_per_byte(0));
+		let evm = ReviveWeights::call_with_evm_code_per_byte(max)
+			.saturating_sub(ReviveWeights::call_with_evm_code_per_byte(0));
+		assert!(pvm.all_lte(half), "PVM load {pvm:?} exceeds {half:?}");
+		assert!(evm.all_lte(half), "EVM load {evm:?} exceeds {half:?}");
 	}
 
 	#[test]
