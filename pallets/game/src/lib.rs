@@ -276,8 +276,11 @@ use sp_statement_store::{
 	decrease_allowance_by, increase_allowance_by, runtime_api::statement_store, StatementAllowance,
 };
 
-/// An upper bound on a number of operation
-const OP_UPPER_BOUND: u32 = 100_000;
+/// The maximum number of loop iterations a game hook runs in one call.
+///
+/// The weight meter stops a call first while each iteration costs more than the hook budget
+/// divided by this bound.
+pub const OP_UPPER_BOUND: u32 = 100_000;
 
 /// Chunk size for clearing the per-game index <-> player maps in `player_process_step2`.
 pub const PLAYER_PROCESS_STEP2_CHUNK: u32 = 100;

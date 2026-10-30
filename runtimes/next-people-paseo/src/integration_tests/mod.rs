@@ -77,6 +77,7 @@ mod coinage_token_allowance;
 mod credit_index_window;
 mod credit_root_deletion;
 mod external_asset_teleport;
+mod game_processing_time;
 mod lite_people_free_tx;
 mod lite_people_game_flow;
 mod members_notifier_whitelist;
