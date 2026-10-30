@@ -21,7 +21,7 @@ use frame_support::{
 	dispatch::GetDispatchInfo,
 	traits::{
 		fungibles::{Create, Inspect, Mutate},
-		Get,
+		Get, UnixTime,
 	},
 };
 use next_asset_hub_paseo_runtime::{
@@ -100,6 +100,7 @@ fn scarcity_purse_test_state(state_nonce: u64) -> (sp_io::TestExternalities, Acc
 				last_moved: 0,
 				state_nonce,
 				moves: 0,
+				pledge: None,
 			},
 		);
 		indiv_pallet_scarcity::Instances::<Runtime>::insert(0, &from);
@@ -319,5 +320,60 @@ fn failed_scarcity_transfer_is_feeless_and_retryable_after_lock() {
 		);
 		assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&to));
 		assert!(indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&from));
+	});
+}
+
+/// An NFT-only purse pledges fee-less through the full extension pipeline, and from then on the
+/// pool refuses its transfer without locking the purse.
+#[test]
+fn nft_only_purse_pledges_feeless_and_cannot_move_the_pledged_instance() {
+	let (mut ext, from) = scarcity_purse_test_state(0);
+	ext.execute_with(|| {
+		let pledgee = AccountId::from([3u8; 32]);
+		let now = <Runtime as indiv_pallet_scarcity::Config>::UnixTime::now().as_secs();
+		let cap: u64 = <Runtime as indiv_pallet_scarcity::Config>::MaxPledgeDuration::get();
+		let until = now + cap;
+		let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::pledge {
+			to: pledgee.clone(),
+			until,
+		});
+		let info = call.get_dispatch_info();
+		let result = scarcity_tx_extension(0, 0).dispatch_transaction(
+			RuntimeOrigin::signed(from.clone()),
+			call,
+			&info,
+			0,
+			INDIVIDUALITY_EXTENSION_VERSION,
+		);
+		assert!(matches!(result, Ok(Ok(_))), "pledge failed: {result:?}");
+
+		assert!(Balances::free_balance(&from).is_zero(), "a fee-less pledge charges nothing");
+		let nft = indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&from)
+			.expect("the pledged instance stays at its holder's key");
+		assert_eq!(
+			nft.pledge,
+			Some(indiv_pallet_scarcity::Pledge { pledgee, until }),
+			"the pledge is on the record",
+		);
+		assert_eq!((nft.state_nonce, nft.moves), (1, 1), "a pledge spends one feeless move");
+
+		let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::transfer {
+			to: AccountId::from([2u8; 32]),
+		});
+		let info = call.get_dispatch_info();
+		let result = scarcity_tx_extension(0, 1).dispatch_transaction(
+			RuntimeOrigin::signed(from.clone()),
+			call,
+			&info,
+			0,
+			INDIVIDUALITY_EXTENSION_VERSION,
+		);
+		assert_eq!(
+			result.unwrap_err(),
+			TransactionValidityError::Invalid(InvalidTransaction::Custom(
+				indiv_pallet_scarcity::extension::CustomInvalidity::Pledged as u8
+			)),
+		);
+		assert!(!indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&from));
 	});
 }

@@ -77,6 +77,14 @@
 //! paid move refills them. The budget bounds the block space one mint buys, as Coinage's
 //! `MaximumAge` does for coins. The holder refills it with
 //! [`transfer_by_holder`](Pallet::transfer_by_holder), which the purse key signs and pays for.
+//!
+//! A holder can [`pledge`](Pallet::pledge) an instance to another account until a time it picks,
+//! at most [`Config::MaxPledgeDuration`] ahead. The instance stays at the holder's key. Until that
+//! time the holder cannot move or burn it, and only the pledgee can end the pledge: it seizes the
+//! instance into an empty key with [`Pallet::do_seize`] or gives it up with
+//! [`Pallet::do_release`]. The holder has no revoke. A fee-less pledge spends a feeless move, and a
+//! seize refills the budget like any paid move. The collection owner's force powers ignore
+//! pledges, and every move clears one.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -411,7 +419,7 @@ pub mod pallet {
 	#[derive(
 		Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, MaxEncodedLen,
 	)]
-	pub struct Nft {
+	pub struct Nft<AccountId> {
 		pub instance: InstanceId,
 		pub collection: CollectionId,
 		pub item: ItemIndex,
@@ -431,6 +439,25 @@ pub mod pallet {
 		/// [`AsScarcity`](crate::extension::AsScarcity) extension authorizes no transfer once the
 		/// two are equal.
 		pub moves: u16,
+		/// The right of another account to take this instance, if one was granted.
+		///
+		/// A pledge has effect only before its `until`. Every move clears it.
+		pub pledge: Option<Pledge<AccountId>>,
+	}
+
+	/// The NFT record as this runtime stores it.
+	pub type NftOf<T> = Nft<<T as frame_system::Config>::AccountId>;
+
+	/// The right of `pledgee` to seize or release an instance, granted by its holder.
+	#[derive(
+		Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, TypeInfo, MaxEncodedLen,
+	)]
+	pub struct Pledge<AccountId> {
+		/// The only account that can seize or release the instance while the pledge has effect.
+		pub pledgee: AccountId,
+		/// Unix seconds at which the pledge stops having effect. The pledge has effect while the
+		/// current time is below this value.
+		pub until: u64,
 	}
 
 	/// Post-failure backoff lock for an NFT purse key.
@@ -512,7 +539,7 @@ pub mod pallet {
 
 	/// One NFT per owner key — the coinage model.
 	#[pallet::storage]
-	pub type NftsByOwner<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, Nft>;
+	pub type NftsByOwner<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, NftOf<T>>;
 
 	/// Stable reverse index from instance identifier to its current owner key.
 	#[pallet::storage]
@@ -606,6 +633,29 @@ pub mod pallet {
 		InstanceMetadataSet { instance: InstanceId, key: MetadataKeyOf<T> },
 		/// An instance-level metadata override was removed.
 		InstanceMetadataRemoved { instance: InstanceId, key: MetadataKeyOf<T> },
+		/// A holder gave `pledgee` the right to seize or release an instance until `until`.
+		Pledged {
+			instance: InstanceId,
+			collection: CollectionId,
+			holder: T::AccountId,
+			pledgee: T::AccountId,
+			until: u64,
+		},
+		/// A pledgee gave up its pledge, and the instance stays with its holder.
+		PledgeReleased {
+			instance: InstanceId,
+			collection: CollectionId,
+			holder: T::AccountId,
+			pledgee: T::AccountId,
+		},
+		/// A pledgee moved a pledged instance from its holder to another purse key.
+		Seized {
+			instance: InstanceId,
+			collection: CollectionId,
+			from: T::AccountId,
+			to: T::AccountId,
+			pledgee: T::AccountId,
+		},
 	}
 
 	#[pallet::error]
@@ -654,6 +704,16 @@ pub mod pallet {
 		TooManyCollectionMetadata,
 		/// The configured per-item metadata entry limit was reached.
 		TooManyItemMetadata,
+		/// The instance carries a pledge with effect, so its holder cannot move or burn it.
+		Pledged,
+		/// The caller holds no pledge with effect on the instance.
+		NotPledgee,
+		/// The instance already carries a pledge with effect.
+		AlreadyPledged,
+		/// A pledge must end in the future and within [`Config::MaxPledgeDuration`].
+		PledgeExpiry,
+		/// An instance cannot be pledged to its own holder.
+		PledgeToSelf,
 	}
 
 	/// Hold reason available to runtimes which back [`Config::Consideration`] with fungible holds.
@@ -663,8 +723,9 @@ pub mod pallet {
 		StorageDeposit,
 	}
 
-	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft`.
-	const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft` and
+	/// version 3 `pledge` to `Nft`.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
@@ -678,7 +739,8 @@ pub mod pallet {
 		/// the weights of [`Config::MetadataPolicy`], [`Config::OnPurseOccupied`] and
 		/// [`Config::OnCollectionDeleted`] ride on the calls that run them. A runtime that
 		/// overshoots on any of them produces a call that no block can hold.
-		/// [`Config::LockPeriod`] must pace the retries of a failing purse key.
+		/// [`Config::LockPeriod`] must pace the retries of a failing purse key, and
+		/// [`Config::MaxPledgeDuration`] must admit some pledge.
 		fn integrity_test() {
 			let budget = OcwWeightBudget::from_normal_max::<T>();
 			let pairs = T::MaxInstanceMetadata::get();
@@ -700,6 +762,11 @@ pub mod pallet {
 			// A zero lock period expires the lock in the block that creates it, so a purse key
 			// that fails dispatch retries in the next block at no cost.
 			assert!(T::LockPeriod::get() > 0, "`LockPeriod` must be greater than zero");
+			// A zero duration leaves no `until` that is both in the future and within the cap.
+			assert!(
+				T::MaxPledgeDuration::get() > 0,
+				"`MaxPledgeDuration` must be greater than zero"
+			);
 		}
 
 		#[cfg(feature = "try-runtime")]
@@ -724,7 +791,7 @@ pub mod pallet {
 	pub enum Origin<T: Config> {
 		/// The NFT is removed from storage by `AsScarcity` before dispatch and held by this
 		/// origin.
-		Nft { owner: T::AccountId, nft: Nft },
+		Nft { owner: T::AccountId, nft: NftOf<T> },
 	}
 
 	#[pallet::config]
@@ -810,6 +877,13 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaximumMoves: Get<u16>;
 
+		/// Longest a pledge may run, in seconds.
+		///
+		/// The holder cannot revoke a pledge, so this bounds how long a pledgee that never seizes
+		/// or releases keeps the holder from moving or burning the instance.
+		#[pallet::constant]
+		type MaxPledgeDuration: Get<u64>;
+
 		/// Cross-pallet cleanup run when a collection is deleted. Defaults to `()` for runtimes
 		/// with nothing keyed by a collection.
 		type OnCollectionDeleted: crate::OnCollectionDeleted;
@@ -883,7 +957,8 @@ pub mod pallet {
 
 		/// Transfer an NFT held by the `Origin::Nft` purse-key origin.
 		///
-		/// Fails for an instance of a [`Transferability::Soulbound`] definition.
+		/// Fails for an instance of a [`Transferability::Soulbound`] definition and for a pledged
+		/// one.
 		#[pallet::call_index(3)]
 		#[pallet::weight(
 			T::WeightInfo::transfer()
@@ -893,6 +968,8 @@ pub mod pallet {
 			let Ok(Origin::Nft { owner, nft }) = origin.into() else {
 				return Err(DispatchError::BadOrigin.into());
 			};
+			let now = T::UnixTime::now().as_secs();
+			ensure!(Self::live_pledge(&nft, now).is_none(), Error::<T>::Pledged);
 			ensure!(to != owner, Error::<T>::SelfTransfer);
 			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
 			Self::ensure_transferable(&nft)?;
@@ -904,7 +981,7 @@ pub mod pallet {
 			// instance could spend it since, and that changes the state nonce the authorization
 			// names.
 			let moves = nft.moves.saturating_add(1);
-			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves, ..nft };
+			let nft = Nft { last_moved: now, state_nonce, moves, pledge: None, ..nft };
 			NftsByOwner::<T>::insert(&to, nft.clone());
 			Instances::<T>::insert(nft.instance, &to);
 			T::OnPurseOccupied::on_purse_occupied(&to);
@@ -921,7 +998,7 @@ pub mod pallet {
 		///
 		/// Item-definition supply counts minted-ever instances and is deliberately monotonic.
 		/// Item metadata belongs to the definition and remains untouched. Instance metadata is
-		/// removed and its exact deposits are released.
+		/// removed and its exact deposits are released. Fails for a pledged instance.
 		#[pallet::call_index(4)]
 		#[pallet::weight(T::WeightInfo::burn(T::MaxInstanceMetadata::get()))]
 		#[transactional]
@@ -929,6 +1006,8 @@ pub mod pallet {
 			let Ok(Origin::Nft { owner, nft }) = origin.into() else {
 				return Err(DispatchError::BadOrigin.into());
 			};
+			let now = T::UnixTime::now().as_secs();
+			ensure!(Self::live_pledge(&nft, now).is_none(), Error::<T>::Pledged);
 			let metadata_count = Self::do_burn(owner, nft)?;
 			Ok((Some(T::WeightInfo::burn(metadata_count)), Pays::No).into())
 		}
@@ -1054,7 +1133,7 @@ pub mod pallet {
 		///
 		/// The collection layer intentionally applies no holder-level ACL. When a runtime exposes
 		/// this call to its contract environment, a contract-owned collection can enforce its own
-		/// consent and game rules before calling it.
+		/// consent and game rules before calling it. A pledge on the instance does not stop it.
 		#[pallet::call_index(10)]
 		#[pallet::weight(T::WeightInfo::force_burn(T::MaxInstanceMetadata::get()))]
 		#[transactional]
@@ -1106,7 +1185,8 @@ pub mod pallet {
 		/// The collection layer intentionally applies no holder-level ACL. When a runtime exposes
 		/// this call to its contract environment, a contract-owned collection can enforce its own
 		/// consent and game rules before calling it. The move increments the instance state nonce,
-		/// invalidating prior holder authorizations.
+		/// invalidating prior holder authorizations. A pledge on the instance does not stop it,
+		/// and the move clears the pledge.
 		#[pallet::call_index(13)]
 		#[pallet::weight(
 			T::WeightInfo::force_transfer()
@@ -1126,7 +1206,8 @@ pub mod pallet {
 		///
 		/// The move refills the feeless move budget of [`Config::MaximumMoves`].
 		///
-		/// Fails for an instance of a [`Transferability::Soulbound`] definition.
+		/// Fails for an instance of a [`Transferability::Soulbound`] definition and for a pledged
+		/// one.
 		#[pallet::call_index(14)]
 		#[pallet::weight(
 			T::WeightInfo::transfer_by_holder()
@@ -1140,6 +1221,27 @@ pub mod pallet {
 		) -> DispatchResult {
 			let holder = ensure_signed(origin)?;
 			Self::do_transfer_by_holder(&holder, instance, to)
+		}
+
+		/// Pledge the NFT held by the `Origin::Nft` purse-key origin to `to` until `until`.
+		///
+		/// Until `until`, in Unix seconds, the holder cannot move or burn the instance, and only
+		/// `to` can end the pledge, through [`Pallet::do_seize`] or [`Pallet::do_release`]. The
+		/// holder cannot revoke it. The pledge spends a feeless move.
+		#[pallet::call_index(15)]
+		#[pallet::weight(T::WeightInfo::pledge())]
+		pub fn pledge(
+			origin: OriginFor<T>,
+			to: T::AccountId,
+			until: u64,
+		) -> DispatchResultWithPostInfo {
+			let Ok(Origin::Nft { owner, nft }) = origin.into() else {
+				return Err(DispatchError::BadOrigin.into());
+			};
+			// The extension checked the budget against this state, as for `transfer`.
+			let moves = nft.moves.saturating_add(1);
+			Self::do_pledge(owner, Nft { moves, ..nft }, to, until)?;
+			Ok(Pays::No.into())
 		}
 	}
 
@@ -1607,7 +1709,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		fn do_burn(owner: T::AccountId, nft: Nft) -> Result<u32, DispatchError> {
+		fn do_burn(owner: T::AccountId, nft: NftOf<T>) -> Result<u32, DispatchError> {
 			let instance = nft.instance;
 			let expected_metadata_count = InstanceMetadataCount::<T>::take(instance);
 			let mut actual_metadata_count = 0u32;
@@ -1660,17 +1762,32 @@ pub mod pallet {
 			ensure!(to != from, Error::<T>::SelfTransfer);
 			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
 
+			let collection = nft.collection;
+			Self::make_paid_move(&from, &to, nft)?;
+			Self::deposit_event(Event::ForceTransferred { instance, collection, from, to });
+			Ok(())
+		}
+
+		/// Move `nft` from `from` to the empty key `to` as a paid move.
+		///
+		/// The state nonce advances, the feeless move budget refills, and any pledge clears.
+		/// Clearing the source lock keeps the `Locked` entry paired with an NFT.
+		fn make_paid_move(from: &T::AccountId, to: &T::AccountId, nft: NftOf<T>) -> DispatchResult {
 			let state_nonce =
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft =
-				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
-			let collection = nft.collection;
-			NftsByOwner::<T>::remove(&from);
-			Locked::<T>::remove(&from);
-			NftsByOwner::<T>::insert(&to, nft);
-			Instances::<T>::insert(instance, &to);
-			T::OnPurseOccupied::on_purse_occupied(&to);
-			Self::deposit_event(Event::ForceTransferred { instance, collection, from, to });
+			let nft = Nft {
+				last_moved: T::UnixTime::now().as_secs(),
+				state_nonce,
+				moves: 0,
+				pledge: None,
+				..nft
+			};
+			let instance = nft.instance;
+			NftsByOwner::<T>::remove(from);
+			Locked::<T>::remove(from);
+			NftsByOwner::<T>::insert(to, nft);
+			Instances::<T>::insert(instance, to);
+			T::OnPurseOccupied::on_purse_occupied(to);
 			Ok(())
 		}
 
@@ -1678,13 +1795,13 @@ pub mod pallet {
 		///
 		/// The flag lives on the definition rather than the instance, so every holder-authorized
 		/// move pays one `ItemDefs` read for it.
-		pub fn transferability_of(nft: &Nft) -> Result<Transferability, DispatchError> {
+		pub fn transferability_of(nft: &NftOf<T>) -> Result<Transferability, DispatchError> {
 			ItemDefs::<T>::get(nft.collection, nft.item)
 				.map(|definition| definition.transferability)
 				.ok_or_else(|| Error::<T>::UnknownItem.into())
 		}
 
-		fn ensure_transferable(nft: &Nft) -> DispatchResult {
+		fn ensure_transferable(nft: &NftOf<T>) -> DispatchResult {
 			ensure!(
 				Self::transferability_of(nft)? == Transferability::Transferable,
 				Error::<T>::Soulbound
@@ -1700,10 +1817,7 @@ pub mod pallet {
 		/// [`Self::transfer_by_holder`] call and contract environments that establish holder
 		/// consent by other means. It applies no consent check beyond `holder` currently holding
 		/// `instance`. The rest-time priority and the feeless move budget guard the fee-less path
-		/// only, so neither applies here.
-		///
-		/// Clearing the source lock keeps the `Locked` entry paired with an NFT, matching both
-		/// other move paths.
+		/// only, so neither applies here. A pledge with effect stops it like the fee-less path.
 		pub fn do_transfer_by_holder(
 			holder: &T::AccountId,
 			instance: InstanceId,
@@ -1711,25 +1825,137 @@ pub mod pallet {
 		) -> DispatchResult {
 			let nft = NftsByOwner::<T>::get(holder).ok_or(Error::<T>::UnknownInstance)?;
 			ensure!(nft.instance == instance, Error::<T>::UnknownInstance);
+			let now = T::UnixTime::now().as_secs();
+			ensure!(Self::live_pledge(&nft, now).is_none(), Error::<T>::Pledged);
 			ensure!(to != *holder, Error::<T>::SelfTransfer);
 			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
 			Self::ensure_transferable(&nft)?;
 
-			let state_nonce =
-				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			let nft =
-				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
-			NftsByOwner::<T>::remove(holder);
-			Locked::<T>::remove(holder);
-			NftsByOwner::<T>::insert(&to, nft);
-			Instances::<T>::insert(instance, &to);
-			T::OnPurseOccupied::on_purse_occupied(&to);
+			Self::make_paid_move(holder, &to, nft)?;
 			Self::deposit_event(Event::Transferred {
 				instance,
 				collection,
 				from: holder.clone(),
 				to,
+			});
+			Ok(())
+		}
+
+		/// The pledge on `nft` if it still has effect at `now`, in Unix seconds.
+		///
+		/// A pledge has effect while `now` is below its `until`. An expired pledge stays on the
+		/// record until the next move and has no effect.
+		pub fn live_pledge(nft: &NftOf<T>, now: u64) -> Option<&Pledge<T::AccountId>> {
+			nft.pledge.as_ref().filter(|pledge| pledge.until > now)
+		}
+
+		/// Pledge `nft`, the record `holder` holds, to `pledgee` until `until` and store it under
+		/// the holder's key.
+		///
+		/// The state nonce advances, so an authorization signed before the pledge does not apply
+		/// after it. The move budget is the caller's to spend before the call.
+		fn do_pledge(
+			holder: T::AccountId,
+			nft: NftOf<T>,
+			pledgee: T::AccountId,
+			until: u64,
+		) -> DispatchResult {
+			ensure!(pledgee != holder, Error::<T>::PledgeToSelf);
+			Self::ensure_transferable(&nft)?;
+			let now = T::UnixTime::now().as_secs();
+			ensure!(
+				now < until && until <= now.saturating_add(T::MaxPledgeDuration::get()),
+				Error::<T>::PledgeExpiry
+			);
+			ensure!(Self::live_pledge(&nft, now).is_none(), Error::<T>::AlreadyPledged);
+			let state_nonce =
+				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
+
+			let (instance, collection) = (nft.instance, nft.collection);
+			let pledge = Some(Pledge { pledgee: pledgee.clone(), until });
+			NftsByOwner::<T>::insert(&holder, Nft { state_nonce, pledge, ..nft });
+			Self::deposit_event(Event::Pledged { instance, collection, holder, pledgee, until });
+			Ok(())
+		}
+
+		/// Pledge `instance` on its current holder's authority, for the paid paths.
+		///
+		/// [`Self::pledge`] is the fee-less path and needs an `Origin::Nft`. This entry serves
+		/// contract environments that establish holder consent by other means. It applies no
+		/// consent check beyond `holder` currently holding `instance`, and it spends no feeless
+		/// move, because the caller pays.
+		pub fn do_pledge_by_holder(
+			holder: &T::AccountId,
+			instance: InstanceId,
+			pledgee: T::AccountId,
+			until: u64,
+		) -> DispatchResult {
+			let nft = NftsByOwner::<T>::get(holder).ok_or(Error::<T>::UnknownInstance)?;
+			ensure!(nft.instance == instance, Error::<T>::UnknownInstance);
+			Self::do_pledge(holder.clone(), nft, pledgee, until)
+		}
+
+		/// Resolve `instance` and check that `pledgee` holds a pledge on it with effect now.
+		fn pledged_to(
+			pledgee: &T::AccountId,
+			instance: InstanceId,
+		) -> Result<(T::AccountId, NftOf<T>), DispatchError> {
+			let holder = Instances::<T>::get(instance).ok_or(Error::<T>::UnknownInstance)?;
+			let nft = NftsByOwner::<T>::get(&holder).ok_or(Error::<T>::UnknownInstance)?;
+			ensure!(nft.instance == instance, Error::<T>::UnknownInstance);
+			ensure!(
+				Self::live_pledge(&nft, T::UnixTime::now().as_secs())
+					.is_some_and(|pledge| pledge.pledgee == *pledgee),
+				Error::<T>::NotPledgee
+			);
+			Ok((holder, nft))
+		}
+
+		/// Move a pledged instance from its holder to the empty key `to`, on the pledgee's
+		/// authority.
+		///
+		/// Only the account the pledge names can call it, and only while the pledge has effect.
+		/// It is a paid move: the move budget refills and the pledge clears. No runtime call
+		/// reaches it; a contract environment calls it for a pledgee that pays.
+		pub fn do_seize(
+			pledgee: &T::AccountId,
+			instance: InstanceId,
+			to: T::AccountId,
+		) -> DispatchResult {
+			let (holder, nft) = Self::pledged_to(pledgee, instance)?;
+			ensure!(to != holder, Error::<T>::SelfTransfer);
+			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
+			Self::ensure_transferable(&nft)?;
+
+			let collection = nft.collection;
+			Self::make_paid_move(&holder, &to, nft)?;
+			Self::deposit_event(Event::Seized {
+				instance,
+				collection,
+				from: holder,
+				to,
+				pledgee: pledgee.clone(),
+			});
+			Ok(())
+		}
+
+		/// Drop a pledge on the pledgee's authority. The instance stays with its holder.
+		///
+		/// Only the account the pledge names can call it, and only while the pledge has effect.
+		/// The state nonce advances, so an authorization the holder signed during the pledge does
+		/// not apply after it. No runtime call reaches it; a contract environment calls it.
+		pub fn do_release(pledgee: &T::AccountId, instance: InstanceId) -> DispatchResult {
+			let (holder, nft) = Self::pledged_to(pledgee, instance)?;
+			let state_nonce =
+				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
+			let collection = nft.collection;
+			NftsByOwner::<T>::insert(&holder, Nft { state_nonce, pledge: None, ..nft });
+			Self::deposit_event(Event::PledgeReleased {
+				instance,
+				collection,
+				holder,
+				pledgee: pledgee.clone(),
 			});
 			Ok(())
 		}
@@ -1826,14 +2052,15 @@ pub mod pallet {
 				last_moved: now,
 				state_nonce: 0,
 				moves: 0,
+				pledge: None,
 			};
 			let instance_deposit = if with_deposit {
 				// Four storage entries back one instance: `NftsByOwner`, the `Instances`
 				// reverse index, `InstanceDeposits`, and `InstanceMetadataCount`. This measures
 				// their logical encoded payload; the runtime's per-record base can price trie
-				// and hash-prefix overhead.
-				let record_size = nft
-					.encoded_size()
+				// and hash-prefix overhead. The NFT counts at its largest, because the holder
+				// can grow it with a pledge and no deposit is taken then.
+				let record_size = NftOf::<T>::max_encoded_len()
 					.saturating_add(to.encoded_size().saturating_mul(2))
 					.saturating_add(instance.encoded_size().saturating_mul(3))
 					.saturating_add(BalanceOf::<T>::max_encoded_len())
@@ -1963,13 +2190,22 @@ pub mod pallet {
 				if nft.instance >= next_instance {
 					return Err(TryRuntimeError::Other("NFT instance is not below NextInstanceId"));
 				}
-				if Instances::<T>::get(nft.instance) != Some(owner) {
+				if Instances::<T>::get(nft.instance).as_ref() != Some(&owner) {
 					return Err(TryRuntimeError::Other(
 						"NftsByOwner entry has no matching Instances entry",
 					));
 				}
 				let definition = ItemDefs::<T>::get(nft.collection, nft.item)
 					.ok_or(TryRuntimeError::Other("NFT has no matching item definition"))?;
+				// An expired pledge stays until the next move, so the checks cover it too.
+				if let Some(pledge) = &nft.pledge {
+					if pledge.pledgee == owner {
+						return Err(TryRuntimeError::Other("NFT is pledged to its own holder"));
+					}
+					if definition.transferability != Transferability::Transferable {
+						return Err(TryRuntimeError::Other("a soulbound NFT carries a pledge"));
+					}
+				}
 				let live = live_by_item.entry((nft.collection, nft.item)).or_default();
 				*live += 1;
 				if *live > u64::from(definition.live_supply) {

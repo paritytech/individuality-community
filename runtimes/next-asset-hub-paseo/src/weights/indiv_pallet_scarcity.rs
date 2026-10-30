@@ -391,4 +391,39 @@ impl<T: frame_system::Config> indiv_pallet_scarcity::WeightInfo for WeightInfo<T
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
+	/// Not yet benchmarked: the values of `transfer`, which reads as much and writes more, with
+	/// the proof widened by the pledge.
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	fn pledge() -> Weight {
+		Weight::from_parts(26_155_000, 0)
+			.saturating_add(Weight::from_parts(0, 3594))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+	/// Not yet benchmarked: the values of `force_transfer`, which reads as much and also the
+	/// collection, with the proof widened by the pledge on both keys.
+	/// Storage: `Scarcity::Instances` (r:1 w:1)
+	/// Storage: `Scarcity::NftsByOwner` (r:2 w:2)
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::Locked` (r:0 w:1)
+	fn seize() -> Weight {
+		Weight::from_parts(43_175_000, 0)
+			.saturating_add(Weight::from_parts(0, 6198))
+			.saturating_add(T::DbWeight::get().reads(5))
+			.saturating_add(T::DbWeight::get().writes(4))
+	}
+	/// Not yet benchmarked: the values of `transfer_by_holder`, which reads and writes more, with
+	/// the proof widened by the pledge.
+	/// Storage: `Scarcity::Instances` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	fn release() -> Weight {
+		Weight::from_parts(29_445_000, 0)
+			.saturating_add(Weight::from_parts(0, 6157))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(4))
+	}
 }
