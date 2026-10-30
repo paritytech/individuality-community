@@ -1186,7 +1186,10 @@ mod benches {
 
 		let msg = (Pallet::<T>::proof_of_ownership_msg_base(), &person)
 			.using_encoded(sp_io::hashing::blake2_256);
-		let signature = <T as Config>::BenchmarkHelper::sign_account(seed, &msg[..]);
+		let signature = <T as Config>::BenchmarkHelper::sign_account(
+			seed,
+			&Pallet::<T>::account_signing_payload(&msg),
+		);
 
 		let score_context = indiv_pallet_score::Pallet::<T>::score_context();
 		let origin = T::EnsurePerson::try_successful_origin(&score_context)
@@ -1355,6 +1358,7 @@ mod benches {
 				has_ever_reached_personhood: true,
 				recognition: indiv_pallet_score::Recognition::ExternallyRecognized,
 				last_attended_game: None,
+				attended_games_while_recognized: 0,
 			},
 		);
 		let deposit = T::PlayDeposit::new(&caller, pallet::PlayDepositAmount::<T>::get())?;
@@ -1416,7 +1420,10 @@ mod benches {
 		// Valid signature
 		let msg = (Pallet::<T>::proof_of_ownership_msg_base(), &person)
 			.using_encoded(sp_io::hashing::blake2_256);
-		let signature = <T as Config>::BenchmarkHelper::sign_account(seed, &msg[..]);
+		let signature = <T as Config>::BenchmarkHelper::sign_account(
+			seed,
+			&Pallet::<T>::account_signing_payload(&msg),
+		);
 
 		// Origin for the personal alias
 		let score_context = indiv_pallet_score::Pallet::<T>::score_context();
@@ -2324,6 +2331,7 @@ mod benches {
 				has_ever_reached_personhood: true,
 				recognition: indiv_pallet_score::Recognition::ExternallyRecognized,
 				last_attended_game: Some(game.index),
+				attended_games_while_recognized: 0,
 			},
 		);
 

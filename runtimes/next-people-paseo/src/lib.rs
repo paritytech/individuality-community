@@ -275,6 +275,8 @@ pub type Migrations = (
 	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_score::migration::MigrateV0ToV1<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_airdrop::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
@@ -803,6 +805,8 @@ impl pallet_migrations::Config for Runtime {
 	#[cfg(not(feature = "runtime-benchmarks"))]
 	type Migrations = (
 		ForeignAssetsReservesMigration<Runtime, (), migrations::PeoplePaseoAssetsReservesProvider>,
+		// Single use! - remove once the upgrade carrying it is live.
+		indiv_pallet_people_lite::migration::v1::LazyMigrationV0ToV1<Runtime>,
 	);
 	// Benchmarks need mocked migrations to guarantee that they succeed.
 	#[cfg(feature = "runtime-benchmarks")]

@@ -96,6 +96,35 @@ pub fn build_product_context(
 	sp_crypto_hashing::blake2_256(&input)
 }
 
+/// The suffix of a product's signing context: `"sig/"` and 28 zero bytes.
+///
+/// It differs from every `Index` suffix and every personhood `"sys/"` allocation. Ring VRF
+/// contexts must not use it.
+pub const SIGNING: ProductContextSuffix = ProductContextSuffix::Raw(signing_suffix());
+
+const fn signing_suffix() -> [u8; 32] {
+	let mut bytes = [0u8; 32];
+	bytes[0] = b's';
+	bytes[1] = b'i';
+	bytes[2] = b'g';
+	bytes[3] = b'/';
+	bytes
+}
+
+/// The signing context of `product_name.network_suffix`: its product context under [`SIGNING`].
+pub fn signing_context(product_name: &[u8], network_suffix: &[u8]) -> Context {
+	build_product_context(product_name, network_suffix, SIGNING)
+}
+
+/// Returns the signing context of `product_name.network_suffix` followed by `msg`.
+///
+/// An account signs these bytes, not `msg` alone, when it signs a message that is not a
+/// transaction. The context binds the signature to the product and the network. It also stops
+/// the signature from being valid for a transaction.
+pub fn signing_payload(product_name: &[u8], network_suffix: &[u8], msg: &[u8]) -> Vec<u8> {
+	[&signing_context(product_name, network_suffix)[..], msg].concat()
+}
+
 /// Context suffix allocations owned by the personhood product.
 pub mod personhood {
 	use super::ProductContextSuffix;
@@ -276,5 +305,28 @@ mod tests {
 		assert_eq!(u32_at(&pgas_claim, 8), period);
 		assert_eq!(u32_at(&pgas_claim, 12), sequence);
 		assert!(pgas_claim[16..].iter().all(|byte| *byte == 0));
+	}
+
+	#[test]
+	fn signing_payload_prefixes_the_product_signing_context() {
+		let context = |product: &[u8]| {
+			sp_crypto_hashing::blake2_256(
+				&[b"product/".as_slice(), product, b".paseo/", b"sig/", &[0u8; 28]].concat(),
+			)
+		};
+		let personhood = context(b"peopl");
+		let game = context(b"dim2");
+
+		// Message signed for each product.
+		let personhood_payload = signing_payload(personhood::PRODUCT_NAME, b"paseo", b"msg");
+		let game_payload = signing_payload(b"dim2", b"paseo", b"msg");
+
+		// Payload is the product context followed by the message.
+		assert_eq!(personhood_payload, [&personhood[..], b"msg"].concat());
+		assert_eq!(game_payload, [&game[..], b"msg"].concat());
+
+		// The context on its own is the same one.
+		assert_eq!(signing_context(personhood::PRODUCT_NAME, b"paseo"), personhood);
+		assert_eq!(signing_context(b"dim2", b"paseo"), game);
 	}
 }
