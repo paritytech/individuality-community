@@ -4032,6 +4032,24 @@ mod check_in {
 	}
 
 	#[test]
+	fn a_processing_game_takes_no_check_in() {
+		new_test_ext().execute_with(|| {
+			set_up_alice();
+			set_time(OPENS);
+			GameStore::<Test>::mutate(|game| {
+				game.as_mut().unwrap().state = GameState::PlayerProcess {
+					step: PlayerProcessStep::Step1ProcessPlayers {
+						last_iteration: None,
+						player_count: 0,
+					},
+				};
+			});
+
+			assert_err_ignore_postinfo!(check_in(&ALICE), Error::<Test>::CheckInClosed);
+		});
+	}
+
+	#[test]
 	fn a_cancelled_game_drops_its_check_ins() {
 		new_test_ext().execute_with(|| {
 			let game = set_up_full_group();

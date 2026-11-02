@@ -52,14 +52,13 @@ impl<T: Config> Pallet<T> {
 	fn new_check_in(player: &AccountOrPerson<T::AccountId>) -> Result<NewCheckIn, DispatchError> {
 		let game = Game::<T>::get().ok_or(Error::<T>::NoGame)?;
 		let now = T::UnixTime::now().as_secs();
-		// A cancelling game is never played. `PlayerProcess` starts after `game_date`, so the
-		// time check refuses a check-in in that state.
+		// `Reporting` starts when the shuffle ends, which is before `game_date`. A processing game
+		// has started and a cancelling game is never played.
 		let state_open = match game.state {
 			GameState::Registration { .. } |
 			GameState::Shuffle { .. } |
-			GameState::Reporting { .. } |
-			GameState::PlayerProcess { .. } => true,
-			GameState::Cancelling { .. } => false,
+			GameState::Reporting { .. } => true,
+			GameState::PlayerProcess { .. } | GameState::Cancelling { .. } => false,
 		};
 		ensure!(
 			state_open && u64::from(game.check_in_opens) <= now && now < u64::from(game.game_date),
