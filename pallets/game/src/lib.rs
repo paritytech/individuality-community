@@ -178,8 +178,9 @@
 //! [`Pallet::check_in`] opens at the game's `check_in_opens` time and closes when the game starts.
 //!
 //! The number of credits depends on the player's tenure: the number of games they attended while
-//! recognised as a person. indiv-pallet-score counts these games, whether this chain or another DIM
-//! recognises the person. A suspended player keeps the games they attended before the suspension.
+//! recognised as a person by indiv-pallet-score, which counts these games. A game attended while
+//! suspended or recognised by another DIM does not count. A suspended player keeps the games they
+//! attended before the suspension.
 //!
 //! A player earns one credit for each of the [`TenureThresholds`] their tenure reaches. With
 //! the thresholds `[0, 1, 5]`, a player that never attended a game while recognised earns one
