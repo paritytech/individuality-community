@@ -789,7 +789,7 @@ parameter_types! {
 	pub const ClaimsChainTreeTtl: u64 = 90 * 24 * 60 * 60;
 	/// The check-in credits a player earns in one game at most. Each takes a credit slot after the
 	/// game's 18 report slots, out of the 128 a claimant has per game.
-	pub const MaxTenureThresholds: u32 = 16;
+	pub const MaxTenureThresholds: u32 = 8;
 	/// Thresholds at 0, 1, 2, 4, 8 and 13 games attended while recognised. A player earns one
 	/// check-in credit per game for each threshold their tenure reaches. Every player reaches the
 	/// first, and a person earns 6 credits a game from 13 games on.
