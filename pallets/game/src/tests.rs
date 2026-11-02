@@ -218,7 +218,7 @@ fn outdated_game_schedule_multi_game() {
 						runtime_origin_for_alias(alias),
 						DEFAULT_IDENTIFIER_KEY,
 						account.clone(),
-						AccountAuthority(account),
+						StatementSignature(account),
 						None,
 					));
 				},
@@ -1245,7 +1245,7 @@ mod games_scheduling {
 							runtime_origin_for_alias(alias),
 							DEFAULT_IDENTIFIER_KEY,
 							stmt_account.clone(),
-							AccountAuthority(stmt_account),
+							StatementSignature(stmt_account),
 							None,
 						));
 					},
@@ -1666,7 +1666,7 @@ fn deposit_not_required_for_person() {
 			alias_origin.clone(),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_account.clone(),
-			AccountAuthority(stmt_account),
+			StatementSignature(stmt_account),
 			None,
 		));
 
@@ -2532,7 +2532,7 @@ fn sign_up_fails_if_statement_account_already_used() {
 			runtime_origin_for_alias(&alias_1),
 			DEFAULT_IDENTIFIER_KEY,
 			BOB, // statement account
-			AccountAuthority(BOB),
+			StatementSignature(BOB),
 			None,
 		));
 
@@ -2560,7 +2560,7 @@ fn sign_up_fails_if_statement_account_already_used() {
 			runtime_origin_for_alias(&alias_1),
 			DEFAULT_IDENTIFIER_KEY,
 			BOB,
-			AccountAuthority(BOB),
+			StatementSignature(BOB),
 			None,
 		));
 
@@ -2571,7 +2571,7 @@ fn sign_up_fails_if_statement_account_already_used() {
 				runtime_origin_for_alias(&alias_2),
 				DEFAULT_IDENTIFIER_KEY,
 				BOB,
-				AccountAuthority(BOB),
+				StatementSignature(BOB),
 				None,
 			),
 			Error::<Test>::StatementAccountAlreadyInUse
@@ -2603,7 +2603,7 @@ fn sign_up_fails_if_statement_account_already_used() {
 				runtime_origin_for_alias(&alias_1),
 				DEFAULT_IDENTIFIER_KEY,
 				BOB,
-				AccountAuthority(BOB),
+				StatementSignature(BOB),
 				None,
 			),
 			Error::<Test>::StatementAccountAlreadyInUse
@@ -2679,7 +2679,7 @@ fn statements_cleared() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			old_stmt.public().into(),
-			AccountAuthority(old_stmt.public().into()),
+			StatementSignature(old_stmt.public().into()),
 			None,
 		));
 
@@ -2733,7 +2733,7 @@ fn statements_cleared() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			new_stmt.public().into(),
-			AccountAuthority(new_stmt.public().into()),
+			StatementSignature(new_stmt.public().into()),
 			None,
 		));
 
@@ -2768,7 +2768,7 @@ fn statements_cleared() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_pair.public().into(),
-			AccountAuthority(stmt_pair.public().into()),
+			StatementSignature(stmt_pair.public().into()),
 			None,
 		));
 
@@ -3041,7 +3041,7 @@ mod game_cancellation {
 				runtime_origin_for_alias(&alias),
 				DEFAULT_IDENTIFIER_KEY,
 				stmt_account.clone(),
-				AccountAuthority(stmt_account.clone()),
+				StatementSignature(stmt_account.clone()),
 				None,
 			));
 
@@ -3193,7 +3193,7 @@ fn candidate_and_people_vote_weights_applied() {
 			alias_origin.clone(),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_acc_person.clone(),
-			AccountAuthority(stmt_acc_person.clone()),
+			StatementSignature(stmt_acc_person.clone()),
 			None,
 		));
 
@@ -3302,7 +3302,7 @@ fn recognised_people_are_evenly_distributed() {
 				runtime_origin_for_alias(alias),
 				DEFAULT_IDENTIFIER_KEY,
 				stmt_acc.clone(),
-				AccountAuthority(stmt_acc),
+				StatementSignature(stmt_acc),
 				None,
 			));
 		}
@@ -3716,7 +3716,7 @@ fn game_cancelled_due_to_shuffle_deadline_missed() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_account.clone(),
-			AccountAuthority(stmt_account),
+			StatementSignature(stmt_account),
 			None,
 		));
 
@@ -4378,7 +4378,7 @@ fn statement_allowance_for_alias_players() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_account_1.clone(),
-			AccountAuthority(stmt_account_1.clone()),
+			StatementSignature(stmt_account_1.clone()),
 			None,
 		));
 		assert_eq!(get_allowance(&stmt_account_1), expected_allowance);
@@ -4406,7 +4406,7 @@ fn statement_allowance_for_alias_players() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_account_1.clone(),
-			AccountAuthority(stmt_account_1.clone()),
+			StatementSignature(stmt_account_1.clone()),
 			None,
 		));
 		assert_eq!(get_allowance(&stmt_account_1), expected_allowance);
@@ -4433,7 +4433,7 @@ fn statement_allowance_for_alias_players() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_account_2.clone(),
-			AccountAuthority(stmt_account_2.clone()),
+			StatementSignature(stmt_account_2.clone()),
 			None,
 		));
 		assert_eq!(get_allowance(&stmt_account_1), zero_allowance);
@@ -4461,7 +4461,7 @@ fn statement_allowance_for_alias_players() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_account_2.clone(),
-			AccountAuthority(stmt_account_2.clone()),
+			StatementSignature(stmt_account_2.clone()),
 			None,
 		));
 		assert_eq!(get_allowance(&stmt_account_2), expected_allowance);
@@ -4822,7 +4822,7 @@ fn vote_weight_snapshotted_during_shuffle() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_acc.clone(),
-			AccountAuthority(stmt_acc),
+			StatementSignature(stmt_acc),
 			None,
 		));
 		assert_ok!(Game::sign_up_with_account(
@@ -4859,7 +4859,7 @@ fn expected_max_vote_weight_is_sum_over_coplayers() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_acc.clone(),
-			AccountAuthority(stmt_acc),
+			StatementSignature(stmt_acc),
 			None,
 		));
 		assert_ok!(Game::sign_up_with_account(
@@ -4925,7 +4925,7 @@ fn expected_max_vote_weight_matches_per_member_oracle_multi_group() {
 				runtime_origin_for_alias(&alias),
 				DEFAULT_IDENTIFIER_KEY,
 				stmt_acc.clone(),
-				AccountAuthority(stmt_acc),
+				StatementSignature(stmt_acc),
 				None,
 			));
 		}
@@ -4992,7 +4992,7 @@ fn reporter_vote_weight_read_from_stored_snapshot() {
 			runtime_origin_for_alias(&alias),
 			DEFAULT_IDENTIFIER_KEY,
 			stmt_acc.clone(),
-			AccountAuthority(stmt_acc),
+			StatementSignature(stmt_acc),
 			None,
 		));
 		// Account-based target.
@@ -5060,7 +5060,7 @@ fn expected_max_vote_weight_does_not_truncate() {
 				runtime_origin_for_alias(&alias),
 				DEFAULT_IDENTIFIER_KEY,
 				stmt_acc.clone(),
-				AccountAuthority(stmt_acc),
+				StatementSignature(stmt_acc),
 				None,
 			));
 			aliases.push(alias);
@@ -5736,6 +5736,7 @@ mod airdrop {
 				has_ever_reached_personhood: false,
 				recognition,
 				last_attended_game,
+				attended_games_while_recognized: 0,
 			},
 		);
 	}
@@ -6061,7 +6062,7 @@ mod airdrop {
 				runtime_origin_for_alias(&alias),
 				DEFAULT_IDENTIFIER_KEY,
 				stmt_account.clone(),
-				AccountAuthority(stmt_account),
+				StatementSignature(stmt_account),
 				Some(alias_proofs(1)),
 			));
 
@@ -6965,7 +6966,7 @@ mod airdrop {
 				runtime_origin_for_alias(&alias),
 				DEFAULT_IDENTIFIER_KEY,
 				stmt_account.clone(),
-				AccountAuthority(stmt_account),
+				StatementSignature(stmt_account),
 				Some(alias_proofs(3)),
 			));
 			let alias_entry = RegistrationEntry::<AccountId32>::Alias { alias };
@@ -7471,7 +7472,7 @@ mod airdrop {
 			charged(Call::sign_up_with_alias {
 				identifier_key: DEFAULT_IDENTIFIER_KEY,
 				statement_account: stmt_account.clone(),
-				sig: AccountAuthority(stmt_account),
+				sig: StatementSignature(stmt_account),
 				airdrops: Some(alias_proofs(2)),
 			}),
 			<MockWeightInfo as WeightInfo>::sign_up_with_alias(2),
@@ -8227,4 +8228,22 @@ mod sign_up_with_account_lite_invite {
 			assert!(Players::<Test>::iter().next().is_none());
 		});
 	}
+}
+
+#[test]
+fn signing_context_constant_is_the_context_the_pallet_verifies() {
+	// The mock's network suffix is `paseo`.
+	let expected = indiv_support::context::build_product_context(
+		crate::PRODUCT_NAME,
+		b"paseo",
+		indiv_support::context::SIGNING,
+	);
+
+	// The published constant is the game's signing context.
+	assert_eq!(crate::Pallet::<Test>::signing_context(), expected);
+	// Signed bytes are that context followed by the message.
+	assert_eq!(
+		crate::Pallet::<Test>::account_signing_payload(b"msg"),
+		[&expected[..], b"msg"].concat()
+	);
 }
