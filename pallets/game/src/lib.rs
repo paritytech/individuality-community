@@ -365,9 +365,8 @@ pub mod pallet {
 
 		/// The lower bound on a game's minimum group size, which is `max_group_size - 1`.
 		///
-		/// Must be non-zero. A game's `max_group_size` must be greater than this value. Set it to
-		/// at least 2 to prevent single-player groups. A testnet does not enforce the minimum
-		/// group size when a game starts.
+		/// Must be at least 2, or 1 when `TESTNET` is set, because a testnet does not enforce the
+		/// minimum group size. A game's `max_group_size` must exceed this value.
 		#[pallet::constant]
 		type MinGroupSize: Get<u32>;
 
@@ -828,6 +827,14 @@ pub mod pallet {
 			);
 
 			assert!(T::MinGroupSize::get() > 0, "MinGroupSize must be non-zero");
+			#[cfg(feature = "testnet")]
+			let testnet = T::TESTNET;
+			#[cfg(not(feature = "testnet"))]
+			let testnet = false;
+			assert!(
+				testnet || T::MinGroupSize::get() >= 2,
+				"MinGroupSize must be at least 2 outside a testnet"
+			);
 			assert!(
 				T::MinGroupSize::get() < T::MaxGroupSize::get(),
 				"MinGroupSize must be less than MaxGroupSize"

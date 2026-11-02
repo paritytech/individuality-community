@@ -2950,18 +2950,6 @@ fn acceptable(full_group_size: u32, player_count: u32) -> bool {
 	GroupsSetting { full_group_size, player_count }.acceptable_player_count::<Test>()
 }
 
-// Verifies that GroupsSetting::acceptable_player_count()
-// returns the expected value for a variety of edge-cases.
-#[test]
-fn acceptable_player_count_cases() {
-	assert!(!acceptable(1, 0));
-	assert!(!acceptable(5, 0));
-	assert!(acceptable(1, 1));
-	assert!(acceptable(1, 10));
-	assert!(acceptable(2, 1));
-	assert!(acceptable(2, 10));
-}
-
 // Every group holds at least `full_group_size - 1` players.
 #[test]
 fn acceptable_player_count_enforces_full_group_size_minus_one() {
@@ -2996,6 +2984,26 @@ fn acceptable_player_count_enforces_full_group_size_minus_one() {
 	assert!(acceptable(5, 12));
 	// Groups of four, four, four and four players.
 	assert!(acceptable(5, 16));
+}
+
+// `acceptable_player_count` holds exactly when every dealt group has at least
+// `full_group_size - 1` players. Size 1 covers games scheduled before `MinGroupSize` was raised.
+#[test]
+fn acceptable_player_count_matches_group_members() {
+	for full_group_size in 0..=10 {
+		for player_count in 0..=100 {
+			let groups = GroupsSetting { full_group_size, player_count };
+			let expected = player_count > 0 &&
+				(0..groups.number_of_group()).all(|g| {
+					groups.group_members(g).count() as u32 >= full_group_size.saturating_sub(1)
+				});
+			assert_eq!(
+				acceptable(full_group_size, player_count),
+				expected,
+				"{full_group_size}, {player_count}"
+			);
+		}
+	}
 }
 
 mod game_cancellation {
@@ -7661,11 +7669,41 @@ fn shuffle_step_retrieve_resumes_and_drains_both_phases() {
 	});
 }
 
-/// Verify that the default mock configuration passes all integrity checks,
-/// including the block-fit assertion for the `report` extrinsic.
+/// The mock configuration passes all integrity checks, including the block-fit assertion for
+/// `report`. The test restores the default `MinGroupSize`, which `new_test_ext` lowers.
 #[test]
 fn integrity_test_passes() {
 	new_test_ext().execute_with(|| {
+		MinGroupSize::set(&2);
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+#[test]
+#[should_panic(expected = "MinGroupSize must be non-zero")]
+fn integrity_test_rejects_zero_min_group_size() {
+	new_test_ext().execute_with(|| {
+		MinGroupSize::set(&0);
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+/// The mock is not a testnet, so it rejects single-player groups.
+#[test]
+#[should_panic(expected = "MinGroupSize must be at least 2 outside a testnet")]
+fn integrity_test_rejects_min_group_size_of_one() {
+	new_test_ext().execute_with(|| {
+		MinGroupSize::set(&1);
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+/// When `MinGroupSize` equals `MaxGroupSize`, no `max_group_size` is valid.
+#[test]
+#[should_panic(expected = "MinGroupSize must be less than MaxGroupSize")]
+fn integrity_test_rejects_min_group_size_at_max() {
+	new_test_ext().execute_with(|| {
+		MinGroupSize::set(&<Test as Config>::MaxGroupSize::get());
 		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }
