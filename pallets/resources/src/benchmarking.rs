@@ -229,7 +229,9 @@ mod benches {
 		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &context) else {
 			panic!("origin was created with `try_successful_origin`; qed");
 		};
-		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&alias[..]);
+		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(
+			&Pallet::<T>::account_signing_payload(&Pallet::<T>::register_person_message(&alias)),
+		);
 
 		#[extrinsic_call]
 		register_person(
@@ -281,7 +283,9 @@ mod benches {
 		let Ok(alias) = T::EnsurePerson::try_origin(origin.clone(), &context) else {
 			panic!("origin was created with `try_successful_origin`; qed");
 		};
-		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&alias[..]);
+		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(
+			&Pallet::<T>::account_signing_payload(&Pallet::<T>::register_person_message(&alias)),
+		);
 
 		#[extrinsic_call]
 		register_person(
@@ -329,7 +333,9 @@ mod benches {
 		Consumers::<T>::insert(&account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&account);
 
-		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(&alias[..]);
+		let (_, proof) = <T as Config>::BenchmarkHelper::sign_message(
+			&Pallet::<T>::account_signing_payload(&Pallet::<T>::register_person_message(&alias)),
+		);
 		assert_ok!(Pallet::<T>::register_person(
 			origin.clone(),
 			account.clone(),

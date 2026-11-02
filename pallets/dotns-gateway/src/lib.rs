@@ -319,9 +319,10 @@ pub mod pallet {
 		/// - `candidate`: the Lite Person's account for whom the label is being reserved. Also the
 		///   signer of `candidate_signature`.
 		/// - `candidate_signature`: signature over the bytes returned by
-		///   `Pallet::construct_reservation_message` — a SCALE-encoded tuple binding the attester,
-		///   candidate, the candidate's chosen *base* username, and chat key. The digit suffix of
-		///   `lite_label` is **not** part of the signed message (the digits are allocated
+		///   `Pallet::construct_reservation_message` in the personhood signing context (see
+		///   [`Pallet::account_signing_payload`]). The message is a SCALE-encoded tuple binding the
+		///   attester, candidate, the candidate's chosen *base* username and chat key. The digit
+		///   suffix of `lite_label` is **not** part of the signed message (the digits are allocated
 		///   server-side after the candidate signs, so the candidate cannot commit to them at
 		///   signing time).
 		/// - `lite_label`: the lite-person label. Must be `<dns-stem>.<2+ digits>` (e.g.
@@ -375,7 +376,7 @@ pub mod pallet {
 				signed_at,
 			);
 			ensure!(
-				candidate_signature.verify(&msg[..], &candidate),
+				candidate_signature.verify(&Self::account_signing_payload(&msg)[..], &candidate),
 				Error::<T>::InvalidAttestationSignature,
 			);
 
@@ -598,6 +599,25 @@ pub mod pallet {
 				identifier, proof, ring_index, revision, context, message,
 			)?;
 			Ok(validated.alias)
+		}
+	}
+
+	#[pallet::extra_constants]
+	impl<T: Config> Pallet<T> {
+		/// The personhood signing context on this network. An account signs this context
+		/// followed by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> indiv_support::traits::Context {
+			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			[&Self::signing_context()[..], msg].concat()
 		}
 
 		pub fn proof_context() -> indiv_support::traits::Context {

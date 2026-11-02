@@ -4470,3 +4470,21 @@ fn integrity_test_passes() {
 		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }
+
+#[test]
+fn signing_context_constant_is_the_context_the_pallet_verifies() {
+	// The mock's network suffix is `paseo`.
+	let expected = indiv_support::context::build_product_context(
+		indiv_support::context::personhood::PRODUCT_NAME,
+		b"paseo",
+		indiv_support::context::SIGNING,
+	);
+
+	// The published constant is the personhood signing context.
+	assert_eq!(crate::Pallet::<Test>::signing_context(), expected);
+	// Signed bytes are that context followed by the message.
+	assert_eq!(
+		crate::Pallet::<Test>::account_signing_payload(b"msg"),
+		[&expected[..], b"msg"].concat()
+	);
+}
