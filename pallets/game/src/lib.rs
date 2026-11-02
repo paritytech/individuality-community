@@ -745,7 +745,7 @@ pub mod pallet {
 		InvalidReport,
 		/// No game ongoing.
 		NoGame,
-		/// No report phase ongoing.
+		/// The game is not in its reporting phase, or it has not started yet.
 		NoReporting,
 		/// Not registered.
 		NotRegistered,
@@ -1095,7 +1095,7 @@ pub mod pallet {
 
 		/// After the game, send the full report.
 		///
-		/// The game must be ongoing and in its reporting phase.
+		/// The game must be in its reporting phase, from `game_date` until `report_ends`.
 		///
 		/// The origin must be an alias, or signed by an account, or signed by an account and use
 		/// `ScoreAsParticipant` extension.
@@ -1144,7 +1144,11 @@ pub mod pallet {
 			let game = Game::<T>::get().ok_or(Error::<T>::NoGame)?;
 			let game_index = game.index;
 			let now = T::UnixTime::now();
-			ensure!(now < Duration::from_secs(game.report_ends as u64), Error::<T>::NoReporting);
+			ensure!(
+				Duration::from_secs(game.game_date.into()) <= now &&
+					now < Duration::from_secs(game.report_ends.into()),
+				Error::<T>::NoReporting
+			);
 			let award_time = now.as_secs() as u32;
 			let group_size = game.max_group_size;
 			let GameState::Reporting { player_count } = game.state else {
@@ -1694,6 +1698,8 @@ pub mod pallet {
 
 		/// Force start the shuffle before its normal start time.
 		///
+		/// The game starts no later than now, so players can report as soon as the shuffle ends.
+		///
 		/// This action can only be performed by the root origin and is only meant for testing.
 		#[pallet::call_index(101)]
 		#[pallet::weight(Weight::zero())]
@@ -1710,6 +1716,7 @@ pub mod pallet {
 			};
 			let now = T::UnixTime::now();
 			game.registration_ends = now.as_secs().try_into().unwrap_or(u32::MAX);
+			game.game_date = core::cmp::min(game.game_date, game.registration_ends);
 			game.state =
 				GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } };
 			Game::<T>::put(game);
@@ -2875,12 +2882,13 @@ pub mod pallet {
 			};
 
 			// Transition to player process either when the reporting window has closed
-			// or as soon as every registered player's attendance has already been
-			// enacted early (nothing left to wait for).
+			// or, once the game has started, as soon as every registered player's
+			// attendance has already been enacted early (nothing left to wait for).
 			let now = T::UnixTime::now();
 			let reporting_ended = now >= Duration::from_secs(game.report_ends.into());
+			let started = now >= Duration::from_secs(game.game_date.into());
 			let nothing_pending = game.pending_attendance == 0;
-			if !reporting_ended && !nothing_pending {
+			if !reporting_ended && !(started && nothing_pending) {
 				return;
 			}
 

@@ -582,6 +582,36 @@ fn cannot_register_twice() {
 }
 
 #[test]
+fn reports_open_when_the_game_starts() {
+	new_test_ext().execute_with(|| {
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 20,
+			rounds: 1,
+			max_group_size: 1,
+			..Default::default()
+		};
+		assert_ok!(Game::new_game(&schedule));
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(ALICE),
+			DEFAULT_IDENTIFIER_KEY,
+			None,
+		));
+		advance_to_reporting_phase(&schedule);
+		let full_report: FullReport<Test> = vec![BoundedVec::default()].try_into().unwrap();
+
+		// The shuffle ends before the game starts.
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(19));
+		assert_noop!(
+			Game::report(RuntimeOrigin::signed(ALICE), full_report.clone()),
+			Error::<Test>::NoReporting
+		);
+
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(20));
+		assert_ok!(Game::report(RuntimeOrigin::signed(ALICE), full_report));
+	});
+}
+
+#[test]
 fn cannot_report_twice() {
 	new_test_ext().execute_with(|| {
 		// Create a new game.
@@ -600,15 +630,7 @@ fn cannot_report_twice() {
 			None,
 		));
 
-		// Fast-forward time beyond registration_ends, so we can transition.
-		let registration_ends = GameTimes::<Test>::registration_end(&schedule);
-		MOCK_UNIX_TIME
-			.with(|v| *v.borrow_mut() = Duration::from_secs(registration_ends as u64 + 1));
-
-		advance_process(); // Transition to shuffle.
-		advance_process(); // Shuffle to report.
-
-		// Now the game is in `Reporting` phase.
+		advance_to_reporting_phase(&schedule);
 
 		// Player sees exactly 0 other player.
 		let partial_report: BoundedVec<Report, _> = BoundedVec::default();
@@ -3166,12 +3188,7 @@ fn candidate_and_people_vote_weights_applied() {
 			None,
 		));
 
-		// Fast-forward to **Reporting** phase
-		let reg_end = GameTimes::<Test>::registration_end(&schedule);
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
-
-		advance_process(); // registration -> shuffle
-		advance_process(); // shuffle -> reporting
+		advance_to_reporting_phase(&schedule);
 
 		// Helper that builds a 1-round FullReport with the desired opinion on `target`.
 		let build_report = |reporter: &AccountOrPerson<AccountId32>, target_is_person: bool| {
@@ -3937,60 +3954,53 @@ fn vote_weight_tracks_current_recognition_and_drops_when_lost() {
 
 		// Small helper: start a 1-round, 2-per-group game, have `reporter_acc` report
 		// "Person" on `target_acc`, and assert that the `yes_person` tally equals `expected_w`.
-		let assert_vote_weight = |game_time: u32,
-		                          reporter_acc: AccountId32,
-		                          target_acc: AccountId32,
-		                          expected_w: u8| {
-			use core::time::Duration;
+		let assert_vote_weight =
+			|game_time: u32, reporter_acc: AccountId32, target_acc: AccountId32, expected_w: u8| {
+				let schedule = GameSchedule::<u32, u128> {
+					game_play_time: game_time,
+					rounds: 1,
+					max_group_size: 2, // reporter and target in the same group
+					..Default::default()
+				};
 
-			let schedule = GameSchedule::<u32, u128> {
-				game_play_time: game_time,
-				rounds: 1,
-				max_group_size: 2, // reporter and target in the same group
-				..Default::default()
+				// New game + sign-ups.
+				assert_ok!(Game::new_game(&schedule));
+				assert_ok!(Game::sign_up_with_account(
+					RuntimeOrigin::signed(reporter_acc.clone()),
+					DEFAULT_IDENTIFIER_KEY,
+					None,
+				));
+				assert_ok!(Game::sign_up_with_account(
+					RuntimeOrigin::signed(target_acc.clone()),
+					DEFAULT_IDENTIFIER_KEY,
+					None,
+				));
+
+				advance_to_reporting_phase(&schedule);
+
+				// Reporter submits a single opinion (there's exactly one peer in the group).
+				let partial: BoundedVec<Report, <Test as Config>::MaxGroupSize> =
+					vec![Report::Person].try_into().unwrap();
+				let full: FullReport<Test> = vec![partial].try_into().unwrap();
+				assert_ok!(Game::report(RuntimeOrigin::signed(reporter_acc.clone()), full));
+
+				// Check immediate tallies (before PlayerProcess resets them).
+				let info = Players::<Test>::get(AccountOrPerson::Account(target_acc.clone()))
+					.expect("target must be registered");
+				assert_eq!(
+					info.yes_person, expected_w,
+					"reporter should contribute exactly the expected vote weight"
+				);
+
+				// Finish the game so we can start another one.
+				let rep_end = GameTimes::<Test>::reporting_end(&schedule);
+				MOCK_UNIX_TIME
+					.with(|t| *t.borrow_mut() = Duration::from_secs((rep_end + 1) as u64));
+				advance_process(); // reporting -> player process
+				advance_process(); // step1 -> step2
+				advance_process(); // step2 -> step3
+				advance_process(); // step3 -> done
 			};
-
-			// New game + sign-ups.
-			assert_ok!(Game::new_game(&schedule));
-			assert_ok!(Game::sign_up_with_account(
-				RuntimeOrigin::signed(reporter_acc.clone()),
-				DEFAULT_IDENTIFIER_KEY,
-				None,
-			));
-			assert_ok!(Game::sign_up_with_account(
-				RuntimeOrigin::signed(target_acc.clone()),
-				DEFAULT_IDENTIFIER_KEY,
-				None,
-			));
-
-			// Fast-forward to Reporting.
-			let reg_end = GameTimes::<Test>::registration_end(&schedule);
-			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
-			advance_process(); // registration -> shuffle
-			advance_process(); // shuffle -> reporting
-
-			// Reporter submits a single opinion (there's exactly one peer in the group).
-			let partial: BoundedVec<Report, <Test as Config>::MaxGroupSize> =
-				vec![Report::Person].try_into().unwrap();
-			let full: FullReport<Test> = vec![partial].try_into().unwrap();
-			assert_ok!(Game::report(RuntimeOrigin::signed(reporter_acc.clone()), full));
-
-			// Check immediate tallies (before PlayerProcess resets them).
-			let info = Players::<Test>::get(AccountOrPerson::Account(target_acc.clone()))
-				.expect("target must be registered");
-			assert_eq!(
-				info.yes_person, expected_w,
-				"reporter should contribute exactly the expected vote weight"
-			);
-
-			// Finish the game so we can start another one.
-			let rep_end = GameTimes::<Test>::reporting_end(&schedule);
-			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((rep_end + 1) as u64));
-			advance_process(); // reporting -> player process
-			advance_process(); // step1 -> step2
-			advance_process(); // step2 -> step3
-			advance_process(); // step3 -> done
-		};
 
 		// ─────────────────────────────────────────────────────────────────────────────
 		// Scenario 1: NOT recognized => candidate weight.
@@ -4156,12 +4166,7 @@ fn statement_allowance_for_account_players() {
 		));
 		assert_eq!(get_allowance(BOB), expected_allowance);
 
-		// Move to reporting phase
-		let registration_ends = GameTimes::<Test>::registration_end(&schedule1);
-		MOCK_UNIX_TIME
-			.with(|t| *t.borrow_mut() = Duration::from_secs((registration_ends + 1) as u64));
-		advance_process(); // registration -> shuffle
-		advance_process(); // shuffle -> reporting
+		advance_to_reporting_phase(&schedule1);
 
 		// ALICE does NOT report (will be absent)
 		// BOB reports (will attend)
@@ -4228,12 +4233,7 @@ fn statement_allowance_for_account_players() {
 			"BOB allowance should not double after signing up for game 2"
 		);
 
-		// Move to reporting phase
-		let registration_ends2 = GameTimes::<Test>::registration_end(&schedule2);
-		MOCK_UNIX_TIME
-			.with(|t| *t.borrow_mut() = Duration::from_secs((registration_ends2 + 1) as u64));
-		advance_process(); // registration -> shuffle
-		advance_process(); // shuffle -> reporting
+		advance_to_reporting_phase(&schedule2);
 
 		// BOB does NOT report this time (will be absent and eventually archived)
 		// Finish game 2
@@ -4297,15 +4297,6 @@ fn statement_allowance_for_alias_players() {
 				.try_into()
 				.unwrap();
 
-		let advance_to_reporting = |schedule: &GameSchedule<u32, u128>| {
-			let registration_ends = GameTimes::<Test>::registration_end(schedule);
-			MOCK_UNIX_TIME.with(|t| {
-				*t.borrow_mut() = Duration::from_secs((registration_ends + 1) as u64);
-			});
-			advance_process(); // registration -> shuffle
-			advance_process(); // shuffle -> reporting
-		};
-
 		let finish_game = |schedule: &GameSchedule<u32, u128>| {
 			let report_ends = GameTimes::<Test>::reporting_end(schedule);
 			MOCK_UNIX_TIME
@@ -4341,7 +4332,7 @@ fn statement_allowance_for_alias_players() {
 		assert_eq!(get_allowance(&stmt_account_1), expected_allowance);
 		assert_eq!(get_allowance(&stmt_account_2), zero_allowance);
 
-		advance_to_reporting(&schedule1);
+		advance_to_reporting_phase(&schedule1);
 		assert_ok!(Game::report(runtime_origin_for_alias(&alias), empty_report.clone()));
 		finish_game(&schedule1);
 
@@ -4368,7 +4359,7 @@ fn statement_allowance_for_alias_players() {
 		));
 		assert_eq!(get_allowance(&stmt_account_1), expected_allowance);
 
-		advance_to_reporting(&schedule2);
+		advance_to_reporting_phase(&schedule2);
 		assert_ok!(Game::report(runtime_origin_for_alias(&alias), empty_report.clone()));
 		finish_game(&schedule2);
 
@@ -4396,7 +4387,7 @@ fn statement_allowance_for_alias_players() {
 		assert_eq!(get_allowance(&stmt_account_1), zero_allowance);
 		assert_eq!(get_allowance(&stmt_account_2), expected_allowance);
 
-		advance_to_reporting(&schedule3);
+		advance_to_reporting_phase(&schedule3);
 		assert_ok!(Game::report(runtime_origin_for_alias(&alias), empty_report.clone()));
 		finish_game(&schedule3);
 
@@ -4423,7 +4414,7 @@ fn statement_allowance_for_alias_players() {
 		));
 		assert_eq!(get_allowance(&stmt_account_2), expected_allowance);
 
-		advance_to_reporting(&schedule4);
+		advance_to_reporting_phase(&schedule4);
 		// No report => absent.
 		finish_game(&schedule4);
 
@@ -4467,13 +4458,16 @@ fn build_report_with_opinion(
 	full.try_into().expect("fits MaxRounds")
 }
 
-/// Advance through registration and the full shuffle phase, stopping in Reporting.
+/// Advance through registration and the full shuffle phase to the start of the game.
 fn advance_to_reporting_phase(schedule: &GameSchedule<u32, u128>) {
 	let reg_end = GameTimes::<Test>::registration_end(schedule);
 	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
 	advance_process(); // registration -> shuffle
 	advance_process(); // shuffle -> reporting (steps 1-4)
 	assert!(matches!(crate::Game::<Test>::get().unwrap().state, GameState::Reporting { .. }));
+	// Reports are accepted from the start of the game.
+	let game_play_time = GameTimes::<Test>::game_play_time(schedule);
+	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_play_time.into()));
 }
 
 #[test]
@@ -4713,6 +4707,35 @@ fn reporting_ends_early_when_all_attendance_determined() {
 				vec![idx],
 			);
 		}
+	});
+}
+
+#[test]
+fn reporting_without_players_ends_once_the_game_starts() {
+	new_test_ext().execute_with(|| {
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 20,
+			rounds: 1,
+			max_group_size: 1,
+			..Default::default()
+		};
+		assert_ok!(Game::new_game(&schedule));
+		let reg_end = GameTimes::<Test>::registration_end(&schedule);
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
+		advance_process(); // registration -> shuffle
+		advance_process(); // shuffle -> reporting
+		assert_eq!(crate::Game::<Test>::get().unwrap().pending_attendance, 0);
+
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(19));
+		advance_process();
+		assert!(matches!(crate::Game::<Test>::get().unwrap().state, GameState::Reporting { .. }));
+
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(20));
+		advance_process();
+		assert!(matches!(
+			crate::Game::<Test>::get().unwrap().state,
+			GameState::PlayerProcess { .. }
+		));
 	});
 }
 
