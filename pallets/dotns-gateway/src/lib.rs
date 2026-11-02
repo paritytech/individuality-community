@@ -394,13 +394,13 @@ pub mod pallet {
 			// Encoding and calling the contract
 			let candidate_h160 = T::AddressMapper::to_address(&candidate);
 			let calldata = match reserved_base_label.as_ref() {
-				Some(base) => reserveBaseNameCall::new_abi_encoded(
+				Some(base) => issueDeviceNameWithReservationCall::new_abi_encoded(
 					lite_label.as_slice(),
 					candidate_h160,
 					chat_key.as_slice(),
 					base.as_slice(),
 				),
-				None => reserveLiteNameCall::new_abi_encoded(
+				None => issueDeviceNameCall::new_abi_encoded(
 					lite_label.as_slice(),
 					candidate_h160,
 					chat_key.as_slice(),
@@ -461,7 +461,8 @@ pub mod pallet {
 			let alias = Self::ensure_person_registration(origin)?;
 
 			let who_h160 = T::AddressMapper::to_address(&who);
-			let calldata = registerBaseNameCall::new_abi_encoded(label.as_slice(), who_h160, &link);
+			let calldata =
+				issuePersonhoodNameCall::new_abi_encoded(label.as_slice(), who_h160, &link);
 			let contract_weight = Self::call_dispatcher(calldata)?;
 
 			AliasRegistration::<T>::insert(
