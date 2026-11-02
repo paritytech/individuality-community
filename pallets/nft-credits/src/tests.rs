@@ -3587,6 +3587,18 @@ mod check_in {
 		});
 	}
 
+	/// Suspends `who`, a participant, recognised as a person or not.
+	fn suspend(who: &AccountId32) {
+		let id = match Participants::<Test>::get(AccountOrPerson::Account(who.clone()))
+			.expect("sign-up onboards the account")
+			.recognition
+		{
+			Recognition::Recognized(id) => id,
+			_ => recognise(who),
+		};
+		set_recognition(who, Recognition::Suspended(id));
+	}
+
 	/// Sets the tenure of `who`, a participant.
 	fn set_tenure(who: &AccountId32, tenure: GamesAttended) {
 		Participants::<Test>::mutate(AccountOrPerson::Account(who.clone()), |participant| {
@@ -3838,19 +3850,71 @@ mod check_in {
 	}
 
 	#[test]
-	fn a_suspended_person_keeps_their_tenure() {
+	fn a_suspended_person_keeps_their_tenure_but_is_awarded_nothing_at_check_in() {
 		new_test_ext().execute_with(|| {
 			set_thresholds(vec![0, 1, 2]);
-			let game = set_up_alice();
-			let id = sign_up_recognised(&BOB);
+			let game = set_up_full_group();
 			set_tenure(&BOB, 1);
-			set_recognition(&BOB, Recognition::Suspended(id));
+			suspend(&BOB);
 			set_time(OPENS);
 
 			assert_ok!(check_in(&BOB));
 
 			assert_eq!(check_in_of(game, &BOB), Some(2));
+			assert_eq!(awarded_check_in_credits(game, &BOB), Vec::<u32>::new());
+		});
+	}
+
+	#[test]
+	fn a_suspended_person_that_attends_is_awarded_their_check_in_credits() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&BOB, 1);
+			suspend(&BOB);
+			set_time(OPENS);
+			assert_ok!(check_in(&BOB));
+
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
 			assert_eq!(awarded_check_in_credits(game, &BOB), vec![0, 1]);
+			assert_eq!(check_in_of(game, &BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_suspended_person_that_does_not_attend_forfeits_their_check_in_credits() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&BOB, 1);
+			suspend(&BOB);
+			set_time(OPENS);
+			assert_ok!(check_in(&BOB));
+
+			play_to_end(&[ALICE, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_check_in_credits(game, &BOB), Vec::<u32>::new());
+			assert_eq!(check_in_of(game, &BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_person_suspended_after_check_in_receives_the_rest_only_if_they_attend() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 1);
+			assert_ok!(check_in(&ALICE));
+			assert_eq!(awarded_check_in_credits(game, &ALICE), vec![0]);
+
+			suspend(&ALICE);
+			play_to_end(&[BOB, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_check_in_credits(game, &ALICE), vec![0]);
+			assert_eq!(check_in_of(game, &ALICE), None);
 		});
 	}
 

@@ -192,15 +192,18 @@
 //! reaches the NFT claims chain. [`CheckIns`] records a player's credits. When they are paid
 //! depends on the player's recognition in indiv-pallet-score:
 //!
-//! - A person is unique, whether recognised by indiv-pallet-score, suspended or recognised by
-//!   another DIM. A person receives the credits at check-in as far as the credit buffers have room,
-//!   and the rest after the game.
+//! - A person is unique, whether recognised by indiv-pallet-score or by another DIM. A person
+//!   receives the credits at check-in as far as the credit buffers have room, and the rest after
+//!   the game.
 //! - One party can control any number of accounts that are not persons. Such an account receives
 //!   the credits after the game if it attends.
+//! - A suspended person receives the credits after the game if they attend, as an account that is
+//!   not a person does.
 //!
 //! "After the game" is the attendance backfill, which runs once attendance is final. It reads the
-//! recognition again, so a candidate that becomes a person after checking in is paid without
-//! attending. A cancelled game pays no further check-in credits.
+//! recognition again. A candidate that becomes a person after checking in is paid without
+//! attending. A person suspended after checking in keeps the credits awarded at check-in and
+//! receives the rest only if they attend. A cancelled game pays no further check-in credits.
 //!
 //! # Calls
 //!

@@ -83,18 +83,13 @@ impl<T: Config> Pallet<T> {
 	/// Whether a player with `recognition` in indiv-pallet-score is a person. Only a person is paid
 	/// without attending.
 	///
-	/// A suspended person stays a person. Recognition only moves from not recognised to recognised
-	/// to suspended, so a player that is a person at check-in is still one after the game.
+	/// A suspended person is not a person here, so they are paid only if they attend.
 	fn is_person(recognition: Option<&Recognition>) -> bool {
 		match recognition {
-			Some(
-				Recognition::Recognized(_) |
-				Recognition::Suspended(_) |
-				Recognition::ExternallyRecognized,
-			) => true,
+			Some(Recognition::Recognized(_) | Recognition::ExternallyRecognized) => true,
 			// One party can control any number of accounts that are not persons, so attendance is
 			// what an account pays for its credits with.
-			Some(Recognition::NotRecognized) | None => false,
+			Some(Recognition::NotRecognized | Recognition::Suspended(_)) | None => false,
 		}
 	}
 
