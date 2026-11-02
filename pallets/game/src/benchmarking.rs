@@ -1229,6 +1229,8 @@ mod benches {
 		// The cancelled game's credit mask is dropped with the player's indices.
 		let game_index = Game::<T>::get().expect("game was scheduled").index;
 		T::NftClaimCredits::benchmark_award_every_slot(game_index, &account_or_person);
+		// The cancelled game's check-in is dropped with the player.
+		CheckIns::<T>::insert(game_index, &account_or_person, T::MaxTenureThresholds::get());
 
 		#[block]
 		{
@@ -1255,6 +1257,8 @@ mod benches {
 				"IndexToPlayer should not contain mapping for round {round}",
 			);
 		}
+
+		assert!(!CheckIns::<T>::contains_key(game_index, &account_or_person));
 
 		Ok(())
 	}
