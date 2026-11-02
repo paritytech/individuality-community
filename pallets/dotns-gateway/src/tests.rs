@@ -1063,14 +1063,14 @@ mod registration {
 		use alloy_core::sol_types::SolError;
 
 		new_test_ext().execute_with(|| {
-			set_contract_call_revert(crate::types::NotGateway::SELECTOR.to_vec());
+			set_contract_call_revert(crate::types::PersonhoodNameUnavailable::SELECTOR.to_vec());
 
 			let link = Link::None(default_chat_key());
 			let bn = base_name(ALICE_BASE);
 
 			assert_noop!(
 				DotnsGateway::register_name(person_registration_origin(alias_a()), ALICE, bn, link,),
-				Error::<Test>::ContractRevert(DispatcherRevert::NotGateway)
+				Error::<Test>::ContractRevert(DispatcherRevert::PersonhoodNameUnavailable)
 			);
 		});
 	}

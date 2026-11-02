@@ -286,7 +286,6 @@ sol! {
 	function issuePersonhoodName(PersonhoodNameIssuance params);
 
 	error NotRoot();
-	error NotGateway(address caller);
 	error InvalidDeviceLabel();
 	error InvalidPersonhoodLabel();
 	error NoActiveReservation(address user);
@@ -379,8 +378,6 @@ impl issuePersonhoodNameCall {
 pub enum DispatcherRevert {
 	/// Dispatcher rejected the call because the substrate origin was not `Root`.
 	NotRoot,
-	/// Caller is not the registered PoP gateway.
-	NotGateway,
 	/// Device label did not match `<stem>.<digits>`.
 	InvalidDeviceLabel,
 	/// Personhood label was not a valid single DNS label.
@@ -410,8 +407,6 @@ pub fn decode_revert(data: &[u8]) -> Option<DispatcherRevert> {
 
 	if selector == NotRoot::SELECTOR {
 		Some(DispatcherRevert::NotRoot)
-	} else if selector == NotGateway::SELECTOR {
-		Some(DispatcherRevert::NotGateway)
 	} else if selector == InvalidDeviceLabel::SELECTOR {
 		Some(DispatcherRevert::InvalidDeviceLabel)
 	} else if selector == InvalidPersonhoodLabel::SELECTOR {
@@ -596,7 +591,6 @@ mod abi_tests {
 	fn decode_revert_matches_known_selectors() {
 		let selectors_and_reverts = [
 			(NotRoot::SELECTOR, DispatcherRevert::NotRoot),
-			(NotGateway::SELECTOR, DispatcherRevert::NotGateway),
 			(InvalidDeviceLabel::SELECTOR, DispatcherRevert::InvalidDeviceLabel),
 			(InvalidPersonhoodLabel::SELECTOR, DispatcherRevert::InvalidPersonhoodLabel),
 			(NoActiveReservation::SELECTOR, DispatcherRevert::NoActiveReservation),
@@ -630,7 +624,6 @@ mod abi_tests {
 	fn revert_selectors_are_pairwise_distinct() {
 		let selectors = [
 			NotRoot::SELECTOR,
-			NotGateway::SELECTOR,
 			InvalidDeviceLabel::SELECTOR,
 			InvalidPersonhoodLabel::SELECTOR,
 			NoActiveReservation::SELECTOR,
