@@ -77,6 +77,8 @@ pub trait WeightInfo {
 	fn claim_long_term_storage_tx_ext() -> Weight;
 	fn clear_expired_long_term_storage_aliases(n: u32, ) -> Weight;
 	fn authorize_clear_expired_long_term_storage_aliases() -> Weight;
+	fn migrate_stmt_store_allowance_step() -> Weight;
+	fn migrate_notification_registration_step() -> Weight;
 }
 
 /// Weights for `indiv_pallet_resources` using the Substrate node and recommended hardware.
@@ -553,6 +555,30 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(8_507_000, 3517)
 			.saturating_add(T::DbWeight::get().reads(2_u64))
 	}
+	/// Storage: `Resources::PalletVersion` (r:1 w:0)
+	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:1)
+	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(132), added: 2607, mode: `MaxEncodedLen`)
+	fn migrate_stmt_store_allowance_step() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `200`
+		//  Estimated: `3597`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 3597)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
+	/// Storage: `Resources::PalletVersion` (r:1 w:0)
+	/// Storage: `Resources::NotificationRegistrationByAlias` (r:1 w:1)
+	/// Proof: `Resources::NotificationRegistrationByAlias` (`max_values`: None, `max_size`: Some(93), added: 2568, mode: `MaxEncodedLen`)
+	fn migrate_notification_registration_step() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `160`
+		//  Estimated: `3558`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 3558)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -1027,5 +1053,29 @@ impl WeightInfo for () {
 		// Minimum execution time: 8_197_000 picoseconds.
 		Weight::from_parts(8_507_000, 3517)
 			.saturating_add(RocksDbWeight::get().reads(2_u64))
+	}
+	/// Storage: `Resources::PalletVersion` (r:1 w:0)
+	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:1)
+	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(132), added: 2607, mode: `MaxEncodedLen`)
+	fn migrate_stmt_store_allowance_step() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `200`
+		//  Estimated: `3597`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 3597)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// Storage: `Resources::PalletVersion` (r:1 w:0)
+	/// Storage: `Resources::NotificationRegistrationByAlias` (r:1 w:1)
+	/// Proof: `Resources::NotificationRegistrationByAlias` (`max_values`: None, `max_size`: Some(93), added: 2568, mode: `MaxEncodedLen`)
+	fn migrate_notification_registration_step() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `160`
+		//  Estimated: `3558`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 3558)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 }

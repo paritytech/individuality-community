@@ -259,9 +259,25 @@ frame_support::construct_runtime!(
 	}
 );
 
+parameter_types! {
+	pub storage MigrationOngoing: bool = false;
+}
+
+/// A multi-block migrator that only reports what [`MigrationOngoing`] says.
+pub struct MockMigrator;
+impl frame_support::migrations::MultiStepMigrator for MockMigrator {
+	fn ongoing() -> bool {
+		MigrationOngoing::get()
+	}
+	fn step() -> frame_support::weights::Weight {
+		frame_support::weights::Weight::zero()
+	}
+}
+
 #[derive_impl(frame_system::config_preludes::TestDefaultConfig)]
 impl frame_system::Config for Test {
 	type BaseCallFilter = frame_support::traits::Everything;
+	type MultiBlockMigrator = MockMigrator;
 	type BlockWeights = ();
 	type BlockLength = ();
 	type DbWeight = ();
@@ -479,11 +495,11 @@ parameter_types! {
 		max_size: 16 * 1024, // 16 KiB
 		max_count: 50,
 	};
-	pub AccountsApiAllowance: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
+	pub storage AccountsApiAllowance: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
 		max_size: 1024,
 		max_count: 2,
 	};
-	pub NotificationAllowance: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
+	pub storage NotificationAllowance: sp_statement_store::StatementAllowance = sp_statement_store::StatementAllowance {
 		max_size: 512,
 		max_count: 1,
 	};
