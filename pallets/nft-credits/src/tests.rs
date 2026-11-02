@@ -3929,7 +3929,7 @@ mod check_in {
 				runtime_origin_for_alias(&alias),
 				DEFAULT_IDENTIFIER_KEY,
 				statement_account.clone(),
-				AccountAuthority(statement_account),
+				StatementSignature(statement_account),
 				None,
 			));
 			set_time(OPENS);
