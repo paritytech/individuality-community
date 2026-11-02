@@ -174,16 +174,16 @@
 //!
 //! # Check-in
 //!
-//! A player that signed up for a game receives credits when they check in before the game begins.
+//! A player that signed up for a game earns credits when they check in before the game begins.
 //! [`Pallet::check_in`] opens at the game's `check_in_opens` time and closes when the game starts.
 //!
 //! The number of credits depends on the player's tenure: the number of games they attended while
 //! recognised as a person. indiv-pallet-score counts these games, whether this chain or another DIM
 //! recognises the person. A suspended player keeps the games they attended before the suspension.
 //!
-//! A player receives one credit for each of the [`TenureThresholds`] their tenure reaches. With
-//! the thresholds `[0, 1, 5]`, a player that never attended a game while recognised receives one
-//! credit, a person with 3 games receives two and a person with 5 or more receives three. A
+//! A player earns one credit for each of the [`TenureThresholds`] their tenure reaches. With
+//! the thresholds `[0, 1, 5]`, a player that never attended a game while recognised earns one
+//! credit, a person with 3 games earns two and a person with 5 or more earns three. A
 //! threshold of zero thus gives every player a credit. A player checks in once per game.
 //!
 //! ## Payout
@@ -809,8 +809,7 @@ pub mod pallet {
 		GameCancelled { game_index: GameIdx },
 		/// The [`TenureThresholds`] were set.
 		TenureThresholdsSet { thresholds: TenureThresholdsOf<T> },
-		/// `player` checked in for the game `game_index` and was granted `credits` check-in
-		/// credits.
+		/// `player` checked in for the game `game_index` and earned `credits` check-in credits.
 		///
 		/// Each credit emits `NftClaimCreditAwarded` from [`Config::NftClaimCredits`] when it is
 		/// awarded.

@@ -23,9 +23,9 @@ use indiv_pallet_score::{Participants, Recognition};
 /// A check-in that [`Pallet::check_in`] accepts.
 struct NewCheckIn {
 	game_index: GameIdx,
-	/// The credits the player is granted with this check-in. Never zero.
+	/// The credits the player earns with this check-in. Never zero.
 	credits: u32,
-	/// Whether the player is a person, who receives the credits at check-in.
+	/// Whether the player is a person. Only a person receives the credits at check-in.
 	is_person: bool,
 }
 
@@ -81,8 +81,8 @@ impl<T: Config> Pallet<T> {
 		Ok(NewCheckIn { game_index: game.index, credits, is_person })
 	}
 
-	/// Whether a player with `recognition` in indiv-pallet-score is a person, who receives their
-	/// check-in credits whether or not they attend.
+	/// Whether a player with `recognition` in indiv-pallet-score is a person. Only a person is paid
+	/// without attending.
 	///
 	/// A suspended person stays a person. Recognition only moves from not recognised to recognised
 	/// to suspended, so a player that is a person at check-in is still one after the game.
