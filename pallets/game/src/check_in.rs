@@ -18,14 +18,15 @@
 
 use super::*;
 use frame_support::{ensure, pallet_prelude::DispatchError};
-use indiv_pallet_score::{Participants, Recognition};
+use indiv_pallet_score::Participants;
 
 /// A check-in that [`Pallet::check_in`] accepts.
 struct NewCheckIn {
 	game_index: GameIdx,
 	/// The credits the player earns with this check-in. Never zero.
 	credits: u32,
-	/// Whether the player is a person. Only a person receives the credits at check-in.
+	/// Whether the player is a person, see [`indiv_pallet_score::Recognition::is_recognized`].
+	/// Only a person receives the credits at check-in.
 	is_person: bool,
 }
 
@@ -72,25 +73,12 @@ impl<T: Config> Pallet<T> {
 
 		let participant = Participants::<T>::get(player);
 		let tenure = participant.as_ref().map_or(0, |p| p.attended_games_while_recognized);
-		let is_person = Self::is_person(participant.map(|p| p.recognition).as_ref());
+		let is_person = participant.is_some_and(|p| p.recognition.is_recognized());
 
 		let credits = Self::tenure_credit_count(tenure);
 		ensure!(credits > 0, Error::<T>::NoCheckInCredit);
 
 		Ok(NewCheckIn { game_index: game.index, credits, is_person })
-	}
-
-	/// Whether a player with `recognition` in indiv-pallet-score is a person. Only a person is paid
-	/// without attending.
-	///
-	/// A suspended person is not a person here, so they are paid only if they attend.
-	fn is_person(recognition: Option<&Recognition>) -> bool {
-		match recognition {
-			Some(Recognition::Recognized(_) | Recognition::ExternallyRecognized) => true,
-			// One party can control any number of accounts that are not persons, so attendance is
-			// what an account pays for its credits with.
-			Some(Recognition::NotRecognized | Recognition::Suspended(_)) | None => false,
-		}
 	}
 
 	/// Checks `player` in for the current game, as [`Pallet::check_in`] does once its origin is
@@ -122,7 +110,9 @@ impl<T: Config> Pallet<T> {
 	/// `attendance` is [`Attendance::Attended`], and removes the check-in.
 	///
 	/// The recognition is read now, not at check-in, so a candidate that became a person since
-	/// is paid whether or not they attend.
+	/// is paid whether or not they attend. A suspended person is not a person, so they are paid
+	/// only if they attend. One party can control any number of accounts that are not persons, so
+	/// attendance is what such an account pays for its credits with.
 	///
 	/// Returns the number of credits awarded. The caller reserves room for
 	/// [`Config::MaxTenureThresholds`] credits first.
@@ -133,8 +123,9 @@ impl<T: Config> Pallet<T> {
 		award_time: u32,
 	) -> u32 {
 		let Some(credits) = CheckIns::<T>::take(game_index, player) else { return 0 };
-		let recognition = Participants::<T>::get(player).map(|p| p.recognition);
-		if !Self::is_person(recognition.as_ref()) && attendance == Attendance::Absent {
+		let is_person =
+			Participants::<T>::get(player).is_some_and(|p| p.recognition.is_recognized());
+		if !is_person && attendance == Attendance::Absent {
 			return 0;
 		}
 		T::NftClaimCredits::award_check_in_credits(game_index, player, credits, award_time)
