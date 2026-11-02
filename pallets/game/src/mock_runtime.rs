@@ -138,6 +138,38 @@ impl Verify for AccountAuthority {
 	}
 }
 
+/// A statement account signature that is valid for its own account over a message in the game's
+/// signing context.
+#[derive(
+	PartialEq, Eq, Clone, Encode, Decode, DecodeWithMemTracking, Debug, MaxEncodedLen, TypeInfo,
+)]
+pub struct StatementSignature(pub AccountId32);
+
+impl IdentifyAccount for StatementSignature {
+	type AccountId = AccountId32;
+	fn into_account(self) -> Self::AccountId {
+		self.0
+	}
+}
+
+impl Verify for StatementSignature {
+	type Signer = Self;
+
+	fn verify<L: sp_runtime::traits::Lazy<[u8]>>(
+		&self,
+		mut msg: L,
+		signer: &<Self::Signer as IdentifyAccount>::AccountId,
+	) -> bool {
+		let msg = msg.get();
+		let context = indiv_support::context::build_product_context(
+			indiv_pallet_game::PRODUCT_NAME,
+			&NetworkSuffix::get(),
+			indiv_support::context::SIGNING,
+		);
+		self.0 == *signer && msg.starts_with(&context)
+	}
+}
+
 /// A simple mock pallet that implements some mock deposit.
 #[frame_support::pallet]
 pub mod deposit {
@@ -894,7 +926,7 @@ use frame_benchmarking::account;
 #[cfg(feature = "runtime-benchmarks")]
 impl
 	indiv_pallet_game::benchmarking::BenchmarkHelper<
-		AccountAuthority,
+		StatementSignature,
 		TestSignature,
 		u64,
 		AccountId32,
@@ -905,8 +937,8 @@ impl
 		account("acc", 0, seed as u32)
 	}
 
-	fn sign_account(seed: u64, _msg: &[u8]) -> AccountAuthority {
-		AccountAuthority(Self::create_account(seed))
+	fn sign_account(seed: u64, _msg: &[u8]) -> StatementSignature {
+		StatementSignature(Self::create_account(seed))
 	}
 
 	fn create_ticket(seed: u64) -> u64 {
@@ -1125,14 +1157,27 @@ impl sp_statement_store::StatementStore for MockStatementStore {
 
 	fn take_recent_statements(
 		&self,
-	) -> sp_statement_store::Result<Vec<(sp_statement_store::Hash, Statement)>> {
+	) -> sp_statement_store::Result<Vec<(u64, sp_statement_store::Hash, Statement)>> {
 		unimplemented!();
 	}
 
 	fn has_statement(&self, _: &sp_statement_store::Hash) -> bool {
 		unimplemented!();
 	}
-	fn statement_hashes(&self) -> Vec<sp_statement_store::Hash> {
+	fn admission_watermark(&self) -> sp_statement_store::Result<u64> {
+		unimplemented!();
+	}
+	fn admitted_statements(
+		&self,
+		_cursor: u64,
+		_watermark: u64,
+		_scan_limit: usize,
+		_filter: &mut dyn FnMut(
+			&sp_statement_store::Hash,
+			&[u8],
+			&Statement,
+		) -> sp_statement_store::FilterDecision,
+	) -> sp_statement_store::Result<sp_statement_store::AdmittedBatch> {
 		unimplemented!();
 	}
 	fn statements_by_hashes(
@@ -1391,7 +1436,7 @@ pub fn run_game_scenario<F>(
 							runtime_origin_for_alias(alias),
 							DEFAULT_IDENTIFIER_KEY,
 							account.clone(),
-							AccountAuthority(account),
+							StatementSignature(account),
 							None,
 						));
 					},
@@ -1521,7 +1566,7 @@ pub fn run_game_scenario_with_hooks<F>(
 					runtime_origin_for_alias(alias),
 					DEFAULT_IDENTIFIER_KEY,
 					account.clone(),
-					AccountAuthority(account),
+					StatementSignature(account),
 					None,
 				));
 			},
@@ -1625,7 +1670,7 @@ impl indiv_pallet_game::Config for Test {
 	type MaxAttendanceHistoryDepth = ConstUint<2>;
 	type TicketSignature = TestSignature;
 	type PlayerStatementLimit = PlayerStatementLimit;
-	type AccountSignature = AccountAuthority;
+	type AccountSignature = StatementSignature;
 	type PeopleVoteWeight = PeopleVoteWeight;
 	type CandidateVoteWeight = CandidateVoteWeight;
 	type AirdropAssetId = u32;

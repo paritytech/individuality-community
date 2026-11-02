@@ -49,10 +49,10 @@ fn invitation_player_flow() {
 		let zoe_stmt_acc_pair = sr25519::Pair::from_seed(&[2u8; 32]);
 		let zoe_stmt_acc = pair_to_account_id(&zoe_stmt_acc_pair);
 		let zoe_stmt_acc_proof_of_ownership: MultiSignature = zoe_stmt_acc_pair
-			.sign(
+			.sign(&indiv_pallet_game::Pallet::<Runtime>::account_signing_payload(
 				&(b"pop:game:stmt_account_for_alias:", zoe_score_alias)
-					.using_encoded(sp_io::hashing::blake2_256)[..],
-			)
+					.using_encoded(sp_io::hashing::blake2_256),
+			))
 			.into();
 		let zoe_id = indiv_pallet_people::NextPersonalId::<Runtime>::get();
 		DummyDim::reserve_ids(RuntimeOrigin::root(), 1).unwrap();
