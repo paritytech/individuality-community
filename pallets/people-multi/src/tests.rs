@@ -2060,24 +2060,29 @@ mod tenure {
 			let ids = generate_people_with_index(0, 2).iter().map(|p| p.0).collect::<Vec<_>>();
 			Members::process_maintenance();
 			downgrade(&ids);
-			MockNow::set(&5_000);
 
-			// Each step migrates exactly one person with the weight of one person.
+			// Each step migrates exactly one person with the weight of one person. The clock
+			// moves between steps, so a person migrated twice would carry a later time.
 			let mut cursor = None;
-			for _ in 0..ids.len() {
+			let mut migrated = Vec::new();
+			for i in 0..ids.len() as u64 {
+				let now = 5_000 + 1_000 * i;
+				MockNow::set(&now);
 				let mut meter = WeightMeter::with_limit(weight_per_person());
 				cursor = MigrateV0ToV1::<Test>::step(cursor, &mut meter).expect("step passes");
 				let last = cursor.expect("migration continues");
 				assert_eq!(meter.remaining(), Weight::zero());
-				assert_eq!(history(last).recognized_since, Some(5_000));
+				assert_eq!(history(last).recognized_since, Some(now));
 				assert_eq!(PeoplePallet::on_chain_storage_version(), StorageVersion::new(0));
+				migrated.push((last, now));
 			}
 
-			// The final step finds no more people and sets the version.
+			// The final step finds no more people and sets the version. Every person keeps the
+			// time of the step that migrated them.
 			let mut meter = WeightMeter::with_limit(weight_per_person());
 			assert_eq!(MigrateV0ToV1::<Test>::step(cursor, &mut meter), Ok(None));
-			for id in ids {
-				assert_eq!(history(id).recognized_since, Some(5_000));
+			for (id, now) in migrated {
+				assert_eq!(history(id).recognized_since, Some(now));
 			}
 			assert_eq!(PeoplePallet::on_chain_storage_version(), StorageVersion::new(1));
 		});
@@ -2088,14 +2093,28 @@ mod tenure {
 		TestExt::new().execute_with(|| {
 			create_collection();
 			MockNow::set(&1_000);
-			let (id, _, _) = generate_people_with_index(0, 0)[0];
+			let people = generate_people_with_index(0, 1);
+			let (recognized, suspended) = (people[0].0, people[1].0);
+			Members::process_maintenance();
+			// One person suspended, so their history holds a closed period.
+			MockNow::set(&1_500);
+			suspend(suspended);
 			MockNow::set(&5_000);
 
-			// The storage is already at version 1 and the record keeps its history.
+			// The storage is already at version 1, so the step and the try-runtime checks pass
+			// without touching the records.
+			#[cfg(feature = "try-runtime")]
+			let state = MigrateV0ToV1::<Test>::pre_upgrade().expect("pre-upgrade passes");
 			let mut meter = WeightMeter::new();
 			assert_eq!(MigrateV0ToV1::<Test>::step(None, &mut meter), Ok(None));
+			#[cfg(feature = "try-runtime")]
+			assert_ok!(MigrateV0ToV1::<Test>::post_upgrade(state));
 			assert_eq!(meter.consumed(), Weight::zero());
-			assert_eq!(history(id).recognized_since, Some(1_000));
+			assert_eq!(history(recognized).recognized_since, Some(1_000));
+			assert_eq!(
+				history(suspended).periods.to_vec(),
+				vec![RecognitionPeriod { start: 1_000, end: 1_500 }]
+			);
 		});
 	}
 

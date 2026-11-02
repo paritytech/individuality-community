@@ -266,6 +266,10 @@ impl crate::WeightInfo for MockWeights {
 	fn authorize_create_people_collection() -> Weight {
 		Weight::from_parts(28, 28)
 	}
+
+	fn migrate_person() -> Weight {
+		Weight::from_parts(29, 29)
+	}
 }
 
 pub const INVALID_MEMBER: [u8; 32] = [

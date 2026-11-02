@@ -69,6 +69,7 @@ pub trait WeightInfo {
 	fn authorize_create_people_collection() -> Weight;
 	fn clean_up_stale_alias(n: u32, ) -> Weight;
 	fn authorize_clean_up_stale_alias(n: u32, ) -> Weight;
+	fn migrate_person() -> Weight;
 }
 
 /// Weights for `indiv_pallet_people` using the Substrate node and recommended hardware.
@@ -341,6 +342,14 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 2595).saturating_mul(n.into()))
 	}
+	/// Placeholder until the benchmark runs.
+	/// Storage: `People::People` (r:2 w:1)
+	/// Storage: `Members::Members` (r:1 w:0)
+	fn migrate_person() -> Weight {
+		Weight::from_parts(300_000_000, 8_130)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -611,5 +620,13 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads(2_u64))
 			.saturating_add(RocksDbWeight::get().reads((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 2595).saturating_mul(n.into()))
+	}
+	/// Placeholder until the benchmark runs.
+	/// Storage: `People::People` (r:2 w:1)
+	/// Storage: `Members::Members` (r:1 w:0)
+	fn migrate_person() -> Weight {
+		Weight::from_parts(300_000_000, 8_130)
+			.saturating_add(RocksDbWeight::get().reads(4_u64))
+			.saturating_add(RocksDbWeight::get().writes(2_u64))
 	}
 }

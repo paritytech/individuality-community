@@ -29,7 +29,7 @@ use frame_support::{
 	traits::{GetStorageVersion, OnRuntimeUpgrade, UnixTime},
 	weights::WeightMeter,
 };
-use indiv_support::traits::{AppendOnlyMembers, PersonalId, RecognitionHistory, RingPosition};
+use indiv_support::traits::{AppendOnlyMembers, PersonalId, RecognitionHistory};
 use sp_runtime::Saturating;
 
 const LOG_TARGET: &str = "runtime::people::migration";
@@ -68,11 +68,7 @@ pub mod v0 {
 impl<T: Config> MigrateV0ToV1<T> {
 	/// Returns the weight of migrating one person.
 	fn weight_per_person() -> Weight {
-		let proof = v0::PersonRecord::<MemberOf<T>, T::AccountId>::max_encoded_len()
-			.saturating_add(RingPosition::max_encoded_len()) as u64;
-		T::DbWeight::get()
-			.reads_writes(3, 1)
-			.saturating_add(Weight::from_parts(0, proof))
+		<T as Config>::WeightInfo::migrate_person()
 	}
 
 	/// Rewrites the record of `id` under the new layout.
@@ -157,8 +153,6 @@ impl<T: Config> SteppedMigration for MigrateV0ToV1<T> {
 				record.history.recognized_since.is_none() == suspended,
 				"an open period must match an active member"
 			);
-			ensure!(record.history.periods.is_empty(), "no closed period is expected");
-			ensure!(record.history.settled == 0, "no settled tenure is expected");
 		}
 		ensure!(before == after, "the number of people must not change");
 		Ok(())

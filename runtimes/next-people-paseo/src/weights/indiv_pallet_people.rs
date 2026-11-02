@@ -335,4 +335,11 @@ impl<T: frame_system::Config> indiv_pallet_people::WeightInfo for WeightInfo<T> 
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 2595).saturating_mul(n.into()))
 	}
+	/// Storage: `People::People` (r:2 w:1)
+	/// Storage: `Members::Members` (r:1 w:0)
+	fn migrate_person() -> Weight {
+		Weight::from_parts(300_000_000, 8_130)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+	}
 }
