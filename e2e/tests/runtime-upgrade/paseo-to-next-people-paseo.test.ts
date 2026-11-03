@@ -16,7 +16,7 @@
 
 import { describe, expect, test } from "vitest";
 
-import { hexToU8a, u8aToBn } from "@polkadot/util";
+import { hexToBigInt } from "@polkadot/util";
 import { xxhashAsHex } from "@polkadot/util-crypto";
 
 import { type Block, getAuraSlotDuration } from "@acala-network/chopsticks-core";
@@ -57,7 +57,8 @@ function storagePrefix(pallet: string, item: string) {
  */
 async function seedAuraSlotDuration(block: Block) {
   const { result } = await block.call("AuraApi_slot_duration", []);
-  const slotDuration = u8aToBn(hexToU8a(result).subarray(0, 8)).toNumber();
+  // `SlotDuration` is a SCALE `u64`: eight little-endian bytes.
+  const slotDuration = Number(hexToBigInt(result, { isLe: true }));
   getAuraSlotDuration.cache.set(await block.wasm, Promise.resolve(slotDuration));
 }
 
