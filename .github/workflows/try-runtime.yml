@@ -1,0 +1,79 @@
+# Run the `try-runtime` upgrade checks against the live paseo next chains when a pull request carries
+# the `C1-runtime-migration` label.
+name: "Try runtime"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# cancel previous runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  try-runtime:
+    name: try-runtime (${{ matrix.runtime.name }})
+    runs-on: parity-large
+    timeout-minutes: 60
+    # The `labeled`/`unlabeled` triggers re-run the job with the updated payload, so adding the label
+    # to an open pull request starts the checks without a new push.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'C1-runtime-migration'))
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime:
+          - name: next-people-paseo
+            package: next-people-paseo-runtime
+            uri: wss://paseo-people-next-system-rpc.polkadot.io
+          - name: next-asset-hub-paseo
+            package: next-asset-hub-paseo-runtime
+            uri: wss://paseo-asset-hub-next-rpc.polkadot.io
+
+    steps:
+      - name: Install updates and protobuf-compiler
+        run: sudo apt update && sudo apt install --assume-yes cmake protobuf-compiler build-essential clang
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Load common env file
+        run: cat .github/env >> $GITHUB_ENV
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
+        with:
+          cache: false
+
+      - name: Fetch cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: "individuality-cache-try-runtime"
+
+      - name: Download try-runtime-cli
+        run: |
+          curl -sL --fail -o try-runtime \
+            "https://github.com/paritytech/try-runtime-cli/releases/download/$TRY_RUNTIME_CLI_VERSION/try-runtime-x86_64-unknown-linux-musl"
+          chmod +x ./try-runtime
+          ./try-runtime --version
+
+      - name: Build ${{ matrix.runtime.name }} runtime
+        run: cargo build --release -p ${{ matrix.runtime.package }} --features try-runtime -q --locked
+
+      - name: Run try-runtime on ${{ matrix.runtime.name }}
+        env:
+          PACKAGE: ${{ matrix.runtime.package }}
+          URI: ${{ matrix.runtime.uri }}
+        run: |
+          RUNTIME_BLOB_PATH=./target/release/wbuild/$PACKAGE/${PACKAGE//-/_}.compact.compressed.wasm
+          ./try-runtime \
+            --runtime "$RUNTIME_BLOB_PATH" \
+            on-runtime-upgrade --blocktime 12000 --checks all --disable-spec-version-check \
+            live --uri "$URI"
