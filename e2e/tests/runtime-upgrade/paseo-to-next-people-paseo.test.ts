@@ -16,8 +16,10 @@
 
 import { describe, expect, test } from "vitest";
 
+import { hexToU8a, u8aToBn } from "@polkadot/util";
 import { xxhashAsHex } from "@polkadot/util-crypto";
 
+import { type Block, getAuraSlotDuration } from "@acala-network/chopsticks-core";
 import { setupContext } from "@acala-network/chopsticks-testing";
 
 import { constants as fsConstants } from "node:fs";
@@ -43,6 +45,20 @@ const EXPECTED_CHUNK_PAGE_HASHES = 8;
  */
 function storagePrefix(pallet: string, item: string) {
   return `${xxhashAsHex(pallet, 128)}${xxhashAsHex(item, 128).slice(2)}` as `0x${string}`;
+}
+
+/**
+ * Seeds the chopsticks Aura slot duration cache with the value from the runtime in `block`.
+ *
+ * Chopsticks reads the slot duration with unresolved imports disallowed. The runtime imports
+ * statement store host functions that chopsticks does not provide, so that read fails and
+ * chopsticks uses 12s for the slot digest and the timestamp inherent. `Block.call` allows
+ * unresolved imports, so it reads the real value.
+ */
+async function seedAuraSlotDuration(block: Block) {
+  const { result } = await block.call("AuraApi_slot_duration", []);
+  const slotDuration = u8aToBn(hexToU8a(result).subarray(0, 8)).toNumber();
+  getAuraSlotDuration.cache.set(await block.wasm, Promise.resolve(slotDuration));
 }
 
 async function isReadable(path: string) {
@@ -133,6 +149,7 @@ describeRuntimeUpgrade("Paseo next-people-paseo -> local next-people-paseo runti
         // next-people-paseo runtime WASM into the block.
         const wasm = await readFile(runtimeWasm);
         block.setWasm(`0x${wasm.toString("hex")}`);
+        await seedAuraSlotDuration(block);
 
         // Build a block with the injected runtime. Executive runs the migrations
         // only when the spec version changed.
