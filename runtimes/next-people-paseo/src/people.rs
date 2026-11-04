@@ -50,14 +50,15 @@ use xcm::v5::{Location, WeightLimit};
 
 use crate::{
 	parameters::{
-		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePersonRegistrationFee,
+		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePaidRegistrationPeriod,
+		LitePaidRegistrationThreshold, LitePaidRegistrationsPerPeriod, LitePersonRegistrationFee,
 		LitePersonStatementLimit, LiteStmtStoreSlotsPerPeriod,
 		LongTermStorageAllowanceForLitePeople, LongTermStorageAllowanceForPeople,
 		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
-		LongTermStoragePeriodDuration, NotificationAllowance, NotificationPeriodDuration,
-		NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource, PersonStatementLimit,
-		StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreReplacementCooldown,
-		StmtStoreSlotsPerPeriod,
+		LongTermStoragePeriodDuration, MaxLitePeople, NotificationAllowance,
+		NotificationPeriodDuration, NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource,
+		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow,
+		StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -204,6 +205,7 @@ parameter_types! {
 impl indiv_pallet_people::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people::WeightInfo<Runtime>;
 	type MemberService = Members;
+	type Clock = RuntimeClock;
 	type RingExponent = MembersFlexibleRingExponent;
 	type CollectionOwner = PeopleCollectionOwner;
 	type AccountContexts = AccountContexts;
@@ -1307,6 +1309,11 @@ impl indiv_pallet_people_lite::Config for Runtime {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type MaxLitePeople = MaxLitePeople;
+	type Clock = RuntimeClock;
+	type PaidRegistrationThreshold = LitePaidRegistrationThreshold;
+	type PaidRegistrationPeriod = LitePaidRegistrationPeriod;
+	type PaidRegistrationsPerPeriod = LitePaidRegistrationsPerPeriod;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;

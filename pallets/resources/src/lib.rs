@@ -26,6 +26,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
+use alloc::vec::Vec;
 
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
@@ -76,6 +77,8 @@ pub mod pallet {
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
 
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+	/// The prefix of the message a lite consumer account signs in [`Call::register_person`].
+	pub const REGISTER_PERSON_MSG_PREFIX: &[u8] = b"pop:resources:register_person";
 
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
@@ -620,8 +623,8 @@ pub mod pallet {
 		///
 		/// The person must link a previously recognized lite identity, which will be upgraded to a
 		/// full person consumer. In order to prove they hold the lite identity they want to link,
-		/// users must provide a `lite_identity_proof` signature, created by signing the alias bytes
-		/// using their lite consumer account.
+		/// users must provide a `lite_identity_proof` signature. The lite consumer account signs
+		/// [`Pallet::account_signing_payload`] of [`Pallet::register_person_message`].
 		#[pallet::call_index(1)]
 		#[pallet::weight(<T as Config>::WeightInfo::register_person())]
 		pub fn register_person(
@@ -634,7 +637,10 @@ pub mod pallet {
 
 			// Verifying proof of ownership of the linked lite person.
 			ensure!(
-				lite_identity_proof.verify(&alias[..], &linked_lite_identity),
+				lite_identity_proof.verify(
+					&Self::account_signing_payload(&Self::register_person_message(&alias))[..],
+					&linked_lite_identity
+				),
 				Error::<T>::InvalidProofOfOwnership,
 			);
 			// Ensuring the linked lite person was not already linked to another full person.
@@ -1257,6 +1263,31 @@ pub mod pallet {
 
 		pub fn resources_context() -> Context {
 			Self::build_context(personhood::RESOURCES)
+		}
+	}
+
+	#[pallet::extra_constants]
+	impl<T: Config> Pallet<T> {
+		/// The personhood signing context on this network. An account signs this context
+		/// followed by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			[&Self::signing_context()[..], msg].concat()
+		}
+
+		/// Returns the message a lite consumer account signs to link itself to `alias` in
+		/// [`Call::register_person`].
+		pub fn register_person_message(alias: &Alias) -> Vec<u8> {
+			[REGISTER_PERSON_MSG_PREFIX, &alias[..]].concat()
 		}
 
 		pub fn notification_context(reference: NotificationReference) -> Context {

@@ -37,7 +37,7 @@ use indiv_support::traits::{
 };
 use sp_runtime::{
 	testing::UintAuthorityId,
-	traits::{Applyable, Checkable},
+	traits::{Applyable, Checkable, IdentifyAccount, Lazy, Verify},
 	transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidityError},
 	BuildStorage, DispatchError, TransactionOutcome,
 };
@@ -113,12 +113,48 @@ impl pallet_balances::Config for Test {
 
 impl alias_target::Config for Test {}
 
+/// An account signature that is valid for its own account over a message in the personhood
+/// signing context.
+#[derive(
+	Encode,
+	codec::Decode,
+	codec::DecodeWithMemTracking,
+	codec::MaxEncodedLen,
+	Clone,
+	PartialEq,
+	Eq,
+	Debug,
+	scale_info::TypeInfo,
+)]
+pub struct MockSignature(pub u64);
+
+impl IdentifyAccount for MockSignature {
+	type AccountId = u64;
+	fn into_account(self) -> u64 {
+		self.0
+	}
+}
+
+impl Verify for MockSignature {
+	type Signer = Self;
+
+	fn verify<L: Lazy<[u8]>>(&self, mut msg: L, signer: &u64) -> bool {
+		let msg = msg.get();
+		let context = indiv_support::context::build_product_context(
+			indiv_support::context::personhood::PRODUCT_NAME,
+			&NetworkSuffix::get(),
+			indiv_support::context::SIGNING,
+		);
+		self.0 == *signer && msg.starts_with(&context)
+	}
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 pub struct Helper;
 #[cfg(feature = "runtime-benchmarks")]
-impl crate::BenchmarkHelper<u64, UintAuthorityId> for Helper {
-	fn sign_message(_message: &[u8]) -> (u64, UintAuthorityId) {
-		(0, UintAuthorityId(0))
+impl crate::BenchmarkHelper<u64, MockSignature> for Helper {
+	fn sign_message(_message: &[u8]) -> (u64, MockSignature) {
+		(0, MockSignature(0))
 	}
 }
 
@@ -138,13 +174,18 @@ impl crate::Config for Test {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type MaxLitePeople = MaxLitePeople;
+	type Clock = TestClock;
+	type PaidRegistrationThreshold = PaidRegistrationThreshold;
+	type PaidRegistrationPeriod = PaidRegistrationPeriod;
+	type PaidRegistrationsPerPeriod = PaidRegistrationsPerPeriod;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = MockMemberService;
 	type CollectionOwner = LiteCollectionOwnerConst;
 	type LiteRingExponent = LiteRingExponentConst;
 	type LiteOnboardingSize = LiteOnboardingSizeConst;
-	type AttestationSignature = UintAuthorityId;
+	type AttestationSignature = MockSignature;
 	type LiteConsumerRegistrar = MockConsumerRegistrar;
 	type AccountContexts = LiteAccountContexts;
 	#[cfg(feature = "runtime-benchmarks")]
@@ -153,6 +194,11 @@ impl crate::Config for Test {
 
 parameter_types! {
 	pub storage LitePersonRegistrationFee: u64 = 10;
+	pub storage MaxLitePeople: u32 = u32::MAX;
+	pub storage PaidRegistrationThreshold: u32 = 1_000;
+	pub storage PaidRegistrationPeriod: u32 = 24 * 60 * 60;
+	pub storage PaidRegistrationsPerPeriod: u32 = 2;
+	pub storage TestUnixTime: u64 = 0;
 	pub const LitePeoplePotId: PalletId = PalletId(*b"plitefee");
 	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
 		b"paseo".to_vec().try_into().expect("network suffix fits");
@@ -168,6 +214,14 @@ thread_local! {
 	static MOCK_FAIL_NEXT_ADD_MEMBERS: RefCell<bool> = const { RefCell::new(false) };
 	static MOCK_REGISTERED_CONSUMERS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 	static MOCK_FAIL_NEXT_CONSUMER_REGISTRATION: RefCell<bool> = const { RefCell::new(false) };
+}
+
+/// Unix time read from [`TestUnixTime`].
+pub struct TestClock;
+impl frame_support::traits::UnixTime for TestClock {
+	fn now() -> core::time::Duration {
+		core::time::Duration::from_secs(TestUnixTime::get())
+	}
 }
 
 pub struct MockConsumerRegistrar;

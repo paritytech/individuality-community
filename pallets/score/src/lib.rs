@@ -23,6 +23,7 @@ extern crate alloc;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 mod extension;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
@@ -94,7 +95,10 @@ pub mod pallet {
 	/// far in the future.
 	const CUSTOM_ERROR_FAR_FUTURE: u8 = 87;
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	/// Default personhood-threshold tiers, used as the storage default for
@@ -1111,6 +1115,7 @@ pub mod pallet {
 					reached_personhood: false,
 					has_ever_reached_personhood: false,
 					last_attended_game: None,
+					attended_games_while_recognized: 0,
 				},
 			);
 
@@ -1137,6 +1142,7 @@ pub mod pallet {
 					reached_personhood: true,
 					has_ever_reached_personhood: true,
 					last_attended_game: None,
+					attended_games_while_recognized: 0,
 				},
 			);
 
@@ -1247,6 +1253,12 @@ pub mod pallet {
 			// Update last_attended_game.
 			if attended {
 				score.last_attended_game = Some(game_index);
+			}
+
+			// Counting games attended while recognized through games
+			if attended && matches!(score.recognition, Recognized(_)) {
+				score.attended_games_while_recognized =
+					score.attended_games_while_recognized.saturating_add(1);
 			}
 
 			// Update score and streak given the attendance.
