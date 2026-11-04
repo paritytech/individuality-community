@@ -754,6 +754,10 @@ mod migration {
 					credibility: Credibility::Lite
 				})
 			);
+			// An old lite record also decodes under the new type, because the `None` tag of
+			// `full_username` matches the `Credibility::Lite` discriminant. A translated record no
+			// longer decodes under the old type.
+			assert!(v0::Consumers::<Test>::get(&lite).is_none());
 			assert_eq!(
 				Consumers::<Test>::get(&person),
 				Some(ConsumerInfo {
