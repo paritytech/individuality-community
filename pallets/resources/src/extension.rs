@@ -39,7 +39,7 @@ use indiv_support::{
 use scale_info::TypeInfo;
 use sp_crypto_hashing::twox_64;
 use sp_runtime::{
-	traits::{DispatchInfoOf, TransactionExtension, ValidateResult},
+	traits::{DispatchInfoOf, TransactionExtension, ValidateResult, Verify},
 	transaction_validity::{InvalidTransaction, TransactionValidityError, ValidTransaction},
 };
 
@@ -63,7 +63,7 @@ pub enum CustomValidity {
 	InvalidStmtStorePeriod = 226,
 	/// The statement store sequence is above the collection-specific slot limit.
 	InvalidStmtStoreSequence = 227,
-	/// The replacement cooldown has not elapsed since the entry was last set.
+	/// The statement store slot entry was written at the current timestamp.
 	StmtStoreReplacementTooEarly = 228,
 	/// The requested expired statement store cleanup is not currently valid.
 	InvalidExpiredStmtStoreCleanup = 229,
@@ -77,6 +77,14 @@ pub enum CustomValidity {
 	LongTermStoragePeriodNotExpired = 233,
 	/// There are no long-term storage aliases to clear for the period.
 	NothingToClearForLongTermStoragePeriod = 234,
+	/// The statement store slot already has an entry for this period.
+	StmtStoreSlotAlreadyClaimed = 235,
+	/// No statement store allowance entry exists for the alias in this period.
+	StmtStoreEntryNotFound = 236,
+	/// The replacement signature was not made by the account holding the slot.
+	StmtStoreReplacementBadSignature = 237,
+	/// The statement account already holds the statement store slot.
+	StmtStoreReplacementSameAccount = 238,
 }
 
 impl From<CustomValidity> for TransactionValidityError {
@@ -151,11 +159,23 @@ pub enum AsResourcesInfo<T: Config> {
 	///   `Pallet::<T>::long_term_storage_context(period, counter)`,
 	/// - the proof message must be `blake2_256(scale_encode(inherited_implication))`.
 	ClaimLongTermStorage(ProofOf<T>, RingIndex, RevisionIndex, MembershipCollection),
+	/// Validate the signature of the statement account that holds a statement store slot.
+	///
+	/// This variant can only be used with `Call::replace_statement_store_account`.
+	///
+	/// Signature construction:
+	/// - the signer is the account recorded in the slot's `StatementStoreAllowances` entry,
+	/// - the signed bytes are `Pallet::<T>::account_signing_payload(msg)` where `msg` is
+	///   `Pallet::<T>::replace_stmt_store_account_message(period, alias, new_account, since)` and
+	///   `since` is the timestamp recorded in the existing entry.
+	///
+	/// Validation fails with `StmtStoreReplacementTooEarly` while the current timestamp equals
+	/// `since`, so submit after a later block.
+	ReplaceStatementStoreAccount(T::OffchainSignature),
 }
 
-/// Extension to validate notification registration proofs and transmute the origin into
-/// `resources::Origin::NotificationAlias` generated from
-/// `Pallet::<T>::notification_context(reference)`.
+/// Extension to validate the proofs and signatures that authorize the resources pallet's
+/// anonymous calls and transmute the origin into the matching `resources::Origin` variant.
 #[derive(
 	Encode,
 	Decode,
@@ -301,16 +321,10 @@ impl<T: Config> AsResources<T> {
 		let alias = validated_ca.alias;
 		let period_key = indiv_support::utils::BigEndianU32::from(*period);
 
-		// If an entry already exists, ensure the replacement cooldown has elapsed.
-		// This mirrors the dispatch-level check and prevents pool spam of proofs that
-		// would fail on dispatch.
-		if let Some(existing) = crate::StatementStoreAllowances::<T>::get(period_key, alias) {
-			let now = T::Clock::now().as_secs();
-			let cooldown = T::StmtStoreReplacementCooldown::get() as u64;
-			if now <= existing.since.saturating_add(cooldown) {
-				return Err(CustomValidity::StmtStoreReplacementTooEarly.into());
-			}
-		}
+		ensure!(
+			!crate::StatementStoreAllowances::<T>::contains_key(period_key, alias),
+			CustomValidity::StmtStoreSlotAlreadyClaimed
+		);
 
 		// Deduplicate by (alias, period, seq) so a user cannot queue many unsigned variants
 		// for the same slot by only changing the target account.
@@ -320,6 +334,60 @@ impl<T: Config> AsResources<T> {
 			.priority(tx_priority::USER_DEFAULT);
 
 		let local_origin = Origin::StmtStoreAlias(alias);
+		let mut origin = origin;
+		origin.set_caller_from(local_origin);
+
+		Ok((validity.into(), (), origin))
+	}
+
+	fn validate_stmt_store_replacement(
+		origin: <T as frame_system::Config>::RuntimeOrigin,
+		call: &<T as frame_system::Config>::RuntimeCall,
+		signature: &T::OffchainSignature,
+	) -> ValidateResult<(), <T as frame_system::Config>::RuntimeCall> {
+		ensure!(
+			matches!(origin.as_system_ref(), Some(frame_system::RawOrigin::None)),
+			InvalidTransaction::BadSigner
+		);
+
+		let Some(crate::Call::<T>::replace_statement_store_account { period, alias, new_account }) =
+			call.is_sub_type()
+		else {
+			return Err(InvalidTransaction::Call.into());
+		};
+
+		let now = T::Clock::now().as_secs();
+		let current_period = Pallet::<T>::stmt_store_period_from_timestamp(now);
+		ensure!(*period == current_period, CustomValidity::InvalidStmtStorePeriod);
+
+		let period_key = indiv_support::utils::BigEndianU32::from(*period);
+		let existing = crate::StatementStoreAllowances::<T>::get(period_key, alias)
+			.ok_or(CustomValidity::StmtStoreEntryNotFound)?;
+		ensure!(
+			existing.account_id != *new_account,
+			CustomValidity::StmtStoreReplacementSameAccount
+		);
+		ensure!(now > existing.since, CustomValidity::StmtStoreReplacementTooEarly);
+
+		let msg = Pallet::<T>::replace_stmt_store_account_message(
+			*period,
+			alias,
+			new_account,
+			existing.since,
+		);
+		ensure!(
+			signature.verify(&Pallet::<T>::account_signing_payload(&msg)[..], &existing.account_id),
+			CustomValidity::StmtStoreReplacementBadSignature
+		);
+
+		// The proof claim uses the same tag, so the pool holds one transaction per slot.
+		let context = Pallet::<T>::stmt_store_slot_context(*period, existing.seq);
+		let provides = twox_64(&("stmt-store-slot", alias, context).encode());
+		let validity = ValidTransaction::with_tag_prefix("Res:StmtStoreSlot")
+			.and_provides(provides)
+			.priority(tx_priority::USER_DEFAULT);
+
+		let local_origin = Origin::StmtStoreHolder(*alias);
 		let mut origin = origin;
 		origin.set_caller_from(local_origin);
 
@@ -407,6 +475,8 @@ impl<T: Config> TransactionExtension<<T as frame_system::Config>::RuntimeCall> f
 				<T as Config>::WeightInfo::as_register_for_collection_tx_ext(),
 			Some(AsResourcesInfo::RegisterStatementStoreAllowance(..)) =>
 				<T as Config>::WeightInfo::as_stmt_store_allowance_tx_ext(),
+			Some(AsResourcesInfo::ReplaceStatementStoreAccount(..)) =>
+				<T as Config>::WeightInfo::as_replace_stmt_store_account_tx_ext(),
 			Some(AsResourcesInfo::ClaimLongTermStorage(..)) =>
 				<T as Config>::WeightInfo::claim_long_term_storage_tx_ext(),
 			None => Weight::zero(),
@@ -462,6 +532,8 @@ impl<T: Config> TransactionExtension<<T as frame_system::Config>::RuntimeCall> f
 				*revision,
 				collection,
 			),
+			Some(AsResourcesInfo::ReplaceStatementStoreAccount(signature)) =>
+				Self::validate_stmt_store_replacement(origin, call, signature),
 			Some(AsResourcesInfo::ClaimLongTermStorage(
 				proof,
 				ring_index,

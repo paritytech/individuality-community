@@ -492,6 +492,33 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 			.saturating_add(Weight::from_parts(0, 5649))
 			.saturating_add(T::DbWeight::get().reads(5))
 	}
+	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:1)
+	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(104), added: 2579, mode: `MaxEncodedLen`)
+	/// Storage: `Resources::StmtStoreAllowanceByAccount` (r:0 w:2)
+	/// Proof: `Resources::StmtStoreAllowanceByAccount` (`max_values`: None, `max_size`: Some(120), added: 2595, mode: `MaxEncodedLen`)
+	fn replace_statement_store_account() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `236`
+		//  Estimated: `3701`
+		// Minimum execution time: 27_383_000 picoseconds.
+		Weight::from_parts(28_397_000, 0)
+			.saturating_add(Weight::from_parts(0, 3701))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(5))
+	}
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:0)
+	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(104), added: 2579, mode: `MaxEncodedLen`)
+	fn as_replace_stmt_store_account_tx_ext() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `236`
+		//  Estimated: `3701`
+		// Minimum execution time: 80_000_000 picoseconds.
+		Weight::from_parts(80_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3701))
+			.saturating_add(T::DbWeight::get().reads(2))
+	}
 	/// Storage: `XcmpQueue::DeliveryFeeFactor` (r:1 w:0)
 	/// Proof: `XcmpQueue::DeliveryFeeFactor` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
 	/// Storage: `PolkadotXcm::SupportedVersion` (r:1 w:0)

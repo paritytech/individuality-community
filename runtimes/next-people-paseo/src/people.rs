@@ -57,8 +57,7 @@ use crate::{
 		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
 		LongTermStoragePeriodDuration, MaxLitePeople, NotificationAllowance,
 		NotificationPeriodDuration, NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource,
-		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow,
-		StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
+		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -328,15 +327,15 @@ pub mod benchmark_utils {
 			pallet_timestamp::Now::<Runtime>::put(now.as_millis() as u64);
 		}
 
+		/// Signs with sr25519 through the host keystore.
 		fn sign_message(message: &[u8]) -> (sp_runtime::AccountId32, MultiSignature) {
-			use sp_core::Pair;
+			use sp_io::crypto::{sr25519_generate, sr25519_sign};
 			use sp_runtime::traits::IdentifyAccount;
-			let entropy = [1u8; 32];
-			let pair = sp_core::ed25519::Pair::from_seed(&entropy);
-			let account = pair.public().into_account().into();
-			let secret = ed25519_zebra::SigningKey::from(entropy);
-			let signature = sp_core::ed25519::Signature::from_raw(secret.sign(message).into());
-			(account, signature.into())
+			let public = sr25519_generate(0.into(), None);
+			let account = sp_runtime::MultiSigner::Sr25519(public).into_account();
+			let signature = sr25519_sign(0.into(), &public, message)
+				.expect("the benchmark keystore signs with a key it generated; qed");
+			(account, MultiSignature::Sr25519(signature))
 		}
 	}
 
@@ -1343,7 +1342,6 @@ impl indiv_pallet_resources::Config for Runtime {
 	type StmtStoreSlotsPerPeriod = StmtStoreSlotsPerPeriod;
 	type LiteStmtStoreSlotsPerPeriod = LiteStmtStoreSlotsPerPeriod;
 	type StmtStoreCleanupLimit = StmtStoreCleanupLimit;
-	type StmtStoreReplacementCooldown = StmtStoreReplacementCooldown;
 	type StmtStoreGraceWindow = StmtStoreGraceWindow;
 	type NotificationAllowance = NotificationAllowance;
 	type NotificationSlotsPerPeriod = NotificationSlotsPerPeriod;
@@ -1355,6 +1353,7 @@ impl indiv_pallet_resources::Config for Runtime {
 	type EnsureLitePerson = indiv_pallet_people_lite::EnsureLitePerson<Runtime>;
 	type Clock = RuntimeClock;
 	type OffchainSignature = Signature;
+	type OnStmtStoreSlotCleared = ClearStmtStoreHolderUsage;
 	type LitePersonStatementLimit = LitePersonStatementLimit;
 	type PersonStatementLimit = PersonStatementLimit;
 	type MaxReservationQueueLength = MaxReservationQueueLength;

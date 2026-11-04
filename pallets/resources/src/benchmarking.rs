@@ -745,8 +745,6 @@ mod benches {
 
 	#[benchmark]
 	fn set_statement_store_account() -> Result<(), BenchmarkError> {
-		// Worst case: replacement of an existing entry after the cooldown has elapsed.
-		// This exercises the read-existing + revoke-old + insert-new code path.
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(
 			pallet::SECONDS_PER_DAY + 1000,
 		));
@@ -756,27 +754,6 @@ mod benches {
 		let seq = 0u32;
 		let alias: Alias = [10u8; 32];
 		let period_key = indiv_support::utils::BigEndianU32::from(period);
-
-		// Pre-populate an existing entry with the same alias and a different target.
-		let old_target: T::AccountId = account("old-target", 0, 0);
-		let old_seq = 1u32;
-		let initial_since = <T as Config>::Clock::now().as_secs();
-		increase_allowance_by(old_target.clone().into(), T::AccountsApiAllowance::get().into());
-		StatementStoreAllowances::<T>::insert(
-			period_key,
-			alias,
-			crate::types::StmtStoreAllowanceEntry {
-				account_id: old_target.clone(),
-				seq: old_seq,
-				since: initial_since,
-				allowance: T::AccountsApiAllowance::get().into(),
-			},
-		);
-		StmtStoreAllowanceByAccount::<T>::insert(&old_target, (period_key, old_seq, alias), ());
-
-		// Advance past the replacement cooldown.
-		let cooldown = T::StmtStoreReplacementCooldown::get() as u64;
-		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(initial_since + cooldown + 1));
 
 		let origin =
 			<T as frame_system::Config>::RuntimeOrigin::from(crate::Origin::StmtStoreAlias(alias));
@@ -791,13 +768,64 @@ mod benches {
 		assert_eq!(entry.seq, seq);
 		assert_eq!(
 			StmtStoreAllowanceByAccount::<T>::get(&target_account, (period_key, seq, alias)),
-			Some(()),
+			Some(())
 		);
-		// Old reverse lookup must be gone.
+		assert_eq!(get_allowance(target_account.into()), T::AccountsApiAllowance::get());
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn replace_statement_store_account() -> Result<(), BenchmarkError> {
+		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(
+			pallet::SECONDS_PER_DAY + 1000,
+		));
+
+		let period =
+			Pallet::<T>::stmt_store_period_from_timestamp(<T as Config>::Clock::now().as_secs());
+		let seq = 1u32;
+		let alias: Alias = [10u8; 32];
+		let period_key = indiv_support::utils::BigEndianU32::from(period);
+
+		let old_target: T::AccountId = account("old-target", 0, 0);
+		let initial_since = <T as Config>::Clock::now().as_secs();
+		increase_allowance_by(old_target.clone().into(), T::AccountsApiAllowance::get().into());
+		StatementStoreAllowances::<T>::insert(
+			period_key,
+			alias,
+			crate::types::StmtStoreAllowanceEntry {
+				account_id: old_target.clone(),
+				seq,
+				since: initial_since,
+				allowance: T::AccountsApiAllowance::get().into(),
+			},
+		);
+		StmtStoreAllowanceByAccount::<T>::insert(&old_target, (period_key, seq, alias), ());
+
+		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(initial_since + 1));
+
+		let origin =
+			<T as frame_system::Config>::RuntimeOrigin::from(crate::Origin::StmtStoreHolder(alias));
+		let new_account: T::AccountId = whitelisted_caller();
+
+		#[extrinsic_call]
+		_(origin, period, alias, new_account.clone());
+
+		let entry = StatementStoreAllowances::<T>::get(period_key, alias)
+			.expect("allowance entry should be stored");
+		assert_eq!(entry.account_id, new_account.clone());
+		assert_eq!(entry.seq, seq);
 		assert_eq!(
-			StmtStoreAllowanceByAccount::<T>::get(&old_target, (period_key, old_seq, alias)),
-			None,
+			StmtStoreAllowanceByAccount::<T>::get(&new_account, (period_key, seq, alias)),
+			Some(())
 		);
+		assert_eq!(
+			StmtStoreAllowanceByAccount::<T>::get(&old_target, (period_key, seq, alias)),
+			None
+		);
+		assert_eq!(get_allowance(old_target.into()), StatementAllowance::default());
+		assert_eq!(get_allowance(new_account.into()), T::AccountsApiAllowance::get());
+
 		Ok(())
 	}
 
@@ -879,8 +907,6 @@ mod benches {
 
 	#[benchmark]
 	fn as_stmt_store_allowance_tx_ext() -> Result<(), BenchmarkError> {
-		// Worst case: extension validates a replacement proof, which performs the extra
-		// storage read of the existing entry to check the cooldown.
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(
 			pallet::SECONDS_PER_DAY + 1000,
 		));
@@ -915,25 +941,6 @@ mod benches {
 			indiv_pallet_people::CryptoOf::<T>::create(commitment, &secret, &context, &msg)
 				.map_err(|_| BenchmarkError::Stop("failed to create lite proof"))?;
 
-		// Pre-populate an existing entry under the same alias so the extension exercises
-		// the cooldown branch.
-		let period_key = indiv_support::utils::BigEndianU32::from(period);
-		let initial_since = <T as Config>::Clock::now().as_secs();
-		let existing_target: T::AccountId = account("existing-target", 0, 0);
-		StatementStoreAllowances::<T>::insert(
-			period_key,
-			alias,
-			crate::types::StmtStoreAllowanceEntry {
-				account_id: existing_target,
-				seq: 1,
-				since: initial_since,
-				allowance: T::AccountsApiAllowance::get().into(),
-			},
-		);
-		// Advance past the replacement cooldown so validation succeeds.
-		let cooldown = T::StmtStoreReplacementCooldown::get() as u64;
-		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(initial_since + cooldown + 1));
-
 		let tx_ext = crate::extension::AsResources::<T>::new(Some(
 			crate::extension::AsResourcesInfo::RegisterStatementStoreAllowance(
 				proof,
@@ -941,6 +948,65 @@ mod benches {
 				0,
 				crate::types::MembershipCollection::LitePeople,
 			),
+		));
+		let len = call.encode().len();
+
+		#[block]
+		{
+			tx_ext
+				.test_run(SystemOrigin::None.into(), &call, &Default::default(), len, 0, |_| {
+					Ok(Default::default())
+				})
+				.unwrap()?;
+		}
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn as_replace_stmt_store_account_tx_ext() -> Result<(), BenchmarkError> {
+		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(
+			pallet::SECONDS_PER_DAY + 1000,
+		));
+		let period =
+			Pallet::<T>::stmt_store_period_from_timestamp(<T as Config>::Clock::now().as_secs());
+		let seq = 0u32;
+		let alias: Alias = [10u8; 32];
+		let period_key = indiv_support::utils::BigEndianU32::from(period);
+
+		let (holder, _) = <T as Config>::BenchmarkHelper::sign_message(b"mock");
+		let initial_since = <T as Config>::Clock::now().as_secs();
+		StatementStoreAllowances::<T>::insert(
+			period_key,
+			alias,
+			crate::types::StmtStoreAllowanceEntry {
+				account_id: holder,
+				seq,
+				since: initial_since,
+				allowance: T::AccountsApiAllowance::get().into(),
+			},
+		);
+		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(initial_since + 1));
+
+		let new_account: T::AccountId = account("new-target", 0, 0);
+		let call: <T as frame_system::Config>::RuntimeCall =
+			crate::Call::<T>::replace_statement_store_account {
+				period,
+				alias,
+				new_account: new_account.clone(),
+			}
+			.into();
+		let (_, signature) =
+			<T as Config>::BenchmarkHelper::sign_message(&Pallet::<T>::account_signing_payload(
+				&Pallet::<T>::replace_stmt_store_account_message(
+					period,
+					&alias,
+					&new_account,
+					initial_since,
+				),
+			));
+		let tx_ext = crate::extension::AsResources::<T>::new(Some(
+			crate::extension::AsResourcesInfo::ReplaceStatementStoreAccount(signature),
 		));
 		let len = call.encode().len();
 
