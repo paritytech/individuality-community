@@ -69,3 +69,7 @@ One line per state change and per `Game.*` event, then the full timeline at the 
   skips.
 - **One player is enough.** The People runtime sets `TESTNET`, so a single registered player is an
   acceptable player count and the game reaches the shuffle instead of being cancelled.
+- **The floor is checked here.** "two games at the floor run back to back" sets the shuffle and the
+  player process to `Game.MinStepPhaseDuration` and places the games one clock tick apart. The
+  pallet can only reject a floor that can never work. Whether the floor the runtime ships holds on
+  a real chain is what this test shows. A failure here means the runtime value is too low.

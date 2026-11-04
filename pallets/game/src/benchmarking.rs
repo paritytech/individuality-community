@@ -2219,7 +2219,7 @@ mod benches {
 
 		#[block]
 		{
-			pallet::Pallet::<T>::on_game_cancelled(&game);
+			pallet::Pallet::<T>::on_game_cancelled(&game, CancelReason::Manager);
 		}
 
 		// Cancellation routes each airdrop into the airdrop pallet's clean-up pipeline (or drops

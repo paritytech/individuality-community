@@ -52,20 +52,23 @@ export const PHASES = {
 /** The play deposit charged to a new player, in plancks. */
 export const PLAY_DEPOSIT = 10_000_000_000n;
 
-/**
- * How far before `game_play_time` a game's registration may open.
- */
-export const LEAD_TIME = PHASES.registration + PHASES.shuffle + PHASES.post_shuffle_margin;
+export type Phases = typeof PHASES;
 
-/**
- * The shortest distance `schedule_games` accepts between two consecutive play times.
- */
-export const MIN_SPACING =
-  PHASES.registration +
-  PHASES.shuffle +
-  PHASES.post_shuffle_margin +
-  PHASES.reporting +
-  PHASES.player_process;
+/** `PHASES` with the shuffle and the player process at the chain's floor, `MinStepPhaseDuration`. */
+export const floorPhases = (minimum: number): Phases => ({
+  ...PHASES,
+  shuffle: minimum,
+  player_process: minimum,
+});
+
+/** How far before `game_play_time` a game's registration may open. */
+export const leadTime = (phases: Phases) => phases.registration + phases.shuffle + phases.post_shuffle_margin;
+
+/** The shortest distance `schedule_games` accepts between two consecutive play times. */
+export const minSpacing = (phases: Phases) => leadTime(phases) + phases.reporting + phases.player_process;
+
+export const LEAD_TIME = leadTime(PHASES);
+export const MIN_SPACING = minSpacing(PHASES);
 
 /**
  * Extra spacing on top of `MIN_SPACING`.
@@ -111,10 +114,10 @@ const IDENTIFIER_KEY = Binary.toHex(new Uint8Array(65).fill(0x42));
 /**
  * Sets the phase durations.
  */
-export async function setPhases(api: PeopleApi, sudo: Sudo, minimum: number): Promise<void> {
+export async function setPhases(api: PeopleApi, sudo: Sudo, minimum: number, phases = PHASES): Promise<void> {
   for (const [name, seconds] of [
-    ["GAME_PHASE_SHUFFLE", PHASES.shuffle],
-    ["GAME_PHASE_PLAYER_PROCESS", PHASES.player_process],
+    ["GAME_PHASE_SHUFFLE", phases.shuffle],
+    ["GAME_PHASE_PLAYER_PROCESS", phases.player_process],
   ] as const) {
     if (seconds < minimum) {
       throw new Error(
@@ -122,7 +125,7 @@ export async function setPhases(api: PeopleApi, sudo: Sudo, minimum: number): Pr
       );
     }
   }
-  await sudo(api.tx.Game.set_game_phases({ phases: PHASES }).decodedCall, "Game.set_game_phases");
+  await sudo(api.tx.Game.set_game_phases({ phases }).decodedCall, "Game.set_game_phases");
 }
 
 /** Sets the deposit a new player pays at sign-up. */
@@ -130,9 +133,14 @@ export async function setPlayDeposit(api: PeopleApi, sudo: Sudo): Promise<void> 
   await sudo(api.tx.Game.set_play_deposit({ amount: PLAY_DEPOSIT }).decodedCall, "Game.set_play_deposit");
 }
 
-/** Play times for `count` games. The first sits `FIRST_OFFSET` ahead of `from`, the rest `SPACING` apart. */
-export function playTimes(from: number, count: number): number[] {
-  return Array.from({ length: count }, (_value, index) => from + FIRST_OFFSET + index * SPACING);
+/**
+ * Play times for `count` games under `phases`. The first sits `FIRST_GAME_MARGIN` past the lead time
+ * ahead of `from`. The rest follow at the minimum spacing plus `slack`.
+ */
+export function playTimes(from: number, count: number, phases = PHASES, slack = SPACING_SLACK): number[] {
+  const first = from + leadTime(phases) + FIRST_GAME_MARGIN;
+  const spacing = minSpacing(phases) + slack;
+  return Array.from({ length: count }, (_value, index) => first + index * spacing);
 }
 
 /** Queues one game per play time. One player per group is enough on a `TESTNET` runtime. */

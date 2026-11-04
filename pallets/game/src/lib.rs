@@ -69,7 +69,10 @@
 //! compared against the block timestamp, which advances in jumps. The `shuffle` and
 //! `player_process` phases and the gap between consecutive games must therefore leave room for
 //! every step the phase needs, and that count grows with the player count.
-//! [`Config::MinStepPhaseDuration`] rejects only a phase that can never complete.
+//! [`Config::MinStepPhaseDuration`] rejects only a phase that can never complete. A shuffle that
+//! misses its deadline cancels the game with [`CancelReason::ShuffleDeadlineMissed`] and an error
+//! log. A player process that runs past the next game's registration start drops that schedule
+//! with [`Error::OutdatedGameSetup`].
 //!
 //! # player index, groups, rounds and report.
 //!
@@ -741,8 +744,8 @@ pub mod pallet {
 		AirdropScheduled { game_index: GameIdx, airdrop_index: u8, event_id: AirdropEventId },
 		/// An airdrop event for the current game failed to schedule.
 		AirdropScheduleFailed { game_index: GameIdx, airdrop_index: u8, error: DispatchError },
-		/// Game `game_index` was cancelled.
-		GameCancelled { game_index: GameIdx },
+		/// Game `game_index` was cancelled for `reason`.
+		GameCancelled { game_index: GameIdx, reason: CancelReason },
 		/// A scheduled game failed to start. Its schedule was removed.
 		GameScheduleDropped { game_play_time: u32, error: DispatchError },
 	}
@@ -1830,7 +1833,7 @@ pub mod pallet {
 				Error::<T>::InvalidGameState
 			);
 
-			Self::on_game_cancelled(&game);
+			Self::on_game_cancelled(&game, CancelReason::Manager);
 			game.state = GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
 			Game::<T>::put(game);
 
@@ -2313,7 +2316,7 @@ pub mod pallet {
 				);
 				<T as Config>::WeightInfo::end_registration_shuffle()
 			} else {
-				Self::on_game_cancelled(&game);
+				Self::on_game_cancelled(&game, CancelReason::TooFewPlayers);
 				game.state = GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
 				log::trace!(
 					target: LOG_TARGET,
@@ -2533,12 +2536,12 @@ pub mod pallet {
 		/// Called from every transition to `GameState::Cancelling`.
 		/// * cancel the game's airdrop events (those that were scheduled).
 		/// * deposit event.
-		pub(crate) fn on_game_cancelled(game: &GameInfo<T::AccountId>) {
+		pub(crate) fn on_game_cancelled(game: &GameInfo<T::AccountId>, reason: CancelReason) {
 			for airdrop_index in 0..game.airdrops_scheduled {
 				let event_id = Self::airdrop_event_id(game.index, airdrop_index);
 				T::Airdrop::cancel(event_id);
 			}
-			Self::deposit_event(Event::<T>::GameCancelled { game_index: game.index });
+			Self::deposit_event(Event::<T>::GameCancelled { game_index: game.index, reason });
 		}
 
 		/// **Warning**: Storage must be rollbacked on error.
@@ -3069,7 +3072,16 @@ pub mod pallet {
 
 			let now = T::UnixTime::now();
 			if now > Duration::from_secs(game.shuffle_deadline.into()) {
-				Self::on_game_cancelled(&game);
+				// The configured phases leave no room for the steps this shuffle needs, so this is
+				// an error introduced by an operator (who configured the pallet).
+				log::error!(
+					target: LOG_TARGET,
+					"game {}: shuffle deadline {} passed at {}, the shuffle phase is too short",
+					game.index,
+					game.shuffle_deadline,
+					now.as_secs(),
+				);
+				Self::on_game_cancelled(&game, CancelReason::ShuffleDeadlineMissed);
 				game.state = GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
 				Game::<T>::put(game);
 				return;

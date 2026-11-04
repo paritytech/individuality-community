@@ -2918,7 +2918,7 @@ fn offchain_worker_keeps_statements_without_removal_event() {
 		mock_statement_store().add_stmt(stmt.clone());
 
 		// An unrelated event is present, but no `StmtUsageRemoved`, so nothing is removed.
-		Game::deposit_event(Event::GameCancelled { game_index: 0 });
+		Game::deposit_event(Event::GameCancelled { game_index: 0, reason: CancelReason::Manager });
 
 		AllPalletsWithSystem::offchain_worker(System::block_number());
 
@@ -3030,6 +3030,9 @@ mod game_cancellation {
 				crate::Game::<Test>::get().unwrap().state,
 				GameState::Cancelling { .. }
 			));
+			System::assert_has_event(
+				Event::GameCancelled { game_index, reason: CancelReason::TooFewPlayers }.into(),
+			);
 
 			// Game should be removed
 			advance_process();
@@ -3708,6 +3711,15 @@ fn game_cancelled_due_to_shuffle_deadline_missed() {
 		advance_process();
 		assert!(crate::Game::<Test>::get().is_some());
 		assert!(matches!(crate::Game::<Test>::get().unwrap().state, GameState::Cancelling { .. }));
+		// The event names the missed deadline, so an operator can tell this cancellation from one
+		// over too few players.
+		System::assert_has_event(
+			Event::GameCancelled {
+				game_index: GameIndex::<Test>::get(),
+				reason: CancelReason::ShuffleDeadlineMissed,
+			}
+			.into(),
+		);
 
 		// Let the Cancelling phase do its cleanup in the next block.
 		advance_process();
@@ -5204,7 +5216,11 @@ mod cancel_game {
 			assert!(info.registered, "cleanup happens later, not during the extrinsic");
 			// `GameCancelled` is emitted up-front, when the game is flipped to `Cancelling`.
 			System::assert_has_event(
-				crate::Event::<Test>::GameCancelled { game_index: game.index }.into(),
+				crate::Event::<Test>::GameCancelled {
+					game_index: game.index,
+					reason: CancelReason::Manager,
+				}
+				.into(),
 			);
 		});
 	}
@@ -5247,7 +5263,10 @@ mod cancel_game {
 			let bob = AccountOrPerson::<AccountId32>::Account(BOB);
 			assert!(!crate::Players::<Test>::get(&alice).unwrap().registered);
 			assert!(!crate::Players::<Test>::get(&bob).unwrap().registered);
-			System::assert_has_event(crate::Event::<Test>::GameCancelled { game_index }.into());
+			System::assert_has_event(
+				crate::Event::<Test>::GameCancelled { game_index, reason: CancelReason::Manager }
+					.into(),
+			);
 		});
 	}
 

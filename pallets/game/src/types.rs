@@ -589,6 +589,17 @@ impl<T: Config, AccountId: Into<sp_statement_store::AccountId>> GameTimes<T>
 	}
 }
 
+/// Why a game was cancelled.
+#[derive(Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelReason {
+	/// `end_registration` found too few registered players.
+	TooFewPlayers,
+	/// `advance_shuffle` ran after the shuffle deadline. The configured phases are too short.
+	ShuffleDeadlineMissed,
+	/// [`Config::ManagerOrigin`] called `cancel_game`.
+	Manager,
+}
+
 /// Contains the duration values for each game phase in seconds.
 #[derive(
 	Encode, Decode, MaxEncodedLen, TypeInfo, Debug, Clone, PartialEq, DecodeWithMemTracking,

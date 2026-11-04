@@ -18,7 +18,9 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { chainNow, connect, devSigner, type Submit, type Sudo, submitters } from "./chain.ts";
 import {
+  CLOCK_TICK,
   FIRST_OFFSET,
+  floorPhases,
   PHASES,
   playTimes,
   readMinStepPhaseDuration,
@@ -58,10 +60,16 @@ const sawEvent = (entry: BlockRecord, name: string) =>
  * step. `index` is the game index the game is expected to take.
  */
 async function expectFullGame(monitor: Monitor, index: number, signUpPlayer: () => Promise<void>) {
+  // A schedule whose registration start has passed is dropped, not started late. Naming that
+  // branch beats waiting out the timeout.
   const registration = await monitor.waitFor(
     entry => inPhase("Registration")(entry) && entry.gameIndex === index,
     `game ${index} to enter Registration (start_game)`,
     ONE_GAME_TIMEOUT,
+    {
+      predicate: entry => sawEvent(entry, "GameScheduleDropped"),
+      reason: `the schedule of game ${index} was dropped`,
+    },
   );
   expect(sawEvent(registration, "NewGame")).toBe(true);
 
@@ -193,6 +201,31 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("game offchain worker drives the game stat
       expect(schedules).toHaveLength(0);
     },
     THREE_GAMES_TIMEOUT + 120 * SECOND,
+  );
+
+  test(
+    "two games at the floor run back to back",
+    async () => {
+      // `MinStepPhaseDuration` claims that a shuffle and a player process this short complete. Only
+      // the running chain can confirm it: the pallet sees neither the clock tick nor the step
+      // latency. The games sit one clock tick apart, the least `new_game` accepts.
+      const phases = floorPhases(minStepPhaseDuration);
+      await setPhases(chain.api, sudo, minStepPhaseDuration, phases);
+
+      const before = Number(await chain.api.query.Game.GameIndex.getValue());
+      const now = await chainNow(chain.api);
+      await scheduleGames(chain.api, sudo, playTimes(now, 2, phases, CLOCK_TICK));
+
+      for (let offset = 1; offset <= 2; offset += 1) {
+        await expectFullGame(monitor, before + offset, () => signUp(chain.api, submit));
+      }
+
+      const schedules = await chain.api.query.Game.GameSchedules.getValue();
+      expect(schedules).toHaveLength(0);
+
+      await setPhases(chain.api, sudo, minStepPhaseDuration);
+    },
+    THREE_GAMES_TIMEOUT,
   );
 
   test(
