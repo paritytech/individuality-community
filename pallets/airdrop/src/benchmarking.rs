@@ -19,7 +19,7 @@
 use super::*;
 use crate::{
 	pallet::{ActionSchedule, Events, Registrations, Winners},
-	Pallet as Airdrop,
+	Pallet as Airdrop, ProductName,
 };
 use core::time::Duration;
 use frame_benchmarking::{v2::*, BenchmarkError};
@@ -166,12 +166,18 @@ fn default_prize<T: Config>(
 	AirdropPrize { asset_id, asset_amount, max_winners, winner_cap }
 }
 
+/// The product name benchmarked events are scheduled under.
+fn product_name() -> ProductName {
+	ProductName::truncate_from(b"bench".to_vec())
+}
+
 fn default_info<T: Config>(
 	asset_id: AssetIdOf<T>,
 	max_winners: u32,
 	winner_cap: Permill,
 ) -> EventInfoOf<T> {
 	EventInfo {
+		product_name: product_name(),
 		prize: default_prize::<T>(asset_id, max_winners, winner_cap),
 		registration_starts: REGISTRATION_STARTS,
 		draw_time: DRAW_TIME,
@@ -345,7 +351,7 @@ mod benches {
 		let participant_alias: Alias = alias_with(0x11, 0);
 		let participant_origin =
 			RegistrationEntry::<T::AccountId>::Alias { alias: participant_alias };
-		let context = crate::context_for_event(&id);
+		let context = Airdrop::<T>::context_for_event(&product_name(), &id);
 		let message = codec::Encode::encode(&participant_origin);
 		let (proof, alias) = T::BenchmarkHelper::build_membership_proof(&context, &message, 0);
 

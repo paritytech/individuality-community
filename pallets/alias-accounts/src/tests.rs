@@ -752,9 +752,8 @@ mod stale_alias_sweeps {
 		});
 	}
 
-	/// A collection torn down and re-created under the same identifier restarts its revisions at
-	/// zero, so a stored revision can be reissued and verify again. The report against it must go,
-	/// otherwise the next staleness inherits a deadline that has long since passed.
+	/// A revision verifies again when the subscriber rebuilds its ring window. Its report must go,
+	/// or the next staleness inherits an expired deadline.
 	#[test]
 	fn a_revision_that_verifies_again_clears_the_report() {
 		new_test_ext().execute_with(|| {

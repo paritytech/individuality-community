@@ -55,8 +55,9 @@ use frame_system::{
 	offchain::{CreateAuthorizedTransaction, SubmitTransaction},
 	pallet_prelude::*,
 };
-use indiv_pallet_airdrop::types::{Airdrop, EventId, EventInfo, RegistrationEntry};
+use indiv_pallet_airdrop::types::{Airdrop, EventId, EventInfo, ProductName, RegistrationEntry};
 use indiv_support::{
+	context::personhood,
 	traits::{Alias, Context, MomentRandomness},
 	tx_priority,
 	utils::BigEndianU256,
@@ -144,16 +145,32 @@ pub mod pallet {
 		/// The context used to authenticate people participating in airdrops.
 		pub fn people_airdrops_context() -> Context {
 			indiv_support::context::build_product_context(
-				indiv_support::context::personhood::PRODUCT_NAME,
+				personhood::PRODUCT_NAME,
 				&T::Suffix::get(),
-				indiv_support::context::personhood::PEOPLE_AIRDROPS,
+				personhood::PEOPLE_AIRDROPS,
 			)
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// The personhood product name every draw is scheduled under.
+		pub fn product_name() -> ProductName {
+			ProductName::truncate_from(personhood::PRODUCT_NAME.to_vec())
 		}
 	}
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		fn integrity_test() {
+			assert!(
+				ProductName::try_from(personhood::PRODUCT_NAME.to_vec()).is_ok(),
+				"the personhood product name must fit the airdrop pallet's bound"
+			);
+			assert!(
+				indiv_support::context::is_product_name(personhood::PRODUCT_NAME),
+				"the personhood product name must be a bare dotNS label"
+			);
+
 			let budget = OcwWeightBudget::from_normal_max::<T>();
 			budget.assert_fits(
 				"clean_up_draw_salt",
@@ -242,6 +259,8 @@ pub mod pallet {
 		/// allocation of every draw is transferred from [`Config::PrizeSource`] into the airdrop
 		/// pot.
 		///
+		/// The `product_name` of every entry is replaced with [`Pallet::product_name`].
+		///
 		/// If any event fails to be scheduled, the whole call fails and no events are scheduled.
 		#[pallet::call_index(0)]
 		#[pallet::weight(T::WeightInfo::schedule_draws(draws.len() as u32))]
@@ -252,7 +271,8 @@ pub mod pallet {
 			T::ManagerOrigin::ensure_origin(origin)?;
 			let (salt, _moment) =
 				T::Randomness::randomness().ok_or(Error::<T>::RandomnessUnavailable)?;
-			for info in draws {
+			for mut info in draws {
+				info.product_name = Self::product_name();
 				let draw_index = NextDrawIndex::<T>::mutate(|index| {
 					let current = *index;
 					*index = index.saturating_add(1);

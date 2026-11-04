@@ -58,19 +58,20 @@ fn build_unload_common(request: &UnloadRequest<'_>, call: RuntimeCall) -> Unchec
 			tx_ext.0 .0 .9.clone(),  // AsResources
 			tx_ext.0 .0 .10.clone(), // AuthorizeCall
 		),
-		tx_ext.0 .1.clone(), // RestrictOrigin
-		tx_ext.0 .2.clone(), // CheckNonZeroSender
-		tx_ext.0 .3.clone(), // CheckSpecVersion
-		tx_ext.0 .4.clone(), // CheckTxVersion
-		tx_ext.0 .5.clone(), // CheckGenesis
-		tx_ext.0 .6.clone(), // CheckEra
-		tx_ext.0 .7.clone(), // CheckNonce
-		tx_ext.0 .8.clone(), // CheckWeight
-		tx_ext.0 .9.clone(), // SkipCheckIfFeeless/ChargeAssetTxPayment
+		tx_ext.0 .1.clone(),  // RestrictOrigin
+		tx_ext.0 .2.clone(),  // CheckNonZeroSender
+		tx_ext.0 .3.clone(),  // CheckSpecVersion
+		tx_ext.0 .4.clone(),  // CheckTxVersion
+		tx_ext.0 .5.clone(),  // CheckGenesis
+		tx_ext.0 .6.clone(),  // CheckEra
+		tx_ext.0 .7.clone(),  // CheckNonce
+		tx_ext.0 .8.clone(),  // CheckWeight
+		tx_ext.0 .9.clone(),  // SkipCheckIfFeeless/ChargeAssetTxPayment
+		tx_ext.0 .10.clone(), // CheckMetadataHash
 	);
 
 	let encoded_implications = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext_for_implication;
 		let implication_implicit = &rest_ext_for_implication.implicit().unwrap();
 		(implication_base, implication_explicit, implication_implicit).encode()

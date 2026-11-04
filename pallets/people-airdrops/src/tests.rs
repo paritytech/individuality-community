@@ -74,6 +74,7 @@ fn source_balance() -> u64 {
 
 fn default_info(max_winners: u32) -> AirdropEventInfoOf<Test> {
 	AirdropEventInfoOf::<Test> {
+		product_name: Default::default(),
 		prize: AirdropPrize {
 			asset_id: ASSET_ID,
 			asset_amount: PRIZE_VALUE,
@@ -140,8 +141,12 @@ fn schedule_draws_assigns_ids_salts_and_debits_source() {
 		assert_eq!(NextDrawIndex::<Test>::get(), 2);
 		assert_eq!(DrawSalts::<Test>::get(id0), Some(([42u8; 32], 300)));
 		assert_eq!(DrawSalts::<Test>::get(id1), Some(([42u8; 32], 300)));
-		assert!(AirdropEvents::<Test>::contains_key(id0));
-		assert!(AirdropEvents::<Test>::contains_key(id1));
+		for id in [id0, id1] {
+			assert_eq!(
+				AirdropEvents::<Test>::get(id).expect("draw scheduled").info.product_name,
+				crate::Pallet::<Test>::product_name()
+			);
+		}
 		// The full prize allocation of both draws left the source.
 		assert_eq!(source_balance(), funded - 5 * PRIZE_VALUE);
 

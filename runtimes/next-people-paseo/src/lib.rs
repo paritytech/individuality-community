@@ -85,8 +85,6 @@ use sp_runtime::{
 	ApplyExtrinsicResult, MultiSignature, MultiSigner,
 };
 pub use sp_runtime::{MultiAddress, Perbill, Permill};
-#[cfg(feature = "std")]
-use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 /// Paseo network constants - defined locally to avoid version conflicts
 pub mod paseo_constants {
@@ -150,6 +148,7 @@ use xcm_config::{
 	FellowshipLocation, GovernanceLocation, PriceForSiblingParachainDelivery, XcmConfig,
 	XcmOriginToTransactDispatchOrigin,
 };
+use xcm_executor::traits::MatchesFungibles;
 use xcm_runtime_apis::{
 	dry_run::{CallDryRunEffects, Error as XcmDryRunApiError, XcmDryRunEffects},
 	fees::Error as XcmPaymentApiError,
@@ -199,8 +198,31 @@ pub type SignedBlock = generic::SignedBlock<Block>;
 /// BlockId type as expected by this runtime.
 pub type BlockId = generic::BlockId<Block>;
 
-/// The extension to the basic transaction logic.
-pub type TransactionExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
+/// The Individuality transaction extension pipeline version.
+pub const INDIVIDUALITY_EXTENSION_VERSION: u8 = 1;
+
+/// The frozen standard transaction extension pipeline version 0.
+/// This follows the fellowship People Polkadot runtime implementation.
+pub type TxExtensionV0 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
+	Runtime,
+	(
+		frame_system::AuthorizeCall<Runtime>,
+		frame_system::CheckNonZeroSender<Runtime>,
+		frame_system::CheckSpecVersion<Runtime>,
+		frame_system::CheckTxVersion<Runtime>,
+		frame_system::CheckGenesis<Runtime>,
+		frame_system::CheckEra<Runtime>,
+		frame_system::CheckNonce<Runtime>,
+		frame_system::CheckWeight<Runtime>,
+		pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
+		frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
+	),
+>;
+
+/// The transaction extension pipeline version 1 carries the Individuality extensions.
+/// This follows the fellowship People Polkadot runtime implementation with the Paseo
+/// authorization extensions.
+pub type TxExtensionV1 = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
 	Runtime,
 	(
 		// Origin modifiers
@@ -227,16 +249,23 @@ pub type TransactionExtension = cumulus_pallet_weight_reclaim::StorageWeightRecl
 		frame_system::CheckEra<Runtime>,
 		frame_system::CheckNonce<Runtime>,
 		frame_system::CheckWeight<Runtime>,
-		pallet_skip_feeless_payment::SkipCheckIfFeeless<
-			Runtime,
-			pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-		>,
+		pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
+		frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
 	),
 >;
 
+/// The transaction extension pipelines a general transaction may select other than version 0.
+pub type TxExtensionOtherVersions =
+	sp_runtime::traits::PipelineAtVers<INDIVIDUALITY_EXTENSION_VERSION, TxExtensionV1>;
+
 /// Unchecked extrinsic type as expected by this runtime.
-pub type UncheckedExtrinsic =
-	generic::UncheckedExtrinsic<Address, RuntimeCall, Signature, TransactionExtension>;
+pub type UncheckedExtrinsic = generic::UncheckedExtrinsic<
+	Address,
+	RuntimeCall,
+	Signature,
+	TxExtensionV0,
+	TxExtensionOtherVersions,
+>;
 
 /// Migrations to apply on runtime upgrade.
 pub type Migrations = (
@@ -245,6 +274,10 @@ pub type Migrations = (
 	cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_score::migration::MigrateV0ToV1<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_airdrop::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)
@@ -276,18 +309,12 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 3_003_000,
+	spec_version: 3_004_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
-	transaction_version: 5,
+	transaction_version: 6,
 	system_version: 1,
 };
-
-/// The version information used to identify this runtime when compiled natively.
-#[cfg(feature = "std")]
-pub fn native_version() -> NativeVersion {
-	NativeVersion { runtime_version: VERSION, can_author_with: Default::default() }
-}
 
 parameter_types! {
 	pub const Version: RuntimeVersion = VERSION;
@@ -457,10 +484,6 @@ impl pallet_transaction_payment::Config for Runtime {
 	type WeightInfo = weights::pallet_transaction_payment::WeightInfo<Runtime>;
 }
 
-impl pallet_skip_feeless_payment::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
-}
-
 impl pallet_sudo::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type RuntimeCall = RuntimeCall;
@@ -547,7 +570,7 @@ impl pallet_verify_signature::BenchmarkHelper<MultiSignature, AccountId>
 impl pallet_verify_signature::Config for Runtime {
 	type Signature = MultiSignature;
 	type AccountIdentifier = MultiSigner;
-	type WeightInfo = ();
+	type WeightInfo = weights::pallet_verify_signature::WeightInfo<Runtime>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = VerifySignatureBenchmarkHelper;
 }
@@ -782,6 +805,9 @@ impl pallet_migrations::Config for Runtime {
 	#[cfg(not(feature = "runtime-benchmarks"))]
 	type Migrations = (
 		ForeignAssetsReservesMigration<Runtime, (), migrations::PeoplePaseoAssetsReservesProvider>,
+		// Single use! - remove once the upgrade carrying it is live.
+		indiv_pallet_people_lite::migration::v1::LazyMigrationV0ToV1<Runtime>,
+		indiv_pallet_people::migration::MigrateV0ToV1<Runtime>,
 	);
 	// Benchmarks need mocked migrations to guarantee that they succeed.
 	#[cfg(feature = "runtime-benchmarks")]
@@ -1058,6 +1084,8 @@ parameter_types! {
 	pub StakingPotAccount: AccountId =
 		<pallet_collator_selection::StakingPotAccountId<Runtime> as frame_support::traits::TypedGet>::get();
 	pub LpFee: Permill = Permill::from_rational(3u32, 1_000u32); // 0.3%
+	/// The highest swap fee `AdminOrigin` can set on a single pool.
+	pub MaxSwapFee: Permill = Permill::from_percent(2);
 	/// Storage deposit for the pool entry and for its liquidity token, plus the deposit an asset
 	/// costs to register, so that creating a pool is no cheaper than creating the asset it pairs.
 	pub const PoolSetupFee: Balance = deposit(1, 4) + AssetDeposit::get();
@@ -1103,6 +1131,8 @@ impl pallet_asset_conversion::Config for Runtime {
 	type PoolSetupFeeTarget = ResolveAssetTo<StakingPotAccount, Self::Assets>;
 	type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
 	type LPFee = LpFee;
+	type AdminOrigin = EnsureRoot<AccountId>;
+	type MaxSwapFee = MaxSwapFee;
 	type PalletId = AssetConversionPalletId;
 	// Every pool holds the native asset on one side (see `PoolLocator`), so swapping one asset for
 	// another takes two hops through native. Coinage itself only ever swaps an asset for native,
@@ -1168,7 +1198,7 @@ impl<LocalCall> CreateTransaction<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
 {
-	type Extension = TransactionExtension;
+	type Extension = TxExtensionV0;
 	fn create_transaction(
 		call: <Self as frame_system::offchain::CreateTransactionBase<LocalCall>>::RuntimeCall,
 		extension: Self::Extension,
@@ -1196,21 +1226,7 @@ where
 {
 	fn create_extension() -> Self::Extension {
 		(
-			(
-				(),
-				pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
-				indiv_pallet_people::extension::AsPerson::<Runtime>::new(None),
-				indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipant::<Runtime>::new(None),
-				indiv_pallet_score::ScoreAsParticipant::<Runtime>::new(None),
-				indiv_pallet_game::GameAsInvited::<Runtime>::new(None),
-				indiv_pallet_people_lite::extension::PeopleLiteAuth::<Runtime>::new(None),
-				indiv_pallet_members::extension::AsMember::<Runtime>::new(None),
-				indiv_pallet_coinage::extension::AsCoinage::<Runtime>::new(None),
-				indiv_pallet_resources::extension::AsResources::<Runtime>::new(None),
-				indiv_pallet_honour::extension::VoterAuth::<Runtime>::new(None),
-				frame_system::AuthorizeCall::<Runtime>::new(),
-			),
-			indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(false),
+			frame_system::AuthorizeCall::<Runtime>::new(),
 			frame_system::CheckNonZeroSender::<Runtime>::new(),
 			frame_system::CheckSpecVersion::<Runtime>::new(),
 			frame_system::CheckTxVersion::<Runtime>::new(),
@@ -1224,10 +1240,8 @@ where
 			)),
 			frame_system::CheckNonce::<Runtime>::from(0),
 			frame_system::CheckWeight::<Runtime>::new(),
-			pallet_skip_feeless_payment::SkipCheckIfFeeless::<
-				Runtime,
-				pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-			>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None)),
+			pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None),
+			frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 		)
 			.into()
 	}
@@ -1250,7 +1264,6 @@ construct_runtime!(
 		// Monetary stuff.
 		Balances: pallet_balances = 10,
 		TransactionPayment: pallet_transaction_payment = 11,
-		SkipFeelessPayment: pallet_skip_feeless_payment = 12,
 		OriginRestriction: indiv_pallet_origin_restriction = 13,
 		Assets: pallet_assets = 14,
 		AssetsHolder: pallet_assets_holder = 15,
@@ -1318,6 +1331,7 @@ mod benches {
 		[pallet_session, SessionBench::<Runtime>]
 		[pallet_proxy, Proxy]
 		[pallet_utility, Utility]
+		[pallet_verify_signature, VerifySignature]
 		[pallet_timestamp, Timestamp]
 		[pallet_migrations, MultiBlockMigrations]
 		[pallet_parameters, Parameters]
@@ -1530,10 +1544,18 @@ impl_runtime_apis! {
 
 	impl xcm_runtime_apis::fees::XcmPaymentApi<Block> for Runtime {
 		fn query_acceptable_payment_assets(xcm_version: xcm::Version) -> Result<Vec<VersionedAssetId>, XcmPaymentApiError> {
-			let acceptable_assets = alloc::vec![
-				AssetId(xcm_config::RelayLocation::get()),
-				AssetId(people::ExternalAssetLocation::get()),
-			];
+			// PAS and existing rated assets accepted by the same matcher as the trader.
+			let acceptable_assets = core::iter::once(AssetId(xcm_config::RelayLocation::get()))
+				.chain(
+					pallet_asset_rate::ConversionRateToNative::<Runtime>::iter_keys()
+						.filter(|location| {
+							xcm_config::AssetsConvertedConcreteId::matches_fungibles(
+								&(location.clone(), 1u128).into(),
+							).is_ok() && pallet_assets::Asset::<Runtime>::contains_key(location)
+						})
+						.map(AssetId),
+				)
+				.collect::<Vec<_>>();
 			PolkadotXcm::query_acceptable_payment_assets(xcm_version, acceptable_assets)
 		}
 
@@ -1790,6 +1812,39 @@ impl_runtime_apis! {
 						id: AssetId(RelayLocation::get()),
 						fun: Fungible(ExistentialDeposit::get()),
 					}
+				}
+
+				fn get_assets(n: u32) -> XcmAssets {
+					use frame_support::traits::tokens::fungible;
+					let account: AccountId = frame_benchmarking::whitelisted_caller();
+					frame_support::assert_ok!(<Balances as fungible::Mutate<_>>::mint_into(
+						&account,
+						ExistentialDeposit::get(),
+					));
+					let amount = 1_000_000u128;
+					// Worst case: `n` distinct foreign assets, which `AssetTransactors` matches
+					// after the native token.
+					let assets = (0..n)
+						.map(|i| {
+							let asset_location = Location::new(
+								1,
+								[Parachain(3000), PalletInstance(53), GeneralIndex((1984 + i).into())],
+							);
+							frame_support::assert_ok!(Assets::force_create(
+								RuntimeOrigin::root(),
+								asset_location.clone(),
+								account.clone().into(),
+								true,
+								1u128,
+							));
+							Asset { id: AssetId(asset_location), fun: Fungible(amount) }
+						})
+						.collect::<Vec<_>>();
+					assets.into()
+				}
+
+				fn batch_call(calls: Vec<RuntimeCall>) -> Option<RuntimeCall> {
+					Some(RuntimeCall::Utility(pallet_utility::Call::batch { calls }))
 				}
 			}
 

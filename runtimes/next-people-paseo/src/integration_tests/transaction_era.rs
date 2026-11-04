@@ -29,8 +29,8 @@ fn authorized_transaction_extension_uses_parent_anchored_mortal_era() {
 		System::set_block_number(current);
 
 		let ext = <Runtime as CreateAuthorizedTransaction<RuntimeCall>>::create_extension();
-		// `StorageWeightReclaim(inner)` -> inner tuple field `.6` is `CheckEra` -> `.0` is the era.
-		let era = ext.0 .6 .0;
+		// `StorageWeightReclaim(inner)` -> inner tuple field `.5` is `CheckEra` -> `.0` is the era.
+		let era = ext.0 .5 .0;
 
 		assert!(!era.is_immortal(), "OCW transactions must be mortal");
 

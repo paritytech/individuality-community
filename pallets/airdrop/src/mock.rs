@@ -281,11 +281,20 @@ impl GenerateVerifiable for MockCrypto {
 /// these tests, only that the inner Mock proof over `(context, msg)` is valid.
 const MOCK_SECRET: [u8; 32] = [42u8; 32];
 
-/// Build a `MockProof` over the per-event context derived from `event_id`, committing to `msg`
-/// (typically `participant_origin.encode()`), and tagged with `chosen_alias` so the mock prover
-/// surfaces that exact alias as the contextual alias / slot key.
+/// Build a `MockProof` for `event_id` under [`TEST_PRODUCT_NAME`], committing to `msg` and
+/// surfacing `chosen_alias` as the slot key.
 pub fn mock_proof(event_id: &crate::EventId, chosen_alias: Alias, msg: &[u8]) -> MockProof {
-	let context = crate::context_for_event(event_id);
+	mock_proof_for_product(TEST_PRODUCT_NAME, event_id, chosen_alias, msg)
+}
+
+/// [`mock_proof`] for an event scheduled under `product_name`.
+pub fn mock_proof_for_product(
+	product_name: &[u8],
+	event_id: &crate::EventId,
+	chosen_alias: Alias,
+	msg: &[u8],
+) -> MockProof {
+	let context = crate::Pallet::<Test>::context_for_event(product_name, event_id);
 	let member = Mock::member_from_secret(&MOCK_SECRET);
 	let mut inter = Mock::start_members(());
 	Mock::push_members(&mut inter, core::iter::once(member), |_| Ok(Vec::new()))
@@ -389,11 +398,22 @@ parameter_types! {
 	pub storage ClearLimitValue: u32 = 100;
 	pub storage DrawLimitValue: u32 = 100;
 	pub const OcwInterval: u64 = 1;
+	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
+		b"paseo".to_vec().try_into().expect("network suffix fits");
+}
+
+/// The product name the tests schedule events under.
+pub const TEST_PRODUCT_NAME: &[u8] = b"test";
+
+/// [`TEST_PRODUCT_NAME`] as stored in an event.
+pub fn test_product_name() -> crate::ProductName {
+	TEST_PRODUCT_NAME.to_vec().try_into().expect("test product name fits")
 }
 
 impl crate::Config for Test {
 	type WeightInfo = ();
 	type MemberService = MockMemberService;
+	type Suffix = NetworkSuffix;
 	type Fungibles = indiv_support::fungibles::CombineAssetsWithHolder<Assets, AssetsHolder>;
 	type ManagerOrigin = EnsureRoot<u64>;
 	type PalletId = AirdropPalletId;

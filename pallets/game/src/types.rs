@@ -205,10 +205,10 @@ pub enum AirdropVrfs<P> {
 	/// When used with `indiv-pallet-airdrop`, each entry is the proof of membership in the
 	/// collection `PEOPLE_IDENTIFIER` of the participant. It verifies the proof in the collection
 	/// `PEOPLE_IDENTIFIER` at ring `ring_index` and revision `revision` for the context
-	/// `blake2_256(AIRDROP_CONTEXT_BASE ++ event_id)` (`event_id` is the id of the entry's
-	/// airdrop event, see `Pallet::airdrop_event_id`) for the message the scale encoded
-	/// registration entry of the participant (so for alias-based player `0u8 ++ alias`, for
-	/// account-based player `1u8 ++ account_id`).
+	/// `indiv_pallet_airdrop::Pallet::context_for_event(PRODUCT_NAME, event_id)` (`event_id` is
+	/// the id of the entry's airdrop event, see `Pallet::airdrop_event_id`) for the message the
+	/// scale encoded registration entry of the participant (so for alias-based player
+	/// `0u8 ++ alias`, for account-based player `1u8 ++ account_id`).
 	///
 	/// This is used by `Config::Airdrop::participate_with_alias` and
 	/// `Config::Airdrop::participate_with_account`.

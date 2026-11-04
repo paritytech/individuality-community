@@ -177,8 +177,8 @@ impl<Call> XcmWeightInfo<Call> for PeoplePaseoXcmWeight<Call> {
 	fn clear_error() -> Weight {
 		XcmGeneric::<Runtime>::clear_error()
 	}
-	fn claim_asset(_assets: &Assets, _ticket: &Location) -> Weight {
-		XcmGeneric::<Runtime>::claim_asset()
+	fn claim_asset(assets: &Assets, _ticket: &Location) -> Weight {
+		assets.weigh_assets(XcmGeneric::<Runtime>::claim_asset())
 	}
 	fn trap(_code: &u64) -> Weight {
 		XcmGeneric::<Runtime>::trap()
@@ -268,5 +268,26 @@ impl<Call> XcmWeightInfo<Call> for PeoplePaseoXcmWeight<Call> {
 	}
 	fn execute_with_origin(_: &Option<InteriorLocation>, _: &Xcm<Call>) -> Weight {
 		XcmGeneric::<Runtime>::execute_with_origin()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// `ClaimAsset` does work per asset, so its weight must grow with the number of assets.
+	#[test]
+	fn claim_asset_weight_scales_with_number_of_assets() {
+		let ticket = Location::here();
+		let one_asset: Assets = (Location::parent(), 100u128).into();
+		let two_assets: Assets = Vec::from([
+			(Location::parent(), 100u128).into(),
+			(Location::new(0, [PalletInstance(50), GeneralIndex(1)]), 100u128).into(),
+		])
+		.into();
+
+		let weight_one = PeoplePaseoXcmWeight::<()>::claim_asset(&one_asset, &ticket);
+		let weight_two = PeoplePaseoXcmWeight::<()>::claim_asset(&two_assets, &ticket);
+		assert!(weight_two.ref_time() > weight_one.ref_time());
 	}
 }

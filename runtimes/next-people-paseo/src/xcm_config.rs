@@ -20,15 +20,13 @@ use super::{
 	AccountId, AllPalletsWithSystem, Balances, ParachainInfo, ParachainSystem, PolkadotXcm,
 	Runtime, RuntimeCall, RuntimeEvent, RuntimeHoldReason, RuntimeOrigin, WeightToFee, XcmpQueue,
 };
-use crate::{
-	people::{ExternalAssetLocation, FungibleExternalAsset},
-	AssetRate, Assets, Balance, TransactionByteFee, CENTS,
-};
+use crate::{people::ExternalAssetLocation, AssetRate, Assets, Balance, TransactionByteFee, CENTS};
+use cumulus_primitives_utility::TakeFirstAssetTrader;
 use frame_support::{
 	parameter_types,
 	traits::{
 		fungible::HoldConsideration,
-		tokens::{imbalance::ResolveTo, ConversionToAssetBalance},
+		tokens::imbalance::{ResolveAssetTo, ResolveTo},
 		ConstU32, Contains, ContainsPair, Equals, Everything, EverythingBut, LinearStoragePrice,
 		Nothing, ProcessMessageError,
 	},
@@ -39,7 +37,8 @@ use pallet_xcm::{AuthorizedAliasers, XcmPassthrough};
 use parachains_common::{
 	xcm_config::{
 		AliasAccountId32FromSiblingSystemChain, AllSiblingSystemParachains,
-		ConcreteAssetFromSystem, ParentRelayOrSiblingParachains, RelayOrOtherSystemParachains,
+		AssetFeeAsExistentialDepositMultiplier, ConcreteAssetFromSystem,
+		ParentRelayOrSiblingParachains, RelayOrOtherSystemParachains,
 	},
 	TREASURY_PALLET_ID,
 };
@@ -343,18 +342,35 @@ impl ContainsPair<Asset, Location> for AssetHubReserveAsset {
 }
 
 pub type WeightToNativeFee = WeightToFee;
-pub struct WeightToExternalAssetFee;
-impl frame_support::weights::WeightToFee for WeightToExternalAssetFee {
-	type Balance = Balance;
 
-	fn weight_to_fee(weight: &Weight) -> Self::Balance {
-		let native_fee = WeightToNativeFee::weight_to_fee(weight);
+/// Prices weight in PAS and converts it at the rate registered by governance.
+/// Assets without a rate cannot pay execution fees.
+pub type WeightToAssetRateFee =
+	AssetFeeAsExistentialDepositMultiplier<Runtime, WeightToNativeFee, AssetRate, ()>;
 
-		AssetRate::to_asset_balance(native_fee, ExternalAssetLocation::get())
-			// Using max value will make the payment fail and go to the next trader component.
-			.unwrap_or(Balance::MAX)
-	}
-}
+/// Buys execution weight with a rated asset accepted by the asset transactor.
+/// Fees go to the staking pot in that asset; failed deposits are burned.
+/// Register assets with `is_sufficient = true` and `min_balance` no larger than the
+/// smallest fee, or seed the pot with the asset or the native existential deposit first.
+pub type AssetRateTrader = TakeFirstAssetTrader<
+	AccountId,
+	WeightToAssetRateFee,
+	AssetsConvertedConcreteId,
+	Assets,
+	ResolveAssetTo<StakingPotAccountId<Runtime>, Assets>,
+>;
+
+/// Pays execution fees in PAS or a foreign asset with a governance-registered rate.
+pub type Traders = (
+	UsingComponents<
+		WeightToNativeFee,
+		RelayLocation,
+		AccountId,
+		Balances,
+		ResolveTo<StakingPotAccountId<Runtime>, Balances>,
+	>,
+	AssetRateTrader,
+);
 
 pub struct XcmConfig;
 impl xcm_executor::Config for XcmConfig {
@@ -373,22 +389,7 @@ impl xcm_executor::Config for XcmConfig {
 		RuntimeCall,
 		MaxInstructions,
 	>;
-	type Trader = (
-		UsingComponents<
-			WeightToNativeFee,
-			RelayLocation,
-			AccountId,
-			Balances,
-			ResolveTo<StakingPotAccountId<Runtime>, Balances>,
-		>,
-		UsingComponents<
-			WeightToExternalAssetFee,
-			ExternalAssetLocation,
-			AccountId,
-			FungibleExternalAsset,
-			ResolveTo<StakingPotAccountId<Runtime>, FungibleExternalAsset>,
-		>,
-	);
+	type Trader = Traders;
 	type ResponseHandler = PolkadotXcm;
 	type AssetTrap = PolkadotXcm;
 	type SubscriptionService = PolkadotXcm;

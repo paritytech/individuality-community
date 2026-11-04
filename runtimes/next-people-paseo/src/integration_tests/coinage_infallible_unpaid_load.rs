@@ -56,10 +56,11 @@ fn build_infallible_unpaid_ext(who: &sr25519::Pair, call: RuntimeCall) -> Unchec
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =

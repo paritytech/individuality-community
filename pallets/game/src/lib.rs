@@ -286,7 +286,7 @@ use frame_support::{
 use frame_system::offchain::CreateAuthorizedTransaction;
 use indiv_pallet_airdrop::types::{
 	Airdrop, EventId as AirdropEventId, EventInfo as AirdropEventInfo,
-	RegistrationEntry as AirdropRegistrationEntry,
+	ProductName as AirdropProductName, RegistrationEntry as AirdropRegistrationEntry,
 };
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::{
@@ -336,6 +336,12 @@ pub mod pallet {
 		<<T as Config>::NativeFungible as Inspect<<T as frame_system::Config>::AccountId>>::Balance;
 
 	pub(crate) const LOG_TARGET: &str = "runtime::indiv-pallet-game";
+
+	/// The name of the product owning the game's airdrop contexts, without the network suffix.
+	///
+	/// `dim2.<tld>` is the game's product identity reserved in [truAPI
+	/// RFC-0022](https://github.com/paritytech/trinity-user-agents/blob/63a450d025462f113311a26408dc53627d1a268d/docs/rfcs/0022-account-derivations.md).
+	pub const PRODUCT_NAME: &[u8] = b"dim2";
 
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
@@ -525,6 +531,11 @@ pub mod pallet {
 		/// [`Pallet::airdrop_event_id`]).
 		pub fn airdrop_event_id_base() -> [u8; 27] {
 			*b"pop:game:airdrop:          "
+		}
+
+		/// [`PRODUCT_NAME`] as stored with every airdrop event the game schedules.
+		pub fn product_name() -> AirdropProductName {
+			AirdropProductName::truncate_from(PRODUCT_NAME.to_vec())
 		}
 	}
 
@@ -877,6 +888,15 @@ pub mod pallet {
 				in any game",
 			);
 
+			assert!(
+				AirdropProductName::try_from(PRODUCT_NAME.to_vec()).is_ok(),
+				"the game's airdrop product name must fit the airdrop pallet's bound"
+			);
+			assert!(
+				indiv_support::context::is_product_name(PRODUCT_NAME),
+				"the game's airdrop product name must be a bare dotNS label"
+			);
+
 			let max_votes = Self::max_received_votes();
 			assert!(
 				max_votes as u64 * T::PeopleVoteWeight::get() as u64 <= u8::MAX as u64,
@@ -1034,10 +1054,10 @@ pub mod pallet {
 		/// Parameters:
 		/// - `statement_account`: the account id to use to interact with the statement store during
 		///   the game.
-		/// - `sig`: the proof of ownership of the account `statement_account` by an alias, it is
-		///   the signature of the message `"pop:game:stmt_account_for_alias:"` concatenated to the
-		///   alias, and then hashed with `blake2_256` (blake2 256bit output). The base of the
-		///   message can be found in the constant: `proof_of_ownership_msg_base`.
+		/// - `sig`: the proof of ownership of the account `statement_account` by an alias. The
+		///   message is the `blake2_256` hash of `"pop:game:stmt_account_for_alias:"` concatenated
+		///   to the alias. The base of the message is in `proof_of_ownership_msg_base`. The
+		///   statement account signs [`Pallet::account_signing_payload`] of the hash.
 		/// - `airdrops`: optionally enters the player into the airdrop draws scheduled for this
 		///   game. Pass `None` to skip it; otherwise it holds exactly one VRF per scheduled airdrop
 		///   event (`airdrops_scheduled` in the `Game` storage), in airdrop-index order. Each entry
@@ -2051,7 +2071,27 @@ pub mod pallet {
 		}
 	}
 
+	#[pallet::extra_constants]
 	impl<T: Config> Pallet<T> {
+		/// The game's signing context on this network. An account signs this context followed
+		/// by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(
+				PRODUCT_NAME,
+				&<T as indiv_pallet_score::Config>::Suffix::get(),
+			)
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the game's signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			[&Self::signing_context()[..], msg].concat()
+		}
+
 		/// Check the count and the variant of the airdrop VRF entries against the player's
 		/// `recognized` state.
 		///
@@ -2498,6 +2538,7 @@ pub mod pallet {
 				let draw_time = game_play_time.saturating_add(airdrop.draw_offset as u64);
 				let end_time = draw_time.saturating_add(airdrop.claim_window as u64);
 				let info = AirdropEventInfo {
+					product_name: Self::product_name(),
 					prize: airdrop.prize.clone(),
 					registration_starts,
 					draw_time,
@@ -2569,7 +2610,8 @@ pub mod pallet {
 					let msg = (Self::proof_of_ownership_msg_base(), &who)
 						.using_encoded(sp_io::hashing::blake2_256);
 					ensure!(
-						statement_account_signature.verify(&msg[..], &statement_account),
+						statement_account_signature
+							.verify(&Self::account_signing_payload(&msg)[..], &statement_account),
 						Error::<T>::InvalidStatementAccountSignature,
 					);
 

@@ -50,14 +50,15 @@ use xcm::v5::{Location, WeightLimit};
 
 use crate::{
 	parameters::{
-		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePersonRegistrationFee,
+		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePaidRegistrationPeriod,
+		LitePaidRegistrationThreshold, LitePaidRegistrationsPerPeriod, LitePersonRegistrationFee,
 		LitePersonStatementLimit, LiteStmtStoreSlotsPerPeriod,
 		LongTermStorageAllowanceForLitePeople, LongTermStorageAllowanceForPeople,
 		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
-		LongTermStoragePeriodDuration, NotificationAllowance, NotificationPeriodDuration,
-		NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource, PersonStatementLimit,
-		StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreReplacementCooldown,
-		StmtStoreSlotsPerPeriod,
+		LongTermStoragePeriodDuration, MaxLitePeople, NotificationAllowance,
+		NotificationPeriodDuration, NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource,
+		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow,
+		StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -204,6 +205,7 @@ parameter_types! {
 impl indiv_pallet_people::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people::WeightInfo<Runtime>;
 	type MemberService = Members;
+	type Clock = RuntimeClock;
 	type RingExponent = MembersFlexibleRingExponent;
 	type CollectionOwner = PeopleCollectionOwner;
 	type AccountContexts = AccountContexts;
@@ -383,7 +385,7 @@ pub mod benchmark_utils {
 		}
 
 		fn setup_ring_roots(count: u32) {
-			use indiv_support::traits::Identifier;
+			use indiv_support::traits::{Identifier, RingExponent, RingMode};
 			use verifiable::ring::RingDomainSize;
 
 			// Creating a valid intermediate and root using the smallest domain size.
@@ -410,6 +412,19 @@ pub mod benchmark_utils {
 				<Runtime as indiv_pallet_members_notifier::Config>::MaxCollections::get();
 			for coll in 0..max_collections {
 				let identifier = test_identifier(coll);
+				// `RingRootsProvider` reports no roots for an identifier without a collection.
+				indiv_pallet_members::Collections::<Runtime>::insert(
+					identifier,
+					indiv_pallet_members::types::CollectionInfo {
+						owner: indiv_pallet_members::types::CollectionOwner::External(
+							PeopleCollectionOwner::get(),
+						),
+						mode: RingMode::Flexible,
+						// `R2e9` has the `Domain11` domain of the roots below.
+						ring_size: RingExponent::R2e9,
+						self_inclusion_delay: None,
+					},
+				);
 				for i in 0..count {
 					let ring_root = indiv_pallet_members::RingRoot::<Runtime> {
 						root: root.clone(),
@@ -892,6 +907,7 @@ parameter_types! {
 impl indiv_pallet_airdrop::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_airdrop::WeightInfo<Runtime>;
 	type MemberService = Members;
+	type Suffix = NetworkSuffix;
 	type Fungibles = AssetsWithHolder;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type PalletId = AirdropPalletId;
@@ -1088,6 +1104,7 @@ impl indiv_pallet_people_airdrops::benchmarking::BenchmarkHelper<Runtime>
 				Assets::mint_into(asset_id.clone(), source, BENCH_PRIZE)
 					.expect("fund prize source");
 				indiv_pallet_people_airdrops::AirdropEventInfoOf::<Runtime> {
+					product_name: Default::default(),
 					prize: indiv_pallet_airdrop::types::AirdropPrize {
 						asset_id,
 						asset_amount: BENCH_PRIZE,
@@ -1296,6 +1313,11 @@ impl indiv_pallet_people_lite::Config for Runtime {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type MaxLitePeople = MaxLitePeople;
+	type Clock = RuntimeClock;
+	type PaidRegistrationThreshold = LitePaidRegistrationThreshold;
+	type PaidRegistrationPeriod = LitePaidRegistrationPeriod;
+	type PaidRegistrationsPerPeriod = LitePaidRegistrationsPerPeriod;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;
