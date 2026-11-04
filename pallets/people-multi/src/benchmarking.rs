@@ -15,15 +15,20 @@
 // limitations under the License.
 
 use super::*;
-use crate::extension::{AsPerson, AsPersonInfo};
+use crate::{
+	extension::{AsPerson, AsPersonInfo},
+	migration::{v0, MigrateV0ToV1},
+};
 use alloc::{vec, vec::Vec};
 use core::marker::{Send, Sync};
 use frame_benchmarking::{account, v2::*, BenchmarkError};
 use frame_support::{
 	assert_ok,
 	dispatch::RawOrigin,
+	migrations::SteppedMigration,
 	pallet_prelude::{Authorize, BoundedVec, ConstU32, Pays},
-	traits::{EnsureOrigin, Get},
+	traits::{EnsureOrigin, Get, StorageVersion},
+	weights::WeightMeter,
 };
 use frame_system::RawOrigin as SystemOrigin;
 use indiv_support::traits::{AppendOnlyMembers, Context, ContextualAlias, RingMode};
@@ -864,6 +869,35 @@ mod benches {
 				.ok_or("Call must give some authorization")??;
 		}
 
+		Ok(())
+	}
+
+	#[benchmark]
+	fn migrate_person() -> Result<(), BenchmarkError> {
+		T::MemberService::create_collection(
+			Decode::decode(&mut &[0u8; 32][..]).unwrap(),
+			PEOPLE_MEMBER_IDENTIFIER,
+			max_ring_size::<T>(),
+			RingMode::Flexible,
+			T::RingExponent::get(),
+			None,
+		)
+		.map_err(|_| BenchmarkError::Stop("failed to create collection"))?;
+		let member = new_member_from::<T>(0, SEED);
+		let (id, key, _) = recognize_people::<T>(&[member]).remove(0);
+		// The record stored under the old layout at storage version 0.
+		v0::People::<T>::insert(id, v0::PersonRecord { key, account: None });
+		StorageVersion::new(0).put::<Pallet<T>>();
+
+		#[block]
+		{
+			MigrateV0ToV1::<T>::step(None, &mut WeightMeter::new())
+				.map_err(|_| BenchmarkError::Stop("migration step failed"))?;
+		}
+
+		assert!(
+			People::<T>::get(id).is_some_and(|record| record.history.recognized_since.is_some())
+		);
 		Ok(())
 	}
 
