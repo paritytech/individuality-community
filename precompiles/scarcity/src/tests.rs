@@ -4318,6 +4318,10 @@ mod evm_fixture {
 			function release(address collection, uint256 tokenId, address to) external;
 			function held(address collection) external view returns (uint256 count);
 		}
+
+		interface ITerminableVault {
+			function terminate(address beneficiary) external;
+		}
 	}
 
 	/// The account of a deployed contract, which holds its tokens in `ContractNfts`.
@@ -4426,6 +4430,83 @@ mod evm_fixture {
 	#[test]
 	fn polkavm_contract_holds_several_tokens_and_releases_them() {
 		assert_vault_holds_and_releases(resolc_code("TokenVault"));
+	}
+
+	/// `terminate` removes a vault's code in a later transaction, and the address keeps its tokens.
+	/// A redeploy with the same deployer, code and salt lands at the same address, and its code
+	/// moves every token the old code held.
+	fn assert_redeploy_takes_over_the_tokens(code: Vec<u8>) {
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let target = alloy_address(collection_address(collection));
+			let vault = deploy(&alice, code.clone());
+			let vault_account = contract_account(vault);
+			let held = (0..2).map(|_| mint_into(&alice, collection, &vault_account)).collect::<Vec<_>>();
+
+			call_ok(
+				&alice,
+				vault,
+				ITerminableVault::terminateCall { beneficiary: alloy_address(purse(0xE0).0) }
+					.abi_encode(),
+			);
+
+			assert!(!ReviveContracts::<Test>::is_contract(&vault_account));
+			for token in &held {
+				assert_eq!(owner_of(collection, *token).into_array(), vault.0);
+			}
+			assert_eq!(balance_of(collection, vault), U256::from(2));
+			call_reverted_with(
+				&alice,
+				collection_address(collection),
+				IScarcityCollection::transferFromCall {
+					from: alloy_address(vault),
+					to: alloy_address(purse(0xE1).0),
+					tokenId: U256::from(held[0]),
+				}
+				.abi_encode(),
+				ERR_NOT_HOLDER,
+			);
+			let (sender_address, sender) = purse(0xE2);
+			let pushed = mint_into(&alice, collection, &sender);
+			call_ok(
+				&sender,
+				collection_address(collection),
+				IScarcityCollection::transferFromCall {
+					from: alloy_address(sender_address),
+					to: alloy_address(vault),
+					tokenId: U256::from(pushed),
+				}
+				.abi_encode(),
+			);
+			assert_eq!(NftsByOwner::<Test>::get(&vault_account).map(|nft| nft.instance), Some(pushed));
+
+			assert_eq!(deploy(&alice, code), vault);
+			for (token, byte) in held.iter().zip([0xE3, 0xE4]) {
+				call_ok(
+					&alice,
+					vault,
+					ITokenVault::releaseCall {
+						collection: target,
+						tokenId: U256::from(*token),
+						to: alloy_address(purse(byte).0),
+					}
+					.abi_encode(),
+				);
+			}
+			assert!(!ContractNftCount::<Test>::contains_key(&vault_account, collection));
+			assert_eq!(balance_of(collection, vault), U256::from(1));
+		});
+	}
+
+	#[test]
+	fn evm_redeploy_takes_over_the_tokens_of_a_terminated_contract() {
+		assert_redeploy_takes_over_the_tokens(fixture_code("TerminableVault"));
+	}
+
+	#[test]
+	fn polkavm_redeploy_takes_over_the_tokens_of_a_terminated_contract() {
+		assert_redeploy_takes_over_the_tokens(resolc_code("TerminableVault"));
 	}
 
 	/// `safeTransferFrom` into a deployed contract reverts after the move wrote `ContractNfts`, so
@@ -4661,7 +4742,8 @@ mod evm_fixture {
 			let item = setup_item(&alice, collection);
 			let vault = deploy(&alice, code);
 			let target = collection_address(collection);
-			let hook = <MapPurseKey<Test> as OnPurseOccupied<AccountId32>>::on_purse_occupied_weight();
+			let hook =
+				<MapPurseKey<Test> as OnPurseOccupied<AccountId32>>::on_purse_occupied_weight();
 			assert!(hook.any_gt(Weight::zero()));
 			let consumed = |caller: &AccountId32, input: Vec<u8>| {
 				let result = call_full(caller, target, input);

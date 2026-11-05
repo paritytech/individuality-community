@@ -34,10 +34,12 @@ pragma solidity ^0.8.30;
 /// A holder moves a token on its own authority: the caller must be the current holder.
 /// A purse key receives a token only while it holds none. A deployed contract holds any number and
 /// moves each with @custom:function transferFrom. An address whose code is gone keeps what it
-/// holds, so it can hold more than one token. Anyone can send a token to a contract, and the
-/// contract cannot learn the sender. A native push emits no `Transfer` log and makes no receiver
-/// call, so a contract checks that @custom:function ownerOf returns `address(this)` and does not
-/// wait for an event. A contract that credits senders records each claimant before the push, when
+/// holds, so it can hold more than one token. `ISystem.terminate` removes a contract's code at
+/// any time, and a redeploy at the address takes over everything it holds, so a custody contract
+/// must not expose a terminate path. Anyone can send a token to a contract, and the contract
+/// cannot learn the sender. A native push emits no `Transfer` log and makes no receiver call, so a
+/// contract checks that @custom:function ownerOf returns `address(this)` and does not wait for an
+/// event. A contract that credits senders records each claimant before the push, when
 /// @custom:function ownerOf still returns the claimant, and credits only tokens it has a record
 /// for. Anyone can raise a contract's @custom:function balanceOf and extend its
 /// @custom:function tokenOfOwnerByIndex list, so a contract does not base its logic on either.

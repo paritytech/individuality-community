@@ -2628,12 +2628,8 @@ fn a_contract_destination_refunds_the_purse_occupancy_hook() {
 		setup_item();
 		MockContracts::add(CONTRACT);
 
-		let mint_call = |to| crate::Call::<Test>::mint {
-			collection: 0,
-			item: 0,
-			to,
-			metadata: alloc::vec![],
-		};
+		let mint_call =
+			|to| crate::Call::<Test>::mint { collection: 0, item: 0, to, metadata: alloc::vec![] };
 		let mint_into = |to| {
 			Scarcity::mint(RuntimeOrigin::signed(OWNER), 0, 0, to, alloc::vec![])
 				.expect("the mint succeeds")
@@ -2659,7 +2655,8 @@ fn a_contract_destination_refunds_the_purse_occupancy_hook() {
 			.expect("the holder transfer succeeds");
 		assert_refunded(declared, post.actual_weight);
 
-		let declared = crate::Call::<Test>::transfer { to: CONTRACT }.get_dispatch_info().call_weight;
+		let declared =
+			crate::Call::<Test>::transfer { to: CONTRACT }.get_dispatch_info().call_weight;
 		let nft = NftsByOwner::<Test>::get(4).expect("4 holds an instance");
 		let post = Scarcity::transfer(nft_origin(4, nft), CONTRACT).expect("the transfer succeeds");
 		assert_refunded(declared, post.actual_weight);

@@ -170,8 +170,10 @@
 //! with one charged read per token, so a token of another collection adds no cost.
 //!
 //! A deleted contract keeps its tokens, and nothing moves them out on the holder's authority until
-//! code is deployed at its address again. A token that an address received before it carried code
-//! stays in its purse, and the contract moves it like the others.
+//! code is deployed at its address again. Unlike on Ethereum since Cancun, `ISystem.terminate`
+//! removes a contract's code at any time. A redeploy at the address takes over every token it
+//! holds, so a custody contract must not expose a terminate path. A token that an address received
+//! before it carried code stays in its purse, and the contract moves it like the others.
 //!
 //! # Frame guards
 //!
