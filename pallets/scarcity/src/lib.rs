@@ -744,7 +744,8 @@ pub mod pallet {
 		StorageDeposit,
 	}
 
-	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft`.
+	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft`. Version 3
+	/// changed the `Instances` value from a holder to a `Location`, which adds the collection.
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
 	#[pallet::pallet]
