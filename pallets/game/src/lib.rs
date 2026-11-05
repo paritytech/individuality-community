@@ -63,11 +63,18 @@
 //! given: f(i) = group_index + i x number_of_group
 //! { f(i) ∣ i ∈ {0,1,…,max_group_size−1} and f(i) < number_of_player }
 //! or equivalently:
-//! {group_index+i⋅number_of_group∣i∈{0,1,…,max_per_group−1}}∩{0,1,…,number_of_player−1}
+//! {group_index+i⋅number_of_group∣i∈{0,1,…,max_group_size−1}}∩{0,1,…,number_of_player−1}
 //! ```
 //! After participating in the game in the given group in each round, the player will report on
 //! other players in the group. The report is a list of round reports, one for each round. Each
 //! round report is a list of reports for all other players in the group, ordered by player index.
+//!
+//! A game is cancelled unless every group holds at least `max_group_size - 1` players. A minimum
+//! of `max_group_size` would cancel every game whose player count is not a multiple of
+//! `max_group_size`, while one player fewer accepts most counts. Attendance needs a strict
+//! majority of the co-players' `Person` vote weight, so a small group is easier to collude in and
+//! a lone player passes unvoted, hence a [`Config::MinGroupSize`] of at least 2. A testnet skips
+//! the bound.
 //!
 //! Players have different vote weights and are differently distributed depending on whether they
 //! are recognized as a unique individual in pallet-score. Throughout this pallet, we use
@@ -356,14 +363,10 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxGroupSize: Get<u32>;
 
-		/// The minimum number of players in a group.
+		/// The lower bound on a game's minimum group size, which is `max_group_size - 1`.
 		///
-		/// When scheduling a game the value for `max_group_size` must be at least this minimum + 1.
-		///
-		/// In order to have no single-player groups, this value must be at least 2.
-		///
-		/// Note: the actual minimum number of players in a group is configured per game, it is
-		/// `max_group_size - 1`.
+		/// Must be at least 2, or 1 when `TESTNET` is set, because a testnet does not enforce the
+		/// minimum group size. A game's `max_group_size` must exceed this value.
 		#[pallet::constant]
 		type MinGroupSize: Get<u32>;
 
@@ -823,6 +826,20 @@ pub mod pallet {
 				"the game's airdrop product name must be a bare dotNS label"
 			);
 
+			assert!(T::MinGroupSize::get() > 0, "MinGroupSize must be non-zero");
+			#[cfg(feature = "testnet")]
+			let testnet = T::TESTNET;
+			#[cfg(not(feature = "testnet"))]
+			let testnet = false;
+			assert!(
+				testnet || T::MinGroupSize::get() >= 2,
+				"MinGroupSize must be at least 2 outside a testnet"
+			);
+			assert!(
+				T::MinGroupSize::get() < T::MaxGroupSize::get(),
+				"MinGroupSize must be less than MaxGroupSize"
+			);
+
 			let max_votes = Self::max_received_votes();
 			assert!(
 				max_votes as u64 * T::PeopleVoteWeight::get() as u64 <= u8::MAX as u64,
@@ -994,10 +1011,10 @@ pub mod pallet {
 		/// Parameters:
 		/// - `statement_account`: the account id to use to interact with the statement store during
 		///   the game.
-		/// - `sig`: the proof of ownership of the account `statement_account` by an alias, it is
-		///   the signature of the message `"pop:game:stmt_account_for_alias:"` concatenated to the
-		///   alias, and then hashed with `blake2_256` (blake2 256bit output). The base of the
-		///   message can be found in the constant: `proof_of_ownership_msg_base`.
+		/// - `sig`: the proof of ownership of the account `statement_account` by an alias. The
+		///   message is the `blake2_256` hash of `"pop:game:stmt_account_for_alias:"` concatenated
+		///   to the alias. The base of the message is in `proof_of_ownership_msg_base`. The
+		///   statement account signs [`Pallet::account_signing_payload`] of the hash.
 		/// - `airdrops`: optionally enters the player into the airdrop draws scheduled for this
 		///   game. Pass `None` to skip it; otherwise it holds exactly one VRF per scheduled airdrop
 		///   event (`airdrops_scheduled` in the `Game` storage), in airdrop-index order. Each entry
@@ -1207,7 +1224,7 @@ pub mod pallet {
 					)
 					.ok_or(Error::<T>::InternalErrorInvalidState)?;
 
-				let groups_setting = GroupsSetting { max_per_group: group_size, player_count };
+				let groups_setting = GroupsSetting { full_group_size: group_size, player_count };
 
 				let group_index = groups_setting.group_index_from_player_index(reporter_index);
 				// The reporter's place in their group. They are the attester of every credit
@@ -1871,7 +1888,27 @@ pub mod pallet {
 		}
 	}
 
+	#[pallet::extra_constants]
 	impl<T: Config> Pallet<T> {
+		/// The game's signing context on this network. An account signs this context followed
+		/// by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(
+				PRODUCT_NAME,
+				&<T as indiv_pallet_score::Config>::Suffix::get(),
+			)
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the game's signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			[&Self::signing_context()[..], msg].concat()
+		}
+
 		/// Check the count and the variant of the airdrop VRF entries against the player's
 		/// `recognized` state.
 		///
@@ -2019,10 +2056,7 @@ pub mod pallet {
 				u32::from(schedule.rounds) <= T::MaxRounds::get(),
 				Error::<T>::InvalidGameSetup
 			);
-			ensure!(
-				schedule.max_group_size >= T::MinGroupSize::get(),
-				Error::<T>::InvalidGameSetup
-			);
+			ensure!(schedule.max_group_size > T::MinGroupSize::get(), Error::<T>::InvalidGameSetup);
 			ensure!(
 				schedule.max_group_size <= T::MaxGroupSize::get(),
 				Error::<T>::InvalidGameSetup
@@ -2184,7 +2218,8 @@ pub mod pallet {
 					let msg = (Self::proof_of_ownership_msg_base(), &who)
 						.using_encoded(sp_io::hashing::blake2_256);
 					ensure!(
-						statement_account_signature.verify(&msg[..], &statement_account),
+						statement_account_signature
+							.verify(&Self::account_signing_payload(&msg)[..], &statement_account),
 						Error::<T>::InvalidStatementAccountSignature,
 					);
 
@@ -2607,7 +2642,7 @@ pub mod pallet {
 			rounds: u8,
 			player_count: u32,
 			recognized_count: u32,
-			max_per_group: u32,
+			full_group_size: u32,
 		) -> StepResult {
 			let mut remaining_players = match last_iteration.clone() {
 				None => PlayerToIndex::<T>::iter(),
@@ -2618,7 +2653,7 @@ pub mod pallet {
 				return StepResult::Finished;
 			};
 
-			let groups_setting = GroupsSetting { max_per_group, player_count };
+			let groups_setting = GroupsSetting { full_group_size, player_count };
 			let people_vote_weight = u32::from(T::PeopleVoteWeight::get());
 			let candidate_vote_weight = u32::from(T::CandidateVoteWeight::get());
 			let mut total_weight: u32 = 0;
@@ -3504,7 +3539,7 @@ pub mod pallet {
 						let player_count = next_player_index;
 
 						let group_setting =
-							GroupsSetting { max_per_group: game.max_group_size, player_count };
+							GroupsSetting { full_group_size: game.max_group_size, player_count };
 
 						if group_setting.acceptable_player_count::<T>() {
 							game.state = GameState::Shuffle {

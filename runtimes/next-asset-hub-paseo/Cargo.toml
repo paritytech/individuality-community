@@ -186,6 +186,7 @@ default = ["std"]
 paseo-ahm = [
 ]
 runtime-benchmarks = [
+	"asset-test-utils/runtime-benchmarks",
 	"assets-common/runtime-benchmarks",
 	"bp-asset-hub-paseo/runtime-benchmarks",
 	"bp-bridge-hub-paseo/runtime-benchmarks",
@@ -264,6 +265,7 @@ runtime-benchmarks = [
 	"pallet-xcm-precompiles/runtime-benchmarks",
 	"pallet-xcm/runtime-benchmarks",
 	"parachains-common/runtime-benchmarks",
+	"parachains-runtimes-test-utils/runtime-benchmarks",
 	"paseo-runtime-constants/runtime-benchmarks",
 	"polkadot-parachain-primitives/runtime-benchmarks",
 	"polkadot-primitives/runtime-benchmarks",
@@ -358,6 +360,7 @@ try-runtime = [
 	"pallet-xcm/try-runtime",
 	"parachain-info/try-runtime",
 	"parachains-common/try-runtime",
+	"parachains-runtimes-test-utils/try-runtime",
 	"polkadot-runtime-common/try-runtime",
 	"snowbridge-inbound-queue-primitives/try-runtime",
 	"snowbridge-pallet-system-frontend/try-runtime",

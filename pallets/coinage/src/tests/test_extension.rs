@@ -421,12 +421,13 @@ fn unload_call_charge_is_max_of_modes() {
 				.max(Coinage::unload_recycler_into_external_asset_from_output_weight(a)),
 		);
 
-		// loaded_coins: a = 2 aliases, d = 0 loaded_coins.
+		// loaded_coins: a = 2 aliases, g = 0 denominations, n = 0 loaded_coins.
 		assert_eq!(
-			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(a, 0),
-			Coinage::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(a, 0).max(
+			Coinage::unload_recycler_into_external_asset_and_loaded_coins_max_weight(a, 0, 0),
+			Coinage::unload_recycler_into_external_asset_and_loaded_coins_prepaid_weight(a, 0, 0)
+				.max(
 				Coinage::unload_recycler_into_external_asset_and_loaded_coins_from_output_weight(
-					a, 0
+					a, 0, 0
 				)
 			),
 		);
