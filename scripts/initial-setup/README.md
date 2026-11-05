@@ -44,7 +44,7 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 | **02** | Adds sudo proxy delegation on People |
 | **03a-g** | XTRNL: create, AssetHub pool, AssetHub metadata, People metadata, conversion rate, Coinage instance, People pool |
 | **04a-b** | USDT/USDC: create on AssetHub with metadata, pool, and liquidity; create as foreign assets on People with metadata |
-| **05a-c** | Stablecoin faucet: acquire USDT/USDC for the owner on AssetHub, fund the People faucet with USDT/USDC via XCM, fund the AssetHub faucet with USDT/USDC by swapping PAS |
+| **05a-c** | Stablecoin faucet: acquire USDT/USDC for the owner on AssetHub, fund the People faucet with XTRNL/USDT/USDC via XCM, fund the AssetHub faucet with USDT/USDC by swapping PAS |
 | **06a-b** | PGAS: create, alias fee |
 | **07** | Adds ZK chunks on People |
 | **08a-b** | Creates the people and people-lite collections on People |
@@ -53,7 +53,6 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 | **11** | Adds Proof of Ink design families from snapshot |
 | **12a-c** | Attestation account: invites, allowances, proxy |
 | **13** | Sets the DotNS gateway dispatcher address on AssetHub |
-| **14** | Creates the attestation NFT collection on People |
 
 ## File Structure
 
