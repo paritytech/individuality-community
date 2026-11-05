@@ -306,7 +306,7 @@ pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 	/// settled. Settlement happens *early* when an incoming `report` makes a
 	/// named player's tally decisive (via `try_early_attendance_enactment`),
 	/// or *late* when `player_process_step1` resolves the rest after `report_ends`.
-	/// When the counter reaches zero before `report_ends`, `process_reporting`
+	/// When the counter is zero between `game_date` and `report_ends`, `process_reporting`
 	/// leaves the reporting phase early instead of waiting for the deadline.
 	pub pending_attendance: u32,
 	/// The number of airdrop events successfully scheduled for this game; the events carry the
