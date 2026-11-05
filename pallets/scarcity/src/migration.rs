@@ -241,7 +241,13 @@ pub mod v3 {
 				sp_runtime::TryRuntimeError::Other("pre_upgrade state is not a u32")
 			})?;
 			let after = Instances::<T>::iter().count() as u32;
-			ensure!(before == after, "an instance location did not survive the migration");
+			if before != after {
+				log::error!(
+					target: LOG_TARGET,
+					"{before} instance locations before the migration, {after} after"
+				);
+				return Err("an instance location did not survive the migration".into());
+			}
 			Ok(())
 		}
 	}

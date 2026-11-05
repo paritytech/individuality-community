@@ -3667,15 +3667,30 @@ mod migration {
 		});
 	}
 
-	/// An entry whose holder does not hold the instance has no collection to take, so it goes.
+	/// Each stale entry goes, including one whose holder holds a different instance, and the
+	/// valid entry keeps its own collection.
 	#[test]
-	fn the_location_migration_removes_an_entry_without_its_nft() {
+	fn the_location_migration_keeps_only_entries_whose_holder_holds_them() {
 		new_test_ext().execute_with(|| {
-			unhashed::put_raw(&Instances::<Test>::hashed_key_for(7), &RECIPIENT.encode());
+			let instance = downgrade_a_real_location();
+			assert_eq!(instance, 0);
+			unhashed::put_raw(&Instances::<Test>::hashed_key_for(7), &OTHER.encode());
+			unhashed::put_raw(&Instances::<Test>::hashed_key_for(8), &RECIPIENT.encode());
+			let purses = NftsByOwner::<Test>::iter().collect::<Vec<_>>();
+			#[cfg(feature = "try-runtime")]
+			let state = MigrateToLocations::<Test>::pre_upgrade().expect("counts the keys");
+			#[cfg(feature = "try-runtime")]
+			assert_eq!(u32::decode(&mut &state[..]).unwrap(), 3);
 
 			MigrateToLocations::<Test>::on_runtime_upgrade();
 
-			assert!(!Instances::<Test>::contains_key(7));
+			assert_eq!(
+				Instances::<Test>::iter().collect::<Vec<_>>(),
+				vec![(0, crate::Location { holder: RECIPIENT, collection: 1 })]
+			);
+			assert_eq!(NftsByOwner::<Test>::iter().collect::<Vec<_>>(), purses);
+			#[cfg(feature = "try-runtime")]
+			assert!(MigrateToLocations::<Test>::post_upgrade(state).is_err());
 		});
 	}
 
