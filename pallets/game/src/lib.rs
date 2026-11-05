@@ -2362,7 +2362,8 @@ pub mod pallet {
 				return Self::end_registration_max_weight();
 			};
 			let player_count = next_player_index;
-			let group_setting = GroupsSetting { full_group_size: game.max_group_size, player_count };
+			let group_setting =
+				GroupsSetting { full_group_size: game.max_group_size, player_count };
 
 			let weight = if group_setting.acceptable_player_count::<T>() {
 				game.state =
