@@ -327,15 +327,15 @@ mod benches {
 		Ok(())
 	}
 
-	/// A game in registration with `n` airdrop events and `max_group_size` two. One sign-up then
-	/// takes the shuffle branch of `end_registration`. None takes the cancel branch. The airdrop
-	/// funds are set up by the caller.
+	/// A game in registration with `n` airdrop events and `max_group_size` one above
+	/// `MinGroupSize`. `MinGroupSize` sign-ups then take the shuffle branch of `end_registration`.
+	/// None takes the cancel branch. The airdrop funds are set up by the caller.
 	fn bench_game_with_airdrops<T: Config>(n: u32) -> GameScheduleOf<T> {
 		<T as Config>::BenchmarkHelper::set_valid_time();
 		let schedule = GameScheduleOf::<T> {
 			game_play_time: 1000,
 			rounds: T::MaxRounds::get() as u8,
-			max_group_size: 2,
+			max_group_size: T::MinGroupSize::get() + 1,
 			airdrops: bench_airdrops::<T>(n),
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
@@ -352,13 +352,16 @@ mod benches {
 	#[benchmark]
 	fn end_registration_shuffle() -> Result<(), BenchmarkError> {
 		let schedule = bench_game_with_airdrops::<T>(0);
-		let player: T::AccountId = account("Alice", 0, 0);
-		<T as Config>::BenchmarkHelper::fund_account(player.clone());
-		assert_ok!(pallet::Pallet::<T>::sign_up_with_account(
-			RawOrigin::Signed(player).into(),
-			DEFAULT_IDENTIFIER_KEY,
-			None
-		));
+		// One group of `max_group_size - 1` players is the smallest acceptable player count.
+		for i in 0..T::MinGroupSize::get() {
+			let player: T::AccountId = account("player", i, i);
+			<T as Config>::BenchmarkHelper::fund_account(player.clone());
+			assert_ok!(pallet::Pallet::<T>::sign_up_with_account(
+				RawOrigin::Signed(player).into(),
+				DEFAULT_IDENTIFIER_KEY,
+				None
+			));
+		}
 		bench_pass_registration_end::<T>(&schedule);
 		let game_index = GameIndex::<T>::get();
 

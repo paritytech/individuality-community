@@ -427,17 +427,17 @@ impl GroupsSetting {
 	/// players.
 	///
 	/// Players are dealt round-robin, so the smallest group holds `player_count / number_of_group`
-	/// players, rounded down. On a testnet any player count is acceptable.
+	/// players, rounded down. On a testnet any non-zero player count is acceptable.
 	pub fn acceptable_player_count<T: Config>(&self) -> bool {
+		if self.player_count == 0 {
+			return false;
+		}
+
 		// A testnet game often has few players. This lets it start with a realistic
 		// `max_group_size`, which would otherwise require at least `max_group_size - 1` players.
 		#[cfg(feature = "testnet")]
 		if T::TESTNET {
 			return true;
-		}
-
-		if self.player_count == 0 {
-			return false;
 		}
 
 		let min_group_size = self.full_group_size.saturating_sub(1);
