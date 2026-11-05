@@ -188,8 +188,8 @@ impl OnCollectionOwnerChanged for () {
 	}
 }
 
-/// Notified when a mint gives a purse key its first instance, so a runtime can make that key
-/// addressable to its contract environment without this pallet depending on that environment.
+/// Notified when an instance arrives at a purse key, so a runtime can make that key addressable
+/// to its contract environment without this pallet depending on that environment.
 ///
 /// A purse key needs no `system::Account` entry, so a runtime that registers addresses on
 /// account creation never sees one. The handler runs inside the call that occupies the key and
@@ -207,7 +207,8 @@ pub trait OnPurseOccupied<AccountId> {
 	/// Worst-case weight of one [`Self::on_purse_occupied`]. Every entry that occupies a key
 	/// adds it: the extrinsic through its annotation, callers of
 	/// [`MintWithoutDeposit`] through `mint_hook_weight`, and a
-	/// precompile calling a pallet entry directly, where no annotation applies.
+	/// precompile calling a pallet entry directly, where no annotation applies. The extrinsics
+	/// and precompile refund it for a contract destination.
 	///
 	/// Benchmarks run against a runtime that wires a real handler measure the handler inside
 	/// `WeightInfo::mint`, `WeightInfo::transfer` and `WeightInfo::force_transfer`, which each
@@ -309,6 +310,7 @@ pub mod pallet {
 	use alloc::collections::BTreeMap;
 	use alloc::vec::Vec;
 	use frame_support::{
+		dispatch::PostDispatchInfo,
 		pallet_prelude::*,
 		traits::{tokens::Balance, Consideration, Footprint, IsSubType, UnixTime},
 		transactional,
@@ -958,9 +960,17 @@ pub mod pallet {
 			item: ItemIndex,
 			to: T::AccountId,
 			metadata: Vec<(MetadataKeyOf<T>, MetadataValueOf<T>)>,
-		) -> DispatchResult {
+		) -> DispatchResultWithPostInfo {
 			let owner = ensure_signed(origin)?;
-			Self::do_mint(owner, collection, item, to, metadata).map(|_| ())
+			let pairs = metadata.len() as u32;
+			let hook = Self::purse_hook_weight(&to);
+			Self::do_mint(owner, collection, item, to, metadata)?;
+			Ok(Some(
+				T::WeightInfo::mint(pairs)
+					.saturating_add(hook)
+					.saturating_add(T::MetadataPolicy::validate_weight(pairs)),
+			)
+			.into())
 		}
 
 		/// Transfer an NFT held by the `Origin::Nft` purse-key origin.
@@ -978,6 +988,7 @@ pub mod pallet {
 			ensure!(to != owner, Error::<T>::SelfTransfer);
 			let destination = Self::destination_of(&to)?;
 			Self::ensure_transferable(&nft)?;
+			let hook = Self::purse_hook_weight(&to);
 
 			let from = owner;
 			let state_nonce =
@@ -988,14 +999,16 @@ pub mod pallet {
 			let moves = nft.moves.saturating_add(1);
 			let nft = Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves, ..nft };
 			Self::place(&to, &nft, destination);
-			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance: nft.instance,
 				collection: nft.collection,
 				from,
 				to,
 			});
-			Ok(Pays::No.into())
+			Ok(PostDispatchInfo {
+				actual_weight: Some(T::WeightInfo::transfer().saturating_add(hook)),
+				pays_fee: Pays::No,
+			})
 		}
 
 		/// Burn an NFT held by the `Origin::Nft` purse-key origin.
@@ -1198,9 +1211,11 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			instance: InstanceId,
 			to: T::AccountId,
-		) -> DispatchResult {
+		) -> DispatchResultWithPostInfo {
 			let owner = ensure_signed(origin)?;
-			Self::do_force_transfer(&owner, instance, to)
+			let hook = Self::purse_hook_weight(&to);
+			Self::do_force_transfer(&owner, instance, to)?;
+			Ok(Some(T::WeightInfo::force_transfer().saturating_add(hook)).into())
 		}
 
 		/// Move the instance the signer holds, with the fee paid from the signer's account.
@@ -1218,9 +1233,11 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			instance: InstanceId,
 			to: T::AccountId,
-		) -> DispatchResult {
+		) -> DispatchResultWithPostInfo {
 			let holder = ensure_signed(origin)?;
-			Self::do_transfer_by_holder(&holder, instance, to)
+			let hook = Self::purse_hook_weight(&to);
+			Self::do_transfer_by_holder(&holder, instance, to)?;
+			Ok(Some(T::WeightInfo::transfer_by_holder().saturating_add(hook)).into())
 		}
 	}
 
@@ -1731,7 +1748,6 @@ pub mod pallet {
 				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
 			Self::place(&to, &nft, destination);
-			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::ForceTransferred { instance, collection, from, to });
 			Ok(())
 		}
@@ -1808,6 +1824,7 @@ pub mod pallet {
 		///
 		/// Cannot fail, so a move that has taken an instance always places it. The contract's
 		/// count saturates, because no contract can hold `u32::MAX` instances of one collection.
+		/// Notifies [`Config::OnPurseOccupied`] for a purse key.
 		fn place(to: &T::AccountId, nft: &Nft, holding: Holding) {
 			match holding {
 				Holding::Purse => NftsByOwner::<T>::insert(to, nft),
@@ -1820,6 +1837,19 @@ pub mod pallet {
 			}
 			let location = Location { holder: to.clone(), collection: nft.collection };
 			Instances::<T>::insert(nft.instance, location);
+			if holding == Holding::Purse {
+				T::OnPurseOccupied::on_purse_occupied(to);
+			}
+		}
+
+		/// Weight of [`Config::OnPurseOccupied`] for an instance that arrives at `to`, or zero for
+		/// a contract, where the hook does not run.
+		pub fn purse_hook_weight(to: &T::AccountId) -> Weight {
+			if T::ContractAccounts::is_contract(to) {
+				Weight::zero()
+			} else {
+				T::OnPurseOccupied::on_purse_occupied_weight()
+			}
 		}
 
 		/// Remove `nft` from `holder` in the map that holds it.
@@ -1899,7 +1929,6 @@ pub mod pallet {
 				Nft { last_moved: T::UnixTime::now().as_secs(), state_nonce, moves: 0, ..nft };
 			let collection = nft.collection;
 			Self::place(&to, &nft, destination);
-			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Transferred {
 				instance,
 				collection,
@@ -2041,7 +2070,6 @@ pub mod pallet {
 					with_deposit,
 				)?;
 			}
-			T::OnPurseOccupied::on_purse_occupied(&to);
 			Self::deposit_event(Event::Minted { instance, collection, item, owner: to });
 			Ok(instance)
 		}

@@ -3807,6 +3807,7 @@ mod guards {
 /// `solc` or `resolc` is missing, so a passing run always exercised real bytecode.
 mod evm_fixture {
 	use super::*;
+	use indiv_pallet_scarcity::OnPurseOccupied;
 	use indiv_precompile_fixtures::{fixture_code, resolc_code};
 	use indiv_precompile_support::test_helpers::alloy_address;
 	use pallet_revive::{precompiles::alloy::primitives::U256, Code};
@@ -4646,6 +4647,72 @@ mod evm_fixture {
 
 			assert_eq!(owner_of(collection, token).into_array(), vault.0);
 			assert_eq!(balance_of(collection, vault), U256::from(2));
+		});
+	}
+
+	/// Each move into a contract costs exactly the purse hook less than the same move into a
+	/// purse key, because the hook does not run for a contract.
+	#[test]
+	fn a_move_into_a_contract_refunds_the_purse_hook() {
+		let code = fixture_code("TokenVault");
+		new_test_ext().execute_with(|| {
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let vault = deploy(&alice, code);
+			let target = collection_address(collection);
+			let hook = <MapPurseKey<Test> as OnPurseOccupied<AccountId32>>::on_purse_occupied_weight();
+			assert!(hook.any_gt(Weight::zero()));
+			let consumed = |caller: &AccountId32, input: Vec<u8>| {
+				let result = call_full(caller, target, input);
+				assert!(!result.result.expect("the call executes").did_revert());
+				result.weight_consumed
+			};
+			let assert_refunded = |into_purse: Weight, into_contract: Weight| {
+				assert_eq!(into_purse.saturating_sub(into_contract), hook);
+			};
+
+			let mint = |to: H160| {
+				IScarcityCollection::mintCall {
+					item,
+					to: alloy_address(to),
+					keys: alloc::vec![],
+					values: alloc::vec![],
+				}
+				.abi_encode()
+			};
+			assert_refunded(consumed(&alice, mint(purse(0xD0).0)), consumed(&alice, mint(vault)));
+
+			let force_transfer = |token: InstanceId, to: H160| {
+				IScarcityCollection::forceTransferCall {
+					tokenId: U256::from(token),
+					to: alloy_address(to),
+				}
+				.abi_encode()
+			};
+			let (_, _, first) = mint_to_funded_purse(&alice, collection, item, 0xD1);
+			let (_, _, second) = mint_to_funded_purse(&alice, collection, item, 0xD2);
+			assert_refunded(
+				consumed(&alice, force_transfer(first, purse(0xD3).0)),
+				consumed(&alice, force_transfer(second, vault)),
+			);
+
+			let transfer_from = |from: H160, token: InstanceId, to: H160| {
+				IScarcityCollection::transferFromCall {
+					from: alloy_address(from),
+					to: alloy_address(to),
+					tokenId: U256::from(token),
+				}
+				.abi_encode()
+			};
+			let (first_address, first_holder, first) =
+				mint_to_funded_purse(&alice, collection, item, 0xD4);
+			let (second_address, second_holder, second) =
+				mint_to_funded_purse(&alice, collection, item, 0xD5);
+			assert_refunded(
+				consumed(&first_holder, transfer_from(first_address, first, purse(0xD6).0)),
+				consumed(&second_holder, transfer_from(second_address, second, vault)),
+			);
 		});
 	}
 

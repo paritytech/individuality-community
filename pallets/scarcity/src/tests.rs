@@ -26,8 +26,8 @@ use crate::{
 	CollectionMetadata, Collections, Error, Event, InspectCollection, InstanceDeposits,
 	InstanceMetadata, InstanceMetadataCount, Instances, ItemDefs, ItemMetadata, LockInfo, Locked,
 	MetadataEntry, MetadataKeyOf, MetadataValueOf, MintWithoutDeposit, NextCollectionId,
-	NextInstanceId, Nft, NftsByOwner, OnCollectionDeleted, OnCollectionOwnerChanged, Origin,
-	Transferability,
+	NextInstanceId, Nft, NftsByOwner, OnCollectionDeleted, OnCollectionOwnerChanged,
+	OnPurseOccupied, Origin, Transferability,
 };
 use codec::{Decode, Encode};
 #[cfg(feature = "try-runtime")]
@@ -36,6 +36,7 @@ use frame_support::{
 	assert_noop, assert_ok,
 	dispatch::{GetDispatchInfo, Pays},
 	traits::{Get, OriginTrait},
+	weights::Weight,
 };
 use sp_runtime::{
 	traits::{TransactionExtension, TxBaseImplication},
@@ -919,13 +920,17 @@ fn the_metadata_policy_refuses_a_value_on_every_write_path() {
 			Transferability::Transferable,
 			metadata(&[(POLICED_KEY, REJECTED_VALUE)]),
 		));
-		refused(Scarcity::mint(
-			RuntimeOrigin::signed(OWNER),
-			0,
-			0,
-			OTHER,
-			metadata(&[(POLICED_KEY, REJECTED_VALUE)]),
-		));
+		refused(
+			Scarcity::mint(
+				RuntimeOrigin::signed(OWNER),
+				0,
+				0,
+				OTHER,
+				metadata(&[(POLICED_KEY, REJECTED_VALUE)]),
+			)
+			.map(|_| ())
+			.map_err(|e| e.error),
+		);
 
 		// The policy judges the value, not the key: the same key takes anything else, and
 		// removing it needs no judgement at all.
@@ -2580,6 +2585,115 @@ fn every_occupying_path_notifies_the_purse_occupancy_hook() {
 		let nft = NftsByOwner::<Test>::get(5).expect("the instance moved to 5");
 		assert_ok!(Scarcity::transfer(nft_origin(5, nft), 6));
 		assert_eq!(OccupiedPurses::get(), alloc::vec![RECIPIENT, OTHER, 4, 5, 6]);
+	});
+}
+
+/// A contract is not a purse key, so no path that gives a contract an instance notifies.
+#[test]
+fn no_path_into_a_contract_notifies_the_purse_occupancy_hook() {
+	const CONTRACT: u64 = 50;
+	new_test_ext().execute_with(|| {
+		setup_item();
+		MockContracts::add(CONTRACT);
+		mint(0, CONTRACT);
+		assert_ok!(Scarcity::mint_without_deposit(0, 0, CONTRACT, alloc::vec![]));
+		for purse in [RECIPIENT, OTHER, 4] {
+			mint(0, purse);
+		}
+		let notified = OccupiedPurses::get();
+		assert_eq!(notified, alloc::vec![RECIPIENT, OTHER, 4]);
+
+		assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 2, CONTRACT));
+		assert_ok!(Scarcity::do_transfer_by_holder(&OTHER, 3, CONTRACT));
+		let nft = NftsByOwner::<Test>::get(4).expect("4 holds an instance");
+		assert_ok!(Scarcity::transfer(nft_origin(4, nft), CONTRACT));
+
+		assert_eq!(Scarcity::balance_of(&CONTRACT, 0), 5);
+		assert_eq!(OccupiedPurses::get(), notified);
+	});
+}
+
+/// Each extrinsic declares the hook's weight and refunds it for a contract destination, where
+/// the hook does not run.
+#[test]
+fn a_contract_destination_refunds_the_purse_occupancy_hook() {
+	const CONTRACT: u64 = 50;
+	let hook = RecordPurseOccupancy::on_purse_occupied_weight();
+	let assert_refunded = |declared: Weight, actual: Option<Weight>| {
+		let actual = actual.expect("the extrinsic reports its actual weight");
+		assert_eq!(actual, declared.saturating_sub(hook));
+		assert!(actual.all_lt(declared));
+	};
+	new_test_ext().execute_with(|| {
+		setup_item();
+		MockContracts::add(CONTRACT);
+
+		let mint_call = |to| crate::Call::<Test>::mint {
+			collection: 0,
+			item: 0,
+			to,
+			metadata: alloc::vec![],
+		};
+		let mint_into = |to| {
+			Scarcity::mint(RuntimeOrigin::signed(OWNER), 0, 0, to, alloc::vec![])
+				.expect("the mint succeeds")
+				.actual_weight
+		};
+		let declared = mint_call(CONTRACT).get_dispatch_info().call_weight;
+		assert_refunded(declared, mint_into(CONTRACT));
+		assert_eq!(mint_into(RECIPIENT), Some(declared));
+		mint(0, OTHER);
+		mint(0, 4);
+
+		let declared = crate::Call::<Test>::force_transfer { instance: 1, to: CONTRACT }
+			.get_dispatch_info()
+			.call_weight;
+		let post = Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 1, CONTRACT)
+			.expect("the force transfer succeeds");
+		assert_refunded(declared, post.actual_weight);
+
+		let declared = crate::Call::<Test>::transfer_by_holder { instance: 2, to: CONTRACT }
+			.get_dispatch_info()
+			.call_weight;
+		let post = Scarcity::transfer_by_holder(RuntimeOrigin::signed(OTHER), 2, CONTRACT)
+			.expect("the holder transfer succeeds");
+		assert_refunded(declared, post.actual_weight);
+
+		let declared = crate::Call::<Test>::transfer { to: CONTRACT }.get_dispatch_info().call_weight;
+		let nft = NftsByOwner::<Test>::get(4).expect("4 holds an instance");
+		let post = Scarcity::transfer(nft_origin(4, nft), CONTRACT).expect("the transfer succeeds");
+		assert_refunded(declared, post.actual_weight);
+		assert_eq!(post.pays_fee, Pays::No);
+	});
+}
+
+/// A purse-key destination runs the hook, so the moves keep its weight.
+#[test]
+fn a_purse_destination_keeps_the_purse_occupancy_hook_weight() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		mint(0, OTHER);
+		mint(0, 4);
+
+		let declared = crate::Call::<Test>::force_transfer { instance: 0, to: 5 }
+			.get_dispatch_info()
+			.call_weight;
+		let post = Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, 5)
+			.expect("the force transfer succeeds");
+		assert_eq!(post.actual_weight, Some(declared));
+
+		let declared = crate::Call::<Test>::transfer_by_holder { instance: 1, to: 6 }
+			.get_dispatch_info()
+			.call_weight;
+		let post = Scarcity::transfer_by_holder(RuntimeOrigin::signed(OTHER), 1, 6)
+			.expect("the holder transfer succeeds");
+		assert_eq!(post.actual_weight, Some(declared));
+
+		let declared = crate::Call::<Test>::transfer { to: 7 }.get_dispatch_info().call_weight;
+		let nft = NftsByOwner::<Test>::get(4).expect("4 holds an instance");
+		let post = Scarcity::transfer(nft_origin(4, nft), 7).expect("the transfer succeeds");
+		assert_eq!(post.actual_weight, Some(declared));
 	});
 }
 

@@ -549,9 +549,11 @@ where
 					),
 				),
 		)?;
-		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
-			T::AccountId,
-		>>::on_purse_occupied_weight())?;
+		let hook = env.charge(
+			<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+				T::AccountId,
+			>>::on_purse_occupied_weight(),
+		)?;
 		// The zero address maps to a real fallback purse; minting there would strand the
 		// instance behind a burn-shaped `Transfer` log.
 		if call.to == Address::ZERO {
@@ -560,6 +562,7 @@ where
 		let metadata = bounded_metadata::<T>(&call.keys, &call.values)?;
 		let who = caller_account::<T>(env)?;
 		let to = account_of::<T>(&call.to);
+		env.adjust_gas(hook, Scarcity::<T>::purse_hook_weight(&to));
 		let instance = Scarcity::<T>::do_mint(who, collection, call.item, to, metadata)
 			.map_err(revert_scarcity::<T>)?;
 		let token = U256::from(instance);
@@ -604,13 +607,16 @@ where
 			return Err(revert(ERR_NOT_HOLDER));
 		}
 		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
-		// The move registers its destination. `WeightInfo::transfer_by_holder` does not cover that:
-		// the extrinsic adds the same term to its own annotation, and the benchmark runtime wires
-		// no handler.
-		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
-			T::AccountId,
-		>>::on_purse_occupied_weight())?;
+		// The move registers a purse-key destination. `WeightInfo::transfer_by_holder` does not
+		// cover that: the extrinsic adds the same term to its own annotation, and the benchmark
+		// runtime wires no handler.
+		let hook = env.charge(
+			<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+				T::AccountId,
+			>>::on_purse_occupied_weight(),
+		)?;
 		let to = account_of::<T>(transfer.to);
+		env.adjust_gas(hook, Scarcity::<T>::purse_hook_weight(&to));
 		Scarcity::<T>::do_transfer_by_holder(&holder, nft.instance, to)
 			.map_err(revert_scarcity::<T>)?;
 		deposit_event(
@@ -679,11 +685,14 @@ where
 		// The move registers its destination, which the benchmark does not cover. See
 		// `transfer_from`. Charged past the rejections above so a revert does not pay for a
 		// registration that never happens.
-		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
-			T::AccountId,
-		>>::on_purse_occupied_weight())?;
+		let hook = env.charge(
+			<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+				T::AccountId,
+			>>::on_purse_occupied_weight(),
+		)?;
+		env.adjust_gas(hook, Scarcity::<T>::purse_hook_weight(&to));
 		Scarcity::<T>::force_transfer(RawOrigin::Signed(who).into(), nft.instance, to)
-			.map_err(revert_scarcity::<T>)?;
+			.map_err(|e| revert_scarcity::<T>(e.error))?;
 		deposit_event(
 			env,
 			IScarcityCollection::Transfer {

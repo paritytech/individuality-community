@@ -102,11 +102,12 @@
 //! is registered with `AddressMapper`: `to_address` of a native key is a truncated keccak hash
 //! and cannot be inverted. Runtimes register the accounts frame-system creates, but a purse key
 //! needs no `system::Account`, so a zero-balance holder would have no registration and would
-//! read as holding nothing. [`MapPurseKey`] closes that by registering every key an instance
-//! lands on, mints and both moves alike, and a runtime wires it through `indiv-pallet-scarcity`'s
-//! `OnPurseOccupied`. Registration also makes `ownerOf` invertible: an address derived from a
-//! registered key resolves back to that key, so a caller can pass a holder address to `mint`,
-//! `forceTransfer` or `nominateCollectionOwner` and reach the account it read. That holds for
+//! read as holding nothing. [`MapPurseKey`] closes that by registering every purse key an
+//! instance lands on, mints and both moves alike, and a runtime wires it through
+//! `indiv-pallet-scarcity`'s `OnPurseOccupied`. Registration also makes `ownerOf` invertible: an
+//! address derived from a registered key resolves back to that key, so a caller can pass a
+//! holder address to `mint`, `forceTransfer` or `nominateCollectionOwner` and reach the account
+//! it read. That holds for
 //! every live holder except one whose account was reaped, which is the case below.
 //!
 //! Registration costs a permanent entry per key, on the fee-less transfer as well, so a token
@@ -315,7 +316,7 @@ pub const ERR_ROYALTY_OVERFLOW: &str = "royalty exceeds the representable range"
 /// Revert reason when a reserved metadata value is not valid UTF-8.
 pub const ERR_RESERVED_NOT_UTF8: &str = "reserved metadata value is not valid UTF-8";
 
-/// Registers a purse key's address when a mint occupies it, for `indiv-pallet-scarcity`'s
+/// Registers a purse key's address when an instance arrives at it, for `indiv-pallet-scarcity`'s
 /// [`OnPurseOccupied`](indiv_pallet_scarcity::OnPurseOccupied) hook.
 ///
 /// `pallet-revive` registers addresses when `frame-system` creates an account, but a purse key
