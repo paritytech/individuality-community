@@ -64,14 +64,14 @@ fn basic_game() {
 
 		run_game_scenario(schedule, &players, |player| {
 			let number_of_group: u32 = 2;
-			let max_per_group: u32 = 3;
+			let full_group_size: u32 = 3;
 			let rounds: usize = 2;
 
 			let mut full_report = Vec::new();
 			for round in 0..rounds {
 				let player_shuffled_position = PlayerToIndex::<Test>::get(player).unwrap()[round];
 				let player_group_index = player_shuffled_position % number_of_group;
-				let other_players = (0..max_per_group)
+				let other_players = (0..full_group_size)
 					.map(|x| player_group_index + x * number_of_group)
 					.filter(|&x| x < players.len() as u32)
 					.filter(|&x| x != player_shuffled_position);
@@ -477,7 +477,7 @@ fn archived_player_can_sign_up_again() {
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 10,
 			rounds: 2,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -498,7 +498,7 @@ fn archived_player_can_sign_up_again() {
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 25,
 			rounds: 2,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -525,7 +525,7 @@ fn cannot_offboard_during_game() {
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 10,
 			rounds: 2,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -556,7 +556,7 @@ fn cannot_register_twice() {
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 25,
 			rounds: 2,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		assert_ok!(Game::new_game(&schedule));
@@ -588,7 +588,7 @@ fn cannot_report_twice() {
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 20,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		assert_ok!(Game::new_game(&schedule));
@@ -672,7 +672,7 @@ mod games_scheduling {
 					vec![GameSchedule::<u32, u128> {
 						game_play_time: 100,
 						rounds: 2,
-						max_group_size: 0, // max_group_size must be > 0
+						max_group_size: 0, // max_group_size must be > MinGroupSize
 						..Default::default()
 					}]
 				),
@@ -694,6 +694,31 @@ mod games_scheduling {
 			System::assert_has_event(Event::<Test>::GamesScheduled { count: 1 }.into());
 
 			assert_eq!(GameSchedules::<Test>::get().len(), 1);
+		});
+	}
+
+	#[test]
+	fn schedule_games_requires_min_group_size() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			MinGroupSize::set(&2);
+
+			let schedule = GameSchedule::<u32, u128> {
+				game_play_time: 100,
+				rounds: 2,
+				max_group_size: 2,
+				..Default::default()
+			};
+			assert_noop!(Game::new_game(&schedule), Error::<Test>::InvalidGameSetup);
+			assert_noop!(
+				Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]),
+				Error::<Test>::InvalidGameSetup
+			);
+
+			assert_ok!(Game::schedule_games(
+				RuntimeOrigin::root(),
+				vec![GameSchedule { max_group_size: 3, ..schedule }]
+			));
 		});
 	}
 
@@ -2646,7 +2671,7 @@ fn statements_cleared() {
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 20,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		assert_ok!(Game::new_game(&schedule));
@@ -2700,7 +2725,7 @@ fn statements_cleared() {
 		let schedule2 = GameSchedule::<u32, u128> {
 			game_play_time: 40,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		assert_ok!(Game::new_game(&schedule2));
@@ -2733,7 +2758,7 @@ fn statements_cleared() {
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 20,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		assert_ok!(Game::new_game(&schedule));
@@ -2807,7 +2832,7 @@ fn statements_cleared() {
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 20,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		assert_ok!(Game::new_game(&schedule));
@@ -2921,47 +2946,64 @@ fn offchain_worker_keeps_statements_without_removal_event() {
 	});
 }
 
-// Verifies that GroupsSetting::acceptable_player_count()
-// returns the expected value for a variety of edge-cases.
+fn acceptable(full_group_size: u32, player_count: u32) -> bool {
+	GroupsSetting { full_group_size, player_count }.acceptable_player_count::<Test>()
+}
+
+// Every group holds at least `full_group_size - 1` players.
 #[test]
-fn acceptable_player_count_cases() {
-	use crate::types::GroupsSetting;
+fn acceptable_player_count_enforces_full_group_size_minus_one() {
+	// One group of one player.
+	assert!(!acceptable(3, 1));
+	assert!(acceptable(3, 2));
+	assert!(acceptable(3, 3));
+	assert!(acceptable(3, 4));
 
-	assert!(GroupsSetting { max_per_group: 0, player_count: 0 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 0, player_count: 1 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 0, player_count: 10 }.acceptable_player_count::<Test>());
+	// One group of two players.
+	assert!(!acceptable(4, 2));
+	assert!(acceptable(4, 3));
+	assert!(acceptable(4, 4));
+	// Groups of three and two players.
+	assert!(!acceptable(4, 5));
+	assert!(acceptable(4, 6));
 
-	assert!(GroupsSetting { max_per_group: 1, player_count: 0 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 1, player_count: 1 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 1, player_count: 10 }.acceptable_player_count::<Test>());
+	// One group of three players.
+	assert!(!acceptable(5, 3));
+	assert!(acceptable(5, 4));
+	assert!(acceptable(5, 5));
+	// Groups of three and three players.
+	assert!(!acceptable(5, 6));
+	// Groups of four and three players.
+	assert!(!acceptable(5, 7));
+	// Groups of four and four players.
+	assert!(acceptable(5, 8));
+	assert!(acceptable(5, 9));
+	assert!(acceptable(5, 10));
+	// Groups of four, four and three players.
+	assert!(!acceptable(5, 11));
+	assert!(acceptable(5, 12));
+	// Groups of four, four, four and four players.
+	assert!(acceptable(5, 16));
+}
 
-	assert!(!GroupsSetting { max_per_group: 2, player_count: 0 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 2, player_count: 1 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 2, player_count: 10 }.acceptable_player_count::<Test>());
-
-	assert!(!GroupsSetting { max_per_group: 3, player_count: 1 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 3, player_count: 2 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 3, player_count: 3 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 3, player_count: 4 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 3, player_count: 4 }.acceptable_player_count::<Test>());
-
-	assert!(!GroupsSetting { max_per_group: 4, player_count: 2 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 4, player_count: 3 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 4, player_count: 4 }.acceptable_player_count::<Test>());
-	assert!(!GroupsSetting { max_per_group: 4, player_count: 5 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 4, player_count: 6 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 4, player_count: 7 }.acceptable_player_count::<Test>());
-
-	assert!(!GroupsSetting { max_per_group: 5, player_count: 2 }.acceptable_player_count::<Test>());
-	assert!(!GroupsSetting { max_per_group: 5, player_count: 3 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 5, player_count: 4 }.acceptable_player_count::<Test>());
-	assert!(GroupsSetting { max_per_group: 5, player_count: 5 }.acceptable_player_count::<Test>());
-	for i in 6..12 {
-		assert!(
-			!GroupsSetting { max_per_group: 5, player_count: i }.acceptable_player_count::<Test>()
-		);
+// `acceptable_player_count` holds exactly when every dealt group has at least
+// `full_group_size - 1` players. Size 1 covers games scheduled before `MinGroupSize` was raised.
+#[test]
+fn acceptable_player_count_matches_group_members() {
+	for full_group_size in 0..=10 {
+		for player_count in 0..=100 {
+			let groups = GroupsSetting { full_group_size, player_count };
+			let expected = player_count > 0 &&
+				(0..groups.number_of_group()).all(|g| {
+					groups.group_members(g).count() as u32 >= full_group_size.saturating_sub(1)
+				});
+			assert_eq!(
+				acceptable(full_group_size, player_count),
+				expected,
+				"{full_group_size}, {player_count}"
+			);
+		}
 	}
-	assert!(GroupsSetting { max_per_group: 5, player_count: 12 }.acceptable_player_count::<Test>());
 }
 
 mod game_cancellation {
@@ -2970,6 +3012,7 @@ mod game_cancellation {
 	#[test]
 	fn game_cancelled_due_to_player_count_too_low() {
 		new_test_ext().execute_with(|| {
+			// Two players form one group, which is below the minimum of three.
 			// The game is initialised with an airdrop scheduled, so the cancellation should
 			// also cancel the airdrop event via `T::Airdrop::cancel`.
 			let schedule = GameSchedule::<u32, u128> {
@@ -3184,7 +3227,7 @@ fn candidate_and_people_vote_weights_applied() {
 				_ => unreachable!("must be Reporting"),
 			};
 
-			let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+			let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 			let group_idx = groups.group_index_from_player_index(reporter_idx);
 
 			// Build the partial report in the deterministic `(round, player_index)` order.
@@ -3291,7 +3334,7 @@ fn recognised_people_are_evenly_distributed() {
 		}
 
 		// 4. Build the GroupsSetting helper
-		let (player_cnt, max_per_group) = {
+		let (player_cnt, full_group_size) = {
 			let game = crate::Game::<Test>::get().unwrap();
 			let player_count = match game.state {
 				GameState::Reporting { player_count } => player_count,
@@ -3299,7 +3342,7 @@ fn recognised_people_are_evenly_distributed() {
 			};
 			(player_count, game.max_group_size)
 		};
-		let groups = GroupsSetting { max_per_group, player_count: player_cnt };
+		let groups = GroupsSetting { full_group_size, player_count: player_cnt };
 		assert_eq!(groups.number_of_group(), 3, "should be exactly 3 groups for 9 players");
 
 		// 5. For each round ensure the 3 aliases occupy three distinct group indices {0,1,2}.
@@ -3394,7 +3437,7 @@ mod one_group_scenario {
 	fn groups_5_6_scenario() {
 		use crate::types::GroupsSetting;
 
-		let gs = GroupsSetting { max_per_group: 6, player_count: 5 };
+		let gs = GroupsSetting { full_group_size: 6, player_count: 5 };
 		assert_eq!(gs.number_of_group(), 1);
 
 		for idx in 0..5 {
@@ -3408,7 +3451,7 @@ mod one_group_scenario {
 	fn groups_6_6_scenario() {
 		use crate::types::GroupsSetting;
 
-		let gs = GroupsSetting { max_per_group: 6, player_count: 6 };
+		let gs = GroupsSetting { full_group_size: 6, player_count: 6 };
 		assert_eq!(gs.number_of_group(), 1);
 
 		for idx in 0..6 {
@@ -3439,7 +3482,7 @@ fn reach_lose_and_regain_personhood() {
 		let mut schedule = GameSchedule::<u32, u128> {
 			game_play_time: 10,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		let attend_report: FullReport<Test> = vec![BoundedVec::default()].try_into().unwrap();
@@ -3510,7 +3553,7 @@ fn offboard_suspends_recognized_player() {
 		let mut schedule = GameSchedule::<u32, u128> {
 			game_play_time: 10,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		let attend_report: FullReport<Test> = vec![BoundedVec::default()].try_into().unwrap();
@@ -3652,7 +3695,7 @@ fn kickout_fails_when_suspension_fails() {
 fn game_cancelled_due_to_shuffle_deadline_missed() {
 	new_test_ext().execute_with(|| {
 		// Set up a game that *would* be acceptable to shuffle (2 players; max_group_size = 3).
-		// With MaxGroupSize = 3, GroupsSetting::acceptable_player_count() is true for 2 players.
+		// With max_group_size = 3, GroupsSetting::acceptable_player_count() is true for 2 players.
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 100,
 			rounds: 2,
@@ -3741,7 +3784,7 @@ fn credibility_flow_deposit_to_recognized_to_archived() {
 		let g1 = GameSchedule::<u32, u128> {
 			game_play_time: 10,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -3782,7 +3825,7 @@ fn credibility_flow_deposit_to_recognized_to_archived() {
 			let g = GameSchedule::<u32, u128> {
 				game_play_time: when,
 				rounds: 1,
-				max_group_size: 1,
+				max_group_size: 2,
 				..Default::default()
 			};
 			run_game_scenario(g, slice::from_ref(&subject), |_p| None); // absent
@@ -3829,7 +3872,7 @@ fn credibility_flow_invited_to_recognized_in_score_to_archived() {
 		let g1 = GameSchedule::<u32, u128> {
 			game_play_time: 10,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -3886,7 +3929,7 @@ fn credibility_flow_invited_to_recognized_in_score_to_archived() {
 			let g = GameSchedule::<u32, u128> {
 				game_play_time: when,
 				rounds: 1,
-				max_group_size: 1,
+				max_group_size: 2,
 				..Default::default()
 			};
 			run_game_scenario_with_phase(
@@ -4014,7 +4057,7 @@ fn vote_weight_tracks_current_recognition_and_drops_when_lost() {
 		let mut sched = GameSchedule::<u32, u128> {
 			game_play_time: t,
 			rounds: 1,
-			max_group_size: 1, // single-player "group" => empty report is valid attendance
+			max_group_size: 2, // single-player "group" => empty report is valid attendance
 			..Default::default()
 		};
 		let empty_full_report: FullReport<Test> =
@@ -4080,14 +4123,14 @@ fn vote_weight_tracks_current_recognition_and_drops_when_lost() {
 		let down1 = GameSchedule::<u32, u128> {
 			game_play_time: 1_100,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		run_game_scenario(down1, slice::from_ref(&reporter), |_p| None); // 1st absence
 		let down2 = GameSchedule::<u32, u128> {
 			game_play_time: 1_110,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		run_game_scenario(down2, slice::from_ref(&reporter), |_p| None); // 2nd absence → suspended
@@ -4210,7 +4253,7 @@ fn statement_allowance_for_account_players() {
 		let schedule2 = GameSchedule::<u32, u128> {
 			game_play_time: 25,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -4259,7 +4302,7 @@ fn statement_allowance_for_account_players() {
 			let schedule = GameSchedule::<u32, u128> {
 				game_play_time: game_time,
 				rounds: 1,
-				max_group_size: 1,
+				max_group_size: 2,
 				..Default::default()
 			};
 
@@ -4326,7 +4369,7 @@ fn statement_allowance_for_alias_players() {
 		let schedule1 = GameSchedule::<u32, u128> {
 			game_play_time: 10,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -4354,7 +4397,7 @@ fn statement_allowance_for_alias_players() {
 		let schedule2 = GameSchedule::<u32, u128> {
 			game_play_time: 25,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -4381,7 +4424,7 @@ fn statement_allowance_for_alias_players() {
 		let schedule3 = GameSchedule::<u32, u128> {
 			game_play_time: 40,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -4409,7 +4452,7 @@ fn statement_allowance_for_alias_players() {
 		let schedule4 = GameSchedule::<u32, u128> {
 			game_play_time: 55,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 
@@ -4449,7 +4492,7 @@ fn build_report_with_opinion(
 		GameState::Reporting { player_count } => player_count,
 		_ => panic!("game must be in Reporting state"),
 	};
-	let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+	let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 	let mut full = Vec::new();
 	for round in 0..game.rounds {
 		let reporter_idx = reporter_indices[round as usize];
@@ -4898,7 +4941,7 @@ fn expected_max_vote_weight_matches_per_member_oracle_multi_group() {
 		advance_to_reporting_phase(&schedule);
 
 		// The scenario must span more than one group, otherwise group membership is trivial.
-		let groups = GroupsSetting { max_per_group: max_group_size, player_count };
+		let groups = GroupsSetting { full_group_size: max_group_size, player_count };
 		assert!(groups.number_of_group() >= 2, "test must span multiple groups");
 
 		// Oracle: recompute every player's expected weight from the actual co-players, exactly as
@@ -7627,11 +7670,41 @@ fn shuffle_step_retrieve_resumes_and_drains_both_phases() {
 	});
 }
 
-/// Verify that the default mock configuration passes all integrity checks,
-/// including the block-fit assertion for the `report` extrinsic.
+/// The mock configuration passes all integrity checks, including the block-fit assertion for
+/// `report`. The test restores the default `MinGroupSize`, which `new_test_ext` lowers.
 #[test]
 fn integrity_test_passes() {
 	new_test_ext().execute_with(|| {
+		MinGroupSize::set(&2);
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+#[test]
+#[should_panic(expected = "MinGroupSize must be non-zero")]
+fn integrity_test_rejects_zero_min_group_size() {
+	new_test_ext().execute_with(|| {
+		MinGroupSize::set(&0);
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+/// The mock is not a testnet, so it rejects single-player groups.
+#[test]
+#[should_panic(expected = "MinGroupSize must be at least 2 outside a testnet")]
+fn integrity_test_rejects_min_group_size_of_one() {
+	new_test_ext().execute_with(|| {
+		MinGroupSize::set(&1);
+		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+/// When `MinGroupSize` equals `MaxGroupSize`, no `max_group_size` is valid.
+#[test]
+#[should_panic(expected = "MinGroupSize must be less than MaxGroupSize")]
+fn integrity_test_rejects_min_group_size_at_max() {
+	new_test_ext().execute_with(|| {
+		MinGroupSize::set(&<Test as Config>::MaxGroupSize::get());
 		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }

@@ -1628,7 +1628,7 @@ impl<T: Config> Pallet<T> {
 
 		let mut awarded = 0;
 
-		let groups_setting = GroupsSetting { max_per_group: max_group_size, player_count };
+		let groups_setting = GroupsSetting { full_group_size: max_group_size, player_count };
 
 		for round in 0..rounds {
 			let Some(&attendee_index) = attendee_indices.get(round as usize) else {
