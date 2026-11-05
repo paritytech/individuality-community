@@ -5658,6 +5658,7 @@ dependencies = [
  "ark-ed-on-bls12-381-bandersnatch-ext",
  "ark-ff 0.6.0",
  "ark-scale",
+ "derive-where",
  "frame-support 49.0.0",
  "frame-system 49.0.0",
  "getrandom 0.2.17",
