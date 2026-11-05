@@ -44,7 +44,7 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 | **02** | Adds sudo proxy delegation on People |
 | **03a-g** | dotUSD: create, AssetHub pool, AssetHub metadata, People metadata, conversion rate, Coinage instance, People pool |
 | **04a-b** | USDT/USDC: create on AssetHub with metadata, pool, and liquidity; create as foreign assets on People with metadata |
-| **05a-c** | Stablecoin faucet: acquire USDT/USDC for the owner on AssetHub, fund the People faucet with XTRNL/USDT/USDC via XCM, fund the AssetHub faucet with USDT/USDC by swapping PAS |
+| **05a-c** | Stablecoin faucet: acquire USDT/USDC for the owner on AssetHub, fund the People faucet with dotUSD/USDT/USDC via XCM, fund the AssetHub faucet with USDT/USDC by swapping PAS |
 | **06a-b** | PGAS: create, alias fee |
 | **07** | Adds ZK chunks on People |
 | **08a-b** | Creates the people and people-lite collections on People |
