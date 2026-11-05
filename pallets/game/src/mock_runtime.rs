@@ -623,6 +623,7 @@ impl WeightInfo for MockWeightInfo {
 parameter_types! {
 	pub storage PeopleVoteWeight: u8 = 1;
 	pub storage CandidateVoteWeight: u8 = 1;
+	pub storage MinGroupSize: u32 = 2;
 	pub const PlayDepositDefault: u64 = 2;
 }
 
@@ -1255,6 +1256,9 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	ext.register_extension(TransactionPoolExt::new(pool));
 	// 100k active members yields a personhood threshold of 21 and absence grace ratio (1, 6).
 	ext.execute_with(|| {
+		// `runtime_integrity_tests` reads the declared default of 2. Tests lower it to 1 to
+		// schedule groups of two.
+		MinGroupSize::set(&1);
 		indiv_pallet_members::ActiveMembers::<Test>::insert(
 			indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER,
 			100_000,
@@ -1673,7 +1677,7 @@ impl indiv_pallet_game::Config for Test {
 	type UnixTime = Test;
 	type MaxRounds = ConstUint<10>;
 	type MaxGroupSize = ConstUint<10>;
-	type MinGroupSize = ConstUint<0>;
+	type MinGroupSize = MinGroupSize;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type InviteIssuer = EnsureRoot<Self::AccountId>;
 	type EnsureLiteAlias = indiv_pallet_people_lite::EnsureLiteAliasInContext<Test>;
