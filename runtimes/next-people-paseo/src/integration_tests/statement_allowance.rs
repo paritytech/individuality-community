@@ -411,6 +411,10 @@ fn benchmark_helper_signs_with_sr25519() {
 		assert!(matches!(signature, MultiSignature::Sr25519(_)));
 		assert!(signature.verify(&message[..], &account));
 		assert!(!signature.verify(&b"another message"[..], &account));
+		// The benchmarks look the account up with one call and sign with another.
+		let (same_account, _) =
+			crate::people::benchmark_utils::ResourcesBenchHelper::sign_message(b"other");
+		assert_eq!(same_account, account);
 	});
 }
 

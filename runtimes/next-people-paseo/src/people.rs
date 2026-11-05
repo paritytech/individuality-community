@@ -328,11 +328,13 @@ pub mod benchmark_utils {
 			pallet_timestamp::Now::<Runtime>::put(now.as_millis() as u64);
 		}
 
-		/// Signs with sr25519 through the host keystore.
+		/// Signs with sr25519 through the host keystore. The fixed seed derives the same key on
+		/// every call, so a benchmark that signs after looking up the account signs for that
+		/// account.
 		fn sign_message(message: &[u8]) -> (sp_runtime::AccountId32, MultiSignature) {
 			use sp_io::crypto::{sr25519_generate, sr25519_sign};
 			use sp_runtime::traits::IdentifyAccount;
-			let public = sr25519_generate(0.into(), None);
+			let public = sr25519_generate(0.into(), Some(b"//ResourcesBenchHelper".to_vec()));
 			let account = sp_runtime::MultiSigner::Sr25519(public).into_account();
 			let signature = sr25519_sign(0.into(), &public, message)
 				.expect("the benchmark keystore signs with a key it generated; qed");
