@@ -4805,7 +4805,10 @@ mod evm_fixture {
 			function reserve(uint256 tokenId) external;
 			function confirm(uint256[] calldata tokenIds) external;
 			function withdraw(uint256 tokenId, address to) external;
-			function entries(uint256 tokenId) external view returns (address player, uint8 status);
+			function entries(uint256 tokenId)
+				external
+				view
+				returns (address player, uint64 stateNonce, uint8 status);
 
 			error NotHolder();
 			error NotReserved();
@@ -4977,6 +4980,38 @@ mod evm_fixture {
 			call_ok(&world.alice, world.vault, StakeWorld::confirm_input(&[token]));
 
 			assert_eq!(world.entry(token), (alloy_address(second_address), STAKED));
+		});
+	}
+
+	#[test]
+	fn stake_vault_does_not_credit_a_reservation_after_a_sale() {
+		let code = fixture_code("StakeVault");
+		new_test_ext().execute_with(|| {
+			let world = StakeWorld::new(code);
+			let (seller_address, seller, token) = world.player(0xB1);
+			let (buyer_address, buyer) = purse(0xB2);
+			let (destination_address, _) = purse(0xB3);
+			Balances::make_free_balance_be(&buyer, u64::MAX / 2);
+
+			world.reserve(&seller, token);
+			world.push(&(seller_address, seller.clone()), token, buyer_address);
+			world.push(&(buyer_address, buyer), token, world.vault);
+
+			world.reverts_with(
+				&world.alice,
+				StakeWorld::confirm_input(&[token]),
+				IStakeVault::NotReserved {},
+			);
+			world.reverts_with(
+				&seller,
+				IStakeVault::withdrawCall {
+					tokenId: U256::from(token),
+					to: alloy_address(destination_address),
+				}
+				.abi_encode(),
+				IStakeVault::NotStaker {},
+			);
+			assert_eq!(world.entry(token), (alloy_address(seller_address), RESERVED));
 		});
 	}
 

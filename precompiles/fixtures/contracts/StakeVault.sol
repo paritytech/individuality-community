@@ -26,6 +26,10 @@ import "../../scarcity/sol/IScarcityCollection.sol";
 /// 2. The player pushes the token into the vault, with `transferFrom` or the native transfer.
 /// 3. Anyone calls `confirm`, which credits each token that arrived and has a reservation.
 ///
+/// `reserve` records the token's `stateNonce`, which each move raises by one. `confirm` credits a
+/// token only if the push is its one move since `reserve`, so a token sold in between stays
+/// uncredited. A failed fee-less dispatch also raises the nonce, so the player then reserves again.
+///
 /// Each check costs the same whatever the vault holds, so the vault never reads `balanceOf` or
 /// `tokenOfOwnerByIndex`. A copy of this contract adds its own game rules, for example when a
 /// player may withdraw.
@@ -41,9 +45,10 @@ contract StakeVault {
         Staked
     }
 
-    /// @notice The player a token is credited to and the token's status.
+    /// @notice The player a token is credited to, its `stateNonce` at `reserve` and its status.
     struct Entry {
         address player;
+        uint64 stateNonce;
         Status status;
     }
 
@@ -55,7 +60,7 @@ contract StakeVault {
 
     /// @notice The caller does not hold the token.
     error NotHolder();
-    /// @notice The token has no reservation.
+    /// @notice The token has no reservation, or moved more than once since `reserve`.
     error NotReserved();
     /// @notice The vault does not hold the token.
     error NotReceived();
@@ -75,7 +80,8 @@ contract StakeVault {
     /// @param tokenId The token the caller holds and stakes next.
     function reserve(uint256 tokenId) external {
         require(collection.ownerOf(tokenId) == msg.sender, NotHolder());
-        entries[tokenId] = Entry(msg.sender, Status.Reserved);
+        (,,, uint64 stateNonce,) = collection.instanceInfo(tokenId);
+        entries[tokenId] = Entry(msg.sender, stateNonce, Status.Reserved);
     }
 
     /// @notice Mark each token in `tokenIds` as staked by the player that reserved it.
@@ -89,6 +95,8 @@ contract StakeVault {
             Entry storage entry = entries[tokenId];
             require(entry.status == Status.Reserved, NotReserved());
             require(collection.ownerOf(tokenId) == address(this), NotReceived());
+            (,,, uint64 stateNonce,) = collection.instanceInfo(tokenId);
+            require(stateNonce == entry.stateNonce + 1, NotReserved());
             entry.status = Status.Staked;
         }
     }

@@ -157,8 +157,10 @@
 //!   `ownerOf(tokenId) == msg.sender`. Only the holder passes, so a front-run gains nothing.
 //! - The claimant is the purse key, so it needs funds to call the contract.
 //! - The current holder can replace a record, which goes stale when the token moves.
-//! - After the push, the contract checks that `ownerOf(tokenId)` names it and credits only a token
-//!   it has a record for.
+//! - The record holds the token's `stateNonce`, which each move raises by one. After the push, the
+//!   contract checks that `ownerOf(tokenId)` names it and that the nonce is one above the record. A
+//!   token that moved again, for example in a sale, gets no credit.
+//! - A failed fee-less dispatch also raises the nonce, so the claimant then records again.
 //!
 //! The `StakeVault` fixture in `indiv-precompile-fixtures` follows these rules.
 //!
