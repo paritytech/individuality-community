@@ -1,5 +1,5 @@
 # Run the `try-runtime` upgrade checks against the live paseo next chains when a pull request carries
-# the `C1-runtime-migration` label.
+# a `C1` or higher label.
 name: "Try runtime"
 
 on:
@@ -25,7 +25,9 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.draft == false &&
-      contains(github.event.pull_request.labels.*.name, 'C1-runtime-migration'))
+      (contains(github.event.pull_request.labels.*.name, 'C1-runtime-migration') ||
+      contains(github.event.pull_request.labels.*.name, 'C2-runtime-config') ||
+      contains(github.event.pull_request.labels.*.name, 'C3-breaking-node')))
     strategy:
       fail-fast: false
       matrix:
