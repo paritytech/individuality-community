@@ -4815,10 +4815,12 @@ mod evm_fixture {
 		new_test_ext().execute_with(|| {
 			let alice = id_to_account(1);
 			let collection = setup_collection(&alice);
+			let other_collection = setup_collection(&alice);
 			let vault = deploy(&alice, code);
 			let vault_account = contract_account(vault);
 			for _ in 0..3 {
 				mint_into(&alice, collection, &vault_account);
+				mint_into(&alice, other_collection, &vault_account);
 			}
 			let weight_at = |index| {
 				call_full(
@@ -4833,6 +4835,20 @@ mod evm_fixture {
 
 			// Index 2 passes two more tokens than index 0, one charged read each.
 			assert_eq!(last.proof_size() - first.proof_size(), 2 * PROOF_SIZE_PER_READ);
+
+			// The count rejects an index at or past it before the walk, so a far index costs no
+			// more than the first index out of range.
+			for index in [3, 1_000_000] {
+				call_reverted_with(
+					&alice,
+					collection_address(collection),
+					token_of_owner_by_index_input(vault, index),
+					ERR_INDEX_OUT_OF_RANGE,
+				);
+			}
+			let (past, far) = (weight_at(3), weight_at(1_000_000));
+			assert_eq!(far, past);
+			assert!(past.proof_size() < last.proof_size());
 		});
 	}
 
