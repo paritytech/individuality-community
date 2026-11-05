@@ -4061,8 +4061,16 @@ mod contracts {
 	fn a_missing_source_count_does_not_block_a_move() {
 		let moves: [fn() -> DispatchResult; 3] = [
 			|| Scarcity::do_transfer_by_holder(&CONTRACT, 0, RECIPIENT),
-			|| Scarcity::do_force_transfer(&OWNER, 0, RECIPIENT),
-			|| Scarcity::do_force_burn(&OWNER, 0).map(|_| ()),
+			|| {
+				Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, RECIPIENT)
+					.map(|_| ())
+					.map_err(|e| e.error)
+			},
+			|| {
+				Scarcity::force_burn(RuntimeOrigin::signed(OWNER), 0)
+					.map(|_| ())
+					.map_err(|e| e.error)
+			},
 		];
 		for take_out in moves {
 			new_test_ext().execute_with(|| {

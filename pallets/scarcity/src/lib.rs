@@ -1715,7 +1715,7 @@ pub mod pallet {
 			Ok(actual_metadata_count)
 		}
 
-		pub(crate) fn do_force_burn(
+		fn do_force_burn(
 			owner: &T::AccountId,
 			instance: InstanceId,
 		) -> Result<u32, DispatchError> {
@@ -1729,7 +1729,7 @@ pub mod pallet {
 			Self::do_burn(purse, nft)
 		}
 
-		pub(crate) fn do_force_transfer(
+		fn do_force_transfer(
 			owner: &T::AccountId,
 			instance: InstanceId,
 			to: T::AccountId,
@@ -1757,7 +1757,10 @@ pub mod pallet {
 		///
 		/// A purse key answers from [`NftsByOwner`] alone. A contract also reads [`Instances`] for
 		/// the collection that keys [`ContractNfts`].
-		pub fn nft_held_by(holder: &T::AccountId, instance: InstanceId) -> Option<(Nft, Holding)> {
+		pub(crate) fn nft_held_by(
+			holder: &T::AccountId,
+			instance: InstanceId,
+		) -> Option<(Nft, Holding)> {
 			Self::purse_nft(holder, instance).or_else(|| {
 				let location =
 					Instances::<T>::get(instance).filter(|location| location.holder == *holder)?;
@@ -1806,7 +1809,7 @@ pub mod pallet {
 		///
 		/// Fails with [`Error::AddressOccupied`] when `to` is not a contract and already holds an
 		/// instance.
-		pub fn destination_of(to: &T::AccountId) -> Result<Holding, DispatchError> {
+		pub(crate) fn destination_of(to: &T::AccountId) -> Result<Holding, DispatchError> {
 			if T::ContractAccounts::is_contract(to) {
 				return Ok(Holding::Contract);
 			}
