@@ -1686,6 +1686,26 @@ fn signing_context_constant_is_the_context_the_pallet_verifies() {
 	);
 }
 
+#[test]
+fn metadata_lists_every_extra_constant() {
+	new_test_ext().execute_with(|| {
+		let names = crate::Pallet::<Test>::pallet_constants_metadata()
+			.into_iter()
+			.map(|constant| constant.name)
+			.collect::<Vec<_>>();
+
+		// FRAME keeps only the last `extra_constants` block, so a second block drops these.
+		for name in [
+			"lite_people_pot_id",
+			"auth_context",
+			"account_setup_block_tolerance",
+			"SigningContext",
+		] {
+			assert!(names.contains(&name), "{name} is missing from the metadata");
+		}
+	});
+}
+
 mod paid_registration_throttling {
 	use super::*;
 	use crate::{
