@@ -41,6 +41,7 @@ use alloc::vec::Vec;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
+pub mod migration;
 pub mod types;
 pub mod weights;
 
@@ -54,6 +55,7 @@ pub use weights::WeightInfo;
 
 use frame_support::{
 	dispatch::DispatchResultWithPostInfo,
+	migrations::MultiStepMigrator,
 	traits::{DefensiveOption, EnsureOriginWithArg, IsSubType, OriginTrait, UnixTime},
 };
 use frame_system::offchain::{CreateAuthorizedTransaction, SubmitTransaction};
@@ -90,7 +92,10 @@ pub mod pallet {
 	/// The prefix of the message a lite consumer account signs in [`Call::register_person`].
 	pub const REGISTER_PERSON_MSG_PREFIX: &[u8] = b"pop:resources:register_person";
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -152,8 +157,7 @@ pub mod pallet {
 
 		/// The Statement Store allowance for the accounts API.
 		///
-		/// Changing this value requires a migration that updates the existing state.
-		#[pallet::constant]
+		/// This parameter can be changed at any time.
 		type AccountsApiAllowance: Get<StatementAllowance>;
 
 		/// Maximum number of statement store slots a person can claim within one period.
@@ -190,8 +194,7 @@ pub mod pallet {
 
 		/// The Statement Store allowance for notification statement registration.
 		///
-		/// Changing this value requires a migration that updates the existing state.
-		#[pallet::constant]
+		/// This parameter can be changed at any time.
 		type NotificationAllowance: Get<StatementAllowance>;
 
 		/// Highest valid notification slot identifier for a person within one period.
@@ -524,6 +527,11 @@ pub mod pallet {
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		fn offchain_worker(block_number: BlockNumberFor<T>) {
 			if !(block_number % T::OffchainWorkerInterval::get()).is_zero() {
+				return;
+			}
+			// Blocks hold only inherents while a multi-block migration runs. Entries that the
+			// migration has not reached yet do not decode.
+			if <T as frame_system::Config>::MultiBlockMigrator::ongoing() {
 				return;
 			}
 
@@ -904,10 +912,15 @@ pub mod pallet {
 
 			Self::validate_notification_registration(alias, &account_id)?;
 
-			increase_allowance_by(account_id.clone().into(), T::NotificationAllowance::get());
+			let allowance = T::NotificationAllowance::get();
+			increase_allowance_by(account_id.clone().into(), allowance.clone());
 			NotificationRegistrationByAlias::<T>::insert(
 				alias,
-				types::NotificationRegistration { account_id: account_id.clone(), reference },
+				types::NotificationRegistration {
+					account_id: account_id.clone(),
+					reference,
+					allowance: allowance.into(),
+				},
 			);
 			NotificationAliasByAccount::<T>::insert(&account_id, alias);
 
@@ -943,9 +956,15 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
 			let alias = Self::notification_alias_for_account(&account)?;
-			NotificationRegistrationByAlias::<T>::remove(alias);
+			let Some(registration) = NotificationRegistrationByAlias::<T>::take(alias) else {
+				log::error!(
+					target: LOG_TARGET,
+					"notification storage corruption: missing registration for alias {alias:?} mapped from account {account:?}",
+				);
+				return Err(Error::<T>::InvalidNotificationSequence.into());
+			};
 			NotificationAliasByAccount::<T>::remove(&account);
-			decrease_allowance_by(account.clone().into(), T::NotificationAllowance::get());
+			decrease_allowance_by(account.clone().into(), registration.allowance.into());
 
 			Self::deposit_event(Event::NotificationStmtUsageRemoved { account });
 			Ok(Pays::No.into())
@@ -986,7 +1005,7 @@ pub mod pallet {
 				// Revoke the old allowance and clear the reverse lookup.
 				decrease_allowance_by(
 					existing.account_id.clone().into(),
-					T::AccountsApiAllowance::get(),
+					existing.allowance.into(),
 				);
 				StmtStoreAllowanceByAccount::<T>::remove(
 					&existing.account_id,
@@ -995,11 +1014,17 @@ pub mod pallet {
 			}
 
 			// Grant the statement store allowance to the target account.
-			increase_allowance_by(target_account.clone().into(), T::AccountsApiAllowance::get());
+			let allowance = T::AccountsApiAllowance::get();
+			increase_allowance_by(target_account.clone().into(), allowance.clone());
 			StatementStoreAllowances::<T>::insert(
 				period_key,
 				alias,
-				StmtStoreAllowanceEntry { account_id: target_account.clone(), seq, since: now },
+				StmtStoreAllowanceEntry {
+					account_id: target_account.clone(),
+					seq,
+					since: now,
+					allowance: allowance.into(),
+				},
 			);
 			StmtStoreAllowanceByAccount::<T>::insert(&target_account, (period_key, seq, alias), ());
 			Self::deposit_event(Event::StmtStoreAllowanceSet {
@@ -1036,10 +1061,7 @@ pub mod pallet {
 			for (alias, entry) in
 				StatementStoreAllowances::<T>::drain_prefix(period_key).take(limit as usize)
 			{
-				decrease_allowance_by(
-					entry.account_id.clone().into(),
-					T::AccountsApiAllowance::get(),
-				);
+				decrease_allowance_by(entry.account_id.clone().into(), entry.allowance.into());
 				StmtStoreAllowanceByAccount::<T>::remove(
 					entry.account_id,
 					(period_key, entry.seq, alias),
