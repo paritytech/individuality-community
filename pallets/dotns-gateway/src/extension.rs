@@ -61,6 +61,8 @@ pub enum CustomValidity {
 	/// The `who` provided in the call is already bound to a full-person
 	/// registration.
 	AccountAlreadyRegistered = 185,
+	/// The label is shorter than [`Config::MinStemLength`].
+	StemTooShort = 186,
 }
 
 impl From<CustomValidity> for TransactionValidityError {
@@ -132,6 +134,7 @@ impl<T: Config> AsDotnsGateway<T> {
 		};
 
 		ensure!(label.is_valid_person(), CustomValidity::InvalidName);
+		ensure!(Pallet::<T>::is_stem_long_enough(label), CustomValidity::StemTooShort);
 		if let Link::LiteUsername(ref lite_label) = link {
 			ensure!(lite_label.is_valid_lite(), CustomValidity::InvalidName);
 			ensure!(
