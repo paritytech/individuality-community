@@ -52,7 +52,7 @@ use indiv_support::{
 	traits::{
 		Alias, AppendOnlyMembers, CommunicationIdentifier, ConsumerRegistrar, Context,
 		ContextualAlias, CountedMembers, Identifier, MembershipProver, RevisedContextualAlias,
-		RingExponent, RingMode, Username, PEOPLE_LITE_IDENTIFIER,
+		RingExponent, RingMode, PEOPLE_LITE_IDENTIFIER,
 	},
 	tx_priority,
 };
@@ -739,13 +739,8 @@ pub mod pallet {
 				Error::<T>::InvalidAttestationSignature,
 			);
 			let account = params.account.clone();
-			T::LiteConsumerRegistrar::register_lite_consumer(
-				params.account,
-				params.identifier_key,
-				params.username,
-				params.reserved_username,
-			)
-			.map_err(|e| e.into())?;
+			T::LiteConsumerRegistrar::register_lite_consumer(params.account, params.identifier_key)
+				.map_err(|e| e.into())?;
 			Self::deposit_event(Event::ConsumerRegistered { account });
 			Ok(())
 		}
