@@ -155,6 +155,9 @@ parameter_types! {
 	/// the runtime adapter's code check, which this mock cannot perform without deploying
 	/// real contracts.
 	pub storage MinterContractValid: bool = true;
+	/// Whether the mock selector accepts the contract's code size. Stands in for the runtime
+	/// adapter's code size cap.
+	pub storage MinterCodeFits: bool = true;
 }
 
 /// Stands in for the runtime's contract adapter. Registration only calls `validate`;
@@ -174,6 +177,7 @@ impl CollectionSelector<AccountId32> for MockSelector {
 			MinterContractValid::get(),
 			indiv_pallet_nft_claims::Error::<Test>::MinterNotAContract
 		);
+		ensure!(MinterCodeFits::get(), indiv_pallet_nft_claims::Error::<Test>::MinterCodeTooLarge);
 		Ok(())
 	}
 

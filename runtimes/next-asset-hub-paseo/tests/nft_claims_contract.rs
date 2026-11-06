@@ -36,8 +36,8 @@ use indiv_support::{
 	identity::AccountOrPerson,
 };
 use next_asset_hub_paseo_runtime::{
-	Assets, Balances, NftClaims, NftClaimsCollectionSelector, NftClaimsSelectorDepositLimit,
-	PgasAssetId, Runtime, RuntimeOrigin, Scarcity, System,
+	minter_code_len, Assets, Balances, NftClaims, NftClaimsCollectionSelector,
+	NftClaimsSelectorDepositLimit, PgasAssetId, Runtime, RuntimeOrigin, Scarcity, System,
 };
 use pallet_revive::{Code, ExecConfig, StorageDeposit, TransactionLimits};
 use sp_core::H160;
@@ -498,5 +498,57 @@ fn a_collection_handover_clears_its_claim_registration() {
 			new_owner
 		);
 		assert_eq!(CollectionMinters::<Runtime>::get(COLLECTION), None);
+	});
+}
+
+/// EVM init code that deploys `len` bytes of runtime code, all `STOP`.
+///
+/// `PUSH2 len; PUSH1 0; RETURN` returns `len` bytes of fresh memory, which is zero.
+fn evm_init_code(len: u16) -> Vec<u8> {
+	let [high, low] = len.to_be_bytes();
+	vec![0x61, high, low, 0x60, 0x00, 0xf3]
+}
+
+/// The runtime reads revive's code metadata by its storage layout, so a layout change fails
+/// here.
+#[test]
+fn minter_code_len_reads_the_deployed_code_size() {
+	new_test_ext().execute_with(|| {
+		let owner = account(1);
+		create_collection(&owner);
+		let contract = instantiate(&owner, evm_init_code(1_000), 0);
+
+		assert_eq!(minter_code_len(&contract), Some(1_000));
+		assert_eq!(minter_code_len(&H160::repeat_byte(0x42)), None);
+		assert_ok!(NftClaims::set_collection_minter(
+			RuntimeOrigin::signed(owner),
+			COLLECTION,
+			Some(ItemSelection::Contract(contract))
+		));
+	});
+}
+
+/// Only revive's benchmark helpers build a PolkaVM blob of a given size.
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn a_minter_above_the_code_size_cap_cannot_be_registered() {
+	use next_asset_hub_paseo_runtime::NftClaimsMaxMinterCodeLen;
+	use pallet_revive::call_builder::VmBinaryModule;
+
+	new_test_ext().execute_with(|| {
+		let owner = account(1);
+		create_collection(&owner);
+		let code = VmBinaryModule::sized(NftClaimsMaxMinterCodeLen::get() + 16 * 1024).code;
+		let contract = instantiate(&owner, code, 0);
+		assert!(minter_code_len(&contract).unwrap() > NftClaimsMaxMinterCodeLen::get());
+
+		frame_support::assert_noop!(
+			NftClaims::set_collection_minter(
+				RuntimeOrigin::signed(owner),
+				COLLECTION,
+				Some(ItemSelection::Contract(contract))
+			),
+			indiv_pallet_nft_claims::Error::<Runtime>::MinterCodeTooLarge
+		);
 	});
 }

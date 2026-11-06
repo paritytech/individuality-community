@@ -255,6 +255,26 @@ fn rejected_contract_selection_reverts() {
 	});
 }
 
+#[test]
+fn oversized_minter_code_reverts() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		MinterCodeFits::set(&false);
+
+		call_reverted_with(
+			&alice,
+			INftClaimsMinter::setContractMinterCall {
+				collection,
+				minter: H160([0xCC; 20]).0.into(),
+			}
+			.abi_encode(),
+			ERR_MINTER_CODE_TOO_LARGE,
+		);
+		assert_eq!(CollectionMinters::<Test>::get(collection), None);
+	});
+}
+
 /// Both branches charge before they act, so the frame consumes at least what each one declares.
 ///
 /// The mutator charges the pallet's `set_collection_minter` weight and the read one database

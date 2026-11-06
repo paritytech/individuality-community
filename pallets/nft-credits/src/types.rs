@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use indiv_pallet_game::GameIdx;
 use indiv_support::{
-	credit_trees::{CreditProofNode, NftClaimCredit},
+	credit_trees::{CreditProofNode, NftClaimCredit, NftClaimCreditTree},
 	identity::AccountOrPerson,
 };
 use scale_info::TypeInfo;
@@ -148,6 +148,20 @@ pub struct NftClaimCreditProof {
 	pub leaf_index: u32,
 	/// The sibling hashes that rehash the leaf up to the block's root, bottom layer first.
 	pub proof: Vec<CreditProofNode>,
+}
+
+/// The state of a block whose tree commits to credits of a claimant.
+#[derive(Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug, Clone, PartialEq, Eq)]
+pub enum NftClaimCreditBlockState {
+	/// The block's credits wait for their tree, which a later block builds.
+	Pending,
+	/// The block's tree is recorded and queued for delivery to Asset Hub.
+	Committed(NftClaimCreditTree),
+	/// The block's root is removed.
+	///
+	/// Asset Hub removed the tree after its last credit was claimed or after the tree expired, or
+	/// the root outlived its own TTL here.
+	Removed,
 }
 
 /// Why no [`NftClaimCreditProof`] could be built for a claim.

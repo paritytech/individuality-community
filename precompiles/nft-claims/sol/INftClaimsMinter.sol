@@ -41,14 +41,17 @@ interface INftClaimsMinter {
     function setRandomMinter(uint32 collection) external;
 
     /// @notice Register the caller's `collection` with `minter` picking the item per claim.
-    /// @dev `minter` must have contract code deployed, otherwise the runtime's collection
-    /// selector rejects it and its reason is forwarded as the revert. Nothing guarantees the code
+    /// @dev `minter` must have contract code deployed within the runtime's minter code size cap.
+    /// Otherwise the runtime's collection selector rejects it and the revert forwards its reason.
+    /// Each claim loads the whole code. Nothing guarantees the code
     /// implements `mint(uint32,bytes32) returns (uint32)`, so a wrong contract fails claims
     /// instead of failing here.
     /// @param collection The Scarcity collection to register.
     /// @param minter The contract that picks the item for each claim.
     /// @custom:reverts "caller is not the collection owner"
     /// @custom:reverts "unknown collection"
+    /// @custom:reverts "no contract code at the minter address"
+    /// @custom:reverts "minter code is too large"
     function setContractMinter(uint32 collection, address minter) external;
 
     /// @notice Withdraw the caller's `collection` from claims.

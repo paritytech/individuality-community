@@ -73,6 +73,19 @@ Pallet: `pallets/dotns-gateway` (on the Asset Hub).
 - `register_name` — registers a full-person label (e.g. `alice`), authenticated
   by a ring membership proof via the pallet's transaction extension.
 
+## Claim an NFT
+
+Pallet: `pallets/nft-claims` (on the Asset Hub).
+
+A game awards NFT claim credits on the People chain. The People chain then sends
+the credits to the Asset Hub, where the claimant mints:
+
+- `claim` — mint the NFT of one credit into a registered collection, with the
+  inclusion proof from the People chain's `nft_claim_credit_proofs` runtime API.
+
+See [nft-minting.md](./nft-minting.md) for the stages between a game and the
+mint, and how a wallet tracks them.
+
 ## Reference
 
 For the full set of calls and parameters, build the API docs (rustdoc) locally:

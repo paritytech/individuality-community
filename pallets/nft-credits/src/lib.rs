@@ -578,13 +578,11 @@ pub mod pallet {
 		NftClaimCreditDropped { claimant: AccountOrPerson<T::AccountId>, credit: NftClaimCredit },
 		/// Credit trees were handed to the XCM router for delivery to the NFT claims chain.
 		CreditTreesSent {
-			/// The tree block of every tree the message carries, in the order they go out.
-			/// Empty means every tree of this message had lost its root, so nothing was sent.
+			/// The sequence and tree block of every tree the message carries, in the order they go
+			/// out. Empty means every tree of this message had lost its root, so nothing was sent.
 			///
-			/// The sequence each block travels under is not spelled out: the message takes a
-			/// contiguous run of sequences off the queue, starting at the call's `first_sequence`,
-			/// minus the ones this block's [`Event::CreditTreeDeliverySkipped`] names.
-			trees: BoundedVec<CreditTreeBlock, T::MaxCreditTreesPerMessage>,
+			/// A sequence in the claims chain's `CreditTreesMissing` resolves to its block here.
+			trees: BoundedVec<(TreeSequence, CreditTreeBlock), T::MaxCreditTreesPerMessage>,
 		},
 		/// A queued credit tree was not sent because its root is no longer recorded.
 		///
@@ -1148,7 +1146,7 @@ impl<T: Config> Pallet<T> {
 	/// One tree a block, over at most [`CHUNKS_PER_TREE`] chunks of awards, bounds this hook. Each
 	/// tree stands alone. It is built once, from a complete leaf set, so no root grows over time
 	/// and no inclusion proof can go stale. The awards it was built over stay for the retained
-	/// window, so a claim can be proven from state; the root itself is never removed.
+	/// window, so a claim can be proven from state.
 	///
 	/// Every root recorded is also queued for delivery to the NFT claims chain, which the
 	/// offchain worker then ships (see [`Pallet::send_credit_trees`]).
@@ -1591,6 +1589,27 @@ impl<T: Config> Pallet<T> {
 			.collect::<Vec<_>>()
 	}
 
+	/// Every block in the [`NftClaimCreditBlocks`] index of `claimant`, with the state of its tree.
+	///
+	/// A block without a root is pending while [`CreditBuffers`] still holds it. Otherwise its
+	/// root is removed.
+	pub fn nft_claim_credit_blocks(
+		claimant: &AccountOrPerson<T::AccountId>,
+	) -> Vec<(BlockNumberFor<T>, NftClaimCreditBlockState)> {
+		NftClaimCreditBlocks::<T>::get(claimant)
+			.into_iter()
+			.map(|block| {
+				let state = match NftClaimCreditRoots::<T>::get(block) {
+					Some(tree) => NftClaimCreditBlockState::Committed(tree),
+					None if CreditBuffers::<T>::contains_key(block) =>
+						NftClaimCreditBlockState::Pending,
+					None => NftClaimCreditBlockState::Removed,
+				};
+				(block, state)
+			})
+			.collect::<Vec<_>>()
+	}
+
 	/// Award every NFT claim credit a freshly-attended `attendee` is entitled to for the
 	/// current game.
 	///
@@ -1692,12 +1711,15 @@ impl<T: Config> Pallet<T> {
 			queued[..taken].iter().map(|(sequence, block)| (Some(*sequence), *block)),
 		);
 
-		// The blocks the message delivers, in sequence order, which the event carries so that a
-		// gap the claims chain reports can be turned back into the block a replay needs.
-		// Truncation is unreachable: `updates` came out of `queued[..taken]`, which
-		// `message_capacity` already held to this very bound.
+		// The sequence and block of each delivery, which the event carries so that a gap the
+		// claims chain reports resolves to the blocks a replay needs. Every queued delivery
+		// carries a sequence. Truncation is unreachable: `updates` comes from `queued[..taken]`,
+		// and `message_capacity` holds `taken` to this bound.
 		let sent = BoundedVec::<_, T::MaxCreditTreesPerMessage>::truncate_from(
-			updates.iter().map(|update| update.block).collect::<Vec<_>>(),
+			updates
+				.iter()
+				.filter_map(|update| update.sequence.map(|sequence| (sequence, update.block)))
+				.collect::<Vec<_>>(),
 		);
 
 		// An empty batch means every queued block has lost its tree in the meantime, so there

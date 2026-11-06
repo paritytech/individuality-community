@@ -83,6 +83,8 @@ pub const ERR_UNKNOWN_COLLECTION: &str = "unknown collection";
 pub const ERR_NOT_COLLECTION_OWNER: &str = "caller is not the collection owner";
 /// Revert reason when no contract code exists at the minter address.
 pub const ERR_MINTER_NOT_A_CONTRACT: &str = "no contract code at the minter address";
+/// Revert reason when the minter's code exceeds the runtime's minter code size cap.
+pub const ERR_MINTER_CODE_TOO_LARGE: &str = "minter code is too large";
 
 /// Map the errors `set_collection_minter` can return to catchable reverts.
 ///
@@ -90,10 +92,11 @@ pub const ERR_MINTER_NOT_A_CONTRACT: &str = "no contract code at the minter addr
 /// The `mapped_nft_claims_errors_are_exhaustive` test checks exhaustiveness. An unlisted error,
 /// such as one from a runtime's `CollectionSelector::validate`, traps the frame.
 fn revert_nft_claims<T: indiv_pallet_nft_claims::Config>(e: DispatchError) -> Error {
-	let cases: [(NftClaimsError<T>, &str); 3] = [
+	let cases: [(NftClaimsError<T>, &str); 4] = [
 		(NftClaimsError::UnknownCollection, ERR_UNKNOWN_COLLECTION),
 		(NftClaimsError::NotCollectionOwner, ERR_NOT_COLLECTION_OWNER),
 		(NftClaimsError::MinterNotAContract, ERR_MINTER_NOT_A_CONTRACT),
+		(NftClaimsError::MinterCodeTooLarge, ERR_MINTER_CODE_TOO_LARGE),
 	];
 
 	for (error, reason) in cases {
