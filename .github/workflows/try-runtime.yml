@@ -1,11 +1,19 @@
 # Run the `try-runtime` upgrade checks against the live paseo next chains when a pull request carries
 # a `C1` or higher label.
+#
+# The state comes from a snapshot cached per runtime and per day, refreshed by a daily run on `main`.
+# A live source would download the state twice, over an hour for People. Single-block migrations
+# get their own `pre_upgrade`/`post_upgrade` only after the multi-block migrations completed, on
+# migrated state (paritytech/try-runtime-cli#109).
 name: "Try runtime"
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
+  schedule:
+    # Daily, before the European working day, so pull requests find a fresh snapshot in the cache.
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -19,11 +27,13 @@ jobs:
   try-runtime:
     name: try-runtime (${{ matrix.runtime.name }})
     runs-on: parity-large
-    timeout-minutes: 60
+    # A cold day pays the snapshot download (about 30 minutes for People) plus the runtime build.
+    timeout-minutes: 90
     # The `labeled`/`unlabeled` triggers re-run the job with the updated payload, so adding the label
     # to an open pull request starts the checks without a new push.
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       (github.event.pull_request.draft == false &&
       (contains(github.event.pull_request.labels.*.name, 'C1-runtime-migration') ||
       contains(github.event.pull_request.labels.*.name, 'C2-runtime-config') ||
@@ -38,6 +48,8 @@ jobs:
           - name: next-asset-hub-paseo
             package: next-asset-hub-paseo-runtime
             uri: wss://paseo-asset-hub-next-rpc.polkadot.io
+    env:
+      SNAPSHOT: ${{ matrix.runtime.name }}.snap
 
     steps:
       - name: Install updates and protobuf-compiler
@@ -49,6 +61,51 @@ jobs:
       - name: Load common env file
         run: cat .github/env >> $GITHUB_ENV
 
+      - name: Download try-runtime-cli
+        run: |
+          curl -sL --fail -o try-runtime \
+            "https://github.com/paritytech/try-runtime-cli/releases/download/$TRY_RUNTIME_CLI_VERSION/try-runtime-x86_64-unknown-linux-musl"
+          chmod +x ./try-runtime
+          ./try-runtime --version
+
+      - name: Compute snapshot cache key
+        id: snapshot-key
+        run: echo "key=try-runtime-snapshot-${{ matrix.runtime.name }}-$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore state snapshot
+        id: snapshot-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.SNAPSHOT }}
+          key: ${{ steps.snapshot-key.outputs.key }}
+
+      - name: Create state snapshot of ${{ matrix.runtime.name }}
+        if: steps.snapshot-cache.outputs.cache-hit != 'true'
+        env:
+          URI: ${{ matrix.runtime.uri }}
+        run: |
+          for attempt in 1 2 3; do
+            echo "Snapshot attempt $attempt/3"
+            if ./try-runtime create-snapshot --uri "$URI" "$SNAPSHOT" && [ -s "$SNAPSHOT" ]; then
+              break
+            fi
+            rm -f "$SNAPSHOT"
+            if [ "$attempt" = 3 ]; then
+              echo "Snapshot creation failed" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+          ls -la "$SNAPSHOT"
+
+      # Saved before the checks run, so a failing check still leaves the snapshot for the next run.
+      - name: Save state snapshot
+        if: steps.snapshot-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.SNAPSHOT }}
+          key: ${{ steps.snapshot-key.outputs.key }}
+
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7 # v1.16.0
         with:
@@ -59,23 +116,16 @@ jobs:
         with:
           shared-key: "individuality-cache-try-runtime"
 
-      - name: Download try-runtime-cli
-        run: |
-          curl -sL --fail -o try-runtime \
-            "https://github.com/paritytech/try-runtime-cli/releases/download/$TRY_RUNTIME_CLI_VERSION/try-runtime-x86_64-unknown-linux-musl"
-          chmod +x ./try-runtime
-          ./try-runtime --version
-
       - name: Build ${{ matrix.runtime.name }} runtime
         run: cargo build --release -p ${{ matrix.runtime.package }} --features try-runtime -q --locked
 
       - name: Run try-runtime on ${{ matrix.runtime.name }}
         env:
           PACKAGE: ${{ matrix.runtime.package }}
-          URI: ${{ matrix.runtime.uri }}
         run: |
           RUNTIME_BLOB_PATH=./target/release/wbuild/$PACKAGE/${PACKAGE//-/_}.compact.compressed.wasm
+          # `--blocktime` is the Aura slot duration (12 s on both runtimes), not the block time.
           ./try-runtime \
             --runtime "$RUNTIME_BLOB_PATH" \
             on-runtime-upgrade --blocktime 12000 --checks all --disable-spec-version-check \
-            live --uri "$URI"
+            snap --path "$SNAPSHOT"
