@@ -669,6 +669,10 @@ impl indiv_pallet_game::Config for Runtime {
 	type MaxTenureThresholds = MaxTenureThresholds;
 	type DefaultTenureThresholds = DefaultTenureThresholds;
 	type DefaultPhaseDurations = GamePhaseDurations;
+	// Two 12-second jumps of the block timestamp. That covers the fewest steps a phase needs:
+	// `end_registration` then one `advance_shuffle` for the shuffle, `end_reporting` then two
+	// `process_players` for the player process.
+	type MinStepPhaseDuration = ConstU32<{ 2 * (SLOT_DURATION / 1_000) as u32 }>;
 	type AccountSignature = Signature;
 	type PlayerStatementLimit = PlayerStatementLimit;
 	type PeopleVoteWeight = ConstUint<2>;
