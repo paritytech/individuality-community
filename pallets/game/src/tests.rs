@@ -8799,3 +8799,25 @@ fn signing_context_constant_is_the_context_the_pallet_verifies() {
 		[&expected[..], b"msg"].concat()
 	);
 }
+
+#[test]
+fn metadata_lists_every_extra_constant() {
+	new_test_ext().execute_with(|| {
+		let names = crate::Pallet::<Test>::pallet_constants_metadata()
+			.into_iter()
+			.map(|constant| constant.name)
+			.collect::<Vec<_>>();
+
+		// FRAME keeps only the last `extra_constants` block, so a second block drops these.
+		for name in [
+			"proof_of_ownership_msg_base",
+			"max_enactments",
+			"max_received_votes",
+			"airdrop_event_id_base",
+			"product_name",
+			"SigningContext",
+		] {
+			assert!(names.contains(&name), "{name} is missing from the metadata");
+		}
+	});
+}

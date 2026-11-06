@@ -540,6 +540,17 @@ pub mod pallet {
 		pub fn product_name() -> AirdropProductName {
 			AirdropProductName::truncate_from(PRODUCT_NAME.to_vec())
 		}
+
+		/// The game's signing context on this network. An account signs this context followed
+		/// by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(
+				PRODUCT_NAME,
+				&<T as indiv_pallet_score::Config>::Suffix::get(),
+			)
+		}
 	}
 
 	#[pallet::origin]
@@ -2085,20 +2096,6 @@ pub mod pallet {
 					Self::UseInviteButAlreadyPlaying,
 				SignUpEligibilityError::AlreadyRegistered => Self::AlreadyRegistered,
 			}
-		}
-	}
-
-	#[pallet::extra_constants]
-	impl<T: Config> Pallet<T> {
-		/// The game's signing context on this network. An account signs this context followed
-		/// by the message when it signs a message that is not a transaction; see
-		/// [`Pallet::account_signing_payload`].
-		#[pallet::constant_name(SigningContext)]
-		pub fn signing_context() -> Context {
-			indiv_support::context::signing_context(
-				PRODUCT_NAME,
-				&<T as indiv_pallet_score::Config>::Suffix::get(),
-			)
 		}
 	}
 
