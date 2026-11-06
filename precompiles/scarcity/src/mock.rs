@@ -87,6 +87,7 @@ impl indiv_pallet_scarcity::Config for Test {
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
 	type MaximumMoves = ConstU16<16>;
+	type MaxPledgeDuration = ConstU64<3_600>;
 	// Nothing in this mock keys state by a collection or its owner, so neither deletion nor a
 	// handover needs a cleanup hook.
 	type OnCollectionDeleted = ();

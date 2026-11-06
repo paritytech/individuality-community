@@ -77,6 +77,8 @@ type TestStoragePrice = LinearStoragePrice<ConstU64<1>, ConstU64<1>, u64>;
 parameter_types! {
 	/// Feeless moves one instance gets. Tests that exhaust the budget lower it.
 	pub storage MaximumMoves: u16 = 16;
+	/// Longest pledge, in seconds. The integrity tests lower it.
+	pub storage MaxPledgeDuration: u64 = 3_600;
 	/// Metadata entries one instance may carry. The integrity tests raise it.
 	pub storage MaxInstanceMetadata: u32 = 3;
 	/// Weight the mock policy charges per metadata pair. The integrity tests raise it.
@@ -110,6 +112,7 @@ impl crate::Config for Test {
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
 	type MaximumMoves = MaximumMoves;
+	type MaxPledgeDuration = MaxPledgeDuration;
 	type OnCollectionDeleted = RecordCollectionDeletion;
 	type OnCollectionOwnerChanged = RecordCollectionOwnerChange;
 	type OnPurseOccupied = RecordPurseOccupancy;

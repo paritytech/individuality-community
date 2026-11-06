@@ -1153,6 +1153,9 @@ impl indiv_pallet_scarcity::Config for Runtime {
 	// Matches Coinage's `MaximumAge`: the feeless moves one mint buys, after which a move is paid
 	// for and the budget refills.
 	type MaximumMoves = ConstU16<16>;
+	// Thirty days: long enough for a tournament or a listing, short enough that a holder who
+	// pledged to a contract that never acts gets the instance back within a month.
+	type MaxPledgeDuration = ConstU64<{ 30 * 24 * 60 * 60 }>;
 	// Clears a collection's nft-claims minter registration when the collection is deleted, so no
 	// registration outlives the collection it names.
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Runtime>;
@@ -3154,6 +3157,7 @@ pub mod migrations {
 		ForceCreatePgasAsset,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_scarcity::migration::MigrateV1ToV2<Runtime>,
+		indiv_pallet_scarcity::migration::MigrateV2ToV3<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_members_subscriber::migration::MigrateV0ToV1<Runtime>,
