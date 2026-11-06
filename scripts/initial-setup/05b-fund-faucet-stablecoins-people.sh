@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Transfers USDT, USDC from AssetHub to the faucet account on People via XCM.
+# Transfers XTRNL, USDT, USDC from AssetHub to the faucet account on People via XCM.
 set -euo pipefail
 source ./load-config.sh
 source ./utils.sh
@@ -9,6 +9,7 @@ reserve_topup=$((FAUCET_RESERVE_TOPUP_PAS * 10**NATIVE_DECIMALS))
 
 # (symbol, asset_id, decimals, whole_tokens, transfer_type)
 ASSETS=(
+  "XTRNL  $XTRNL_ASSET_ID  $XTRNL_DECIMALS  1000000  Teleport"
   "USDT  $USDT_ASSET_ID  $USDT_DECIMALS  10000    LocalReserve"
   "USDC  $USDC_ASSET_ID  $USDC_DECIMALS  10000    LocalReserve"
 )
