@@ -79,13 +79,13 @@ impl AwardCredits<AccountId32> for MockNftClaimCredits {
 		)
 	}
 
-	fn award_check_in_credits(
+	fn award_tenure_credits(
 		game_index: u32,
 		player: &AccountOrPerson<AccountId32>,
 		count: u32,
 		award_time: u32,
 	) -> u32 {
-		<() as AwardCredits<AccountId32>>::award_check_in_credits(
+		<() as AwardCredits<AccountId32>>::award_tenure_credits(
 			game_index, player, count, award_time,
 		)
 	}

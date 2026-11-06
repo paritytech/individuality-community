@@ -931,7 +931,7 @@ impl ContainsPair<RestrictedEntity, RuntimeCall> for OperationAllowedOneTimeExce
 						RuntimeCall::Score(register { .. }) |
 						RuntimeCall::Game(sign_up_with_account { .. }) |
 						RuntimeCall::Game(report { .. }) |
-						RuntimeCall::Game(check_in { .. }) |
+						RuntimeCall::Game(claim_tenure_credits { .. }) |
 						RuntimeCall::Game(offboard { .. }) |
 						RuntimeCall::Game(claim_airdrop { .. })
 				)
@@ -1648,10 +1648,10 @@ impl_runtime_apis! {
 			indiv_pallet_game::PlayDepositAmount::<Runtime>::get()
 		}
 
-		fn check_in_credits(
+		fn tenure_credits(
 			player: indiv_support::identity::AccountOrPerson<AccountId>,
 		) -> Result<u32, sp_runtime::DispatchError> {
-			Game::check_in_credits(player)
+			Game::tenure_credits(player)
 		}
 	}
 

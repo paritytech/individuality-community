@@ -28,7 +28,7 @@
 //! One earning has three names here, one per stage:
 //!
 //! - A *credit* ([`indiv_support::credit_trees::NftClaimCredit`]) is the hash of one successful
-//!   report or of one check-in threshold. A player earns credits and capacity is counted in them.
+//!   report or of one tenure threshold. A player earns credits and capacity is counted in them.
 //! - An *award* ([`NftClaimCreditAward`]) is a credit paired with its claimant. Storage holds
 //!   awards, so chunk and buffer sizes count them.
 //! - A *leaf* ([`indiv_support::credit_trees::NftClaimCreditLeaf`]) is the hash of an award, at a
@@ -52,12 +52,12 @@
 //! the buffer of the block that commits it in [`NftClaimCreditAwards`] and emitted as
 //! `NftClaimCreditAwarded`, in leaf order.
 //!
-//! ## Check-in credits
+//! ## Tenure credits
 //!
-//! The game pallet's `check_in` grants a player one credit per tenure threshold they reach, and
-//! decides when to pay them. This pallet awards them like any other credit. A check-in credit takes
-//! an [`AwardedNftClaimCredits`] slot after the report slots, so a player receives it at most once
-//! per game.
+//! The game pallet's `claim_tenure_credits` grants a player one credit per tenure threshold they
+//! reach, and decides when to pay them. This pallet awards them like any other credit. A tenure
+//! credit takes an [`AwardedNftClaimCredits`] slot after the report slots, so a player receives it
+//! at most once per game.
 //!
 //! ## Committing
 //!
@@ -228,10 +228,10 @@ pub const MAX_PENDING_CREDIT_TREES: u32 = 8;
 /// A fixed-size array encodes without a length prefix, so the preimage starts with these bytes.
 pub const REPORT_CREDIT_PREFIX: [u8; 17] = *b"polkadot-pop-game";
 
-/// The prefix of the preimage of a check-in credit, see [`Pallet::compute_check_in_credit`].
+/// The prefix of the preimage of a tenure credit, see [`Pallet::compute_tenure_credit`].
 ///
-/// It differs from [`REPORT_CREDIT_PREFIX`], so a check-in credit never equals a report credit.
-pub const CHECK_IN_CREDIT_PREFIX: [u8; 21] = *b"polkadot-pop-check-in";
+/// It differs from [`REPORT_CREDIT_PREFIX`], so a tenure credit never equals a report credit.
+pub const TENURE_CREDIT_PREFIX: [u8; 19] = *b"polkadot-pop-tenure";
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-credits";
 
@@ -923,17 +923,17 @@ impl<T: Config> Pallet<T> {
 	}
 
 	/// The number of credit slots any game of this runtime can use, the report slots followed by
-	/// the check-in slots.
+	/// the tenure credit slots.
 	pub(crate) fn max_credit_slots() -> u32 {
 		Self::max_report_credit_slots()
 			.saturating_add(<T as indiv_pallet_game::Config>::MaxTenureThresholds::get())
 	}
 
-	/// The [`AwardedNftClaimCredits`] slot of the check-in credit for the tenure threshold at
+	/// The [`AwardedNftClaimCredits`] slot of the tenure credit for the tenure threshold at
 	/// `index`.
 	///
-	/// Check-in slots start after the last report slot, so the two kinds never share a slot.
-	pub fn check_in_credit_slot(index: u32) -> CreditSlot {
+	/// Tenure credit slots start after the last report slot, so the two kinds never share a slot.
+	pub fn tenure_credit_slot(index: u32) -> CreditSlot {
 		Self::max_report_credit_slots().saturating_add(index)
 	}
 
@@ -941,16 +941,16 @@ impl<T: Config> Pallet<T> {
 	///
 	/// Blake2 256 hash of
 	/// ```txt
-	/// "polkadot-pop-check-in" ++ game index ++ threshold index ++ claimant
+	/// "polkadot-pop-tenure" ++ game index ++ threshold index ++ claimant
 	/// ```
 	/// - `game_index` and `index`: unsigned 32bit.
 	/// - `claimant`: 0 ++ account id, or 1 ++ person id.
-	pub fn compute_check_in_credit(
+	pub fn compute_tenure_credit(
 		game_index: GameIdx,
 		index: u32,
 		claimant: &AccountOrPerson<T::AccountId>,
 	) -> NftClaimCredit {
-		(CHECK_IN_CREDIT_PREFIX, game_index, index, claimant)
+		(TENURE_CREDIT_PREFIX, game_index, index, claimant)
 			.using_encoded(sp_io::hashing::blake2_256)
 	}
 
@@ -1019,7 +1019,7 @@ impl<T: Config> Pallet<T> {
 		award_time: u32,
 	) -> u32 {
 		if !AwardedCredits::within_capacity(credit_slot) {
-			// `credit_slot` is a report or check-in slot, and the `integrity_test` holds both
+			// `credit_slot` is a report or tenure credit slot, and the `integrity_test` holds both
 			// kinds to the mask's capacity, so this cannot be reached.
 			defensive!("indiv-pallet-nft-credits: credit slot must fit the awarded credit mask");
 			return 0;
@@ -2031,7 +2031,7 @@ impl<T: Config> Pallet<T> {
 	pub(crate) fn integrity_test_credits() {
 		// Every credit a claimant can earn in a game needs its own slot in
 		// `AwardedNftClaimCredits`, otherwise the overflowing ones would be awarded twice,
-		// once by `report` and once by the attendance backfill. Check-in slots come after the
+		// once by `report` and once by the attendance backfill. Tenure credit slots come after the
 		// report slots.
 		let slots = Self::max_credit_slots();
 		assert!(
@@ -2052,7 +2052,7 @@ impl<T: Config> Pallet<T> {
 		);
 
 		// The attendance backfill processes a player only while the buffers hold their report
-		// credits and their check-in credits. Below that, the game never ends.
+		// credits and their tenure credits. Below that, the game never ends.
 		let per_player =
 			e_max.saturating_add(<T as indiv_pallet_game::Config>::MaxTenureThresholds::get());
 		assert!(
@@ -2229,7 +2229,7 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 		)
 	}
 
-	fn award_check_in_credits(
+	fn award_tenure_credits(
 		game_index: GameIdx,
 		player: &AccountOrPerson<T::AccountId>,
 		count: u32,
@@ -2237,14 +2237,14 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 	) -> u32 {
 		let awarded = AwardedNftClaimCredits::<T>::get(game_index, player);
 		(0..count)
-			.filter(|&index| !awarded.contains(Self::check_in_credit_slot(index)))
+			.filter(|&index| !awarded.contains(Self::tenure_credit_slot(index)))
 			.take(Self::remaining_credit_capacity(game_index) as usize)
 			.map(|index| {
 				Self::award_nft_claim_credit(
 					game_index,
 					player,
-					Self::compute_check_in_credit(game_index, index, player),
-					Self::check_in_credit_slot(index),
+					Self::compute_tenure_credit(game_index, index, player),
+					Self::tenure_credit_slot(index),
 					award_time,
 				)
 			})

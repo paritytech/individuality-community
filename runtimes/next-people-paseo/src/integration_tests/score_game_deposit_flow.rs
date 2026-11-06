@@ -37,7 +37,7 @@ fn configurable_play_deposit_is_held_refunded_and_future_only() {
 			rounds: 1,
 			max_group_size: 2,
 			airdrops: Default::default(),
-			check_in_window: 0,
+			tenure_claim_window: 0,
 		};
 		Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]).unwrap();
 
@@ -128,7 +128,7 @@ fn account_participant_checks_in() {
 			rounds: 1,
 			max_group_size: 2,
 			airdrops: Default::default(),
-			check_in_window: 60,
+			tenure_claim_window: 60,
 		};
 		Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]).unwrap();
 
@@ -144,11 +144,14 @@ fn account_participant_checks_in() {
 
 		advance_until_time(GameTimes::<Runtime>::game_play_time(&schedule) - 60);
 		let game_index = indiv_pallet_game::Game::<Runtime>::get().expect("game exists").index;
-		let check_in = indiv_pallet_game::Call::<Runtime>::check_in {};
-		exec_signed_as_score_participant(&bob_pair, check_in.into());
+		let claim = indiv_pallet_game::Call::<Runtime>::claim_tenure_credits {};
+		exec_signed_as_score_participant(&bob_pair, claim.into());
 
 		assert_eq!(
-			indiv_pallet_game::CheckIns::<Runtime>::get(game_index, AccountOrPerson::Account(bob)),
+			indiv_pallet_game::TenureClaims::<Runtime>::get(
+				game_index,
+				AccountOrPerson::Account(bob)
+			),
 			Some(1),
 			"a player without tenure reaches only the zero threshold"
 		);
@@ -224,7 +227,7 @@ fn deposit_player_flow() {
 				} else {
 					Default::default()
 				},
-				check_in_window: 0,
+				tenure_claim_window: 0,
 			})
 			.collect::<Vec<_>>();
 		Game::schedule_games(RuntimeOrigin::root(), schedules.clone()).unwrap();
@@ -529,7 +532,7 @@ fn deposit_player_flow() {
 				} else {
 					Default::default()
 				},
-				check_in_window: 0,
+				tenure_claim_window: 0,
 			})
 			.collect::<Vec<_>>();
 		// Top up the airdrop source for the second event's prize allocation.

@@ -621,9 +621,9 @@ impl WeightInfo for MockWeightInfo {
 	fn set_tenure_thresholds() -> Weight {
 		Weight::zero()
 	}
-	/// Non-zero and scales with `n`, so a check-in that awards fewer credits than
+	/// Non-zero and scales with `n`, so a tenure claim that awards fewer credits than
 	/// `MaxTenureThresholds` refunds a measurable amount.
-	fn check_in(n: u32) -> Weight {
+	fn claim_tenure_credits(n: u32) -> Weight {
 		Weight::from_parts(600 + 10 * n as u64, 60 + n as u64)
 	}
 }

@@ -95,7 +95,7 @@ pub trait WeightInfo {
 	fn on_game_cancelled(n: u32, ) -> Weight;
 	fn claim_airdrop() -> Weight;
 	fn set_tenure_thresholds() -> Weight;
-	fn check_in(n: u32, ) -> Weight;
+	fn claim_tenure_credits(n: u32, ) -> Weight;
 }
 
 /// Weights for `indiv_pallet_game` using the Substrate node and recommended hardware.
@@ -1071,8 +1071,8 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `Game::Players` (r:1 w:0)
 	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
-	/// Storage: `Game::CheckIns` (r:1 w:1)
-	/// Proof: `Game::CheckIns` (`max_values`: None, `max_size`: Some(65), added: 2540, mode: `MaxEncodedLen`)
+	/// Storage: `Game::TenureClaims` (r:1 w:1)
+	/// Proof: `Game::TenureClaims` (`max_values`: None, `max_size`: Some(65), added: 2540, mode: `MaxEncodedLen`)
 	/// Storage: `Score::Participants` (r:1 w:0)
 	/// Proof: `Score::Participants` (`max_values`: None, `max_size`: Some(90), added: 2565, mode: `MaxEncodedLen`)
 	/// Storage: `Game::TenureThresholds` (r:1 w:0)
@@ -1088,7 +1088,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	/// Storage: `NftCredits::NftClaimCreditBlocks` (r:1 w:1)
 	/// Proof: `NftCredits::NftClaimCreditBlocks` (`max_values`: None, `max_size`: Some(1075), added: 3550, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 8]`.
-	fn check_in(n: u32, ) -> Weight {
+	fn claim_tenure_credits(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `3698`
 		//  Estimated: `7631 + n * (458 ±104)`
@@ -2074,8 +2074,8 @@ impl WeightInfo for () {
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `Game::Players` (r:1 w:0)
 	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
-	/// Storage: `Game::CheckIns` (r:1 w:1)
-	/// Proof: `Game::CheckIns` (`max_values`: None, `max_size`: Some(65), added: 2540, mode: `MaxEncodedLen`)
+	/// Storage: `Game::TenureClaims` (r:1 w:1)
+	/// Proof: `Game::TenureClaims` (`max_values`: None, `max_size`: Some(65), added: 2540, mode: `MaxEncodedLen`)
 	/// Storage: `Score::Participants` (r:1 w:0)
 	/// Proof: `Score::Participants` (`max_values`: None, `max_size`: Some(90), added: 2565, mode: `MaxEncodedLen`)
 	/// Storage: `Game::TenureThresholds` (r:1 w:0)
@@ -2091,7 +2091,7 @@ impl WeightInfo for () {
 	/// Storage: `NftCredits::NftClaimCreditBlocks` (r:1 w:1)
 	/// Proof: `NftCredits::NftClaimCreditBlocks` (`max_values`: None, `max_size`: Some(1075), added: 3550, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 8]`.
-	fn check_in(n: u32, ) -> Weight {
+	fn claim_tenure_credits(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `3698`
 		//  Estimated: `7631 + n * (458 ±104)`
