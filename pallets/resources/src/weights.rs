@@ -73,6 +73,8 @@ pub trait WeightInfo {
 	fn clear_expired_stmt_store_allowances(n: u32, ) -> Weight;
 	fn authorize_clear_expired_stmt_store_allowances() -> Weight;
 	fn as_stmt_store_allowance_tx_ext() -> Weight;
+	fn replace_statement_store_account() -> Weight;
+	fn as_replace_stmt_store_account_tx_ext() -> Weight;
 	fn claim_long_term_storage() -> Weight;
 	fn claim_long_term_storage_tx_ext() -> Weight;
 	fn clear_expired_long_term_storage_aliases(n: u32, ) -> Weight;
@@ -491,6 +493,31 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		// Minimum execution time: 29_106_975_000 picoseconds.
 		Weight::from_parts(29_137_169_000, 5137)
 			.saturating_add(T::DbWeight::get().reads(4_u64))
+	}
+	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:1)
+	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(104), added: 2579, mode: `MaxEncodedLen`)
+	/// Storage: `Resources::StmtStoreAllowanceByAccount` (r:0 w:2)
+	/// Proof: `Resources::StmtStoreAllowanceByAccount` (`max_values`: None, `max_size`: Some(120), added: 2595, mode: `MaxEncodedLen`)
+	fn replace_statement_store_account() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `236`
+		//  Estimated: `3701`
+		// Minimum execution time: 28_032_000 picoseconds.
+		Weight::from_parts(29_141_000, 3701)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(5_u64))
+	}
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:0)
+	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(104), added: 2579, mode: `MaxEncodedLen`)
+	fn as_replace_stmt_store_account_tx_ext() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `236`
+		//  Estimated: `3701`
+		// Minimum execution time: 80_000_000 picoseconds.
+		Weight::from_parts(80_000_000, 3701)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
 	}
 	/// Storage: `XcmpQueue::DeliveryFeeFactor` (r:1 w:0)
 	/// Proof: `XcmpQueue::DeliveryFeeFactor` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
@@ -990,6 +1017,31 @@ impl WeightInfo for () {
 		// Minimum execution time: 29_106_975_000 picoseconds.
 		Weight::from_parts(29_137_169_000, 5137)
 			.saturating_add(RocksDbWeight::get().reads(4_u64))
+	}
+	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:1)
+	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(104), added: 2579, mode: `MaxEncodedLen`)
+	/// Storage: `Resources::StmtStoreAllowanceByAccount` (r:0 w:2)
+	/// Proof: `Resources::StmtStoreAllowanceByAccount` (`max_values`: None, `max_size`: Some(120), added: 2595, mode: `MaxEncodedLen`)
+	fn replace_statement_store_account() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `236`
+		//  Estimated: `3701`
+		// Minimum execution time: 28_032_000 picoseconds.
+		Weight::from_parts(29_141_000, 3701)
+			.saturating_add(RocksDbWeight::get().reads(4_u64))
+			.saturating_add(RocksDbWeight::get().writes(5_u64))
+	}
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:0)
+	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(104), added: 2579, mode: `MaxEncodedLen`)
+	fn as_replace_stmt_store_account_tx_ext() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `236`
+		//  Estimated: `3701`
+		// Minimum execution time: 80_000_000 picoseconds.
+		Weight::from_parts(80_000_000, 3701)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
 	}
 	/// Storage: `XcmpQueue::DeliveryFeeFactor` (r:1 w:0)
 	/// Proof: `XcmpQueue::DeliveryFeeFactor` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
