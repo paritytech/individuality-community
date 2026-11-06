@@ -301,6 +301,14 @@ pub mod pallet {
 		pub fn account_setup_block_tolerance() -> BlockNumberFor<T> {
 			600u32.into()
 		}
+
+		/// The personhood signing context on this network. An account signs this context
+		/// followed by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
+		}
 	}
 
 	#[pallet::error]
@@ -674,17 +682,6 @@ pub mod pallet {
 		pub fn create_lite_people_collection(origin: OriginFor<T>) -> DispatchResult {
 			ensure_authorized(origin)?;
 			Self::do_create_lite_people_collection()
-		}
-	}
-
-	#[pallet::extra_constants]
-	impl<T: Config> Pallet<T> {
-		/// The personhood signing context on this network. An account signs this context
-		/// followed by the message when it signs a message that is not a transaction; see
-		/// [`Pallet::account_signing_payload`].
-		#[pallet::constant_name(SigningContext)]
-		pub fn signing_context() -> Context {
-			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
 		}
 	}
 

@@ -52,7 +52,7 @@ fn build_report_with_opinion(
 		GameState::Reporting { player_count } => player_count,
 		_ => panic!("game must be in Reporting state"),
 	};
-	let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+	let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 	let mut full = Vec::new();
 	for round in 0..game.rounds {
 		let reporter_idx = reporter_indices[round as usize];
@@ -94,23 +94,20 @@ fn advance_to_reporting_phase(schedule: &GameSchedule<u32, u128>) {
 
 /// Take a scheduled game up to its registration phase, which is where a player can sign up.
 ///
-/// The game is scheduled and then reached through `on_poll`, the way a live chain does it, rather
-/// than started directly: `new_game` is the game pallet's own.
+/// The game is scheduled and then reached through the `start_game` step, the way a live chain does
+/// it. It is not started directly, as `new_game` is the game pallet's own.
 fn start_scheduled_game(schedule: &GameSchedule<u32, u128>) {
 	assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]));
-	// The clock stays where it is: `new_game` sets a game up *before* its registration starts, and
-	// `on_poll` takes the first schedule as soon as there is no game. It skips every
-	// `GAME_PROCESS_SKIPPED_BLOCK`th block, so give it a few.
-	for _ in 0..4 {
-		if matches!(
+	// The clock stays where it is. `new_game` sets a game up *before* its registration starts. The
+	// `start_game` step takes the first schedule in the next block.
+	advance_process();
+	assert!(
+		matches!(
 			GameStore::<Test>::get().map(|game| game.state),
 			Some(GameState::Registration { .. })
-		) {
-			return;
-		}
-		advance_process();
-	}
-	panic!("the scheduled game did not open registration");
+		),
+		"the scheduled game did not open registration"
+	);
 }
 
 /// The total number of leaves committed across all blocks' trees.
@@ -1503,7 +1500,7 @@ fn group_position(player: &AccountOrPerson<AccountId32>, round: RoundIndex) -> A
 		_ => panic!("game must be in Reporting state"),
 	};
 	let index = PlayerToIndex::<Test>::get(player).expect("player has indices")[round as usize];
-	let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+	let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 	let group_index = groups.group_index_from_player_index(index);
 	groups
 		.group_members(group_index)
