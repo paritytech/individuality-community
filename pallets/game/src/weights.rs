@@ -94,6 +94,8 @@ pub trait WeightInfo {
 	fn set_game_phases() -> Weight;
 	fn on_game_cancelled(n: u32, ) -> Weight;
 	fn claim_airdrop() -> Weight;
+	fn set_tenure_thresholds() -> Weight;
+	fn claim_tenure_credits(n: u32, ) -> Weight;
 }
 
 /// Weights for `indiv_pallet_game` using the Substrate node and recommended hardware.
@@ -1051,6 +1053,53 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(12_u64))
 			.saturating_add(T::DbWeight::get().writes(8_u64))
 	}
+	/// Storage: `Game::TenureThresholds` (r:0 w:1)
+	/// Proof: `Game::TenureThresholds` (`max_values`: Some(1), `max_size`: Some(33), added: 528, mode: `MaxEncodedLen`)
+	fn set_tenure_thresholds() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		// Minimum execution time: 6_261_000 picoseconds.
+		Weight::from_parts(6_736_000, 0)
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Game::Game` (r:1 w:0)
+	/// Proof: `Game::Game` (`max_values`: Some(1), `max_size`: Some(78), added: 573, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `Game::Players` (r:1 w:0)
+	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
+	/// Storage: `Game::TenureClaims` (r:1 w:1)
+	/// Proof: `Game::TenureClaims` (`max_values`: None, `max_size`: Some(65), added: 2540, mode: `MaxEncodedLen`)
+	/// Storage: `Score::Participants` (r:1 w:0)
+	/// Proof: `Score::Participants` (`max_values`: None, `max_size`: Some(90), added: 2565, mode: `MaxEncodedLen`)
+	/// Storage: `Game::TenureThresholds` (r:1 w:0)
+	/// Proof: `Game::TenureThresholds` (`max_values`: Some(1), `max_size`: Some(33), added: 528, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::AwardedNftClaimCredits` (r:1 w:1)
+	/// Proof: `NftCredits::AwardedNftClaimCredits` (`max_values`: None, `max_size`: Some(77), added: 2552, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBufferCursor` (r:1 w:1)
+	/// Proof: `NftCredits::CreditBufferCursor` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBuffers` (r:1 w:2)
+	/// Proof: `NftCredits::CreditBuffers` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwards` (r:2 w:2)
+	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(2105), added: 4580, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditBlocks` (r:1 w:1)
+	/// Proof: `NftCredits::NftClaimCreditBlocks` (`max_values`: None, `max_size`: Some(1075), added: 3550, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[1, 8]`.
+	fn claim_tenure_credits(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `3698`
+		//  Estimated: `7631 + n * (458 ±104)`
+		// Minimum execution time: 90_177_000 picoseconds.
+		Weight::from_parts(81_476_883, 7631)
+			// Standard Error: 49_633
+			.saturating_add(Weight::from_parts(15_232_677, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(12_u64))
+			.saturating_add(T::DbWeight::get().writes(6_u64))
+			.saturating_add(Weight::from_parts(0, 458).saturating_mul(n.into()))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -2006,5 +2055,52 @@ impl WeightInfo for () {
 		Weight::from_parts(145_212_000, 7404)
 			.saturating_add(RocksDbWeight::get().reads(12_u64))
 			.saturating_add(RocksDbWeight::get().writes(8_u64))
+	}
+	/// Storage: `Game::TenureThresholds` (r:0 w:1)
+	/// Proof: `Game::TenureThresholds` (`max_values`: Some(1), `max_size`: Some(33), added: 528, mode: `MaxEncodedLen`)
+	fn set_tenure_thresholds() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		// Minimum execution time: 6_261_000 picoseconds.
+		Weight::from_parts(6_736_000, 0)
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Game::Game` (r:1 w:0)
+	/// Proof: `Game::Game` (`max_values`: Some(1), `max_size`: Some(78), added: 573, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `Game::Players` (r:1 w:0)
+	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
+	/// Storage: `Game::TenureClaims` (r:1 w:1)
+	/// Proof: `Game::TenureClaims` (`max_values`: None, `max_size`: Some(65), added: 2540, mode: `MaxEncodedLen`)
+	/// Storage: `Score::Participants` (r:1 w:0)
+	/// Proof: `Score::Participants` (`max_values`: None, `max_size`: Some(90), added: 2565, mode: `MaxEncodedLen`)
+	/// Storage: `Game::TenureThresholds` (r:1 w:0)
+	/// Proof: `Game::TenureThresholds` (`max_values`: Some(1), `max_size`: Some(33), added: 528, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::AwardedNftClaimCredits` (r:1 w:1)
+	/// Proof: `NftCredits::AwardedNftClaimCredits` (`max_values`: None, `max_size`: Some(77), added: 2552, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBufferCursor` (r:1 w:1)
+	/// Proof: `NftCredits::CreditBufferCursor` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::CreditBuffers` (r:1 w:2)
+	/// Proof: `NftCredits::CreditBuffers` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditAwards` (r:2 w:2)
+	/// Proof: `NftCredits::NftClaimCreditAwards` (`max_values`: None, `max_size`: Some(2105), added: 4580, mode: `MaxEncodedLen`)
+	/// Storage: `NftCredits::NftClaimCreditBlocks` (r:1 w:1)
+	/// Proof: `NftCredits::NftClaimCreditBlocks` (`max_values`: None, `max_size`: Some(1075), added: 3550, mode: `MaxEncodedLen`)
+	/// The range of component `n` is `[1, 8]`.
+	fn claim_tenure_credits(n: u32, ) -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `3698`
+		//  Estimated: `7631 + n * (458 ±104)`
+		// Minimum execution time: 90_177_000 picoseconds.
+		Weight::from_parts(81_476_883, 7631)
+			// Standard Error: 49_633
+			.saturating_add(Weight::from_parts(15_232_677, 0).saturating_mul(n.into()))
+			.saturating_add(RocksDbWeight::get().reads(12_u64))
+			.saturating_add(RocksDbWeight::get().writes(6_u64))
+			.saturating_add(Weight::from_parts(0, 458).saturating_mul(n.into()))
 	}
 }
