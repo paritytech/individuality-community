@@ -199,7 +199,7 @@ pub struct RegistrationRecord<T: Config> {
 /// Describes if and how a full-person username relates to a lite-person username.
 ///
 /// Passed to the dotNS contract as a `(uint8, string, bytes)` tuple matching
-/// `IDotnsPopController.Link { LinkKind kind; string liteLabel; bytes chatKey; }`.
+/// `IDotnsPopController.Link { LinkKind kind; string deviceLabel; bytes chatKey; }`.
 #[derive(
 	Clone, PartialEq, Eq, Debug, Encode, Decode, MaxEncodedLen, TypeInfo, DecodeWithMemTracking,
 )]
@@ -258,49 +258,49 @@ impl ContractCaller for () {
 // ========== EVM ABI Encoding ==========
 
 sol! {
-	struct LiteRegistration {
-		string liteLabel;
+	struct DeviceNameIssuance {
+		string label;
 		address user;
 		bytes chatKey;
 	}
 
-	struct BaseReservation {
-		LiteRegistration lite;
-		string reservedBaseLabel;
+	struct DeviceNameIssuanceWithReservation {
+		DeviceNameIssuance issuance;
+		string reservedLabel;
 	}
 
 	struct SolLink {
 		uint8 kind;
-		string liteLabel;
+		string deviceLabel;
 		bytes chatKey;
 	}
 
-	struct FullRegistration {
+	struct PersonhoodNameIssuance {
 		string label;
 		address user;
 		SolLink link;
 	}
 
-	function reserveLiteName(LiteRegistration params);
-	function reserveBaseName(BaseReservation params);
-	function registerBaseName(FullRegistration params);
+	function issueDeviceName(DeviceNameIssuance params);
+	function issueDeviceNameWithReservation(DeviceNameIssuanceWithReservation params);
+	function issuePersonhoodName(PersonhoodNameIssuance params);
 
 	error NotRoot();
-	error NotGateway(address caller);
-	error InvalidLiteLabel();
-	error InvalidBaseLabel();
+	error InvalidDeviceLabel();
+	error InvalidPersonhoodLabel();
 	error NoActiveReservation(address user);
 	error QueueFull(bytes32 labelhash);
 	error AlreadyReserved(address user, bytes32 labelhash);
 	error NotHolder(address user, bytes32 labelhash);
+	error PersonhoodNameUnavailable();
 }
 
-impl reserveLiteNameCall {
-	/// Encodes `DotnsPopController.reserveLiteName((string,address,bytes))`.
+impl issueDeviceNameCall {
+	/// Encodes `DotnsPopController.issueDeviceName((string,address,bytes))`.
 	pub fn new_abi_encoded(lite_label: &[u8], user: H160, chat_key: &[u8]) -> Vec<u8> {
 		Self {
-			params: LiteRegistration {
-				liteLabel: string_from_bytes(lite_label),
+			params: DeviceNameIssuance {
+				label: string_from_bytes(lite_label),
 				user: Address::from(user.0),
 				chatKey: Bytes::copy_from_slice(chat_key),
 			},
@@ -309,8 +309,9 @@ impl reserveLiteNameCall {
 	}
 }
 
-impl reserveBaseNameCall {
-	/// Encodes `DotnsPopController.reserveBaseName(((string,address,bytes),string))`.
+impl issueDeviceNameWithReservationCall {
+	/// Encodes
+	/// `DotnsPopController.issueDeviceNameWithReservation(((string,address,bytes),string))`.
 	pub fn new_abi_encoded(
 		lite_label: &[u8],
 		user: H160,
@@ -318,36 +319,36 @@ impl reserveBaseNameCall {
 		reserved_base_label: &[u8],
 	) -> Vec<u8> {
 		Self {
-			params: BaseReservation {
-				lite: LiteRegistration {
-					liteLabel: string_from_bytes(lite_label),
+			params: DeviceNameIssuanceWithReservation {
+				issuance: DeviceNameIssuance {
+					label: string_from_bytes(lite_label),
 					user: Address::from(user.0),
 					chatKey: Bytes::copy_from_slice(chat_key),
 				},
-				reservedBaseLabel: string_from_bytes(reserved_base_label),
+				reservedLabel: string_from_bytes(reserved_base_label),
 			},
 		}
 		.abi_encode()
 	}
 }
 
-impl registerBaseNameCall {
-	/// Encodes `DotnsPopController.registerBaseName((string,address,(uint8,string,bytes)))`.
+impl issuePersonhoodNameCall {
+	/// Encodes `DotnsPopController.issuePersonhoodName((string,address,(uint8,string,bytes)))`.
 	pub fn new_abi_encoded(label: &[u8], user: H160, link: &Link) -> Vec<u8> {
 		let sol_link = match link {
 			Link::LiteUsername(name) => SolLink {
 				kind: 1u8,
-				liteLabel: string_from_bytes(name.as_slice()),
+				deviceLabel: string_from_bytes(name.as_slice()),
 				chatKey: Bytes::copy_from_slice(&[]),
 			},
 			Link::None(key) => SolLink {
 				kind: 0u8,
-				liteLabel: String::new(),
+				deviceLabel: String::new(),
 				chatKey: Bytes::copy_from_slice(key.as_slice()),
 			},
 		};
 		Self {
-			params: FullRegistration {
+			params: PersonhoodNameIssuance {
 				label: string_from_bytes(label),
 				user: Address::from(user.0),
 				link: sol_link,
@@ -377,12 +378,10 @@ impl registerBaseNameCall {
 pub enum DispatcherRevert {
 	/// Dispatcher rejected the call because the substrate origin was not `Root`.
 	NotRoot,
-	/// Caller is not the registered PoP gateway.
-	NotGateway,
-	/// Lite-person label did not match `<dns-stem>.<digits>`.
-	InvalidLiteLabel,
-	/// Base label was not a valid single DNS label.
-	InvalidBaseLabel,
+	/// Device label did not match `<stem>.<digits>`.
+	InvalidDeviceLabel,
+	/// Personhood label was not a valid single DNS label.
+	InvalidPersonhoodLabel,
 	/// Caller has no active reservation to operate on.
 	NoActiveReservation,
 	/// Reservation queue for the label has reached its capacity.
@@ -391,6 +390,8 @@ pub enum DispatcherRevert {
 	AlreadyReserved,
 	/// Caller is not the head-of-queue reservation holder.
 	NotHolder,
+	/// Personhood name is already registered or held by a whitelist grant.
+	PersonhoodNameUnavailable,
 }
 
 /// Decodes contract revert `data` into a [`DispatcherRevert`].
@@ -406,12 +407,10 @@ pub fn decode_revert(data: &[u8]) -> Option<DispatcherRevert> {
 
 	if selector == NotRoot::SELECTOR {
 		Some(DispatcherRevert::NotRoot)
-	} else if selector == NotGateway::SELECTOR {
-		Some(DispatcherRevert::NotGateway)
-	} else if selector == InvalidLiteLabel::SELECTOR {
-		Some(DispatcherRevert::InvalidLiteLabel)
-	} else if selector == InvalidBaseLabel::SELECTOR {
-		Some(DispatcherRevert::InvalidBaseLabel)
+	} else if selector == InvalidDeviceLabel::SELECTOR {
+		Some(DispatcherRevert::InvalidDeviceLabel)
+	} else if selector == InvalidPersonhoodLabel::SELECTOR {
+		Some(DispatcherRevert::InvalidPersonhoodLabel)
 	} else if selector == NoActiveReservation::SELECTOR {
 		Some(DispatcherRevert::NoActiveReservation)
 	} else if selector == QueueFull::SELECTOR {
@@ -420,6 +419,8 @@ pub fn decode_revert(data: &[u8]) -> Option<DispatcherRevert> {
 		Some(DispatcherRevert::AlreadyReserved)
 	} else if selector == NotHolder::SELECTOR {
 		Some(DispatcherRevert::NotHolder)
+	} else if selector == PersonhoodNameUnavailable::SELECTOR {
+		Some(DispatcherRevert::PersonhoodNameUnavailable)
 	} else {
 		None
 	}
@@ -437,7 +438,7 @@ mod abi_tests {
 	#[test]
 	fn encode_reserve_lite_name_structure() {
 		let addr = H160::from_low_u64_be(0x1234);
-		let data = reserveLiteNameCall::new_abi_encoded(b"alice42", addr, b"key");
+		let data = issueDeviceNameCall::new_abi_encoded(b"alice42", addr, b"key");
 
 		// Selector present and non-zero.
 		assert_ne!(&data[..4], &[0u8; 4]);
@@ -448,7 +449,8 @@ mod abi_tests {
 	#[test]
 	fn encode_reserve_base_name_structure() {
 		let addr = H160::from_low_u64_be(0x1234);
-		let data = reserveBaseNameCall::new_abi_encoded(b"alice42", addr, b"key", b"alice");
+		let data =
+			issueDeviceNameWithReservationCall::new_abi_encoded(b"alice42", addr, b"key", b"alice");
 
 		assert_ne!(&data[..4], &[0u8; 4]);
 		assert!(data.len() > 4);
@@ -457,8 +459,9 @@ mod abi_tests {
 	#[test]
 	fn reserve_lite_and_base_have_distinct_selectors() {
 		let addr = H160::from_low_u64_be(0x1234);
-		let lite = reserveLiteNameCall::new_abi_encoded(b"alice42", addr, b"key");
-		let base = reserveBaseNameCall::new_abi_encoded(b"alice42", addr, b"key", b"alice");
+		let lite = issueDeviceNameCall::new_abi_encoded(b"alice42", addr, b"key");
+		let base =
+			issueDeviceNameWithReservationCall::new_abi_encoded(b"alice42", addr, b"key", b"alice");
 
 		// Different functions, different selectors.
 		assert_ne!(&lite[..4], &base[..4]);
@@ -468,7 +471,7 @@ mod abi_tests {
 	fn encode_register_base_name_with_lite_username_link() {
 		let addr = H160::from_low_u64_be(0x5678);
 		let link = Link::LiteUsername(BaseLabel::try_from(b"alice42".to_vec()).unwrap());
-		let data = registerBaseNameCall::new_abi_encoded(b"alice", addr, &link);
+		let data = issuePersonhoodNameCall::new_abi_encoded(b"alice", addr, &link);
 
 		assert_ne!(&data[..4], &[0u8; 4]);
 		assert!(data.len() > 4);
@@ -478,7 +481,7 @@ mod abi_tests {
 	fn encode_register_base_name_with_none_link() {
 		let addr = H160::from_low_u64_be(0x5678);
 		let link = Link::None(ChatKey::from([0xAB; 65]));
-		let data = registerBaseNameCall::new_abi_encoded(b"alice", addr, &link);
+		let data = issuePersonhoodNameCall::new_abi_encoded(b"alice", addr, &link);
 
 		assert_ne!(&data[..4], &[0u8; 4]);
 		assert!(data.len() > 4);
@@ -490,8 +493,8 @@ mod abi_tests {
 		let link_a = Link::LiteUsername(BaseLabel::try_from(b"alice42".to_vec()).unwrap());
 		let link_b = Link::None(ChatKey::from([0x01; 65]));
 
-		let data_a = registerBaseNameCall::new_abi_encoded(b"alice", addr, &link_a);
-		let data_b = registerBaseNameCall::new_abi_encoded(b"alice", addr, &link_b);
+		let data_a = issuePersonhoodNameCall::new_abi_encoded(b"alice", addr, &link_a);
+		let data_b = issuePersonhoodNameCall::new_abi_encoded(b"alice", addr, &link_b);
 
 		// Same selector regardless of link variant.
 		assert_eq!(&data_a[..4], &data_b[..4]);
@@ -500,9 +503,10 @@ mod abi_tests {
 	#[test]
 	fn selectors_are_distinct() {
 		let link = Link::None(ChatKey::from([0x01; 65]));
-		let lite = reserveLiteNameCall::new_abi_encoded(b"x42", H160::zero(), b"");
-		let base = reserveBaseNameCall::new_abi_encoded(b"x42", H160::zero(), b"", b"x");
-		let register = registerBaseNameCall::new_abi_encoded(b"x", H160::zero(), &link);
+		let lite = issueDeviceNameCall::new_abi_encoded(b"x42", H160::zero(), b"");
+		let base =
+			issueDeviceNameWithReservationCall::new_abi_encoded(b"x42", H160::zero(), b"", b"x");
+		let register = issuePersonhoodNameCall::new_abi_encoded(b"x", H160::zero(), &link);
 
 		// All three selectors are pairwise different.
 		assert_ne!(&lite[..4], &base[..4]);
@@ -513,10 +517,10 @@ mod abi_tests {
 	#[test]
 	fn reserve_lite_round_trip() {
 		let addr = H160::from_low_u64_be(0x1234);
-		let data = reserveLiteNameCall::new_abi_encoded(b"alice42", addr, b"key-bytes");
+		let data = issueDeviceNameCall::new_abi_encoded(b"alice42", addr, b"key-bytes");
 
-		let decoded = reserveLiteNameCall::abi_decode(&data).expect("decode");
-		assert_eq!(decoded.params.liteLabel, "alice42");
+		let decoded = issueDeviceNameCall::abi_decode(&data).expect("decode");
+		assert_eq!(decoded.params.label, "alice42");
 		assert_eq!(decoded.params.user, Address::from(addr.0));
 		assert_eq!(&decoded.params.chatKey[..], b"key-bytes");
 	}
@@ -524,26 +528,27 @@ mod abi_tests {
 	#[test]
 	fn reserve_base_round_trip() {
 		let addr = H160::from_low_u64_be(0x1234);
-		let data = reserveBaseNameCall::new_abi_encoded(b"alice42", addr, b"key", b"alice");
+		let data =
+			issueDeviceNameWithReservationCall::new_abi_encoded(b"alice42", addr, b"key", b"alice");
 
-		let decoded = reserveBaseNameCall::abi_decode(&data).expect("decode");
-		assert_eq!(decoded.params.lite.liteLabel, "alice42");
-		assert_eq!(decoded.params.lite.user, Address::from(addr.0));
-		assert_eq!(&decoded.params.lite.chatKey[..], b"key");
-		assert_eq!(decoded.params.reservedBaseLabel, "alice");
+		let decoded = issueDeviceNameWithReservationCall::abi_decode(&data).expect("decode");
+		assert_eq!(decoded.params.issuance.label, "alice42");
+		assert_eq!(decoded.params.issuance.user, Address::from(addr.0));
+		assert_eq!(&decoded.params.issuance.chatKey[..], b"key");
+		assert_eq!(decoded.params.reservedLabel, "alice");
 	}
 
 	#[test]
 	fn register_round_trip_lite_link() {
 		let addr = H160::from_low_u64_be(0x5678);
 		let link = Link::LiteUsername(BaseLabel::try_from(b"alice42".to_vec()).unwrap());
-		let data = registerBaseNameCall::new_abi_encoded(b"alice", addr, &link);
+		let data = issuePersonhoodNameCall::new_abi_encoded(b"alice", addr, &link);
 
-		let decoded = registerBaseNameCall::abi_decode(&data).expect("decode");
+		let decoded = issuePersonhoodNameCall::abi_decode(&data).expect("decode");
 		assert_eq!(decoded.params.label, "alice");
 		assert_eq!(decoded.params.user, Address::from(addr.0));
 		assert_eq!(decoded.params.link.kind, 1);
-		assert_eq!(decoded.params.link.liteLabel, "alice42");
+		assert_eq!(decoded.params.link.deviceLabel, "alice42");
 		assert!(decoded.params.link.chatKey.is_empty());
 	}
 
@@ -552,34 +557,33 @@ mod abi_tests {
 		let addr = H160::from_low_u64_be(0x5678);
 		let key = [0xABu8; 65];
 		let link = Link::None(ChatKey::from(key));
-		let data = registerBaseNameCall::new_abi_encoded(b"alice", addr, &link);
+		let data = issuePersonhoodNameCall::new_abi_encoded(b"alice", addr, &link);
 
-		let decoded = registerBaseNameCall::abi_decode(&data).expect("decode");
+		let decoded = issuePersonhoodNameCall::abi_decode(&data).expect("decode");
 		assert_eq!(decoded.params.link.kind, 0);
-		assert!(decoded.params.link.liteLabel.is_empty());
+		assert!(decoded.params.link.deviceLabel.is_empty());
 		assert_eq!(&decoded.params.link.chatKey[..], &key[..]);
 	}
 
 	#[test]
 	fn selectors_match_solidity_canonical_signatures() {
-		// Mirrors SELECTOR_RESERVE_LITE / SELECTOR_RESERVE_BASE / SELECTOR_REGISTER_BASE
-		// in DotnsPopController.sol.
+		// Mirrors the function signatures in IDotnsPopController.sol.
 		fn selector(sig: &str) -> [u8; 4] {
 			let h = sp_io::hashing::keccak_256(sig.as_bytes());
 			[h[0], h[1], h[2], h[3]]
 		}
 
 		assert_eq!(
-			reserveLiteNameCall::SELECTOR,
-			selector("reserveLiteName((string,address,bytes))")
+			issueDeviceNameCall::SELECTOR,
+			selector("issueDeviceName((string,address,bytes))")
 		);
 		assert_eq!(
-			reserveBaseNameCall::SELECTOR,
-			selector("reserveBaseName(((string,address,bytes),string))"),
+			issueDeviceNameWithReservationCall::SELECTOR,
+			selector("issueDeviceNameWithReservation(((string,address,bytes),string))"),
 		);
 		assert_eq!(
-			registerBaseNameCall::SELECTOR,
-			selector("registerBaseName((string,address,(uint8,string,bytes)))"),
+			issuePersonhoodNameCall::SELECTOR,
+			selector("issuePersonhoodName((string,address,(uint8,string,bytes)))"),
 		);
 	}
 
@@ -587,13 +591,13 @@ mod abi_tests {
 	fn decode_revert_matches_known_selectors() {
 		let selectors_and_reverts = [
 			(NotRoot::SELECTOR, DispatcherRevert::NotRoot),
-			(NotGateway::SELECTOR, DispatcherRevert::NotGateway),
-			(InvalidLiteLabel::SELECTOR, DispatcherRevert::InvalidLiteLabel),
-			(InvalidBaseLabel::SELECTOR, DispatcherRevert::InvalidBaseLabel),
+			(InvalidDeviceLabel::SELECTOR, DispatcherRevert::InvalidDeviceLabel),
+			(InvalidPersonhoodLabel::SELECTOR, DispatcherRevert::InvalidPersonhoodLabel),
 			(NoActiveReservation::SELECTOR, DispatcherRevert::NoActiveReservation),
 			(QueueFull::SELECTOR, DispatcherRevert::QueueFull),
 			(AlreadyReserved::SELECTOR, DispatcherRevert::AlreadyReserved),
 			(NotHolder::SELECTOR, DispatcherRevert::NotHolder),
+			(PersonhoodNameUnavailable::SELECTOR, DispatcherRevert::PersonhoodNameUnavailable),
 		];
 		for (selector, expected) in selectors_and_reverts {
 			assert_eq!(decode_revert(&selector), Some(expected));
@@ -620,13 +624,13 @@ mod abi_tests {
 	fn revert_selectors_are_pairwise_distinct() {
 		let selectors = [
 			NotRoot::SELECTOR,
-			NotGateway::SELECTOR,
-			InvalidLiteLabel::SELECTOR,
-			InvalidBaseLabel::SELECTOR,
+			InvalidDeviceLabel::SELECTOR,
+			InvalidPersonhoodLabel::SELECTOR,
 			NoActiveReservation::SELECTOR,
 			QueueFull::SELECTOR,
 			AlreadyReserved::SELECTOR,
 			NotHolder::SELECTOR,
+			PersonhoodNameUnavailable::SELECTOR,
 		];
 		for i in 0..selectors.len() {
 			for j in (i + 1)..selectors.len() {
