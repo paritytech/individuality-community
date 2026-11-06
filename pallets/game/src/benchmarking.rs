@@ -2382,8 +2382,12 @@ mod benches {
 	//
 	// The block's credit buffer is one award short of full, so the check-in fills it and spills
 	// into the next block's buffer. That reads the most keys a check-in can.
+	//
+	// `n` starts at 2. A single award does not spill, so it touches fewer keys, and a linear fit
+	// across that step undercharges the reads and writes of every larger `n`. A check-in of one
+	// credit can spill too, when the buffer is full already, so `check_in(1)` keeps the spill.
 	#[benchmark]
-	fn check_in(n: Linear<1, { T::MaxTenureThresholds::get() }>) -> Result<(), BenchmarkError> {
+	fn check_in(n: Linear<2, { T::MaxTenureThresholds::get() }>) -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
 		let player = AccountOrPerson::Account(caller.clone());
 		let game_index = set_up_check_in::<T>(&caller, n)?;
