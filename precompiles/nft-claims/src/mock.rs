@@ -148,6 +148,7 @@ impl indiv_pallet_scarcity::Config for Test {
 	type OnPurseOccupied = ();
 	// These tests store no metadata, so the runtime's ERC-721 policy would never be consulted.
 	type MetadataPolicy = ();
+	type ContractAccounts = ();
 }
 
 parameter_types! {

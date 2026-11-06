@@ -65,6 +65,41 @@ fn create_definition<T: Config>(
 	Ok((collection, item))
 }
 
+/// Make `contract` a contract, which is the costlier destination and source.
+///
+/// The contract also holds an instance in `NftsByOwner`, as it does when it received one before it
+/// had code, so every lookup of its `ContractNfts` instances reads both maps. A runtime without
+/// contracts ignores the request, and the benchmark then measures an ordinary key.
+fn make_contract<T: Config>(
+	owner: &T::AccountId,
+	collection: CollectionId,
+	item: ItemIndex,
+	contract: &T::AccountId,
+) -> Result<(), BenchmarkError> {
+	T::ContractAccounts::set_contract(contract);
+	if !T::ContractAccounts::is_contract(contract) {
+		return Ok(());
+	}
+	let scratch: T::AccountId = account("scratch", 0, 0);
+	let instance =
+		Pallet::<T>::do_mint(owner.clone(), collection, item, scratch.clone(), Vec::new())?;
+	let nft = NftsByOwner::<T>::take(&scratch).expect("scratch purse holds the minted NFT");
+	NftsByOwner::<T>::insert(contract, nft);
+	Instances::<T>::insert(instance, Location { holder: contract.clone(), collection });
+	Ok(())
+}
+
+/// The instance `instance` as `holder` holds it, in either map.
+fn held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> Option<Nft> {
+	Pallet::<T>::nft_held_by(holder, instance).map(|(nft, _)| nft)
+}
+
+/// The instance `instance`, after a check that `holder` holds it and [`Instances`] names it.
+fn assert_held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> Nft {
+	assert_eq!(Instances::<T>::get(instance).map(|location| location.holder), Some(holder.clone()));
+	held::<T>(holder, instance).expect("holder holds the instance")
+}
+
 #[benchmarks(
 	where
 		T::RuntimeCall: From<Call<T>>
@@ -113,6 +148,7 @@ mod benchmarks {
 		let destination: T::AccountId = account("destination", 0, 0);
 		NftsByOwner::<T>::remove(&destination);
 		let (collection, item) = create_definition::<T>(&caller)?;
+		T::ContractAccounts::set_contract(&destination);
 		let metadata = (0..m)
 			.map(|index| {
 				let key = metadata_key::<T>(index);
@@ -120,13 +156,13 @@ mod benchmarks {
 				(key, value)
 			})
 			.collect::<Vec<_>>();
+		let instance = NextInstanceId::<T>::get();
 
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller), collection, item, destination.clone(), metadata);
 
-		let nft = NftsByOwner::<T>::get(&destination).expect("destination owns the minted NFT");
-		assert_eq!(Instances::<T>::get(nft.instance), Some(destination));
-		assert_eq!(InstanceMetadataCount::<T>::get(nft.instance), m);
+		assert_held::<T>(&destination, instance);
+		assert_eq!(InstanceMetadataCount::<T>::get(instance), m);
 		Ok(())
 	}
 
@@ -136,6 +172,7 @@ mod benchmarks {
 		let destination: T::AccountId = account("destination", 0, 0);
 		NftsByOwner::<T>::remove(&destination);
 		let (collection, item) = create_definition::<T>(&owner)?;
+		T::ContractAccounts::set_contract(&destination);
 		Pallet::<T>::do_mint(owner.clone(), collection, item, owner.clone(), Vec::new())?;
 		let nft = NftsByOwner::<T>::take(&owner).expect("owner has the minted NFT");
 		let instance = nft.instance;
@@ -144,8 +181,7 @@ mod benchmarks {
 		#[extrinsic_call]
 		_(origin, destination.clone());
 
-		assert_eq!(NftsByOwner::<T>::get(&destination).map(|nft| nft.instance), Some(instance));
-		assert_eq!(Instances::<T>::get(instance), Some(destination));
+		assert_held::<T>(&destination, instance);
 		Ok(())
 	}
 
@@ -234,6 +270,7 @@ mod benchmarks {
 		let caller: T::AccountId = whitelisted_caller();
 		let destination: T::AccountId = account("destination", 0, 0);
 		let (collection, item) = create_definition::<T>(&caller)?;
+		make_contract::<T>(&caller, collection, item, &destination)?;
 		let instance =
 			Pallet::<T>::do_mint(caller.clone(), collection, item, destination, Vec::new())?;
 		let key = metadata_key::<T>(0);
@@ -254,6 +291,7 @@ mod benchmarks {
 		let caller: T::AccountId = whitelisted_caller();
 		let destination: T::AccountId = account("destination", 0, 0);
 		let (collection, item) = create_definition::<T>(&caller)?;
+		make_contract::<T>(&caller, collection, item, &destination)?;
 		let metadata = (0..m)
 			.map(|index| {
 				let key = metadata_key::<T>(index);
@@ -267,7 +305,7 @@ mod benchmarks {
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller), instance);
 
-		assert!(!NftsByOwner::<T>::contains_key(destination));
+		assert!(held::<T>(&destination, instance).is_none());
 		assert!(!Instances::<T>::contains_key(instance));
 		assert_eq!(InstanceMetadata::<T>::iter_prefix(instance).count(), 0);
 		Ok(())
@@ -280,19 +318,18 @@ mod benchmarks {
 		let to: T::AccountId = account("to", 0, 0);
 		NftsByOwner::<T>::remove(&to);
 		let (collection, item) = create_definition::<T>(&caller)?;
+		make_contract::<T>(&caller, collection, item, &from)?;
+		T::ContractAccounts::set_contract(&to);
 		let instance =
 			Pallet::<T>::do_mint(caller.clone(), collection, item, from.clone(), Vec::new())?;
+		// A runtime without contracts measures a purse source, whose worst case clears a lock.
 		Locked::<T>::insert(&from, LockInfo { retries: u8::MAX, until: u64::MAX });
 
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller), instance, to.clone());
 
-		let nft = NftsByOwner::<T>::get(&to).expect("destination owns the transferred NFT");
-		assert_eq!(nft.instance, instance);
-		assert_eq!(nft.state_nonce, 1);
-		assert_eq!(Instances::<T>::get(instance), Some(to));
-		assert!(!NftsByOwner::<T>::contains_key(from.clone()));
-		assert!(!Locked::<T>::contains_key(from));
+		assert_eq!(assert_held::<T>(&to, instance).state_nonce, 1);
+		assert!(held::<T>(&from, instance).is_none());
 		Ok(())
 	}
 
@@ -305,20 +342,18 @@ mod benchmarks {
 		let to: T::AccountId = account("to", 0, 0);
 		NftsByOwner::<T>::remove(&to);
 		let (collection, item) = create_definition::<T>(&owner)?;
+		make_contract::<T>(&owner, collection, item, &from)?;
+		T::ContractAccounts::set_contract(&to);
 		let instance =
 			Pallet::<T>::do_mint(owner.clone(), collection, item, from.clone(), Vec::new())?;
-		// Worst case clears a lock on the source purse.
+		// A runtime without contracts measures a purse source, whose worst case clears a lock.
 		Locked::<T>::insert(&from, LockInfo { retries: u8::MAX, until: u64::MAX });
 
 		#[extrinsic_call]
 		_(RawOrigin::Signed(from.clone()), instance, to.clone());
 
-		let nft = NftsByOwner::<T>::get(&to).expect("destination holds the transferred NFT");
-		assert_eq!(nft.instance, instance);
-		assert_eq!(nft.state_nonce, 1);
-		assert_eq!(Instances::<T>::get(instance), Some(to));
-		assert!(!NftsByOwner::<T>::contains_key(&from));
-		assert!(!Locked::<T>::contains_key(&from));
+		assert_eq!(assert_held::<T>(&to, instance).state_nonce, 1);
+		assert!(held::<T>(&from, instance).is_none());
 		Ok(())
 	}
 

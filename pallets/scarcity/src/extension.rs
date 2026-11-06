@@ -240,7 +240,7 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 			if to == &owner {
 				return Err(CustomInvalidity::TransferToSelf.into());
 			}
-			if NftsByOwner::<T>::contains_key(to) {
+			if Pallet::<T>::destination_of(to).is_err() {
 				return Err(CustomInvalidity::DestinationOccupied.into());
 			}
 			// Unlike the checks above, neither of these can come good: transferability is fixed

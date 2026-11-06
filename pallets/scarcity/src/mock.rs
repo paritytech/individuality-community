@@ -114,6 +114,41 @@ impl crate::Config for Test {
 	type OnCollectionOwnerChanged = RecordCollectionOwnerChange;
 	type OnPurseOccupied = RecordPurseOccupancy;
 	type MetadataPolicy = RejectReservedValue;
+	type ContractAccounts = MockContracts;
+}
+
+parameter_types! {
+	/// The accounts the mock treats as contracts.
+	pub storage Contracts: alloc::vec::Vec<u64> = alloc::vec![];
+}
+
+/// Treats the accounts in [`Contracts`] as contracts.
+pub struct MockContracts;
+impl MockContracts {
+	/// Make `account` a contract.
+	pub fn add(account: u64) {
+		let mut contracts = Contracts::get();
+		contracts.push(account);
+		Contracts::set(&contracts);
+	}
+
+	/// Make `account` an ordinary key again, as when a contract is removed.
+	pub fn remove(account: u64) {
+		let mut contracts = Contracts::get();
+		contracts.retain(|contract| *contract != account);
+		Contracts::set(&contracts);
+	}
+}
+
+impl crate::ContractAccounts<u64> for MockContracts {
+	fn is_contract(account: &u64) -> bool {
+		Contracts::get().contains(account)
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn set_contract(account: &u64) {
+		Self::add(*account);
+	}
 }
 
 parameter_types! {
