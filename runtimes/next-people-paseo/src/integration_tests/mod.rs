@@ -89,6 +89,7 @@ mod score_game_deposit_flow;
 mod score_game_invitation_flow;
 mod score_game_person_flow;
 mod statement_allowance;
+mod stmt_store_replacement_padding;
 mod transaction_era;
 mod trusted_query;
 mod tx_extension_pipeline;
