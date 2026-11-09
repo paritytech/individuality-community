@@ -88,16 +88,18 @@ impl Estimate {
 		);
 	}
 
-	/// The phase windows to set for each of `PLAYER_COUNTS`.
+	/// The shortest phase windows each of `PLAYER_COUNTS` needs.
 	pub(super) fn print_phase_windows(&self) {
 		let Self { limits, post_shuffle_margin, paths, steps, reports_per_credit_tree, .. } = self;
 		println!();
-		println!("--- Phase windows by player count ---");
+		println!("--- Shortest phase windows by player count ---");
 		println!(
-			"the windows to set with `set_game_phases`, rounded up to a minute: sign-ups and \
-			reports by {} / by {}, shuffle and player process with every credit backfilled and a \
-			step in {STEP_LANDING_PERCENT}% of the blocks, game with the runtime's post-shuffle \
-			margin of {post_shuffle_margin}s",
+			"the block space each phase needs, rounded up to a minute, as `set_game_phases` takes \
+			it. Registration and reporting are lower bounds, sign-ups and reports by {} / by {}. \
+			Set them for people, who also play the game inside the reporting window. Shuffle and \
+			player process are the offchain worker's work, with every credit backfilled and a step \
+			in {STEP_LANDING_PERCENT}% of the blocks. Set them no shorter. Game adds the runtime's \
+			post-shuffle margin of {post_shuffle_margin}s",
 			paths.sign_ups.without_proof.account.name, paths.sign_ups.with_proof.ring_proof.name
 		);
 		println!(
