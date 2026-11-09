@@ -4086,6 +4086,22 @@ mod claim_tenure_credits {
 	}
 
 	#[test]
+	fn tenure_claims_stay_open_through_the_shuffle_and_reporting() {
+		new_test_ext().execute_with(|| {
+			set_up_full_group();
+			set_time(GameTimes::<Test>::registration_end(&schedule()) as u64 + 1);
+
+			advance_process();
+			assert!(matches!(GameStore::<Test>::get().unwrap().state, GameState::Shuffle { .. }));
+			assert_ok!(claim_tenure_credits(&ALICE));
+
+			advance_process();
+			assert!(matches!(GameStore::<Test>::get().unwrap().state, GameState::Reporting { .. }));
+			assert_ok!(claim_tenure_credits(&BOB));
+		});
+	}
+
+	#[test]
 	fn a_game_without_a_window_takes_no_tenure_claim() {
 		new_test_ext().execute_with(|| {
 			start_scheduled_game(&GameSchedule { tenure_claim_window: 0, ..schedule() });
