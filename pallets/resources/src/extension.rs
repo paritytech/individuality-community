@@ -85,6 +85,8 @@ pub enum CustomValidity {
 	StmtStoreReplacementBadSignature = 237,
 	/// The statement account already holds the statement store slot.
 	StmtStoreReplacementSameAccount = 238,
+	/// The `since` witness in the call differs from the timestamp recorded in the slot entry.
+	StmtStoreReplacementSinceMismatch = 239,
 }
 
 impl From<CustomValidity> for TransactionValidityError {
@@ -165,12 +167,13 @@ pub enum AsResourcesInfo<T: Config> {
 	///
 	/// Signature construction:
 	/// - the signer is the account recorded in the slot's `StatementStoreAllowances` entry,
-	/// - the signed bytes are `Pallet::<T>::account_signing_payload(msg)` where `msg` is
-	///   `Pallet::<T>::replace_stmt_store_account_message(period, alias, new_account, since)` and
-	///   `since` is the timestamp recorded in the existing entry.
+	/// - the signed bytes are `blake2_256(scale_encode(inherited_implication))`, the payload
+	///   `pallet_verify_signature` checks. The implication contains the call, so the signature
+	///   covers the call's `since`.
 	///
-	/// Validation fails with `StmtStoreReplacementTooEarly` while the current timestamp equals
-	/// `since`, so submit after a later block.
+	/// Validation fails with `StmtStoreReplacementSinceMismatch` when the call's `since` differs
+	/// from the timestamp recorded in the entry, and with `StmtStoreReplacementTooEarly` while
+	/// the current timestamp equals `since`, so submit after a later block.
 	ReplaceStatementStoreAccount(T::OffchainSignature),
 }
 
@@ -343,6 +346,7 @@ impl<T: Config> AsResources<T> {
 	fn validate_stmt_store_replacement(
 		origin: <T as frame_system::Config>::RuntimeOrigin,
 		call: &<T as frame_system::Config>::RuntimeCall,
+		inherited_implication: &impl Encode,
 		signature: &T::OffchainSignature,
 	) -> ValidateResult<(), <T as frame_system::Config>::RuntimeCall> {
 		ensure!(
@@ -350,8 +354,12 @@ impl<T: Config> AsResources<T> {
 			InvalidTransaction::BadSigner
 		);
 
-		let Some(crate::Call::<T>::replace_statement_store_account { period, alias, new_account }) =
-			call.is_sub_type()
+		let Some(crate::Call::<T>::replace_statement_store_account {
+			period,
+			alias,
+			new_account,
+			since,
+		}) = call.is_sub_type()
 		else {
 			return Err(InvalidTransaction::Call.into());
 		};
@@ -367,16 +375,12 @@ impl<T: Config> AsResources<T> {
 			existing.account_id != *new_account,
 			CustomValidity::StmtStoreReplacementSameAccount
 		);
+		ensure!(existing.since == *since, CustomValidity::StmtStoreReplacementSinceMismatch);
 		ensure!(now > existing.since, CustomValidity::StmtStoreReplacementTooEarly);
 
-		let msg = Pallet::<T>::replace_stmt_store_account_message(
-			*period,
-			alias,
-			new_account,
-			existing.since,
-		);
+		let msg = inherited_implication.using_encoded(sp_io::hashing::blake2_256);
 		ensure!(
-			signature.verify(&Pallet::<T>::account_signing_payload(&msg)[..], &existing.account_id),
+			signature.verify(&msg[..], &existing.account_id),
 			CustomValidity::StmtStoreReplacementBadSignature
 		);
 
@@ -533,7 +537,12 @@ impl<T: Config> TransactionExtension<<T as frame_system::Config>::RuntimeCall> f
 				collection,
 			),
 			Some(AsResourcesInfo::ReplaceStatementStoreAccount(signature)) =>
-				Self::validate_stmt_store_replacement(origin, call, signature),
+				Self::validate_stmt_store_replacement(
+					origin,
+					call,
+					inherited_implication,
+					signature,
+				),
 			Some(AsResourcesInfo::ClaimLongTermStorage(
 				proof,
 				ring_index,

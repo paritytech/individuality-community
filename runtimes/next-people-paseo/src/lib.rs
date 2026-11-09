@@ -882,6 +882,7 @@ fn stmt_store_replacement_fee() -> Balance {
 			period: 0,
 			alias: [0u8; 32],
 			new_account: AccountId::new([0u8; 32]),
+			since: 0,
 		});
 	let signature = MultiSignature::Sr25519(sp_core::sr25519::Signature::from_raw([0u8; 64]));
 	let tx_ext: TxExtensionV1 = (
@@ -1047,6 +1048,7 @@ impl indiv_pallet_origin_restriction::BenchmarkHelper<OriginCaller, RuntimeCall>
 				period: 0,
 				alias: [0u8; 32],
 				new_account: AccountId::new([0u8; 32]),
+				since: 0,
 			}),
 		)
 	}

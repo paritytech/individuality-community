@@ -107,11 +107,6 @@ pub mod pallet {
 	/// The prefix of the message a lite consumer account signs in [`Call::register_person`].
 	pub const REGISTER_PERSON_MSG_PREFIX: &[u8] = b"pop:resources:register_person";
 
-	/// The prefix of the message a statement account signs in
-	/// [`Call::replace_statement_store_account`].
-	pub const REPLACE_STMT_STORE_ACCOUNT_MSG_PREFIX: &[u8] =
-		b"pop:resources:replace_statement_store_account";
-
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
 	#[pallet::pallet]
@@ -558,6 +553,8 @@ pub mod pallet {
 		StmtStoreEntryNotFound,
 		/// The statement account already holds the statement store slot.
 		StmtStoreReplacementSameAccount,
+		/// The `since` witness differs from the timestamp recorded in the slot entry.
+		StmtStoreReplacementSinceMismatch,
 	}
 
 	#[pallet::hooks]
@@ -1051,6 +1048,7 @@ pub mod pallet {
 		/// * `period`: day number since Unix epoch. Must be the current period.
 		/// * `alias`: the alias the slot was claimed under. Must match the origin.
 		/// * `new_account`: statement account that takes over the slot.
+		/// * `since`: the timestamp recorded in the slot's entry. Must match the entry.
 		#[pallet::call_index(14)]
 		#[pallet::weight(<T as Config>::WeightInfo::replace_statement_store_account())]
 		pub fn replace_statement_store_account(
@@ -1058,6 +1056,7 @@ pub mod pallet {
 			period: u32,
 			alias: Alias,
 			new_account: T::AccountId,
+			since: u64,
 		) -> DispatchResultWithPostInfo {
 			ensure!(Self::ensure_stmt_store_holder(origin)? == alias, DispatchError::BadOrigin);
 			let period_key = BigEndianU32::from(period);
@@ -1068,6 +1067,7 @@ pub mod pallet {
 				existing.account_id != new_account,
 				Error::<T>::StmtStoreReplacementSameAccount
 			);
+			ensure!(existing.since == since, Error::<T>::StmtStoreReplacementSinceMismatch);
 			ensure!(
 				T::Clock::now().as_secs() > existing.since,
 				Error::<T>::StmtStoreReplacementTooEarly
@@ -1612,21 +1612,6 @@ pub mod pallet {
 		/// The raw suffix contains the allocated family followed by the period and sequence.
 		pub fn stmt_store_slot_context(period: u32, seq: u32) -> Context {
 			Self::build_context(personhood::statement_store_slot(period, seq))
-		}
-
-		/// Returns the message the statement account holding a slot signs to move the slot to
-		/// `new_account` in [`Call::replace_statement_store_account`].
-		///
-		/// `since` is the timestamp recorded in the slot's entry, so a signature is valid for one
-		/// replacement only.
-		pub fn replace_stmt_store_account_message(
-			period: u32,
-			alias: &Alias,
-			new_account: &T::AccountId,
-			since: u64,
-		) -> Vec<u8> {
-			[REPLACE_STMT_STORE_ACCOUNT_MSG_PREFIX, &(period, alias, new_account, since).encode()]
-				.concat()
 		}
 
 		/// Grant the current accounts API allowance to `target_account` for a statement store

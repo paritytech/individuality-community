@@ -809,7 +809,7 @@ mod benches {
 		let new_account: T::AccountId = whitelisted_caller();
 
 		#[extrinsic_call]
-		_(origin, period, alias, new_account.clone());
+		_(origin, period, alias, new_account.clone(), initial_since);
 
 		let entry = StatementStoreAllowances::<T>::get(period_key, alias)
 			.expect("allowance entry should be stored");
@@ -1001,17 +1001,11 @@ mod benches {
 				period,
 				alias,
 				new_account: new_account.clone(),
+				since: initial_since,
 			}
 			.into();
-		let (_, signature) =
-			<T as Config>::BenchmarkHelper::sign_message(&Pallet::<T>::account_signing_payload(
-				&Pallet::<T>::replace_stmt_store_account_message(
-					period,
-					&alias,
-					&new_account,
-					initial_since,
-				),
-			));
+		let msg = TxBaseImplication((0u8, &call)).using_encoded(sp_io::hashing::blake2_256);
+		let (_, signature) = <T as Config>::BenchmarkHelper::sign_message(&msg);
 		let tx_ext = crate::extension::AsResources::<T>::new(Some(
 			crate::extension::AsResourcesInfo::ReplaceStatementStoreAccount(signature),
 		));

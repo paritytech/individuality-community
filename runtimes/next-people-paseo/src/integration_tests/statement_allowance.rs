@@ -26,6 +26,7 @@ use crate::{
 	},
 	OperationAllowedOneTimeExcess, RestrictedEntity,
 };
+use codec::Decode;
 use frame_support::traits::{Authorize, ContainsPair};
 use indiv_pallet_origin_restriction::{RestrictedEntity as _, Usages};
 #[cfg(feature = "runtime-benchmarks")]
@@ -33,8 +34,13 @@ use indiv_pallet_resources::benchmarking::BenchmarkHelper;
 use indiv_pallet_resources::StatementStoreAllowances;
 #[cfg(feature = "runtime-benchmarks")]
 use sp_runtime::traits::Verify;
-use sp_runtime::transaction_validity::{InvalidTransaction, TransactionSource};
+use sp_runtime::{
+	generic::Preamble,
+	traits::ExtensionVariant,
+	transaction_validity::{InvalidTransaction, TransactionSource},
+};
 use sp_statement_store::{get_allowance, StatementAllowance};
+use xcm::latest::{Junction, Location, NetworkId};
 
 #[test]
 fn lite_person_registration_grants_lite_allowance() {
@@ -418,8 +424,29 @@ fn benchmark_helper_signs_with_sr25519() {
 	});
 }
 
+/// Returns the implication the `AsResources` extension inherits in `tx_ext` for `call`. It holds
+/// the extension version and call, then the explicit and implicit data of the later extensions.
+fn resources_inherited_implication(call: &RuntimeCall, tx_ext: &TxExtensionV1) -> impl Encode {
+	let following = (
+		(tx_ext.0 .0 .10.clone(), tx_ext.0 .0 .11.clone()),
+		tx_ext.0 .1.clone(),
+		tx_ext.0 .2.clone(),
+		tx_ext.0 .3.clone(),
+		tx_ext.0 .4.clone(),
+		tx_ext.0 .5.clone(),
+		tx_ext.0 .6.clone(),
+		tx_ext.0 .7.clone(),
+		tx_ext.0 .8.clone(),
+		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
+	);
+	let implicit = following.implicit().expect("the following extensions have implicit data");
+	((INDIVIDUALITY_EXTENSION_VERSION, call.clone()), following, implicit)
+}
+
 /// Builds the general transaction that moves the statement store slot of `alias` in `period`
-/// to `new_account`, carrying `holder`'s sr25519 signature over the replacement message.
+/// to `new_account` with the witness `since`. The `AsResources` extension carries `holder`'s
+/// sr25519 signature over the blake2 hash of the inherited implication.
 fn build_signed_replacement_ext(
 	holder: &sr25519::Pair,
 	period: u32,
@@ -431,15 +458,38 @@ fn build_signed_replacement_ext(
 		RuntimeCall::Resources(indiv_pallet_resources::Call::replace_statement_store_account {
 			period,
 			alias,
-			new_account: new_account.clone(),
+			new_account,
+			since,
 		});
-	let msg = Resources::replace_stmt_store_account_message(period, &alias, &new_account, since);
-	let signature: MultiSignature = holder.sign(&Resources::account_signing_payload(&msg)).into();
 	let mut tx_ext = base_tx_ext(call.clone());
+	let msg =
+		resources_inherited_implication(&call, &tx_ext).using_encoded(sp_io::hashing::blake2_256);
+	let signature: MultiSignature = holder.sign(&msg).into();
 	tx_ext.0 .0 .9 = indiv_pallet_resources::extension::AsResources::new(Some(
 		indiv_pallet_resources::extension::AsResourcesInfo::ReplaceStatementStoreAccount(signature),
 	));
 	finalize_uxt(call, tx_ext)
+}
+
+/// Returns a copy of `broadcast` with the nonce, tip and asset id set to their longest
+/// encodings, as a relaying node could forward it. The call and the holder's signature are
+/// unchanged.
+fn pad_relayed_replacement(broadcast: &[u8]) -> UncheckedExtrinsic {
+	let mut uxt = UncheckedExtrinsic::decode(&mut &broadcast[..]).expect("relayed bytes decode");
+	let Preamble::General(ExtensionVariant::Other(pipeline)) = &mut uxt.preamble else {
+		panic!("a signed replacement is a general transaction");
+	};
+	// An account on a forked network is the longest junction, 75 bytes. A location holds at most
+	// 8 junctions.
+	let junction = Junction::AccountId32 {
+		network: Some(NetworkId::ByFork { block_number: u64::MAX, block_hash: [0xff; 32] }),
+		id: [0xff; 32],
+	};
+	let asset_id = Location::new(0, [junction; 8]);
+	pipeline.extension.0 .7 = frame_system::CheckNonce::<Runtime>::from(u32::MAX);
+	pipeline.extension.0 .9 =
+		pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(u128::MAX, Some(asset_id));
+	uxt
 }
 
 #[test]
@@ -488,6 +538,58 @@ fn signed_replacement_moves_the_slot_allowance() {
 			.expect("signed replacement dispatch succeeds");
 
 		assert_eq!(get_allowance(&holder), StatementAllowance::default());
+		assert_eq!(get_allowance(&new_account), AccountsApiAllowance::get());
+	});
+}
+
+/// The origin restriction charges the slot by the transaction length. The holder's signature
+/// covers the extension fields a relaying node could pad.
+#[test]
+fn signed_replacement_rejects_a_padded_relayed_copy() {
+	new_test_ext().execute_with(|| {
+		let holder_pair = sr25519::Pair::from_seed(&[95u8; 32]);
+		let holder = pair_to_account_id(&holder_pair);
+		let new_account = pair_to_account_id(&sr25519::Pair::from_seed(&[96u8; 32]));
+		let alias = [8u8; 32];
+		advance_block();
+		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
+		let period = Resources::stmt_store_period_from_timestamp(now_secs);
+
+		Resources::set_statement_store_account(
+			OriginCaller::Resources(indiv_pallet_resources::Origin::StmtStoreAlias(alias)).into(),
+			period,
+			0,
+			holder.clone(),
+		)
+		.unwrap();
+		let since = StatementStoreAllowances::<Runtime>::get(
+			indiv_support::utils::BigEndianU32::from(period),
+			alias,
+		)
+		.expect("slot is claimed")
+		.since;
+		set_time(since + 1);
+
+		let broadcast =
+			build_signed_replacement_ext(&holder_pair, period, alias, new_account.clone(), since)
+				.encode();
+		let padded = pad_relayed_replacement(&broadcast);
+		assert!(padded.encoded_size() > 4 * broadcast.len());
+
+		assert_eq!(
+			Executive::apply_extrinsic(padded),
+			Err(InvalidTransaction::Custom(
+				indiv_pallet_resources::extension::CustomValidity::StmtStoreReplacementBadSignature
+					as u8,
+			)
+			.into())
+		);
+
+		// The copy the holder broadcast is still valid.
+		let uxt = UncheckedExtrinsic::decode(&mut &broadcast[..]).expect("broadcast bytes decode");
+		Executive::apply_extrinsic(uxt)
+			.expect("signed replacement transaction is valid")
+			.expect("signed replacement dispatch succeeds");
 		assert_eq!(get_allowance(&new_account), AccountsApiAllowance::get());
 	});
 }
@@ -624,6 +726,7 @@ fn stmt_store_holder_entity_allows_only_the_replacement_call() {
 			period: 0,
 			alias,
 			new_account: account.clone(),
+			since: 0,
 		});
 	let claim = RuntimeCall::Resources(indiv_pallet_resources::Call::set_statement_store_account {
 		period: 0,

@@ -231,8 +231,9 @@ pub fn set_time_sec(secs: u64) {
 	TestClock::set_time(Duration::from_secs(secs));
 }
 
-/// An account signature that is valid for its own account over a message in the personhood
-/// signing context. With a payload hash it is valid for that exact payload only.
+/// An account signature that is valid for its own account only. The message must be in the
+/// personhood signing context. With a payload hash it is valid for that exact payload only,
+/// which may also be a 32-byte implication hash.
 #[derive(
 	PartialEq,
 	Eq,
@@ -270,8 +271,9 @@ impl Verify for AccountAuthority {
 			&NetworkSuffix::get(),
 			indiv_support::context::SIGNING,
 		);
+		let implication_hash = self.1.is_some() && msg.len() == 32;
 		self.0 == *signer &&
-			msg.starts_with(&context) &&
+			(msg.starts_with(&context) || implication_hash) &&
 			self.1.is_none_or(|hash| hash == sp_io::hashing::blake2_256(msg))
 	}
 }
