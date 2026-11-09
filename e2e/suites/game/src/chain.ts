@@ -59,7 +59,7 @@ export interface PeopleApi {
  */
 export type TxFromCallData = (callData: Uint8Array) => { decodedCall: DecodedCall };
 
-/** A call as `{ type: pallet, value: { type: call, value: arguments } }`. */
+/** A call that `TxFromCallData` decodes. */
 export interface DecodedCall {
   type: string;
   value: { type: string; value: Untyped };
