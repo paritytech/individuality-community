@@ -83,13 +83,16 @@ fn start_game_in_reporting_phase(schedule: &GameSchedule<u32, u128>, accounts: &
 	advance_to_reporting_phase(schedule);
 }
 
-/// Advance a registered game to its reporting phase.
+/// Advance a registered game to its reporting phase at the start of the game.
 fn advance_to_reporting_phase(schedule: &GameSchedule<u32, u128>) {
 	let reg_end = GameTimes::<Test>::registration_end(schedule);
 	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
 	advance_process(); // registration -> shuffle
 	advance_process(); // shuffle -> reporting (steps 1-4)
 	assert!(matches!(GameStore::<Test>::get().unwrap().state, GameState::Reporting { .. }));
+	// Reports are accepted from the start of the game.
+	let game_play_time = GameTimes::<Test>::game_play_time(schedule);
+	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_play_time.into()));
 }
 
 /// Take a scheduled game up to its registration phase, which is where a player can sign up.
