@@ -745,7 +745,8 @@ pub mod pallet {
 		InvalidReport,
 		/// No game ongoing.
 		NoGame,
-		/// The game is not in its reporting phase, or it has not started yet.
+		/// The game does not accept reports now. The game state must be `Reporting` and the
+		/// current time must be at or after `game_date` and before `report_ends`.
 		NoReporting,
 		/// Not registered.
 		NotRegistered,
@@ -1093,7 +1094,7 @@ pub mod pallet {
 			Ok(Pays::No.into())
 		}
 
-		/// After the game, send the full report.
+		/// Send the full report for the current game.
 		///
 		/// The game must be in its reporting phase, from `game_date` until `report_ends`.
 		///
@@ -1143,13 +1144,12 @@ pub mod pallet {
 
 			let game = Game::<T>::get().ok_or(Error::<T>::NoGame)?;
 			let game_index = game.index;
-			let now = T::UnixTime::now();
+			let now = T::UnixTime::now().as_secs();
 			ensure!(
-				Duration::from_secs(game.game_date.into()) <= now &&
-					now < Duration::from_secs(game.report_ends.into()),
+				(u64::from(game.game_date)..u64::from(game.report_ends)).contains(&now),
 				Error::<T>::NoReporting
 			);
-			let award_time = now.as_secs() as u32;
+			let award_time = now as u32;
 			let group_size = game.max_group_size;
 			let GameState::Reporting { player_count } = game.state else {
 				return Err(Error::<T>::NoReporting.into());
@@ -2881,14 +2881,12 @@ pub mod pallet {
 				return;
 			};
 
-			// Transition to player process either when the reporting window has closed
-			// or, once the game has started, as soon as every registered player's
-			// attendance has already been enacted early (nothing left to wait for).
-			let now = T::UnixTime::now();
-			let reporting_ended = now >= Duration::from_secs(game.report_ends.into());
-			let started = now >= Duration::from_secs(game.game_date.into());
-			let nothing_pending = game.pending_attendance == 0;
-			if !reporting_ended && !(started && nothing_pending) {
+			// Reporting ends when the window closes, or earlier once the game has started and
+			// every registered player's attendance is settled.
+			let now = T::UnixTime::now().as_secs();
+			let window_closed = now >= u64::from(game.report_ends);
+			let settled_early = now >= u64::from(game.game_date) && game.pending_attendance == 0;
+			if !window_closed && !settled_early {
 				return;
 			}
 

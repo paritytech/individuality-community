@@ -600,13 +600,14 @@ fn reports_open_when_the_game_starts() {
 		let full_report: FullReport<Test> = vec![BoundedVec::default()].try_into().unwrap();
 
 		// The shuffle ends before the game starts.
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(19));
+		let game_date = u64::from(crate::Game::<Test>::get().unwrap().game_date);
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_date - 1));
 		assert_noop!(
 			Game::report(RuntimeOrigin::signed(ALICE), full_report.clone()),
 			Error::<Test>::NoReporting
 		);
 
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(20));
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_date));
 		assert_ok!(Game::report(RuntimeOrigin::signed(ALICE), full_report));
 	});
 }
@@ -4720,17 +4721,15 @@ fn reporting_without_players_ends_once_the_game_starts() {
 			..Default::default()
 		};
 		assert_ok!(Game::new_game(&schedule));
-		let reg_end = GameTimes::<Test>::registration_end(&schedule);
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
-		advance_process(); // registration -> shuffle
-		advance_process(); // shuffle -> reporting
+		advance_to_reporting_phase(&schedule);
 		assert_eq!(crate::Game::<Test>::get().unwrap().pending_attendance, 0);
 
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(19));
+		let game_date = u64::from(crate::Game::<Test>::get().unwrap().game_date);
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_date - 1));
 		advance_process();
 		assert!(matches!(crate::Game::<Test>::get().unwrap().state, GameState::Reporting { .. }));
 
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(20));
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_date));
 		advance_process();
 		assert!(matches!(
 			crate::Game::<Test>::get().unwrap().state,
