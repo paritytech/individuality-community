@@ -27,6 +27,12 @@ use frame_support::dispatch::DispatchClass;
 /// this on a local network.
 pub(super) const PHASE_CHANGE_BLOCKS: u64 = 2;
 
+/// The share of the blocks with a step due that include one, in percent.
+///
+/// The offchain worker of one block submits a step call and a later block includes it. The e2e
+/// suite `game` prints the measured share as `blocks with a step due ... (<share>%)`.
+pub(super) const STEP_LANDING_PERCENT: u64 = 80;
+
 /// The limit that stops a block from taking more of a phase's work.
 #[derive(Clone, Copy)]
 pub(super) enum Bound {
@@ -123,9 +129,14 @@ fn units_in(budget: Weight, overhead: Weight, unit: Weight) -> PerBlock {
 	by_ref_time.min(by_proof_size)
 }
 
+/// The blocks `steps` step calls take when a step lands in `STEP_LANDING_PERCENT` of the blocks.
+fn step_blocks(steps: u64) -> u64 {
+	(steps * 100).div_ceil(STEP_LANDING_PERCENT)
+}
+
 /// The blocks the shuffle takes for `players`, from the end of the registration.
 pub(super) fn shuffle_blocks(players: u64, per_step: PerBlock) -> u64 {
-	PHASE_CHANGE_BLOCKS + players.div_ceil(per_step.units)
+	PHASE_CHANGE_BLOCKS + step_blocks(players.div_ceil(per_step.units))
 }
 
 /// The blocks the player process takes for `players` with every credit backfilled, from the end
@@ -137,7 +148,8 @@ pub(super) fn player_process_blocks(
 	credits: PerBlock,
 	step2: PerBlock,
 ) -> u64 {
-	PHASE_CHANGE_BLOCKS + players.div_ceil(step1.min(credits).units) + players.div_ceil(step2.units)
+	let steps = players.div_ceil(step1.min(credits).units) + players.div_ceil(step2.units);
+	PHASE_CHANGE_BLOCKS + step_blocks(steps)
 }
 
 /// The phase window, in seconds rounded up to a minute, that holds `blocks`.

@@ -39,8 +39,9 @@
 //!   `OP_UPPER_BOUND` loop iterations. Player process step 1 and step 2 take separate calls.
 //! * A phase change takes `PHASE_CHANGE_BLOCKS` blocks from the shuffle and from the player
 //!   process. `end_registration` and `end_reporting` land in the first block of the phase. The
-//!   first step call after them misses the next block about half of the time. The e2e suite `game`
-//!   measures this on a local network.
+//!   first step call after them misses the next block about half of the time. After that a step
+//!   lands in `STEP_LANDING_PERCENT` of the blocks it is due. The e2e suite `game` measures both on
+//!   a local network.
 //! * A game schedules `GAME_AIRDROPS` airdrop events, as in production, and a sign-up enters each.
 //!   The airdrop sweep compares other counts.
 //! * The shuffle insert step and the player process step 1 iterate over every stored player,

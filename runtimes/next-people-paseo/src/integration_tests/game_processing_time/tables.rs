@@ -17,7 +17,10 @@
 //! The tables the estimate prints.
 
 use super::{
-	limits::{player_process_blocks, shuffle_blocks, window_secs, PHASE_CHANGE_BLOCKS},
+	limits::{
+		player_process_blocks, shuffle_blocks, window_secs, PHASE_CHANGE_BLOCKS,
+		STEP_LANDING_PERCENT,
+	},
 	paths::TxPath,
 	*,
 };
@@ -43,7 +46,8 @@ impl Estimate {
 			airdrops={GAME_AIRDROPS}"
 		);
 		println!(
-			"phase change: {PHASE_CHANGE_BLOCKS} blocks of the shuffle and of the player process"
+			"phase change: {PHASE_CHANGE_BLOCKS} blocks of the shuffle and of the player process, \
+			then a step lands in {STEP_LANDING_PERCENT}% of the blocks it is due"
 		);
 		println!(
 			"NFT claim credits: {AWARDS_PER_TREE} per block, {} buffered ahead at most",
@@ -91,8 +95,9 @@ impl Estimate {
 		println!("--- Phase windows by player count ---");
 		println!(
 			"the windows to set with `set_game_phases`, rounded up to a minute: sign-ups and \
-			reports by {} / by {}, shuffle and player process with every credit backfilled, game \
-			with the runtime's post-shuffle margin of {post_shuffle_margin}s",
+			reports by {} / by {}, shuffle and player process with every credit backfilled and a \
+			step in {STEP_LANDING_PERCENT}% of the blocks, game with the runtime's post-shuffle \
+			margin of {post_shuffle_margin}s",
 			paths.sign_ups.without_proof.account.name, paths.sign_ups.with_proof.ring_proof.name
 		);
 		println!(
