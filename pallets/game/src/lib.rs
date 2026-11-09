@@ -2229,7 +2229,8 @@ pub mod pallet {
 				GameState::Shuffle { .. } => Some(NextStep::AdvanceShuffle),
 				GameState::Reporting { .. } => (now >=
 					Duration::from_secs(game.report_ends.into()) ||
-					game.pending_attendance == 0)
+					(now >= Duration::from_secs(game.game_date.into()) &&
+						game.pending_attendance == 0))
 					.then_some(NextStep::EndReporting),
 				GameState::PlayerProcess { .. } => Some(NextStep::ProcessPlayers),
 				GameState::Cancelling { .. } => Some(NextStep::AdvanceCancelling),

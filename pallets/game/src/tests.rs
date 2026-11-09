@@ -596,7 +596,7 @@ fn reports_open_when_the_game_starts() {
 		let schedule = GameSchedule::<u32, u128> {
 			game_play_time: 20,
 			rounds: 1,
-			max_group_size: 1,
+			max_group_size: 2,
 			..Default::default()
 		};
 		assert_ok!(Game::new_game(&schedule));
@@ -4772,33 +4772,6 @@ fn reporting_ends_early_when_all_attendance_determined() {
 }
 
 #[test]
-fn reporting_without_players_ends_once_the_game_starts() {
-	new_test_ext().execute_with(|| {
-		let schedule = GameSchedule::<u32, u128> {
-			game_play_time: 20,
-			rounds: 1,
-			max_group_size: 1,
-			..Default::default()
-		};
-		assert_ok!(Game::new_game(&schedule));
-		advance_to_reporting_phase(&schedule);
-		assert_eq!(crate::Game::<Test>::get().unwrap().pending_attendance, 0);
-
-		let game_date = u64::from(crate::Game::<Test>::get().unwrap().game_date);
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_date - 1));
-		advance_process();
-		assert!(matches!(crate::Game::<Test>::get().unwrap().state, GameState::Reporting { .. }));
-
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_date));
-		advance_process();
-		assert!(matches!(
-			crate::Game::<Test>::get().unwrap().state,
-			GameState::PlayerProcess { .. }
-		));
-	});
-}
-
-#[test]
 fn player_process_step2_uses_marginal_weight_for_follow_up_chunks() {
 	new_test_ext().execute_with(|| {
 		// Matches `mock::Test`'s `Config::MaxRounds = ConstUint<10>`.
@@ -8623,8 +8596,15 @@ mod game_steps {
 			set_time(200);
 			assert_eq!(end_reporting.authorize(TransactionSource::Local), Some(Err(not_due())));
 
-			// The last attendance settles.
+			// No attendance pending, but the game has not started.
 			crate::Game::<Test>::mutate(|game| game.as_mut().unwrap().pending_attendance = 0);
+			set_time(149);
+			assert_eq!(Game::next_step(), None);
+			assert_eq!(end_reporting.authorize(TransactionSource::Local), Some(Err(not_due())));
+
+			// The game has started.
+			set_time(150);
+			assert_eq!(Game::next_step(), Some(NextStep::EndReporting));
 			assert!(end_reporting.authorize(TransactionSource::Local).unwrap().is_ok());
 		});
 	}
