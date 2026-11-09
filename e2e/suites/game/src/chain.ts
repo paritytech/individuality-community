@@ -48,6 +48,21 @@ export interface PeopleApi {
   tx: Untyped;
   event: Untyped;
   constants: Untyped;
+  getStaticApis: () => Promise<{ txFromCallData: TxFromCallData }>;
+}
+
+/**
+ * Decodes call data with the chain's metadata. Throws `Invalid call data` when the bytes do not start
+ * with a call.
+ *
+ * PAPI 2.1.7 also declares a `decodeCallData` static API, which its runtime does not provide.
+ */
+export type TxFromCallData = (callData: Uint8Array) => { decodedCall: DecodedCall };
+
+/** A call as `{ type: pallet, value: { type: call, value: arguments } }`. */
+export interface DecodedCall {
+  type: string;
+  value: { type: string; value: Untyped };
 }
 
 /** Submits a call wrapped in `Sudo.sudo`. Reports the inner call's result. */
