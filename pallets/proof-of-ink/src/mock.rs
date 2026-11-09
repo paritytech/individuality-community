@@ -118,7 +118,7 @@ use verifiable::mock::Mock;
 #[frame_support::pallet]
 pub mod mock_people {
 	use frame_support::pallet_prelude::*;
-	use indiv_support::traits::{AddOnlyPeopleTrait, PersonalId};
+	use indiv_support::traits::{AddOnlyPeopleTrait, PersonalId, RecognitionHistory};
 	use sp_runtime::Saturating;
 
 	#[pallet::config]
@@ -158,6 +158,9 @@ pub mod mock_people {
 			MockRecognized::<T>::insert(who, ());
 			maybe_key.expect("We always recognize with key in the context of POI");
 			Ok(())
+		}
+		fn recognition_history(_: PersonalId) -> Option<RecognitionHistory> {
+			None
 		}
 		fn cancel_id_reservation(personal_id: PersonalId) -> Result<(), DispatchError> {
 			MockReserved::<T>::take(personal_id).expect("We only cancel reserved id");

@@ -205,6 +205,7 @@ parameter_types! {
 impl indiv_pallet_people::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people::WeightInfo<Runtime>;
 	type MemberService = Members;
+	type Clock = RuntimeClock;
 	type RingExponent = MembersFlexibleRingExponent;
 	type CollectionOwner = PeopleCollectionOwner;
 	type AccountContexts = AccountContexts;
@@ -668,12 +669,16 @@ impl indiv_pallet_game::Config for Runtime {
 	type MaxAttendanceHistoryDepth = ConstU32<12>;
 	type NftClaimCredits = NftCredits;
 	type DefaultPhaseDurations = GamePhaseDurations;
+	// Two 12-second jumps of the block timestamp. That covers the fewest steps a phase needs:
+	// `end_registration` then one `advance_shuffle` for the shuffle, `end_reporting` then two
+	// `process_players` for the player process.
+	type MinStepPhaseDuration = ConstU32<{ 2 * (SLOT_DURATION / 1_000) as u32 }>;
 	type AccountSignature = Signature;
 	type PlayerStatementLimit = PlayerStatementLimit;
 	type PeopleVoteWeight = ConstUint<2>;
 	type CandidateVoteWeight = ConstUint<1>;
 	// This is for the testnet, the value must be at least 2 in production.
-	type MinGroupSize = ConstUint<0>;
+	type MinGroupSize = ConstUint<1>;
 	type AirdropAssetId = <Runtime as pallet_assets::Config>::AssetId;
 	type AirdropAssetBalance = Balance;
 	type Airdrop = Airdrop;
