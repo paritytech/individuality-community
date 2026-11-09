@@ -4043,6 +4043,10 @@ mod claim_tenure_credits {
 
 			assert_eq!(refused.error, Error::<Test>::TenureCreditsAlreadyClaimed.into());
 			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
+			assert_eq!(
+				refused.post_info.actual_weight,
+				Some(<MockWeightInfo as WeightInfo>::claim_tenure_credits(1))
+			);
 			assert_eq!(tenure_claim_of(game, &BOB), Some(1));
 		});
 	}
@@ -4277,6 +4281,47 @@ mod claim_tenure_credits {
 				<<Test as indiv_pallet_game::Config>::MaxGroupSize as Get<u32>>::get() - 1,
 			);
 			assert!(last_report_slot < NftCredits::tenure_credit_slot(0));
+		});
+	}
+}
+
+/// The game benchmarks that award credits, run against this pallet's buffers. The game's own mock
+/// awards nothing, so only here does the setup show that the awards spill.
+#[cfg(feature = "runtime-benchmarks")]
+mod game_benchmarks {
+	use super::*;
+	use indiv_pallet_game::benchmarking::benches::{
+		_claim_tenure_credits, _player_process_step1_inner_loop,
+	};
+
+	/// The block both benchmarks award in.
+	const BLOCK: u64 = 10;
+
+	/// Asserts that the awards filled the buffer of [`BLOCK`] and spilled into the next one.
+	fn assert_spilled() {
+		assert_eq!(
+			CreditBuffers::<Test>::get(BLOCK).map(|buffer| buffer.awards),
+			Some(AWARDS_PER_TREE)
+		);
+		assert!(CreditBuffers::<Test>::get(BLOCK + 1).is_some_and(|buffer| buffer.awards > 0));
+	}
+
+	#[test]
+	fn player_process_step1_inner_loop_spills() {
+		new_test_ext().execute_with(|| {
+			let rounds = <<Test as indiv_pallet_game::Config>::MaxRounds as Get<u32>>::get();
+			assert_ok!(_player_process_step1_inner_loop::<Test>(rounds, true));
+
+			assert_spilled();
+		});
+	}
+
+	#[test]
+	fn claim_tenure_credits_spills() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(_claim_tenure_credits::<Test>(2, true));
+
+			assert_spilled();
 		});
 	}
 }

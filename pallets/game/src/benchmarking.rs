@@ -58,7 +58,9 @@ pub trait BenchmarkHelper<AccountSignature, TicketSignature, Ticket, AccountId, 
 	<<T as frame_system::Config>::RuntimeCall as Dispatchable>::RuntimeOrigin:
 		AsSystemOriginSigner<T::AccountId> + AsTransactionAuthorizedOrigin + Clone,
 )]
-mod benches {
+// Public so that `indiv-pallet-nft-credits` can run the benchmarks that award credits against its
+// buffers. The game's mock awards nothing.
+pub mod benches {
 	use super::*;
 
 	/// Sampling range for `remove_available_and_pending_invites`'s Linear
@@ -883,8 +885,11 @@ mod benches {
 	// full attendance history, awards all attendance NFT claim credits, pays a tenure claim of
 	// `MaxTenureThresholds` credits, promotes all staged candidates, and drops a deposit after
 	// the target reaches personhood.
+	//
+	// The block's credit buffer is one award short of full, so the awards fill it and spill into
+	// the next block's buffer. That reads the most keys the awards can.
 	#[benchmark]
-	fn player_process_step1_inner_loop(
+	pub fn player_process_step1_inner_loop(
 		r: Linear<1, { T::MaxRounds::get() }>,
 	) -> Result<(), BenchmarkError> {
 		<T as Config>::BenchmarkHelper::set_valid_time();
@@ -967,6 +972,9 @@ mod benches {
 		}
 		PlayerAttendanceHistory::<T>::insert(&target_player, attendance);
 		TenureClaims::<T>::insert(game_index, &target_player, T::MaxTenureThresholds::get());
+		// Not the genesis block, whose buffer would count as built already.
+		frame_system::Pallet::<T>::set_block_number(10u32.into());
+		T::NftClaimCredits::benchmark_fill_buffer_but_one(game_index);
 
 		indiv_pallet_score::Pallet::<T>::start_attendance_report_session().unwrap();
 		let personhood_threshold = indiv_pallet_score::PersonhoodThreshold::<T>::get();
@@ -2359,8 +2367,6 @@ mod benches {
 		Ok(())
 	}
 
-	// Implements a test for each benchmark. Execute with:
-	// `cargo test -p pallet-people --features runtime-benchmarks`.
 	// Setting a full list of thresholds, which is the largest value the call writes.
 	#[benchmark]
 	fn set_tenure_thresholds() -> Result<(), BenchmarkError> {
@@ -2388,7 +2394,7 @@ mod benches {
 	// credit can spill too, when the buffer is full already, so `claim_tenure_credits(1)` keeps the
 	// spill.
 	#[benchmark]
-	fn claim_tenure_credits(
+	pub fn claim_tenure_credits(
 		n: Linear<2, { T::MaxTenureThresholds::get() }>,
 	) -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
@@ -2464,5 +2470,7 @@ mod benches {
 		BoundedVec::truncate_from((1..=T::MaxTenureThresholds::get()).collect::<Vec<_>>())
 	}
 
+	// Implements a test for each benchmark. Execute with:
+	// `cargo test -p indiv-pallet-game --features runtime-benchmarks`.
 	impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }

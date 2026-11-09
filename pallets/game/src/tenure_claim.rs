@@ -16,9 +16,13 @@
 
 //! The tenure claim before a game, see [Tenure claim](crate#tenure-claim).
 
-use super::*;
-use frame_support::{ensure, pallet_prelude::DispatchError};
-use indiv_pallet_score::Participants;
+use super::{
+	Attendance, Config, Error, Event, Game, GameIdx, GameState, GamesAttended, Pallet, Players,
+	TenureClaims, TenureThresholds,
+};
+use frame_support::{ensure, pallet_prelude::DispatchError, traits::UnixTime};
+use indiv_pallet_score::{AccountOrPerson, Participants};
+use indiv_support::credit_trees::AwardCredits;
 
 /// A tenure claim that [`Pallet::claim_tenure_credits`] accepts.
 struct NewTenureClaim {
@@ -39,7 +43,7 @@ impl<T: Config> Pallet<T> {
 			.count() as u32
 	}
 
-	/// The number of credits that [`Pallet::claim_tenure_credits`] by `player` grants now.
+	/// The number of credits that [`Pallet::claim_tenure_credits`] by `player` earns.
 	///
 	/// Fails with the error the tenure claim fails with. A tenure claim submitted later can still
 	/// fail, because the state can change before it is included.
@@ -115,16 +119,10 @@ impl<T: Config> Pallet<T> {
 		Ok(awarded)
 	}
 
-	/// Awards the credits of `player`'s tenure claim for `game_index` if they are a person or
-	/// `attendance` is [`Attendance::Attended`], and removes the tenure claim.
+	/// Awards the credits of `player`'s tenure claim for `game_index` and removes the claim.
 	///
-	/// The recognition is read now, not when the player claims, so a candidate that became a person
-	/// since is paid whether or not they attend. A suspended person is not a person, so they are
-	/// paid only if they attend. One party can control any number of accounts that are not
-	/// persons, so attendance is what such an account pays for its credits with.
-	///
-	/// Returns the number of credits awarded. The caller reserves room for
-	/// [`Config::MaxTenureThresholds`] credits first.
+	/// Pays a person, or a player that attended, see [Payout](crate#payout). Returns the number of
+	/// credits awarded. The caller reserves room for [`Config::MaxTenureThresholds`] credits first.
 	pub(crate) fn settle_tenure_claim(
 		game_index: GameIdx,
 		player: &AccountOrPerson<T::AccountId>,

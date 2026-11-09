@@ -750,11 +750,10 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	type ReplayCooldownSeconds = ConstU64<60>;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
 	// Entries are the tree blocks that hold a claimant's credits, so the bound counts games rather
-	// than time. A game puts a claimant's credits in at most 22 blocks: 15 for reports, one for the
-	// attendance backfill and up to 6 for tenure claims. At one game a week `AwardRetentionTtl`
-	// spans about 13 games, so the worst case slightly exceeds this bound, but reports cluster and
-	// a game usually takes a few blocks. A block the ring drops stays mintable through the events.
-	// The list costs 1 KB at this bound.
+	// than time. A game puts a claimant's credits in at most 19 blocks: 15 for reports and up to
+	// two each for the attendance backfill and the tenure claim, whose credits can spill into the
+	// next block's buffer. At one game a week `AwardRetentionTtl` spans about 13 games, so the
+	// worst case is 247 blocks. The list costs 1 KB at this bound.
 	//
 	// Being a count, the window shortens as games run more often. Governance sets the schedule and
 	// `new_game` only refuses a concurrent game, so back-to-back games would fill this in a day.
@@ -762,8 +761,8 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	// The claims chain's own deadline, which is what the two have to agree on. What it costs this
 	// chain follows participation rather than a constant: a player earns at most
 	// `(MaxGroupSize - 1) * MaxRounds = 15` report credits and one tenure credit per
-	// `DefaultTenureThresholds` entry a game, so at one game a week 90 days is about 273 credits,
-	// or 18 KB at 65 bytes an award. Retaining personhood needs one game per
+	// `MaxTenureThresholds` entry a game, so at one game a week 90 days is about 299 credits,
+	// or 19 KB at 65 bytes an award. Retaining personhood needs one game per
 	// `NonPlayingKickoutTime` and costs a fraction of that.
 	type AwardRetentionTtl = ClaimsChainTreeTtl;
 	type EnsureClaimsChainOrigin = EnsureClaimsChainSibling;
