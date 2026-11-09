@@ -17,8 +17,7 @@
 //! The tables the estimate prints.
 
 use super::{
-	hooks::HookWork,
-	limits::{hook_blocks, hook_window_blocks, player_process_blocks, window_blocks, window_secs},
+	limits::{player_process_blocks, shuffle_blocks, window_secs, PHASE_CHANGE_BLOCKS},
 	paths::TxPath,
 	*,
 };
@@ -26,24 +25,25 @@ use crate::async_backing::MILLISECS_PER_BLOCK;
 use indiv_pallet_nft_credits::MAX_PENDING_CREDIT_TREES;
 
 impl Estimate {
-	/// The block, game and phase configuration the estimate runs on.
+	/// The block and game configuration the estimate runs on.
 	pub(super) fn print_header(&self) {
-		let Self { limits, phases, rounds, group_size, co_players, hooks, .. } = self;
+		let Self { limits, rounds, group_size, co_players, steps, .. } = self;
 		println!(
 			"=== Game processing time estimate (next-people-paseo weights and configuration) ==="
 		);
 		println!(
-			"block: every {MILLISECS_PER_BLOCK}ms, hooks share {}, normal transactions {} {}B",
-			describe(limits.hooks),
+			"block: every {MILLISECS_PER_BLOCK}ms, one game step call of {}, normal transactions \
+			{} {}B",
+			describe(limits.step_budget),
 			describe(limits.normal),
 			limits.normal_length
 		);
 		println!(
-			"game: rounds={rounds} max_group_size={group_size} co-players per report={co_players}"
+			"game: rounds={rounds} max_group_size={group_size} co-players per report={co_players} \
+			airdrops={GAME_AIRDROPS}"
 		);
 		println!(
-			"phases: registration={}s shuffle={}s reporting={}s player_process={}s",
-			phases.registration, phases.shuffle, phases.reporting, phases.player_process
+			"phase change: {PHASE_CHANGE_BLOCKS} blocks of the shuffle and of the player process"
 		);
 		println!(
 			"NFT claim credits: {AWARDS_PER_TREE} per block, {} buffered ahead at most",
@@ -51,130 +51,57 @@ impl Estimate {
 		);
 		println!(
 			"each stored player who does not play: shuffle {}, player process {}",
-			describe(hooks.shuffle_insert),
-			describe(hooks.process_step1)
+			describe(steps.shuffle_insert),
+			describe(steps.process_step1.unit)
 		);
 	}
 
-	/// The players each phase takes per block and in its default window.
-	pub(super) fn print_players_per_window(&self) {
-		let Self { limits, phases, co_players, paths, hooks, reports_per_credit_tree, .. } = self;
+	/// The players each phase takes per block.
+	pub(super) fn print_players_per_block(&self) {
+		let Self { limits, co_players, paths, steps, reports_per_credit_tree, .. } = self;
 		println!();
-		println!("--- Players per phase window ---");
-		println!(
-			"{:<16}{:<40}{:>28}{:>18}{:>14}",
-			"phase", "path", "per player", "per block", "max players"
-		);
-		let registration_blocks = window_blocks(phases.registration);
+		println!("--- Players per block ---");
+		print_row("phase", "path", "per player", "per block");
 		for path in paths.sign_ups.all() {
-			let per_block = limits.txs_per_block(path);
-			println!(
-				"{:<16}{:<40}{:>28}{:>18}{:>14}",
-				"registration",
-				path.name,
-				path.describe(),
-				per_block,
-				per_block.units * registration_blocks
-			);
+			print_row("registration", path.name, &path.describe(), limits.txs_per_block(path));
 		}
-		let reporting_blocks = window_blocks(phases.reporting);
 		for path in paths.reports.all() {
 			let per_block = limits.txs_per_block(path).min(*reports_per_credit_tree);
-			println!(
-				"{:<16}{:<40}{:>28}{:>18}{:>14}",
-				"reporting",
-				path.name,
-				path.describe(),
-				per_block,
-				per_block.units * reporting_blocks
-			);
+			print_row("reporting", path.name, &path.describe(), per_block);
 		}
-		for (phase, secs, work) in [
-			("shuffle", phases.shuffle, hooks.shuffle),
-			("player process", phases.player_process, hooks.player_process),
+		for (phase, name, work) in [
+			("shuffle", "advance_shuffle", steps.shuffle),
+			("player process", "process_players, step 1", steps.process_step1),
+			("player process", "process_players, step 2", steps.process_step2),
 		] {
-			for (load, name) in
-				[(BlockLoad::Full, "full blocks"), (BlockLoad::Empty, "empty blocks")]
-			{
-				let per_block = limits.hook_units_per_block(load, work);
-				println!(
-					"{:<16}{:<40}{:>28}{:>18}{:>14}",
-					phase,
-					name,
-					describe(work.unit),
-					per_block,
-					per_block.units * hook_window_blocks(secs)
-				);
-			}
+			print_row(phase, name, &describe(work.unit), limits.step_units(work));
 		}
-		let process_in_full_blocks =
-			limits.hook_units_per_block(BlockLoad::Full, hooks.player_process);
-		println!(
-			"{:<16}{:<40}{:>28}{:>18}{:>14}",
+		print_row(
 			"player process",
-			"full blocks, all credits backfilled",
-			format!("{co_players} credits"),
+			"step 1, all credits backfilled",
+			&format!("{co_players} credits"),
 			reports_per_credit_tree,
-			(process_in_full_blocks.units * hook_window_blocks(phases.player_process))
-				.min(reports_per_credit_tree.units * window_blocks(phases.player_process))
 		);
-	}
-
-	/// How long each phase takes for each of `PLAYER_COUNTS`, against its default window.
-	pub(super) fn print_phase_durations(&self) {
-		let Self { limits, phases, paths, hooks, reports_per_credit_tree, .. } = self;
-		println!();
-		println!("--- Phase durations ---");
-		println!(
-			"registration by {}, reporting by {}, shuffle and player process from empty to full \
-			blocks, * overruns the default window",
-			paths.sign_ups.without_proof.account.name, paths.reports.account.name
-		);
-		println!(
-			"{:>10}{:>16}{:>22}{:>16}{:>22}",
-			"players", "registration", "shuffle", "reporting", "player process"
-		);
-		let registration_blocks = window_blocks(phases.registration);
-		let reporting_blocks = window_blocks(phases.reporting);
-		let hook_range = |players: u64, secs: u32, work: HookWork| {
-			let window = window_blocks(secs);
-			let full = hook_blocks(players, limits.hook_units_per_block(BlockLoad::Full, work));
-			let empty = hook_blocks(players, limits.hook_units_per_block(BlockLoad::Empty, work));
-			format!("{}-{}", fit(empty, window), fit(full, window))
-		};
-		for players in PLAYER_COUNTS {
-			let sign_up_blocks =
-				players.div_ceil(limits.txs_per_block(&paths.sign_ups.without_proof.account).units);
-			let report_blocks = players.div_ceil(
-				limits.txs_per_block(&paths.reports.account).min(*reports_per_credit_tree).units,
-			);
-			println!(
-				"{:>10}{:>16}{:>22}{:>16}{:>22}",
-				players,
-				fit(sign_up_blocks, registration_blocks),
-				hook_range(players, phases.shuffle, hooks.shuffle),
-				fit(report_blocks, reporting_blocks),
-				hook_range(players, phases.player_process, hooks.player_process)
-			);
-		}
 	}
 
 	/// The phase windows to set for each of `PLAYER_COUNTS`.
 	pub(super) fn print_phase_windows(&self) {
-		let Self { limits, phases, paths, hooks, reports_per_credit_tree, .. } = self;
+		let Self { limits, post_shuffle_margin, paths, steps, reports_per_credit_tree, .. } = self;
 		println!();
 		println!("--- Phase windows by player count ---");
 		println!(
-			"the windows to set with `set_game_phases`, rounded up to a minute: shuffle and player \
-			process in full blocks with every credit backfilled, sign-ups and reports by {} / by {}",
+			"the windows to set with `set_game_phases`, rounded up to a minute: sign-ups and \
+			reports by {} / by {}, shuffle and player process with every credit backfilled, game \
+			with the runtime's post-shuffle margin of {post_shuffle_margin}s",
 			paths.sign_ups.without_proof.account.name, paths.sign_ups.with_proof.ring_proof.name
 		);
 		println!(
 			"{:>10}{:>16}{:>10}{:>16}{:>16}{:>16}",
 			"players", "registration", "shuffle", "reporting", "player process", "game"
 		);
-		let process_in_full_blocks =
-			limits.hook_units_per_block(BlockLoad::Full, hooks.player_process);
+		let shuffle_step = limits.step_units(steps.shuffle);
+		let process_step1 = limits.step_units(steps.process_step1);
+		let process_step2 = limits.step_units(steps.process_step2);
 		for players in PLAYER_COUNTS {
 			let registration =
 				|path: &TxPath| window_secs(players.div_ceil(limits.txs_per_block(path).units));
@@ -184,14 +111,12 @@ impl Estimate {
 						.div_ceil(limits.txs_per_block(path).min(*reports_per_credit_tree).units),
 				)
 			};
-			let shuffle = window_secs(hook_blocks(
-				players,
-				limits.hook_units_per_block(BlockLoad::Full, hooks.shuffle),
-			));
+			let shuffle = window_secs(shuffle_blocks(players, shuffle_step));
 			let player_process = window_secs(player_process_blocks(
 				players,
-				process_in_full_blocks,
+				process_step1,
 				*reports_per_credit_tree,
+				process_step2,
 			));
 			let by_account = (
 				registration(&paths.sign_ups.without_proof.account),
@@ -203,7 +128,7 @@ impl Estimate {
 			);
 			let game = |(registration, reporting): (u64, u64)| {
 				registration +
-					shuffle + u64::from(phases.post_shuffle_margin) +
+					shuffle + u64::from(*post_shuffle_margin) +
 					reporting + player_process
 			};
 			println!(
@@ -224,32 +149,35 @@ impl Estimate {
 
 	/// The registration of `AIRDROP_SWEEP_PLAYERS` by the airdrop entries each sign-up carries.
 	pub(super) fn print_airdrop_sweep(&self) {
-		let Self { limits, phases, paths, .. } = self;
+		let Self { limits, paths, .. } = self;
 		let Some(first) = paths.airdrop_sweep.first() else { return };
 		println!();
 		println!("--- Airdrop sweep ---");
 		println!(
 			"registration of {AIRDROP_SWEEP_PLAYERS} players who all sign up by one path, by the \
-			airdrop entries each sign-up carries: sign-ups per block / registration, * overruns \
-			the default window. A player who is not recognized enters by VRF, a recognized one by \
-			ring proof"
+			airdrop entries each sign-up carries: sign-ups per block / registration. A player who \
+			is not recognized enters by VRF, a recognized one by ring proof"
 		);
 		print!("{:>10}", "airdrops");
 		for path in first.all() {
 			print!("{:>24}", path.name);
 		}
 		println!();
-		let registration_blocks = window_blocks(phases.registration);
 		for row in &paths.airdrop_sweep {
 			print!("{:>10}", row.airdrops);
 			for path in row.all() {
 				let per_block = limits.txs_per_block(path);
 				let blocks = AIRDROP_SWEEP_PLAYERS.div_ceil(per_block.units);
-				print!("{:>24}", format!("{per_block} / {}", fit(blocks, registration_blocks)));
+				print!("{:>24}", format!("{per_block} / {}", duration(blocks)));
 			}
 			println!();
 		}
 	}
+}
+
+/// A row of the players per block table.
+fn print_row(phase: &str, path: &str, per_player: &str, per_block: impl core::fmt::Display) {
+	println!("{phase:<16}{path:<48}{per_player:>28}{per_block:>18}");
 }
 
 /// A weight in milliseconds and KiB.
@@ -271,10 +199,4 @@ fn duration_secs(secs: u64) -> String {
 		60..3_600 => format!("{:.1}m", secs as f64 / 60.0),
 		_ => format!("{:.1}h", secs as f64 / 3_600.0),
 	}
-}
-
-/// A phase duration for `blocks`, marked with `*` when it overruns its window of `window` blocks.
-fn fit(blocks: u64, window: u64) -> String {
-	let mark = if blocks > window { "*" } else { "" };
-	format!("{}{mark}", duration(blocks))
 }

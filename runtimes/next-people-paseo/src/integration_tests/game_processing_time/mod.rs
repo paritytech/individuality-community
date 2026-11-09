@@ -31,20 +31,24 @@
 //!   the unused part after dispatch, so a block takes more of the transactions bound by the proof
 //!   size than the estimate.
 //! * `report` refuses a report whose credits the NFT claim credit buffers cannot hold. Every block
-//!   commits one tree of `AWARDS_PER_TREE` credits, including the blocks the game hooks skip. This
-//!   bounds the reports per block. When every credit is backfilled, it also bounds the players the
-//!   player process takes per block.
-//! * The shuffle and the player process run in `on_poll` and `on_idle`. Each hook takes half of the
-//!   weight it is given. In a block without transactions the two hooks get 3/4 of the block. In a
-//!   full block only `on_poll` runs, with 1/2. Both hooks skip one block in
-//!   `GAME_PROCESS_SKIPPED_BLOCK`. A hook call runs at most `OP_UPPER_BOUND` loop iterations, one
-//!   per player in the shuffle and in the player process step 1.
+//!   commits one tree of `AWARDS_PER_TREE` credits. This bounds the reports per block. When every
+//!   credit is backfilled, it also bounds the players the player process takes per block.
+//! * The offchain worker runs the shuffle and the player process in step calls, `advance_shuffle`
+//!   and `process_players`. A block includes at most one step call. A step call meters its work
+//!   against the step budget, half of the `Normal` maximum extrinsic weight, and runs at most
+//!   `OP_UPPER_BOUND` loop iterations. Player process step 1 and step 2 take separate calls.
+//! * A phase change takes `PHASE_CHANGE_BLOCKS` blocks from the shuffle and from the player
+//!   process. `end_registration` and `end_reporting` land in the first block of the phase. The
+//!   first step call after them misses the next block about half of the time. The e2e suite `game`
+//!   measures this on a local network.
+//! * A game schedules `GAME_AIRDROPS` airdrop events, as in production, and a sign-up enters each.
+//!   The airdrop sweep compares other counts.
 //! * The shuffle insert step and the player process step 1 iterate over every stored player,
 //!   including the players who did not sign up for this game. The estimate assumes that every
 //!   stored player plays. Each other stored player costs one more step, which the estimate prints.
 //!
-//! The estimate is split into what a transaction costs ([`paths`]), what the game hooks cost
-//! ([`hooks`]), how much of each fits in a block ([`limits`]) and the printed tables ([`tables`]).
+//! The estimate is split into what a transaction costs ([`paths`]), what the game steps cost
+//! ([`steps`]), how much of each fits in a block ([`limits`]) and the printed tables ([`tables`]).
 //!
 //! The benchmarking build widens `MaxRounds` and `MaxGroupSize`, so it ignores the test.
 //!
@@ -52,38 +56,41 @@
 //! `SKIP_WASM_BUILD=1 cargo test -p next-people-paseo-runtime --lib game_processing_time --
 //! --nocapture`
 
-mod hooks;
 mod limits;
 mod paths;
+mod steps;
 mod tables;
 
 use super::*;
-use hooks::GameHooks;
-use indiv_pallet_game::PhaseDurationValues;
 use indiv_pallet_nft_credits::AWARDS_PER_TREE;
 use indiv_support::weight_budget::OcwWeightBudget;
-use limits::{BlockLoad, Bound, Limits, PerBlock};
+use limits::{Bound, Limits, PerBlock};
 use paths::Paths;
+use steps::GameSteps;
 
 type GameWeights = <Runtime as indiv_pallet_game::Config>::WeightInfo;
 
-/// The player counts to print the phase durations for.
+/// The player counts to print the phase windows for.
 const PLAYER_COUNTS: [u64; 3] = [10_000, 100_000, 1_000_000];
 
 /// The player count the airdrop sweep prints the registration of.
 const AIRDROP_SWEEP_PLAYERS: u64 = 10_000;
 
+/// The airdrop events a production game schedules. The sign-up path names state this count.
+const GAME_AIRDROPS: u8 = 1;
+
 /// What the estimate prints from: the runtime's limits and game configuration, and the cost of
 /// each phase's work.
 struct Estimate {
 	limits: Limits,
-	phases: PhaseDurationValues,
+	/// The runtime's default margin between the shuffle deadline and the game date.
+	post_shuffle_margin: u32,
 	rounds: u32,
 	group_size: u32,
 	/// The co-players a report covers, each of whom a `Person` vote awards a credit to.
 	co_players: u32,
 	paths: Paths,
-	hooks: GameHooks,
+	steps: GameSteps,
 	/// A report awards up to one credit per co-player, and a block commits one tree of credits.
 	reports_per_credit_tree: PerBlock,
 }
@@ -97,11 +104,12 @@ fn game_processing_time_estimate() {
 	let limits = Limits::of_runtime();
 	let rounds: u32 = <Runtime as indiv_pallet_game::Config>::MaxRounds::get();
 	let group_size: u32 = <Runtime as indiv_pallet_game::Config>::MaxGroupSize::get();
-	let phases = <Runtime as indiv_pallet_game::Config>::DefaultPhaseDurations::get();
+	let post_shuffle_margin =
+		<Runtime as indiv_pallet_game::Config>::DefaultPhaseDurations::get().post_shuffle_margin;
 	let co_players = rounds * (group_size - 1);
 
 	let paths = new_test_ext().execute_with(|| Paths::build(&limits, rounds, group_size));
-	let hooks = GameHooks::of_runtime(rounds, group_size);
+	let steps = GameSteps::of_runtime(rounds, group_size);
 	let reports_per_credit_tree =
 		PerBlock { units: u64::from(AWARDS_PER_TREE / co_players), bound: Bound::Credits };
 
@@ -115,26 +123,29 @@ fn game_processing_time_estimate() {
 	{
 		budget.assert_fits(path.name, path.declared);
 	}
-	for (name, work) in [("shuffle", hooks.shuffle), ("player process", hooks.player_process)] {
+	for (name, work) in [
+		("shuffle", steps.shuffle),
+		("player process step 1", steps.process_step1),
+		("player process step 2", steps.process_step2),
+	] {
 		assert!(
-			limits.hook_units_per_block(BlockLoad::Full, work).units >= u64::from(group_size),
-			"a full block cannot {name} one group"
+			limits.step_units(work).units >= u64::from(group_size),
+			"a {name} call cannot take one group"
 		);
 	}
 
 	let estimate = Estimate {
 		limits,
-		phases,
+		post_shuffle_margin,
 		rounds,
 		group_size,
 		co_players,
 		paths,
-		hooks,
+		steps,
 		reports_per_credit_tree,
 	};
 	estimate.print_header();
-	estimate.print_players_per_window();
-	estimate.print_phase_durations();
+	estimate.print_players_per_block();
 	estimate.print_phase_windows();
 	estimate.print_airdrop_sweep();
 }

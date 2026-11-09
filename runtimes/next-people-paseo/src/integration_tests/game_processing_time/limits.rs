@@ -16,19 +16,16 @@
 
 //! The block limits, how much of a phase's work a block takes, and how many blocks a phase takes.
 
-use super::{hooks::HookWork, paths::TxPath, *};
-use crate::{async_backing::MILLISECS_PER_BLOCK, AVERAGE_ON_INITIALIZE_RATIO};
+use super::{paths::TxPath, steps::StepWork, *};
+use crate::async_backing::MILLISECS_PER_BLOCK;
 use frame_support::dispatch::DispatchClass;
-use indiv_pallet_game::{GAME_PROCESS_SKIPPED_BLOCK, OP_UPPER_BOUND};
 
-/// How much of a block transactions use, which sets the weight left to the game hooks.
-#[derive(Clone, Copy)]
-pub(super) enum BlockLoad {
-	/// No transactions: `on_poll` takes half of the block and `on_idle` half of the rest.
-	Empty,
-	/// Transactions use the weight `on_poll` leaves, so `on_idle` gets nothing.
-	Full,
-}
+/// The blocks a phase change takes from the shuffle and from the player process.
+///
+/// `end_registration` and `end_reporting` land in the first block of the phase. The first step
+/// call after them misses the next block about half of the time. The e2e suite `game` measures
+/// this on a local network.
+pub(super) const PHASE_CHANGE_BLOCKS: u64 = 2;
 
 /// The limit that stops a block from taking more of a phase's work.
 #[derive(Clone, Copy)]
@@ -39,7 +36,7 @@ pub(super) enum Bound {
 	Length,
 	/// The NFT claim credits a block commits.
 	Credits,
-	/// `OP_UPPER_BOUND`, the loop iterations of one hook call.
+	/// `OP_UPPER_BOUND`, the loop iterations of one step call.
 	Iterations,
 }
 
@@ -75,8 +72,8 @@ impl core::fmt::Display for PerBlock {
 
 /// The block limits the game phases share.
 pub(super) struct Limits {
-	/// The weight `on_poll` and `on_idle` share in a block.
-	pub(super) hooks: Weight,
+	/// The weight a step call meters its work against.
+	pub(super) step_budget: Weight,
 	/// The weight of all `Normal` transactions in a block.
 	pub(super) normal: Weight,
 	/// The encoded length of all `Normal` transactions in a block.
@@ -90,34 +87,17 @@ impl Limits {
 		let block_weights = RuntimeBlockWeights::get();
 		let normal = block_weights.get(DispatchClass::Normal);
 		Self {
-			// `on_poll` gets the block weight that `on_initialize` and the inherents leave.
-			hooks: block_weights
-				.max_block
-				.saturating_sub(block_weights.base_block)
-				.saturating_sub(AVERAGE_ON_INITIALIZE_RATIO * block_weights.max_block),
+			step_budget: indiv_pallet_game::Pallet::<Runtime>::step_budget(),
 			normal: normal.max_total.expect("the normal class has a maximum total weight"),
 			normal_length: u64::from(*RuntimeBlockLength::get().max.get(DispatchClass::Normal)),
 			base_extrinsic: normal.base_extrinsic,
 		}
 	}
 
-	/// The units of hook `work` a block processes, after the overhead of each hook call.
-	pub(super) fn hook_units_per_block(&self, load: BlockLoad, work: HookWork) -> PerBlock {
-		let on_poll = self.hooks / 2;
-		let in_on_poll = hook_call_units(on_poll, work);
-		match load {
-			BlockLoad::Full => in_on_poll,
-			BlockLoad::Empty => {
-				let in_on_idle = hook_call_units(self.hooks.saturating_sub(on_poll) / 2, work);
-				// The bound of the hook that takes more units names the limit of the block.
-				let bound = if in_on_idle.units > in_on_poll.units {
-					in_on_idle.bound
-				} else {
-					in_on_poll.bound
-				};
-				PerBlock { units: in_on_poll.units.saturating_add(in_on_idle.units), bound }
-			},
-		}
+	/// The players a step call of `work` processes. A block includes one step call.
+	pub(super) fn step_units(&self, work: StepWork) -> PerBlock {
+		units_in(self.step_budget, work.overhead, work.unit)
+			.min(PerBlock { units: work.max_units, bound: Bound::Iterations })
 	}
 
 	/// The transactions of `path` a block includes.
@@ -143,34 +123,21 @@ fn units_in(budget: Weight, overhead: Weight, unit: Weight) -> PerBlock {
 	by_ref_time.min(by_proof_size)
 }
 
-/// The units of `work` one hook call processes in `budget`.
-/// A unit takes one loop iteration of the call.
-fn hook_call_units(budget: Weight, work: HookWork) -> PerBlock {
-	units_in(budget, work.overhead, work.unit)
-		.min(PerBlock { units: u64::from(OP_UPPER_BOUND), bound: Bound::Iterations })
+/// The blocks the shuffle takes for `players`, from the end of the registration.
+pub(super) fn shuffle_blocks(players: u64, per_step: PerBlock) -> u64 {
+	PHASE_CHANGE_BLOCKS + players.div_ceil(per_step.units)
 }
 
-/// The blocks in a phase of `secs` seconds.
-pub(super) fn window_blocks(secs: u32) -> u64 {
-	u64::from(secs) * 1_000 / MILLISECS_PER_BLOCK
-}
-
-/// The blocks in a phase of `secs` seconds that the game hooks do not skip.
-pub(super) fn hook_window_blocks(secs: u32) -> u64 {
-	let every = u64::from(GAME_PROCESS_SKIPPED_BLOCK);
-	window_blocks(secs) * (every - 1) / every
-}
-
-/// The blocks a hook phase takes for `units` of work, including the blocks the game skips.
-pub(super) fn hook_blocks(units: u64, per_block: PerBlock) -> u64 {
-	let every = u64::from(GAME_PROCESS_SKIPPED_BLOCK);
-	(units.div_ceil(per_block.units) * every).div_ceil(every - 1)
-}
-
-/// The blocks the player process takes for `players` at `hook` units per block with every credit
-/// backfilled. The hooks skip blocks, but the credit trees commit in every block.
-pub(super) fn player_process_blocks(players: u64, hook: PerBlock, credits: PerBlock) -> u64 {
-	hook_blocks(players, hook).max(players.div_ceil(credits.units))
+/// The blocks the player process takes for `players` with every credit backfilled, from the end
+/// of the reporting. Step 1 takes the players that the step call and the credit trees allow.
+/// Step 2 starts in the block after the last step 1 call.
+pub(super) fn player_process_blocks(
+	players: u64,
+	step1: PerBlock,
+	credits: PerBlock,
+	step2: PerBlock,
+) -> u64 {
+	PHASE_CHANGE_BLOCKS + players.div_ceil(step1.min(credits).units) + players.div_ceil(step2.units)
 }
 
 /// The phase window, in seconds rounded up to a minute, that holds `blocks`.

@@ -90,11 +90,10 @@ pub(super) struct SignUps {
 	pub(super) with_proof: SignUpsWithProof,
 }
 
-/// The sign-ups authenticated by a signature, entering airdrops by VRF if at all.
+/// The sign-ups authenticated by a signature, entering the airdrops by VRF.
 pub(super) struct SignUpsWithoutProof {
 	pub(super) account: TxPath,
 	pub(super) account_with_vrf_airdrops: TxPath,
-	pub(super) alias_account: TxPath,
 	pub(super) invite: TxPath,
 	pub(super) invite_with_vrf_airdrops: TxPath,
 	pub(super) lite_alias_account: TxPath,
@@ -104,6 +103,7 @@ pub(super) struct SignUpsWithoutProof {
 /// The sign-ups carrying a ring proof, in their authentication or in their airdrop entries.
 pub(super) struct SignUpsWithProof {
 	pub(super) account_with_proof_airdrops: TxPath,
+	pub(super) alias_account: TxPath,
 	pub(super) alias_account_with_proof_airdrops: TxPath,
 	pub(super) ring_proof: TxPath,
 	pub(super) lite_alias_account_revised: TxPath,
@@ -153,9 +153,12 @@ impl Paths {
 
 		let without_proof = SignUpsWithoutProof {
 			account: TxPath::new(
-				"account, no airdrop",
+				"account, one airdrop by VRF",
 				limits,
-				&build_signed_ext(&player, sign_up_with_account(None)),
+				&build_signed_ext(
+					&player,
+					sign_up_with_account(vrf_airdrops(&player, GAME_AIRDROPS)),
+				),
 			),
 			account_with_vrf_airdrops: TxPath::new(
 				"account, max airdrops by VRF",
@@ -165,15 +168,10 @@ impl Paths {
 					sign_up_with_account(vrf_airdrops(&player, MAX_GAME_AIRDROPS)),
 				),
 			),
-			alias_account: TxPath::new(
-				"alias account, no airdrop",
-				limits,
-				&build_signed_as_alias_with_account_ext(&player, sign_up_with_alias(&player, None)),
-			),
 			invite: TxPath::new(
-				"invite, no airdrop",
+				"invite, one airdrop by VRF",
 				limits,
-				&by_invite(&player, sign_up_with_invite(None)),
+				&by_invite(&player, sign_up_with_invite(vrf_airdrops(&player, GAME_AIRDROPS))),
 			),
 			invite_with_vrf_airdrops: TxPath::new(
 				"invite, max airdrops by VRF",
@@ -181,12 +179,12 @@ impl Paths {
 				&by_invite(&player, sign_up_with_invite(vrf_airdrops(&player, MAX_GAME_AIRDROPS))),
 			),
 			lite_alias_account: TxPath::new(
-				"lite alias account, no airdrop",
+				"lite alias account, one airdrop by VRF",
 				limits,
 				&build_people_lite_auth_ext(
 					&player,
 					indiv_pallet_people_lite::PeopleLiteAuthData::AsLiteAliasWithAccount,
-					sign_up_with_account_lite_invite(None),
+					sign_up_with_account_lite_invite(vrf_airdrops(&player, GAME_AIRDROPS)),
 				),
 			),
 			lite_alias_account_with_vrf_airdrops: TxPath::new(
@@ -205,6 +203,14 @@ impl Paths {
 				limits,
 				&build_signed_ext(&player, sign_up_with_account(proof_airdrops(MAX_GAME_AIRDROPS))),
 			),
+			alias_account: TxPath::new(
+				"alias account, one airdrop by alias proof",
+				limits,
+				&build_signed_as_alias_with_account_ext(
+					&player,
+					sign_up_with_alias(&player, proof_airdrops(GAME_AIRDROPS)),
+				),
+			),
 			alias_account_with_proof_airdrops: TxPath::new(
 				"alias account, max airdrops by alias proof",
 				limits,
@@ -214,12 +220,12 @@ impl Paths {
 				),
 			),
 			ring_proof: TxPath::new(
-				"alias ring proof, no airdrop",
+				"alias ring proof, one airdrop by alias proof",
 				limits,
-				&by_ring_proof(sign_up_with_alias(&player, None)),
+				&by_ring_proof(sign_up_with_alias(&player, proof_airdrops(GAME_AIRDROPS))),
 			),
 			lite_alias_account_revised: TxPath::new(
-				"lite alias account revised, no airdrop",
+				"lite alias account revised, one airdrop by VRF",
 				limits,
 				&build_people_lite_auth_ext(
 					&player,
@@ -232,7 +238,7 @@ impl Paths {
 							[0; 32],
 						)
 					},
-					sign_up_with_account_lite_invite(None),
+					sign_up_with_account_lite_invite(vrf_airdrops(&player, GAME_AIRDROPS)),
 				),
 			),
 		};
@@ -273,11 +279,10 @@ impl SignUps {
 }
 
 impl SignUpsWithoutProof {
-	fn all(&self) -> [&TxPath; 7] {
+	fn all(&self) -> [&TxPath; 6] {
 		[
 			&self.account,
 			&self.account_with_vrf_airdrops,
-			&self.alias_account,
 			&self.invite,
 			&self.invite_with_vrf_airdrops,
 			&self.lite_alias_account,
@@ -287,9 +292,10 @@ impl SignUpsWithoutProof {
 }
 
 impl SignUpsWithProof {
-	fn all(&self) -> [&TxPath; 4] {
+	fn all(&self) -> [&TxPath; 5] {
 		[
 			&self.account_with_proof_airdrops,
+			&self.alias_account,
 			&self.alias_account_with_proof_airdrops,
 			&self.ring_proof,
 			&self.lite_alias_account_revised,
