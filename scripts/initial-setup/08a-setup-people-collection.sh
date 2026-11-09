@@ -9,5 +9,5 @@ if [ "$people_collection_created" == "true" ]; then
   echo "People collection already created, skipping"
 else
   echo "People collection not created, creating"
-  dot people.tx.People.create_people_collection --unsigned
+  dot people.tx.People.create_people_collection --general
 fi

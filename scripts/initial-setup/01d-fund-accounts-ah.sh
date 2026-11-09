@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Funds sudo, attestation, attestation proxy, faucet, and asset
+# Funds sudo, attestation, attestation writer, faucet, and asset
 # owner accounts on AssetHub with native tokens teleported from the
 # People sudo. Must run after 01b (establishes the People<->AssetHub
 # HRMP channel).
@@ -8,12 +8,12 @@ source ./load-config.sh
 source ./utils.sh
 
 AH_FUND_PAS=10000
-AH_ASSET_OWNER_FUND_PAS=100000
+AH_ASSET_OWNER_FUND_PAS=1000000
 
 AH_FUND_TARGETS=(
   "ACCOUNT_AH_SUDO"
   "ACCOUNT_ATTESTATION"
-  "ACCOUNT_ATTESTATION_PROXY"
+  "ACCOUNT_ATTESTATION_WRITER"
   "ACCOUNT_FAUCET"
 )
 
