@@ -25,7 +25,7 @@ use crate::{
 use codec::Encode;
 use frame_support::{
 	assert_noop, assert_ok,
-	dispatch::GetDispatchInfo,
+	dispatch::{GetDispatchInfo, Pays},
 	traits::{Authorize, Hooks},
 };
 use frame_system::RawOrigin as SystemOrigin;
@@ -39,7 +39,7 @@ use sp_runtime::{
 	transaction_validity::{InvalidTransaction, TransactionSource},
 	AccountId32,
 };
-use sp_statement_store::{get_allowance, StatementAllowance};
+use sp_statement_store::{get_allowance, increase_allowance_by, StatementAllowance};
 
 // --- Test Helpers ---
 
@@ -2714,6 +2714,97 @@ mod notification {
 			);
 		});
 	}
+
+	#[test]
+	fn cleanup_revokes_the_recorded_allowance_after_an_allowance_change() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::notification_period_from_timestamp(TestClock::now().as_secs());
+			let reference = NotificationReference { period, seq: 0 };
+			let account = id_to_account(330);
+			let base = StatementAllowance { max_size: 10_000, max_count: 100 };
+			increase_allowance_by(&account, base.clone());
+			let granted = <Test as Config>::NotificationAllowance::get();
+
+			assert_ok!(Resources::set_notification_statement_account_for_sequence(
+				notification_origin(33),
+				reference,
+				account.clone(),
+			));
+			assert_eq!(get_allowance(&account), base.clone().saturating_add(granted.clone()));
+			let registration = NotificationRegistrationByAlias::<Test>::get(id_to_alias(33))
+				.expect("registration should exist");
+			assert_eq!(StatementAllowance::from(registration.allowance), granted);
+
+			let raised =
+				granted.saturating_add(StatementAllowance { max_size: 4096, max_count: 3 });
+			NotificationAllowance::set(&raised);
+
+			set_time_sec(Resources::notification_expiration_time(period).saturating_add(1));
+			assert_ok!(Resources::clear_expired_notification_sequence(
+				SystemOrigin::Authorized.into(),
+				account.clone(),
+				reference.seq,
+			));
+
+			assert_eq!(get_allowance(&account), base);
+		});
+	}
+
+	#[test]
+	fn cleanup_rejects_an_account_whose_registration_is_missing() {
+		new_test_ext().execute_with(|| {
+			let account = id_to_account(340);
+			NotificationAliasByAccount::<Test>::insert(&account, id_to_alias(34));
+
+			let refused = Resources::clear_expired_notification_sequence(
+				SystemOrigin::Authorized.into(),
+				account.clone(),
+				0,
+			)
+			.expect_err("the cleanup is refused");
+
+			assert_eq!(refused.error, Error::<Test>::InvalidNotificationSequence.into());
+			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
+			assert_eq!(NotificationAliasByAccount::<Test>::get(&account), Some(id_to_alias(34)));
+		});
+	}
+
+	#[test]
+	fn cleanup_keeps_the_other_grants_of_the_account() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let now = TestClock::now().as_secs();
+			let account = id_to_account(350);
+			let slot_period = Resources::stmt_store_period_from_timestamp(now);
+			let slot_grant = <Test as Config>::AccountsApiAllowance::get();
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(35),
+				slot_period,
+				0,
+				account.clone(),
+			));
+			let period = Resources::notification_period_from_timestamp(now);
+			let reference = NotificationReference { period, seq: 0 };
+			assert_ok!(Resources::set_notification_statement_account_for_sequence(
+				notification_origin(35),
+				reference,
+				account.clone(),
+			));
+			let raised = <Test as Config>::NotificationAllowance::get()
+				.saturating_add(StatementAllowance { max_size: 4096, max_count: 3 });
+			NotificationAllowance::set(&raised);
+
+			set_time_sec(Resources::notification_expiration_time(period).saturating_add(1));
+			assert_ok!(Resources::clear_expired_notification_sequence(
+				SystemOrigin::Authorized.into(),
+				account.clone(),
+				reference.seq,
+			));
+
+			assert_eq!(get_allowance(&account), slot_grant);
+		});
+	}
 }
 
 mod long_term_storage {
@@ -3734,6 +3825,7 @@ mod stmt_store_allowance {
 					account_id: target.clone(),
 					seq: 0,
 					since: TestClock::now().as_secs(),
+					allowance: accounts_allowance.clone().into(),
 				}),
 			);
 			assert_eq!(get_allowance(&target), accounts_allowance);
@@ -3751,6 +3843,222 @@ mod stmt_store_allowance {
 				None,
 			);
 			assert_eq!(get_allowance(&target), StatementAllowance::default());
+		});
+	}
+
+	#[test]
+	fn offchain_worker_waits_for_an_ongoing_migration() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let now = TestClock::now().as_secs();
+			let period = Resources::stmt_store_period_from_timestamp(now);
+			let target = id_to_account(730);
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(73),
+				period,
+				0,
+				target.clone(),
+			));
+			let notification_period = Resources::notification_period_from_timestamp(now);
+			let reference = NotificationReference { period: notification_period, seq: 0 };
+			assert_ok!(Resources::set_notification_statement_account_for_sequence(
+				notification_origin(73),
+				reference,
+				target.clone(),
+			));
+			let grace_secs: u64 =
+				<<Test as Config>::StmtStoreGraceWindow as Get<u32>>::get() as u64;
+			let slot_expiry = (period as u64 + 1) * SECONDS_PER_DAY + grace_secs;
+			let notification_expiry = Resources::notification_expiration_time(notification_period);
+			set_time_sec(slot_expiry.max(notification_expiry) + 1);
+
+			// Both entries are now clearable.
+			MigrationOngoing::set(&true);
+			advance_to_block(2);
+			assert!(StatementStoreAllowances::<Test>::contains_key(
+				BigEndianU32::from(period),
+				id_to_alias(73)
+			));
+			assert!(NotificationRegistrationByAlias::<Test>::contains_key(id_to_alias(73)));
+
+			MigrationOngoing::set(&false);
+			advance_to_block(3);
+			assert!(!StatementStoreAllowances::<Test>::contains_key(
+				BigEndianU32::from(period),
+				id_to_alias(73)
+			));
+			assert!(!NotificationRegistrationByAlias::<Test>::contains_key(id_to_alias(73)));
+		});
+	}
+
+	#[test]
+	fn cleanup_revokes_the_recorded_allowance_after_an_allowance_change() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let target = id_to_account(710);
+			let base = StatementAllowance { max_size: 10_000, max_count: 100 };
+			increase_allowance_by(&target, base.clone());
+			let granted = <Test as Config>::AccountsApiAllowance::get();
+
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(71),
+				period,
+				0,
+				target.clone(),
+			));
+			assert_eq!(get_allowance(&target), base.clone().saturating_add(granted.clone()));
+			let entry =
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), id_to_alias(71))
+					.expect("allowance entry should exist");
+			assert_eq!(StatementAllowance::from(entry.allowance), granted);
+
+			let raised =
+				granted.saturating_add(StatementAllowance { max_size: 4096, max_count: 3 });
+			AccountsApiAllowance::set(&raised);
+
+			let grace_secs: u64 =
+				<<Test as Config>::StmtStoreGraceWindow as Get<u32>>::get() as u64;
+			set_time_sec((period as u64 + 1) * SECONDS_PER_DAY + grace_secs + 1);
+			assert_ok!(Resources::clear_expired_stmt_store_allowances(
+				SystemOrigin::Authorized.into(),
+				period,
+				id_to_alias(71),
+			));
+
+			assert_eq!(get_allowance(&target), base);
+		});
+	}
+
+	#[test]
+	fn replacement_revokes_the_recorded_allowance_after_an_allowance_change() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let old_target = id_to_account(720);
+			let new_target = id_to_account(721);
+			let base = StatementAllowance { max_size: 10_000, max_count: 100 };
+			increase_allowance_by(&old_target, base.clone());
+			let granted = <Test as Config>::AccountsApiAllowance::get();
+
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(72),
+				period,
+				0,
+				old_target.clone(),
+			));
+			assert_eq!(get_allowance(&old_target), base.clone().saturating_add(granted.clone()));
+
+			let raised =
+				granted.saturating_add(StatementAllowance { max_size: 4096, max_count: 3 });
+			AccountsApiAllowance::set(&raised);
+
+			let cooldown: u64 =
+				<<Test as Config>::StmtStoreReplacementCooldown as Get<u32>>::get() as u64;
+			advance_time_sec(cooldown + 1);
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(72),
+				period,
+				1,
+				new_target.clone(),
+			));
+
+			assert_eq!(get_allowance(&old_target), base);
+			assert_eq!(get_allowance(&new_target), raised);
+			let entry =
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), id_to_alias(72))
+					.expect("allowance entry should exist");
+			assert_eq!(entry.account_id, new_target);
+			assert_eq!(StatementAllowance::from(entry.allowance), raised);
+		});
+	}
+
+	#[test]
+	fn cleanup_revokes_each_entry_at_its_recorded_allowance() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let target = id_to_account(740);
+			let base = StatementAllowance { max_size: 10_000, max_count: 100 };
+			increase_allowance_by(&target, base.clone());
+			let granted = <Test as Config>::AccountsApiAllowance::get();
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(74),
+				period,
+				0,
+				target.clone(),
+			));
+
+			let raised = granted
+				.clone()
+				.saturating_add(StatementAllowance { max_size: 4096, max_count: 3 });
+			AccountsApiAllowance::set(&raised);
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(75),
+				period,
+				1,
+				target.clone(),
+			));
+			assert_eq!(
+				get_allowance(&target),
+				base.clone().saturating_add(granted).saturating_add(raised)
+			);
+
+			let grace_secs: u64 =
+				<<Test as Config>::StmtStoreGraceWindow as Get<u32>>::get() as u64;
+			set_time_sec((period as u64 + 1) * SECONDS_PER_DAY + grace_secs + 1);
+			assert_ok!(Resources::clear_expired_stmt_store_allowances(
+				SystemOrigin::Authorized.into(),
+				period,
+				id_to_alias(74),
+			));
+
+			assert_eq!(
+				StatementStoreAllowances::<Test>::iter_prefix(BigEndianU32::from(period)).count(),
+				0
+			);
+			assert_eq!(get_allowance(&target), base);
+		});
+	}
+
+	#[test]
+	fn replacement_with_the_same_target_records_the_current_allowance() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let target = id_to_account(760);
+			let base = StatementAllowance { max_size: 10_000, max_count: 100 };
+			increase_allowance_by(&target, base.clone());
+			let granted = <Test as Config>::AccountsApiAllowance::get();
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(76),
+				period,
+				0,
+				target.clone(),
+			));
+
+			let raised =
+				granted.saturating_add(StatementAllowance { max_size: 4096, max_count: 3 });
+			AccountsApiAllowance::set(&raised);
+			let cooldown: u64 =
+				<<Test as Config>::StmtStoreReplacementCooldown as Get<u32>>::get() as u64;
+			advance_time_sec(cooldown + 1);
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(76),
+				period,
+				1,
+				target.clone(),
+			));
+
+			assert_eq!(get_allowance(&target), base.saturating_add(raised.clone()));
+			let entry =
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), id_to_alias(76))
+					.expect("allowance entry should exist");
+			assert_eq!(StatementAllowance::from(entry.allowance), raised);
+			assert_eq!(
+				StmtStoreAllowanceByAccount::<Test>::iter_prefix(&target).collect::<Vec<_>>(),
+				vec![((BigEndianU32::from(period), 1, id_to_alias(76)), ())]
+			);
 		});
 	}
 
@@ -4487,4 +4795,396 @@ fn signing_context_constant_is_the_context_the_pallet_verifies() {
 		crate::Pallet::<Test>::account_signing_payload(b"msg"),
 		[&expected[..], b"msg"].concat()
 	);
+}
+
+mod migration {
+	use super::*;
+	use crate::migration::v1::{v0, Cursor, RecordGrantedAllowances};
+	use frame_support::{
+		migrations::{SteppedMigration, SteppedMigrationError},
+		traits::{GetStorageVersion, StorageVersion},
+		weights::{Weight, WeightMeter},
+	};
+	use indiv_support::utils::BigEndianU32;
+
+	/// The version 0 statement store entries as `(period, alias id)`. Two share a period, so the
+	/// migration must resume inside a period as well as across periods.
+	const V0_ENTRIES: [(u32, u64); 3] = [(1, 1), (1, 3), (2, 2)];
+
+	fn set_up_v0() {
+		seed_v0_entries();
+		seed_v0_registrations();
+		StorageVersion::new(0).put::<Resources>();
+		assert_eq!(migrated_entries(), 0);
+		assert_eq!(migrated_registrations(), 0);
+	}
+
+	fn seed_v0_entries() {
+		for (period, i) in V0_ENTRIES {
+			v0::StatementStoreAllowances::<Test>::insert(
+				BigEndianU32::from(period),
+				id_to_alias(i),
+				v0::StmtStoreAllowanceEntry {
+					account_id: id_to_account(100 + i),
+					seq: i as u32,
+					since: 10 * i,
+				},
+			);
+		}
+	}
+
+	fn seed_v0_registrations() {
+		for i in 1..=2u64 {
+			v0::NotificationRegistrationByAlias::<Test>::insert(
+				id_to_alias(10 + i),
+				v0::NotificationRegistration {
+					account_id: id_to_account(200 + i),
+					reference: NotificationReference { period: i as u32, seq: i as u8 },
+				},
+			);
+		}
+	}
+
+	/// The statement store entries that decode in the current layout.
+	fn migrated_entries() -> usize {
+		StatementStoreAllowances::<Test>::iter().count()
+	}
+
+	/// The notification registrations that decode in the current layout.
+	fn migrated_registrations() -> usize {
+		NotificationRegistrationByAlias::<Test>::iter().count()
+	}
+
+	fn stmt_step_weight() -> Weight {
+		<() as WeightInfo>::migrate_stmt_store_allowance_step()
+	}
+
+	fn notification_step_weight() -> Weight {
+		<() as WeightInfo>::migrate_notification_registration_step()
+	}
+
+	#[test]
+	fn migration_records_the_current_allowances() {
+		new_test_ext().execute_with(|| {
+			set_up_v0();
+			let mut meter = WeightMeter::new();
+
+			assert_eq!(RecordGrantedAllowances::<Test>::step(None, &mut meter), Ok(None));
+
+			assert_eq!(Resources::on_chain_storage_version(), 1);
+			for (period, i) in V0_ENTRIES {
+				assert_eq!(
+					StatementStoreAllowances::<Test>::get(
+						BigEndianU32::from(period),
+						id_to_alias(i)
+					),
+					Some(crate::types::StmtStoreAllowanceEntry {
+						account_id: id_to_account(100 + i),
+						seq: i as u32,
+						since: 10 * i,
+						allowance: <Test as Config>::AccountsApiAllowance::get().into(),
+					})
+				);
+			}
+			for i in 1..=2u64 {
+				assert_eq!(
+					NotificationRegistrationByAlias::<Test>::get(id_to_alias(10 + i)),
+					Some(crate::types::NotificationRegistration {
+						account_id: id_to_account(200 + i),
+						reference: NotificationReference { period: i as u32, seq: i as u8 },
+						allowance: <Test as Config>::NotificationAllowance::get().into(),
+					})
+				);
+			}
+		});
+	}
+
+	#[test]
+	fn migration_step_weight_covers_one_entry_or_registration() {
+		new_test_ext().execute_with(|| {
+			set_up_v0();
+
+			// The two entries of period 1 come in hash order, so only their period is known.
+			let mut meter = WeightMeter::with_limit(stmt_step_weight());
+			let cursor = RecordGrantedAllowances::<Test>::step(None, &mut meter).unwrap();
+			assert!(matches!(
+				cursor,
+				Some(Cursor::StmtStore(Some((period, _)))) if period == BigEndianU32::from(1u32)
+			));
+			assert_eq!(migrated_entries(), 1);
+
+			let mut meter = WeightMeter::with_limit(stmt_step_weight());
+			let cursor = RecordGrantedAllowances::<Test>::step(cursor, &mut meter).unwrap();
+			assert!(matches!(
+				cursor,
+				Some(Cursor::StmtStore(Some((period, _)))) if period == BigEndianU32::from(1u32)
+			));
+			assert_eq!(migrated_entries(), 2);
+
+			let mut meter = WeightMeter::with_limit(stmt_step_weight());
+			let cursor = RecordGrantedAllowances::<Test>::step(cursor, &mut meter).unwrap();
+			assert_eq!(
+				cursor,
+				Some(Cursor::StmtStore(Some((BigEndianU32::from(2u32), id_to_alias(2)))))
+			);
+			assert_eq!(migrated_entries(), 3);
+
+			let mut meter = WeightMeter::with_limit(stmt_step_weight());
+			let cursor = RecordGrantedAllowances::<Test>::step(cursor, &mut meter).unwrap();
+			assert_eq!(cursor, Some(Cursor::Notification(None)));
+			assert_eq!(migrated_registrations(), 0);
+
+			let mut meter = WeightMeter::with_limit(notification_step_weight());
+			let cursor = RecordGrantedAllowances::<Test>::step(cursor, &mut meter).unwrap();
+			assert!(matches!(cursor, Some(Cursor::Notification(Some(_)))));
+			assert_eq!(migrated_registrations(), 1);
+
+			let mut meter = WeightMeter::with_limit(notification_step_weight());
+			let cursor = RecordGrantedAllowances::<Test>::step(cursor, &mut meter).unwrap();
+			assert!(matches!(cursor, Some(Cursor::Notification(Some(_)))));
+			assert_eq!(migrated_registrations(), 2);
+			assert_eq!(Resources::on_chain_storage_version(), 0);
+
+			let mut meter = WeightMeter::with_limit(notification_step_weight());
+			assert_eq!(RecordGrantedAllowances::<Test>::step(cursor, &mut meter), Ok(None));
+			assert_eq!(Resources::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn migration_step_requires_the_weight_of_one_entry_or_registration() {
+		new_test_ext().execute_with(|| {
+			set_up_v0();
+
+			let required = stmt_step_weight();
+			let mut meter =
+				WeightMeter::with_limit(required.saturating_sub(Weight::from_parts(1, 0)));
+			assert_eq!(
+				RecordGrantedAllowances::<Test>::step(None, &mut meter),
+				Err(SteppedMigrationError::InsufficientWeight { required })
+			);
+
+			let required = notification_step_weight();
+			let mut meter =
+				WeightMeter::with_limit(required.saturating_sub(Weight::from_parts(1, 0)));
+			assert_eq!(
+				RecordGrantedAllowances::<Test>::step(Some(Cursor::Notification(None)), &mut meter),
+				Err(SteppedMigrationError::InsufficientWeight { required })
+			);
+			assert_eq!(migrated_entries(), 0);
+			assert_eq!(migrated_registrations(), 0);
+		});
+	}
+
+	#[test]
+	fn migration_completes_on_empty_maps() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<Resources>();
+
+			let mut meter = WeightMeter::with_limit(stmt_step_weight());
+			let cursor = RecordGrantedAllowances::<Test>::step(None, &mut meter).unwrap();
+			assert_eq!(cursor, Some(Cursor::Notification(None)));
+			assert_eq!(Resources::on_chain_storage_version(), 0);
+
+			let mut meter = WeightMeter::with_limit(notification_step_weight());
+			assert_eq!(RecordGrantedAllowances::<Test>::step(cursor, &mut meter), Ok(None));
+			assert_eq!(Resources::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn migration_records_registrations_without_entries() {
+		new_test_ext().execute_with(|| {
+			seed_v0_registrations();
+			StorageVersion::new(0).put::<Resources>();
+			let mut meter = WeightMeter::new();
+
+			assert_eq!(RecordGrantedAllowances::<Test>::step(None, &mut meter), Ok(None));
+
+			assert_eq!(migrated_registrations(), 2);
+			assert_eq!(Resources::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn migration_records_entries_without_registrations() {
+		new_test_ext().execute_with(|| {
+			seed_v0_entries();
+			StorageVersion::new(0).put::<Resources>();
+			let mut meter = WeightMeter::new();
+
+			assert_eq!(RecordGrantedAllowances::<Test>::step(None, &mut meter), Ok(None));
+
+			assert_eq!(migrated_entries(), V0_ENTRIES.len());
+			assert_eq!(Resources::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn migration_skips_a_chain_past_version_0() {
+		new_test_ext().execute_with(|| {
+			set_up_v0();
+			StorageVersion::new(1).put::<Resources>();
+			let mut meter = WeightMeter::with_limit(stmt_step_weight());
+
+			assert_eq!(RecordGrantedAllowances::<Test>::step(None, &mut meter), Ok(None));
+
+			assert_eq!(meter.consumed(), Weight::zero());
+			assert_eq!(migrated_entries(), 0);
+			assert_eq!(migrated_registrations(), 0);
+		});
+	}
+
+	/// Sets up version 0 state, takes the pre-upgrade state and runs the migration to completion.
+	#[cfg(feature = "try-runtime")]
+	fn migrate_with_pre_upgrade_state() -> Vec<u8> {
+		set_up_v0();
+		let state = RecordGrantedAllowances::<Test>::pre_upgrade().unwrap();
+		let mut meter = WeightMeter::new();
+		assert_eq!(RecordGrantedAllowances::<Test>::step(None, &mut meter), Ok(None));
+		state
+	}
+
+	#[test]
+	#[cfg(feature = "try-runtime")]
+	fn try_runtime_checks_accept_a_complete_migration() {
+		new_test_ext().execute_with(|| {
+			let state = migrate_with_pre_upgrade_state();
+
+			assert_ok!(RecordGrantedAllowances::<Test>::post_upgrade(state));
+		});
+	}
+
+	#[test]
+	#[cfg(feature = "try-runtime")]
+	fn try_runtime_checks_reject_a_lost_entry() {
+		new_test_ext().execute_with(|| {
+			let state = migrate_with_pre_upgrade_state();
+			StatementStoreAllowances::<Test>::remove(BigEndianU32::from(1u32), id_to_alias(1));
+
+			assert_eq!(
+				RecordGrantedAllowances::<Test>::post_upgrade(state),
+				Err("the migration must keep every statement store allowance entry".into())
+			);
+		});
+	}
+
+	#[test]
+	#[cfg(feature = "try-runtime")]
+	fn try_runtime_checks_reject_a_lost_registration() {
+		new_test_ext().execute_with(|| {
+			let state = migrate_with_pre_upgrade_state();
+			NotificationRegistrationByAlias::<Test>::remove(id_to_alias(11));
+
+			assert_eq!(
+				RecordGrantedAllowances::<Test>::post_upgrade(state),
+				Err("the migration must keep every notification registration".into())
+			);
+		});
+	}
+
+	#[test]
+	#[cfg(feature = "try-runtime")]
+	fn try_runtime_checks_reject_an_entry_without_an_allowance() {
+		new_test_ext().execute_with(|| {
+			let state = migrate_with_pre_upgrade_state();
+			v0::StatementStoreAllowances::<Test>::insert(
+				BigEndianU32::from(1u32),
+				id_to_alias(1),
+				v0::StmtStoreAllowanceEntry { account_id: id_to_account(101), seq: 1, since: 10 },
+			);
+
+			assert_eq!(
+				RecordGrantedAllowances::<Test>::post_upgrade(state),
+				Err("a statement store allowance entry must decode with its allowance".into())
+			);
+		});
+	}
+
+	#[test]
+	#[cfg(feature = "try-runtime")]
+	fn try_runtime_checks_reject_a_registration_without_an_allowance() {
+		new_test_ext().execute_with(|| {
+			let state = migrate_with_pre_upgrade_state();
+			v0::NotificationRegistrationByAlias::<Test>::insert(
+				id_to_alias(11),
+				v0::NotificationRegistration {
+					account_id: id_to_account(201),
+					reference: NotificationReference { period: 1, seq: 1 },
+				},
+			);
+
+			assert_eq!(
+				RecordGrantedAllowances::<Test>::post_upgrade(state),
+				Err("a notification registration must decode with its allowance".into())
+			);
+		});
+	}
+
+	#[test]
+	#[cfg(feature = "try-runtime")]
+	fn try_runtime_checks_reject_a_changed_accounts_api_allowance() {
+		new_test_ext().execute_with(|| {
+			let state = migrate_with_pre_upgrade_state();
+			let raised = <Test as Config>::AccountsApiAllowance::get()
+				.saturating_add(StatementAllowance { max_size: 1, max_count: 1 });
+			AccountsApiAllowance::set(&raised);
+
+			assert_eq!(
+				RecordGrantedAllowances::<Test>::post_upgrade(state),
+				Err("a statement store allowance entry must keep its fields and record the \
+				     accounts API allowance"
+					.into())
+			);
+		});
+	}
+
+	#[test]
+	#[cfg(feature = "try-runtime")]
+	fn try_runtime_checks_reject_a_changed_notification_allowance() {
+		new_test_ext().execute_with(|| {
+			let state = migrate_with_pre_upgrade_state();
+			let raised = <Test as Config>::NotificationAllowance::get()
+				.saturating_add(StatementAllowance { max_size: 1, max_count: 1 });
+			NotificationAllowance::set(&raised);
+
+			assert_eq!(
+				RecordGrantedAllowances::<Test>::post_upgrade(state),
+				Err("a notification registration must keep its fields and record the \
+				     notification allowance"
+					.into())
+			);
+		});
+	}
+
+	#[test]
+	#[cfg(feature = "try-runtime")]
+	fn try_runtime_checks_reject_a_wrong_storage_version() {
+		new_test_ext().execute_with(|| {
+			let state = migrate_with_pre_upgrade_state();
+			StorageVersion::new(0).put::<Resources>();
+
+			assert_eq!(
+				RecordGrantedAllowances::<Test>::post_upgrade(state),
+				Err("the storage version must be 1 after the migration".into())
+			);
+		});
+	}
+
+	#[test]
+	#[cfg(feature = "try-runtime")]
+	fn try_runtime_checks_skip_a_migrated_chain() {
+		new_test_ext().execute_with(|| {
+			set_up_v0();
+			StorageVersion::new(1).put::<Resources>();
+
+			let state = RecordGrantedAllowances::<Test>::pre_upgrade().unwrap();
+			let mut meter = WeightMeter::new();
+			assert_eq!(RecordGrantedAllowances::<Test>::step(None, &mut meter), Ok(None));
+			assert_ok!(RecordGrantedAllowances::<Test>::post_upgrade(state));
+
+			assert_eq!(migrated_entries(), 0);
+			assert_eq!(migrated_registrations(), 0);
+		});
+	}
 }
