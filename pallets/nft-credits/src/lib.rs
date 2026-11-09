@@ -112,6 +112,8 @@
 //!   tree blocks, against [`NftClaimCreditRoots`], so a claimant finds their roots by one lookup
 //!   instead of a scan. That index is a bounded ring, so a runtime that sizes it below the
 //!   retention window leaves the older blocks to be found from the events.
+//! - `nft_claim_credit_blocks` returns every block in that index with the state of its tree:
+//!   pending, committed or removed.
 //! - `nft_claim_credit_proofs` returns, for one tree block and one claimant, the inclusion proof of
 //!   each credit the claimant holds there: the credit, its leaf index and the sibling hashes, which
 //!   is what the claims chain verifies. `nft_claim_credit_proof_from_awards` does the same for a
@@ -311,11 +313,11 @@ pub mod pallet {
 		/// The index is a lookup aid, not the record of what a claimant is owed, so a full list
 		/// drops its oldest block rather than rejecting an award. A dropped block stays mintable
 		/// for [`Config::AwardRetentionTtl`], its proof coming from the block's
-		/// [`NftClaimCreditAwards`] entry, so the claimant loses discovery through
-		/// [`Pallet::nft_claim_credit_roots`] and nothing else. Size it to the tree blocks a
-		/// claimant accumulates over [`Config::AwardRetentionTtl`] at the chain's game cadence, and
-		/// account for the cost: the list is read and written whole at this bound, once per
-		/// distinct claimant an extrinsic awards to.
+		/// [`NftClaimCreditAwards`] entry, so the claimant only loses discovery through the runtime
+		/// API. Size it to the tree blocks a claimant accumulates over
+		/// [`Config::AwardRetentionTtl`] at the chain's game cadence, and account for the cost:
+		/// the list is read and written whole at this bound, once per distinct claimant an
+		/// extrinsic awards to.
 		#[pallet::constant]
 		type MaxCreditBlocksPerClaimant: Get<u32>;
 

@@ -155,7 +155,7 @@ pub struct NftClaimCreditProof {
 pub enum NftClaimCreditBlockState {
 	/// The block's credits wait for their tree, which a later block builds.
 	Pending,
-	/// The block's tree is recorded and queued for delivery to Asset Hub.
+	/// The block's root is recorded, from before delivery until the root is removed.
 	Committed(NftClaimCreditTree),
 	/// The block's root is removed.
 	///
