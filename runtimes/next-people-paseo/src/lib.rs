@@ -312,7 +312,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_version: 3_004_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
-	transaction_version: 6,
+	transaction_version: 7,
 	system_version: 1,
 };
 
@@ -808,6 +808,7 @@ impl pallet_migrations::Config for Runtime {
 		// Single use! - remove once the upgrade carrying it is live.
 		indiv_pallet_people_lite::migration::v1::LazyMigrationV0ToV1<Runtime>,
 		indiv_pallet_people::migration::MigrateV0ToV1<Runtime>,
+		indiv_pallet_resources::migration::MigrateV0ToV1<Runtime>,
 	);
 	// Benchmarks need mocked migrations to guarantee that they succeed.
 	#[cfg(feature = "runtime-benchmarks")]

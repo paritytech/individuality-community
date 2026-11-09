@@ -530,9 +530,6 @@ mod register_with_fee_tests {
 			signature: MockSignature(account),
 			account,
 			identifier_key: [7; 65],
-			username: indiv_support::traits::Username::try_from(b"liteperson.1".to_vec())
-				.expect("valid username"),
-			reserved_username: None,
 		}
 	}
 
