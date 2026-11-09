@@ -1,0 +1,42 @@
+name: Initial setup
+
+# Runs scripts/initial-setup against a live network. The signer mnemonics are secrets of the
+# GitHub Environment the job targets, so the protection rules of that environment gate each run.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        required: true
+        options:
+          - preview
+          - next
+
+permissions:
+  contents: read
+
+# Two runs against one network race on the on-chain checks of the scripts. A cancelled run
+# leaves the network partially set up, so a new run waits instead of cancelling the old one.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  initial-setup:
+    name: Initial setup (${{ inputs.environment }})
+    runs-on: parity-ubuntu
+    timeout-minutes: 120
+    environment: ${{ inputs.environment == 'next' && 'paseo-next-v2' || 'previewnet' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run initial setup
+        uses: ./.github/actions/initial-setup
+        with:
+          environment: ${{ inputs.environment }}
+          people-sudo-mnemonic: ${{ secrets.PEOPLE_SUDO_MNEMONIC }}
+          ah-sudo-mnemonic: ${{ secrets.AH_SUDO_MNEMONIC }}
+          attestation-mnemonic: ${{ secrets.ATTESTATION_MNEMONIC }}
+          asset-owner-mnemonic: ${{ secrets.ASSET_OWNER_MNEMONIC }}
