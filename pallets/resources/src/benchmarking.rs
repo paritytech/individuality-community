@@ -19,15 +19,20 @@
 #![allow(unused)]
 
 use super::*;
-use crate::Pallet as Resources;
+use crate::{
+	migration::{self, v1::RecordGrantedAllowances},
+	Pallet as Resources,
+};
 use codec::{Decode, Encode};
 use core::time::Duration;
 use frame_benchmarking::v2::{benchmarks, *};
 use frame_support::{
 	assert_ok,
 	dispatch::{DispatchInfo, PostDispatchInfo},
+	migrations::SteppedMigration,
 	pallet_prelude::Authorize,
-	traits::{EnsureOrigin, IsSubType},
+	traits::{EnsureOrigin, IsSubType, StorageVersion},
+	weights::WeightMeter,
 	BoundedVec,
 };
 use frame_system::{pallet_prelude::BlockNumberFor, RawOrigin as SystemOrigin};
@@ -764,6 +769,7 @@ mod benches {
 				account_id: old_target.clone(),
 				seq: old_seq,
 				since: initial_since,
+				allowance: T::AccountsApiAllowance::get().into(),
 			},
 		);
 		StmtStoreAllowanceByAccount::<T>::insert(&old_target, (period_key, old_seq, alias), ());
@@ -804,6 +810,13 @@ mod benches {
 		let past_period = Pallet::<T>::stmt_store_period_from_timestamp(100);
 		let past_period_key = indiv_support::utils::BigEndianU32::from(past_period);
 
+		// Workaround for an issue with statement store benchmarking.
+		// The weight writer fits each storage key on the samples that touch it. Each account has
+		// its own `:statement_allowance:` key, so a key touched only at `n = max` has one sample
+		// and the fit fails (polkadot-sdk #12075). The last two entries share an account to
+		// avoid this.
+		let max_account = T::StmtStoreCleanupLimit::get().saturating_sub(2);
+
 		// Set up `n` entries by calling the extrinsic with fabricated origins.
 		for i in 0..n {
 			let mut alias = [0u8; 32];
@@ -811,7 +824,7 @@ mod benches {
 			let origin = <T as frame_system::Config>::RuntimeOrigin::from(
 				crate::Origin::StmtStoreAlias(alias),
 			);
-			let acc: T::AccountId = account("stmt-store", i, 0);
+			let acc: T::AccountId = account("stmt-store", i.min(max_account), 0);
 			// Should work because the period checks happen when setting the origin, which we skip
 			assert_ok!(Pallet::<T>::set_statement_store_account(origin, past_period, i, acc));
 		}
@@ -844,7 +857,12 @@ mod benches {
 		StatementStoreAllowances::<T>::insert(
 			past_period_key,
 			alias,
-			crate::types::StmtStoreAllowanceEntry { account_id: acc.clone(), seq: 0, since: 0 },
+			crate::types::StmtStoreAllowanceEntry {
+				account_id: acc.clone(),
+				seq: 0,
+				since: 0,
+				allowance: T::AccountsApiAllowance::get().into(),
+			},
 		);
 		StmtStoreAllowanceByAccount::<T>::insert(&acc, (past_period_key, 0u32, alias), ());
 
@@ -916,6 +934,7 @@ mod benches {
 				account_id: existing_target,
 				seq: 1,
 				since: initial_since,
+				allowance: T::AccountsApiAllowance::get().into(),
 			},
 		);
 		// Advance past the replacement cooldown so validation succeeds.
@@ -1116,6 +1135,85 @@ mod benches {
 		}
 
 		Ok(())
+	}
+
+	#[benchmark]
+	fn migrate_stmt_store_allowance_step() {
+		let account: T::AccountId = whitelisted_caller();
+		for i in 0..2u8 {
+			migration::v1::v0::StatementStoreAllowances::<T>::insert(
+				indiv_support::utils::BigEndianU32::from(i as u32),
+				[30u8 + i; 32],
+				migration::v1::v0::StmtStoreAllowanceEntry {
+					account_id: account.clone(),
+					seq: 0,
+					since: 0,
+				},
+			);
+		}
+		StorageVersion::new(0).put::<Pallet<T>>();
+		let mut keys = migration::v1::v0::StatementStoreAllowances::<T>::iter_keys();
+		let first = keys.next().expect("two entries are seeded");
+		let second = keys.next().expect("two entries are seeded");
+		let mut meter =
+			WeightMeter::with_limit(<T as Config>::WeightInfo::migrate_stmt_store_allowance_step());
+		let start = Some(migration::v1::Cursor::StmtStore(Some(first)));
+		let cursor;
+
+		#[block]
+		{
+			cursor = RecordGrantedAllowances::<T>::step(start, &mut meter).unwrap();
+		}
+
+		assert_eq!(cursor, Some(migration::v1::Cursor::StmtStore(Some(second))));
+		assert_eq!(
+			StatementStoreAllowances::<T>::get(second.0, second.1),
+			Some(crate::types::StmtStoreAllowanceEntry {
+				account_id: account,
+				seq: 0,
+				since: 0,
+				allowance: T::AccountsApiAllowance::get().into(),
+			})
+		);
+	}
+
+	#[benchmark]
+	fn migrate_notification_registration_step() {
+		let account: T::AccountId = whitelisted_caller();
+		let reference = crate::types::NotificationReference { period: 1, seq: 0 };
+		for i in 0..2u8 {
+			migration::v1::v0::NotificationRegistrationByAlias::<T>::insert(
+				[32u8 + i; 32],
+				migration::v1::v0::NotificationRegistration {
+					account_id: account.clone(),
+					reference,
+				},
+			);
+		}
+		StorageVersion::new(0).put::<Pallet<T>>();
+		let mut keys = migration::v1::v0::NotificationRegistrationByAlias::<T>::iter_keys();
+		let first = keys.next().expect("two registrations are seeded");
+		let second = keys.next().expect("two registrations are seeded");
+		let mut meter = WeightMeter::with_limit(
+			<T as Config>::WeightInfo::migrate_notification_registration_step(),
+		);
+		let start = Some(migration::v1::Cursor::Notification(Some(first)));
+		let cursor;
+
+		#[block]
+		{
+			cursor = RecordGrantedAllowances::<T>::step(start, &mut meter).unwrap();
+		}
+
+		assert_eq!(cursor, Some(migration::v1::Cursor::Notification(Some(second))));
+		assert_eq!(
+			NotificationRegistrationByAlias::<T>::get(second),
+			Some(crate::types::NotificationRegistration {
+				account_id: account,
+				reference,
+				allowance: T::NotificationAllowance::get().into(),
+			})
+		);
 	}
 
 	impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);

@@ -83,34 +83,34 @@ fn start_game_in_reporting_phase(schedule: &GameSchedule<u32, u128>, accounts: &
 	advance_to_reporting_phase(schedule);
 }
 
-/// Advance a registered game to its reporting phase.
+/// Advance a registered game to its reporting phase at the start of the game.
 fn advance_to_reporting_phase(schedule: &GameSchedule<u32, u128>) {
 	let reg_end = GameTimes::<Test>::registration_end(schedule);
 	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
 	advance_process(); // registration -> shuffle
 	advance_process(); // shuffle -> reporting (steps 1-4)
 	assert!(matches!(GameStore::<Test>::get().unwrap().state, GameState::Reporting { .. }));
+	// Reports are accepted from the start of the game.
+	let game_play_time = GameTimes::<Test>::game_play_time(schedule);
+	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_play_time.into()));
 }
 
 /// Take a scheduled game up to its registration phase, which is where a player can sign up.
 ///
-/// The game is scheduled and then reached through `on_poll`, the way a live chain does it, rather
-/// than started directly: `new_game` is the game pallet's own.
+/// The game is scheduled and then reached through the `start_game` step, the way a live chain does
+/// it. It is not started directly, as `new_game` is the game pallet's own.
 fn start_scheduled_game(schedule: &GameSchedule<u32, u128>) {
 	assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]));
-	// The clock stays where it is: `new_game` sets a game up *before* its registration starts, and
-	// `on_poll` takes the first schedule as soon as there is no game. It skips every
-	// `GAME_PROCESS_SKIPPED_BLOCK`th block, so give it a few.
-	for _ in 0..4 {
-		if matches!(
+	// The clock stays where it is. `new_game` sets a game up *before* its registration starts. The
+	// `start_game` step takes the first schedule in the next block.
+	advance_process();
+	assert!(
+		matches!(
 			GameStore::<Test>::get().map(|game| game.state),
 			Some(GameState::Registration { .. })
-		) {
-			return;
-		}
-		advance_process();
-	}
-	panic!("the scheduled game did not open registration");
+		),
+		"the scheduled game did not open registration"
+	);
 }
 
 /// The total number of leaves committed across all blocks' trees.

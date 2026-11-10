@@ -306,7 +306,7 @@ pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 	/// settled. Settlement happens *early* when an incoming `report` makes a
 	/// named player's tally decisive (via `try_early_attendance_enactment`),
 	/// or *late* when `player_process_step1` resolves the rest after `report_ends`.
-	/// When the counter reaches zero before `report_ends`, `process_reporting`
+	/// When the counter is zero between `game_date` and `report_ends`, the `end_reporting` step
 	/// leaves the reporting phase early instead of waiting for the deadline.
 	pub pending_attendance: u32,
 	/// The number of airdrop events successfully scheduled for this game; the events carry the
@@ -427,17 +427,17 @@ impl GroupsSetting {
 	/// players.
 	///
 	/// Players are dealt round-robin, so the smallest group holds `player_count / number_of_group`
-	/// players, rounded down. On a testnet any player count is acceptable.
+	/// players, rounded down. On a testnet any non-zero player count is acceptable.
 	pub fn acceptable_player_count<T: Config>(&self) -> bool {
+		if self.player_count == 0 {
+			return false;
+		}
+
 		// A testnet game often has few players. This lets it start with a realistic
 		// `max_group_size`, which would otherwise require at least `max_group_size - 1` players.
 		#[cfg(feature = "testnet")]
 		if T::TESTNET {
 			return true;
-		}
-
-		if self.player_count == 0 {
-			return false;
 		}
 
 		let min_group_size = self.full_group_size.saturating_sub(1);
@@ -585,6 +585,17 @@ impl<T: Config, AccountId: Into<sp_statement_store::AccountId>> GameTimes<T>
 	}
 }
 
+/// Why a game was cancelled.
+#[derive(Encode, Decode, DecodeWithMemTracking, TypeInfo, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelReason {
+	/// `end_registration` found too few registered players.
+	TooFewPlayers,
+	/// `advance_shuffle` ran after the shuffle deadline. The configured phases are too short.
+	ShuffleDeadlineMissed,
+	/// [`Config::ManagerOrigin`] called `cancel_game`.
+	Manager,
+}
+
 /// Contains the duration values for each game phase in seconds.
 #[derive(
 	Encode, Decode, MaxEncodedLen, TypeInfo, Debug, Clone, PartialEq, DecodeWithMemTracking,
@@ -592,7 +603,7 @@ impl<T: Config, AccountId: Into<sp_statement_store::AccountId>> GameTimes<T>
 pub struct PhaseDurationValues {
 	/// Registration phase minimum duration in seconds
 	pub registration: u32,
-	/// Shuffle phase duration in seconds
+	/// Shuffle phase duration in seconds. At least `Config::MinStepPhaseDuration`.
 	pub shuffle: u32,
 	/// Minimum time between shuffle and game play time in seconds
 	pub post_shuffle_margin: u32,
@@ -603,7 +614,7 @@ pub struct PhaseDurationValues {
 	/// So the reporting duration must take into account the time needed for players to play the
 	/// game and submit their reports.
 	pub reporting: u32,
-	/// Player process phase duration in seconds
+	/// Player process phase duration in seconds. At least `Config::MinStepPhaseDuration`.
 	pub player_process: u32,
 }
 
