@@ -314,7 +314,7 @@ mod reservation {
 	}
 
 	#[test]
-	fn later_reservation_overwrites_account_lite_label() {
+	fn second_reservation_for_same_account_fails() {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			set_attestation_allowance(ATTESTER, 5);
@@ -328,20 +328,25 @@ mod reservation {
 				None,
 				SIGNED_AT_NOW
 			));
-			assert_ok!(DotnsGateway::reserve_name(
-				RuntimeOrigin::signed(ATTESTER),
-				ALICE,
-				valid_candidate_signature(ALICE),
-				base_name(BOB_LITE),
-				default_chat_key(),
-				None,
-				SIGNED_AT_NOW
-			));
+			assert_noop!(
+				DotnsGateway::reserve_name(
+					RuntimeOrigin::signed(ATTESTER),
+					ALICE,
+					valid_candidate_signature(ALICE),
+					base_name(BOB_LITE),
+					default_chat_key(),
+					None,
+					SIGNED_AT_NOW
+				),
+				Error::<Test>::AccountAlreadyHasLiteName
+			);
 
+			assert_eq!(AttestationAllowance::<Test>::get(ATTESTER), 4);
+			assert_eq!(LiteLabelOwner::<Test>::get(base_name(BOB_LITE)), None);
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
 				Some(AccountNameRecord {
-					lite: entry(BOB_LITE, Some(default_chat_key())),
+					lite: entry(ALICE_LITE, Some(default_chat_key())),
 					full: None
 				})
 			);

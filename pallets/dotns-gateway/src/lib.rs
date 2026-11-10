@@ -301,6 +301,8 @@ pub mod pallet {
 		NotLiteLabelOwner,
 		/// The `RootGatewayDispatcher` contract address has not been set.
 		DispatcherAddressNotSet,
+		/// The candidate already holds a lite name.
+		AccountAlreadyHasLiteName,
 	}
 
 	// ========== Extrinsics ==========
@@ -313,7 +315,7 @@ pub mod pallet {
 		///
 		/// The caller must be an attester with available allowance. The user's
 		/// signature proves their consent to the reservation with this specific label
-		/// and attester.
+		/// and attester. A candidate that already holds a lite name is rejected.
 		///
 		/// # Parameters
 		/// - `candidate`: the Lite Person's account for whom the label is being reserved. Also the
@@ -355,6 +357,10 @@ pub mod pallet {
 			if let Some(ref label) = reserved_base_label {
 				ensure!(label.is_valid_person(), Error::<T>::InvalidName);
 			}
+			ensure!(
+				AccountNames::<T>::get(&candidate).and_then(|record| record.lite).is_none(),
+				Error::<T>::AccountAlreadyHasLiteName,
+			);
 
 			let now = <T as Config>::UnixTime::now().as_secs();
 			ensure!(
