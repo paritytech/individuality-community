@@ -43,7 +43,9 @@
 //!   lands in `STEP_LANDING_PERCENT` of the blocks it is due. The e2e suite `game` measures both on
 //!   a local network.
 //! * A game schedules `GAME_AIRDROPS` airdrop events, as in production, and a sign-up enters each.
-//!   The airdrop sweep compares other counts.
+//!   The airdrop sweep compares other counts. The airdrop pallet runs its own lifecycle calls for
+//!   each event, one per block at most and bounded by `DrawLimit` and `ClearLimit`. A call fits
+//!   beside a game step in the `Normal` space, so it does not lengthen a phase.
 //! * The shuffle insert step and the player process step 1 iterate over every stored player,
 //!   including the players who did not sign up for this game. The estimate assumes that every
 //!   stored player plays. Each other stored player costs one more step, which the estimate prints.

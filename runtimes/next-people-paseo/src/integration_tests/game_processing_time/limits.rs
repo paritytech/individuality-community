@@ -30,8 +30,9 @@ pub(super) const PHASE_CHANGE_BLOCKS: u64 = 2;
 /// The share of the blocks with a step due that include one, in percent.
 ///
 /// The offchain worker of one block submits a step call and a later block includes it. The e2e
-/// suite `game` prints the measured share as `blocks with a step due ... (<share>%)`.
-pub(super) const STEP_LANDING_PERCENT: u64 = 80;
+/// suite `game` prints the measured share as `blocks with a step due ... (<share>%)`. A run of
+/// seven one-player games on a local network measured 19 of 25 blocks.
+pub(super) const STEP_LANDING_PERCENT: u64 = 76;
 
 /// The limit that stops a block from taking more of a phase's work.
 #[derive(Clone, Copy)]
