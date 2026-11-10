@@ -338,7 +338,7 @@ mod reservation {
 					None,
 					SIGNED_AT_NOW
 				),
-				Error::<Test>::AccountAlreadyHasLiteName
+				Error::<Test>::AccountAlreadyHasDeviceName
 			);
 
 			assert_eq!(AttestationAllowance::<Test>::get(ATTESTER), 4);
