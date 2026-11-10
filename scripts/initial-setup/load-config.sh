@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # load-config.sh - sources the right config for the target environment.
 # Usage: source ./load-config.sh (from any script in this directory)
-# Set ENV to "local" before sourcing.
+# Set ENV to "next", "preview", or "local" before sourcing.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV="${ENV:-local}"
 
-if [[ ! "$ENV" =~ ^local$ ]]; then
-  echo "ERROR: ENV must be 'local'. Got: '$ENV'" >&2
+if [[ ! "$ENV" =~ ^(next|preview|local)$ ]]; then
+  echo "ERROR: ENV must be 'next', 'preview', or 'local'. Got: '$ENV'" >&2
   exit 1
 fi
 

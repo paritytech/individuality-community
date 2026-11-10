@@ -561,4 +561,30 @@ impl<T: frame_system::Config> indiv_pallet_resources::WeightInfo for WeightInfo<
 			.saturating_add(Weight::from_parts(0, 3517))
 			.saturating_add(T::DbWeight::get().reads(2))
 	}
+	/// Storage: `Resources::PalletVersion` (r:1 w:0)
+	/// Storage: `Resources::StatementStoreAllowances` (r:1 w:1)
+	/// Proof: `Resources::StatementStoreAllowances` (`max_values`: None, `max_size`: Some(132), added: 2607, mode: `MaxEncodedLen`)
+	fn migrate_stmt_store_allowance_step() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `200`
+		//  Estimated: `3597`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3597))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	/// Storage: `Resources::PalletVersion` (r:1 w:0)
+	/// Storage: `Resources::NotificationRegistrationByAlias` (r:1 w:1)
+	/// Proof: `Resources::NotificationRegistrationByAlias` (`max_values`: None, `max_size`: Some(93), added: 2568, mode: `MaxEncodedLen`)
+	fn migrate_notification_registration_step() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `160`
+		//  Estimated: `3558`
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3558))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
 }
