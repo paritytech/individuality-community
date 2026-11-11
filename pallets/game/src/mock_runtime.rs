@@ -1513,6 +1513,10 @@ pub fn run_game_scenario_with_phase<FS, FR>(
 	advance_process(); // registration to shuffle
 	advance_process(); // shuffle to report
 
+	// Move time to game day, when reports open
+	let game_play_time = GameTimes::<Test>::game_play_time(&schedule);
+	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_play_time as u64));
+
 	// Now do your `report_fn` (the user-supplied closure)
 	report_fn();
 

@@ -599,6 +599,17 @@ pub mod pallet {
 		pub fn product_name() -> AirdropProductName {
 			AirdropProductName::truncate_from(PRODUCT_NAME.to_vec())
 		}
+
+		/// The game's signing context on this network. An account signs this context followed
+		/// by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(
+				PRODUCT_NAME,
+				&<T as indiv_pallet_score::Config>::Suffix::get(),
+			)
+		}
 	}
 
 	#[pallet::origin]
@@ -867,7 +878,8 @@ pub mod pallet {
 		InvalidReport,
 		/// No game ongoing.
 		NoGame,
-		/// No report phase ongoing.
+		/// The game does not accept reports now. The game state must be `Reporting` and the
+		/// current time must be at or after `game_date` and before `report_ends`.
 		NoReporting,
 		/// Not registered.
 		NotRegistered,
@@ -1281,9 +1293,9 @@ pub mod pallet {
 			Ok(Pays::No.into())
 		}
 
-		/// After the game, send the full report.
+		/// Send the full report for the current game.
 		///
-		/// The game must be ongoing and in its reporting phase.
+		/// The game must be in its reporting phase, from `game_date` until `report_ends`.
 		///
 		/// The origin must be an alias, or signed by an account, or signed by an account and use
 		/// `ScoreAsParticipant` extension.
@@ -1331,9 +1343,12 @@ pub mod pallet {
 
 			let game = Game::<T>::get().ok_or(Error::<T>::NoGame)?;
 			let game_index = game.index;
-			let now = T::UnixTime::now();
-			ensure!(now < Duration::from_secs(game.report_ends as u64), Error::<T>::NoReporting);
-			let award_time = now.as_secs() as u32;
+			let now = T::UnixTime::now().as_secs();
+			ensure!(
+				(u64::from(game.game_date)..u64::from(game.report_ends)).contains(&now),
+				Error::<T>::NoReporting
+			);
+			let award_time = now as u32;
 			let group_size = game.max_group_size;
 			let GameState::Reporting { player_count } = game.state else {
 				return Err(Error::<T>::NoReporting.into());
@@ -1882,6 +1897,8 @@ pub mod pallet {
 
 		/// Force start the shuffle before its normal start time.
 		///
+		/// The game starts no later than now, so players can report as soon as the shuffle ends.
+		///
 		/// This action can only be performed by the root origin and is only meant for testing.
 		#[pallet::call_index(101)]
 		#[pallet::weight(Weight::zero())]
@@ -1898,6 +1915,7 @@ pub mod pallet {
 			};
 			let now = T::UnixTime::now();
 			game.registration_ends = now.as_secs().try_into().unwrap_or(u32::MAX);
+			game.game_date = core::cmp::min(game.game_date, game.registration_ends);
 			game.state =
 				GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } };
 			Game::<T>::put(game);
@@ -2264,20 +2282,6 @@ pub mod pallet {
 		}
 	}
 
-	#[pallet::extra_constants]
-	impl<T: Config> Pallet<T> {
-		/// The game's signing context on this network. An account signs this context followed
-		/// by the message when it signs a message that is not a transaction; see
-		/// [`Pallet::account_signing_payload`].
-		#[pallet::constant_name(SigningContext)]
-		pub fn signing_context() -> Context {
-			indiv_support::context::signing_context(
-				PRODUCT_NAME,
-				&<T as indiv_pallet_score::Config>::Suffix::get(),
-			)
-		}
-	}
-
 	impl<T: Config> Pallet<T> {
 		/// Returns the bytes an account signs for `msg`: the game's signing context followed by
 		/// `msg`.
@@ -2401,7 +2405,8 @@ pub mod pallet {
 				GameState::Shuffle { .. } => Some(NextStep::AdvanceShuffle),
 				GameState::Reporting { .. } => (now >=
 					Duration::from_secs(game.report_ends.into()) ||
-					game.pending_attendance == 0)
+					(now >= Duration::from_secs(game.game_date.into()) &&
+						game.pending_attendance == 0))
 					.then_some(NextStep::EndReporting),
 				GameState::PlayerProcess { .. } => Some(NextStep::ProcessPlayers),
 				GameState::Cancelling { .. } => Some(NextStep::AdvanceCancelling),
@@ -3469,13 +3474,12 @@ pub mod pallet {
 				return;
 			};
 
-			// Transition to player process either when the reporting window has closed
-			// or as soon as every registered player's attendance has already been
-			// enacted early (nothing left to wait for).
-			let now = T::UnixTime::now();
-			let reporting_ended = now >= Duration::from_secs(game.report_ends.into());
-			let nothing_pending = game.pending_attendance == 0;
-			if !reporting_ended && !nothing_pending {
+			// Reporting ends when the window closes, or earlier once the game has started and
+			// every registered player's attendance is settled.
+			let now = T::UnixTime::now().as_secs();
+			let window_closed = now >= u64::from(game.report_ends);
+			let settled_early = now >= u64::from(game.game_date) && game.pending_attendance == 0;
+			if !window_closed && !settled_early {
 				return;
 			}
 
