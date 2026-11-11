@@ -33,15 +33,16 @@ use frame_support::{
 		fungibles::{
 			Create, Inspect as FungiblesInspect, InspectEnumerable, Mutate as FungiblesMutate,
 		},
-		ContainsPair, OnIdle,
+		ContainsPair, OnIdle, ProcessMessageError,
 	},
 	weights::Weight,
 };
 use next_asset_hub_paseo_runtime::{
 	genesis_config_presets::EXTERNAL_ASSET_ID,
 	xcm_config::{
-		bridging, CheckingAccount, DotLocation, ExternalAssetLocation, LocationToAccountId,
-		RelayChainLocation, StakingPot, TrustBackedAssetsPalletLocation, XcmConfig,
+		bridging, Barrier, CheckingAccount, DotLocation, ExternalAssetLocation,
+		LocationToAccountId, RelayChainLocation, StakingPot, TrustBackedAssetsPalletLocation,
+		XcmConfig,
 	},
 	AllPalletsWithoutSystem, AssetConversion, AssetDeposit, Assets, Balances, Block, Executive,
 	ExistentialDeposit, ForeignAssets, ForeignAssetsInstance, GenericUncheckedExtrinsic,
@@ -69,7 +70,7 @@ use xcm::latest::{
 	WESTEND_GENESIS_HASH,
 };
 use xcm_builder::WithLatestLocationConverter;
-use xcm_executor::traits::ConvertLocation;
+use xcm_executor::traits::{ConvertLocation, Properties, ShouldExecute};
 use xcm_runtime_apis::conversions::LocationToAccountHelper;
 
 const ALICE: [u8; 32] = [1u8; 32];
@@ -1035,6 +1036,31 @@ fn authorized_aliases_work() {
 				&local_alice
 			));
 		})
+}
+
+#[test]
+fn barrier_denies_relay_reserve_transfers_recursively() {
+	let transfer = TransferReserveAsset {
+		assets: (Parent, UNITS).into(),
+		dest: Location::parent(),
+		xcm: Xcm(vec![]),
+	};
+	let results = [
+		transfer.clone(),
+		SetAppendix(Xcm(vec![transfer.clone()])),
+		SetErrorHandler(Xcm(vec![transfer])),
+	]
+	.map(|instruction| {
+		let weight = Weight::from_parts(1_000_000, 1000);
+		let mut properties = Properties { weight_credit: weight, message_id: None };
+		Barrier::should_execute::<RuntimeCall>(
+			&Location::new(0, AccountId32 { network: None, id: ALICE }),
+			&mut [instruction],
+			weight,
+			&mut properties,
+		)
+	});
+	assert_eq!(results, [Err(ProcessMessageError::Unsupported); 3]);
 }
 
 #[test]
