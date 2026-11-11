@@ -4098,6 +4098,46 @@ mod claim_tenure_credits {
 	}
 
 	#[test]
+	fn a_player_with_tenure_earns_nothing_when_the_thresholds_are_emptied() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 3);
+			set_time(OPENS);
+
+			set_thresholds(vec![]);
+
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::NoTenureCredit
+			);
+			assert_err_ignore_postinfo!(claim_tenure_credits(&BOB), Error::<Test>::NoTenureCredit);
+			assert_eq!(tenure_claim_of(&ALICE), None);
+			assert_eq!(slots(game, &ALICE).count(), 0);
+		});
+	}
+
+	#[test]
+	fn a_tenure_claim_made_before_the_thresholds_are_emptied_is_awarded_after_the_game() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 0);
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_eq!(slots(game, &ALICE).count(), 0);
+
+			set_thresholds(vec![]);
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			// The tenure claim holds the credits it earned when ALICE claimed.
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1]);
+			assert_eq!(tenure_claim_of(&ALICE), None);
+		});
+	}
+
+	#[test]
 	fn tenure_claims_open_at_the_window_and_close_at_play() {
 		new_test_ext().execute_with(|| {
 			set_up_alice();
