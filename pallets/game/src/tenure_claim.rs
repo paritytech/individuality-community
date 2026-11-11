@@ -77,10 +77,7 @@ impl<T: Config> Pallet<T> {
 			Players::<T>::get(player).is_some_and(|player| player.registered),
 			Error::<T>::NotRegistered
 		);
-		ensure!(
-			!TenureClaims::<T>::contains_key(game.index, player),
-			Error::<T>::TenureCreditsAlreadyClaimed
-		);
+		ensure!(!TenureClaims::<T>::contains_key(player), Error::<T>::TenureCreditsAlreadyClaimed);
 
 		let participant = Participants::<T>::get(player);
 		let tenure = participant.as_ref().map_or(0, |p| p.attended_games_while_recognized);
@@ -113,7 +110,7 @@ impl<T: Config> Pallet<T> {
 			0
 		};
 
-		TenureClaims::<T>::insert(game_index, &player, credits);
+		TenureClaims::<T>::insert(&player, credits);
 		Self::deposit_event(Event::<T>::TenureCreditsClaimed { player, game_index, credits });
 
 		Ok(awarded)
@@ -129,7 +126,7 @@ impl<T: Config> Pallet<T> {
 		attendance: Attendance,
 		award_time: u32,
 	) -> u32 {
-		let Some(credits) = TenureClaims::<T>::take(game_index, player) else { return 0 };
+		let Some(credits) = TenureClaims::<T>::take(player) else { return 0 };
 		let is_person =
 			Participants::<T>::get(player).is_some_and(|p| p.recognition.is_recognized());
 		if !is_person && attendance == Attendance::Absent {

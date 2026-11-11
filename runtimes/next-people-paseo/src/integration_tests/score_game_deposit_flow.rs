@@ -143,15 +143,11 @@ fn account_participant_checks_in() {
 		exec_signed(&bob_pair, signup.into());
 
 		advance_until_time(GameTimes::<Runtime>::game_play_time(&schedule) - 60);
-		let game_index = indiv_pallet_game::Game::<Runtime>::get().expect("game exists").index;
 		let claim = indiv_pallet_game::Call::<Runtime>::claim_tenure_credits {};
 		exec_signed_as_score_participant(&bob_pair, claim.into());
 
 		assert_eq!(
-			indiv_pallet_game::TenureClaims::<Runtime>::get(
-				game_index,
-				AccountOrPerson::Account(bob)
-			),
+			indiv_pallet_game::TenureClaims::<Runtime>::get(AccountOrPerson::Account(bob)),
 			Some(1),
 			"a player without tenure reaches only the zero threshold"
 		);

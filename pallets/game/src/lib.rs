@@ -785,19 +785,14 @@ pub mod pallet {
 	pub type TenureThresholds<T: Config> =
 		StorageValue<_, TenureThresholdsOf<T>, ValueQuery, T::DefaultTenureThresholds>;
 
-	/// The tenure claim of each player for a game, stored as the number of tenure credits it earns.
+	/// The tenure claim of each player for the current game, stored as the number of tenure
+	/// credits it earns.
 	///
 	/// The number includes the credits paid when the player claims. The attendance backfill or
-	/// the game's cancellation removes every entry.
+	/// the game's cancellation removes every entry, so no entry outlives its game.
 	#[pallet::storage]
-	pub type TenureClaims<T: Config> = StorageDoubleMap<
-		_,
-		Twox64Concat,
-		GameIdx,
-		Blake2_128Concat,
-		AccountOrPerson<T::AccountId>,
-		u32,
-	>;
+	pub type TenureClaims<T: Config> =
+		StorageMap<_, Blake2_128Concat, AccountOrPerson<T::AccountId>, u32>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -3982,7 +3977,7 @@ pub mod pallet {
 				// The credit mask names group positions, so it is only readable through the
 				// index maps and goes with them.
 				T::NftClaimCredits::forget_player_credits(game_index, &player_id);
-				TenureClaims::<T>::remove(game_index, &player_id);
+				TenureClaims::<T>::remove(&player_id);
 
 				// Clean index <-> player mapping.
 				if let Some(indices) = PlayerToIndex::<T>::take(&player_id) {

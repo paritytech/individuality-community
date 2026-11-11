@@ -3656,8 +3656,8 @@ mod claim_tenure_credits {
 		AwardedNftClaimCredits::<Test>::get(game, AccountOrPerson::Account(who.clone()))
 	}
 
-	fn tenure_claim_of(game: GameIdx, who: &AccountId32) -> Option<u32> {
-		TenureClaims::<Test>::get(game, AccountOrPerson::Account(who.clone()))
+	fn tenure_claim_of(who: &AccountId32) -> Option<u32> {
+		TenureClaims::<Test>::get(AccountOrPerson::Account(who.clone()))
 	}
 
 	/// The tenure credits of `game` awarded to `who` so far, by threshold index.
@@ -3691,7 +3691,7 @@ mod claim_tenure_credits {
 
 			assert_eq!(slots(game, &ALICE).count(), 3);
 			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1, 2]);
-			assert_eq!(tenure_claim_of(game, &ALICE), Some(3));
+			assert_eq!(tenure_claim_of(&ALICE), Some(3));
 			System::assert_has_event(
 				Event::<Test>::TenureCreditsClaimed {
 					player: AccountOrPerson::Account(ALICE),
@@ -3712,7 +3712,7 @@ mod claim_tenure_credits {
 
 			let post = claim_tenure_credits(&BOB).expect("BOB claims tenure credits");
 
-			assert_eq!(tenure_claim_of(game, &BOB), Some(1));
+			assert_eq!(tenure_claim_of(&BOB), Some(1));
 			assert_eq!(slots(game, &BOB).count(), 0);
 			assert_eq!(awarded_credit_count(), 0);
 			// Charged as a tenure claim that awards one credit, the least the weight covers.
@@ -3734,7 +3734,7 @@ mod claim_tenure_credits {
 			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
 
 			assert_eq!(awarded_tenure_credits(game, &BOB), vec![0]);
-			assert_eq!(tenure_claim_of(game, &BOB), None);
+			assert_eq!(tenure_claim_of(&BOB), None);
 		});
 	}
 
@@ -3748,7 +3748,7 @@ mod claim_tenure_credits {
 			play_to_end(&[ALICE, CHARLIE, DAVE]);
 
 			assert_eq!(awarded_tenure_credits(game, &BOB), Vec::<u32>::new());
-			assert_eq!(tenure_claim_of(game, &BOB), None);
+			assert_eq!(tenure_claim_of(&BOB), None);
 		});
 	}
 
@@ -3763,7 +3763,7 @@ mod claim_tenure_credits {
 			play_to_end(&[ALICE, CHARLIE, DAVE]);
 
 			assert_eq!(awarded_tenure_credits(game, &BOB), vec![0]);
-			assert_eq!(tenure_claim_of(game, &BOB), None);
+			assert_eq!(tenure_claim_of(&BOB), None);
 		});
 	}
 
@@ -3793,14 +3793,33 @@ mod claim_tenure_credits {
 			start_scheduled_game(&next);
 			sign_up(&ALICE);
 			sign_up(&BOB);
-			let game = GameStore::<Test>::get().expect("the game is registering").index;
 			set_time((play - WINDOW).into());
 
 			assert_ok!(claim_tenure_credits(&ALICE));
 			assert_ok!(claim_tenure_credits(&BOB));
 
-			assert_eq!(tenure_claim_of(game, &ALICE), Some(2));
-			assert_eq!(tenure_claim_of(game, &BOB), Some(1));
+			assert_eq!(tenure_claim_of(&ALICE), Some(2));
+			assert_eq!(tenure_claim_of(&BOB), Some(1));
+		});
+	}
+
+	#[test]
+	fn a_player_that_claimed_in_a_game_claims_again_in_the_next() {
+		new_test_ext().execute_with(|| {
+			set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&ALICE));
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			let play = PLAY + 10_000;
+			let next = GameSchedule { game_play_time: play, ..schedule() };
+			start_scheduled_game(&next);
+			sign_up(&ALICE);
+			set_time((play - WINDOW).into());
+
+			// The first game raised ALICE's tenure, so this claim earns more than her first.
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_eq!(tenure_claim_of(&ALICE), Some(2));
 		});
 	}
 
@@ -3815,13 +3834,13 @@ mod claim_tenure_credits {
 
 			assert_ok!(claim_tenure_credits(&ALICE));
 			assert_eq!(slots(game, &ALICE).count(), 0);
-			assert_eq!(tenure_claim_of(game, &ALICE), Some(2));
+			assert_eq!(tenure_claim_of(&ALICE), Some(2));
 
 			// ALICE does not attend, which a person's tenure claim does not depend on.
 			play_to_end(&[BOB, CHARLIE, DAVE]);
 
 			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1]);
-			assert_eq!(tenure_claim_of(game, &ALICE), None);
+			assert_eq!(tenure_claim_of(&ALICE), None);
 		});
 	}
 
@@ -3860,7 +3879,7 @@ mod claim_tenure_credits {
 
 			assert_ok!(claim_tenure_credits(&BOB));
 
-			assert_eq!(tenure_claim_of(game, &BOB), Some(2));
+			assert_eq!(tenure_claim_of(&BOB), Some(2));
 			assert_eq!(awarded_tenure_credits(game, &BOB), Vec::<u32>::new());
 		});
 	}
@@ -3878,7 +3897,7 @@ mod claim_tenure_credits {
 			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
 
 			assert_eq!(awarded_tenure_credits(game, &BOB), vec![0, 1]);
-			assert_eq!(tenure_claim_of(game, &BOB), None);
+			assert_eq!(tenure_claim_of(&BOB), None);
 		});
 	}
 
@@ -3895,7 +3914,7 @@ mod claim_tenure_credits {
 			play_to_end(&[ALICE, CHARLIE, DAVE]);
 
 			assert_eq!(awarded_tenure_credits(game, &BOB), Vec::<u32>::new());
-			assert_eq!(tenure_claim_of(game, &BOB), None);
+			assert_eq!(tenure_claim_of(&BOB), None);
 		});
 	}
 
@@ -3914,7 +3933,7 @@ mod claim_tenure_credits {
 			play_to_end(&[BOB, CHARLIE, DAVE]);
 
 			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
-			assert_eq!(tenure_claim_of(game, &ALICE), None);
+			assert_eq!(tenure_claim_of(&ALICE), None);
 		});
 	}
 
@@ -3937,7 +3956,7 @@ mod claim_tenure_credits {
 			assert_ok!(Game::claim_tenure_credits(runtime_origin_for_alias(&alias)));
 
 			let player = AccountOrPerson::Person(alias);
-			assert_eq!(TenureClaims::<Test>::get(game, &player), Some(1));
+			assert_eq!(TenureClaims::<Test>::get(&player), Some(1));
 			assert_eq!(
 				awarded_credits(&player),
 				vec![NftCredits::compute_tenure_credit(game, 0, &player)]
@@ -4028,14 +4047,14 @@ mod claim_tenure_credits {
 				Error::<Test>::TenureCreditsAlreadyClaimed
 			);
 			assert_eq!(slots(game, &ALICE).count(), 1);
-			assert_eq!(tenure_claim_of(game, &ALICE), Some(1));
+			assert_eq!(tenure_claim_of(&ALICE), Some(1));
 		});
 	}
 
 	#[test]
 	fn a_tenure_claim_with_nothing_new_is_refused_and_pays() {
 		new_test_ext().execute_with(|| {
-			let game = set_up_full_group();
+			set_up_full_group();
 			set_time(OPENS);
 			assert_ok!(claim_tenure_credits(&BOB));
 
@@ -4047,7 +4066,7 @@ mod claim_tenure_credits {
 				refused.post_info.actual_weight,
 				Some(<MockWeightInfo as WeightInfo>::claim_tenure_credits(1))
 			);
-			assert_eq!(tenure_claim_of(game, &BOB), Some(1));
+			assert_eq!(tenure_claim_of(&BOB), Some(1));
 		});
 	}
 
@@ -4055,7 +4074,7 @@ mod claim_tenure_credits {
 	fn a_tenure_below_every_threshold_earns_nothing() {
 		new_test_ext().execute_with(|| {
 			set_thresholds(vec![1]);
-			let game = set_up_full_group();
+			set_up_full_group();
 			set_time(OPENS);
 
 			assert_err_ignore_postinfo!(
@@ -4064,7 +4083,7 @@ mod claim_tenure_credits {
 			);
 			// Without a threshold of zero, a candidate earns nothing.
 			assert_err_ignore_postinfo!(claim_tenure_credits(&BOB), Error::<Test>::NoTenureCredit);
-			assert_eq!(tenure_claim_of(game, &BOB), None);
+			assert_eq!(tenure_claim_of(&BOB), None);
 		});
 	}
 
@@ -4170,7 +4189,7 @@ mod claim_tenure_credits {
 				advance_process();
 			}
 
-			assert_eq!(TenureClaims::<Test>::iter_prefix(game).count(), 0);
+			assert_eq!(TenureClaims::<Test>::iter().count(), 0);
 			// ALICE keeps the credit awarded at the claim, and BOB receives none.
 			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
 			assert_eq!(awarded_tenure_credits(game, &BOB), Vec::<u32>::new());

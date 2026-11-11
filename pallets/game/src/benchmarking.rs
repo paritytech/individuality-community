@@ -971,7 +971,7 @@ pub mod benches {
 			let _ = attendance.try_push(i);
 		}
 		PlayerAttendanceHistory::<T>::insert(&target_player, attendance);
-		TenureClaims::<T>::insert(game_index, &target_player, T::MaxTenureThresholds::get());
+		TenureClaims::<T>::insert(&target_player, T::MaxTenureThresholds::get());
 		// Not the genesis block, whose buffer would count as built already.
 		frame_system::Pallet::<T>::set_block_number(10u32.into());
 		T::NftClaimCredits::benchmark_fill_buffer_but_one(game_index);
@@ -1240,7 +1240,7 @@ pub mod benches {
 		let game_index = Game::<T>::get().expect("game was scheduled").index;
 		T::NftClaimCredits::benchmark_award_every_slot(game_index, &account_or_person);
 		// The cancelled game's tenure claim is dropped with the player.
-		TenureClaims::<T>::insert(game_index, &account_or_person, T::MaxTenureThresholds::get());
+		TenureClaims::<T>::insert(&account_or_person, T::MaxTenureThresholds::get());
 
 		#[block]
 		{
@@ -1268,7 +1268,7 @@ pub mod benches {
 			);
 		}
 
-		assert!(!TenureClaims::<T>::contains_key(game_index, &account_or_person));
+		assert!(!TenureClaims::<T>::contains_key(&account_or_person));
 
 		Ok(())
 	}
@@ -2407,7 +2407,7 @@ pub mod benches {
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller));
 
-		assert_eq!(TenureClaims::<T>::get(game_index, &player), Some(n));
+		assert_eq!(TenureClaims::<T>::get(&player), Some(n));
 
 		Ok(())
 	}
