@@ -4380,10 +4380,10 @@ mod claim_tenure_credits {
 mod game_benchmarks {
 	use super::*;
 	use indiv_pallet_game::benchmarking::benches::{
-		_claim_tenure_credits, _player_process_step1_inner_loop,
+		_claim_tenure_credits, _player_process_step1_inner_loop, _report,
 	};
 
-	/// The block both benchmarks award in.
+	/// The block the benchmarks award in.
 	const BLOCK: u64 = 10;
 
 	/// Asserts that the awards filled the buffer of [`BLOCK`] and spilled into the next one.
@@ -4409,6 +4409,17 @@ mod game_benchmarks {
 	fn claim_tenure_credits_spills() {
 		new_test_ext().execute_with(|| {
 			assert_ok!(_claim_tenure_credits::<Test>(2, true));
+
+			assert_spilled();
+		});
+	}
+
+	#[test]
+	fn report_spills() {
+		new_test_ext().execute_with(|| {
+			let max_group_size =
+				<<Test as indiv_pallet_game::Config>::MaxGroupSize as Get<u32>>::get();
+			assert_ok!(_report::<Test>(max_group_size - 1, 0, true));
 
 			assert_spilled();
 		});

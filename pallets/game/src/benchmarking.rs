@@ -1544,7 +1544,7 @@ pub mod benches {
 	///   `e` can enact anywhere from 0 to `e + 1` players, so this work needs its own component
 	///   rather than folding into the `e` slope.
 	#[benchmark]
-	fn report(
+	pub fn report(
 		e: Linear<
 			{ T::MaxGroupSize::get() - 1 },
 			{ T::MaxRounds::get() * (T::MaxGroupSize::get() - 1) },
@@ -1679,6 +1679,13 @@ pub mod benches {
 		for _ in 0..rounds {
 			assert!(full_report.try_push(round_report.clone()).is_ok());
 		}
+
+		// The block's credit buffer is one award short of full, so the first award fills it and
+		// the next spills into the next block's buffer. That reads the most keys the awards can.
+		// Not the genesis block, whose buffer would count as built already.
+		frame_system::Pallet::<T>::set_block_number(10u32.into());
+		let game_index = Game::<T>::get().expect("Game should exist").index;
+		T::NftClaimCredits::benchmark_fill_buffer_but_one(game_index);
 
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller.clone()), full_report);
