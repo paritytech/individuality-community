@@ -51,11 +51,17 @@ use sp_runtime::{
 )]
 #[scale_info(skip_type_params(T))]
 pub enum AsCoinageInfo<T: Config + Send + Sync> {
-	/// Transmute the signed origin into [Origin::Coin] for the supported coin calls.
-	/// `retry_counter` must match the next failed-dispatch retry for the coin, or 0 if it has no
-	/// failure lock.
-	/// A failed dispatch locks the coin temporarily with exponential backoff.
-	AsCoin { retry_counter: u8 },
+	/// Transmute the signed origin into [Origin::Coin] for the calls: [Call::split],
+	/// [Call::transfer], [Call::load_recycler_with_coin].
+	///
+	/// A failed dispatch locks the coin temporarily with exponential backoff. Coin authorization
+	/// is not nonce-based, so the caller must send a mortal transaction: a success clears the
+	/// lock, and a later coin under the same account accepts the same transaction again.
+	AsCoin {
+		/// The next failed-dispatch retry for the coin, or 0 if the coin has no failure lock.
+		/// A failed transaction cannot be included again, because its counter is then stale.
+		retry_counter: u8,
+	},
 	/// Transmute the None origin into [Origin::UnloadToken] for the calls:
 	/// [Call::unload_recycler_into_coin], [Call::unload_recycler_into_external_asset],
 	/// [Call::unload_recycler_into_external_asset_and_loaded_coins], and
