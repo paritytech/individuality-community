@@ -39,7 +39,7 @@ fn failed_coin_extrinsic_restores_coin() {
 		assert_eq!(TotalValueOfDestroyedCoins::<Test>::get(TEST_INSTANCE_ID), 0);
 		assert!(!CoinsByOwner::<Test>::contains_key(coin_id));
 
-		let pre = Pre::<Test>::UsingCoin { coin_id, coin };
+		let pre = Pre::<Test>::UsingCoin { coin_id, coin, retry_counter: 0 };
 		let info = Default::default();
 		let post_info = Default::default();
 		let err = Err(DispatchError::Other("test"));
@@ -78,7 +78,7 @@ fn successful_coin_extrinsic_clears_existing_lock() {
 			Some(LockInfo { reason: LockReason::FailedDispatch { retries: 0 }, until: 100u64 })
 		);
 
-		let pre = Pre::<Test>::UsingCoin { coin_id, coin };
+		let pre = Pre::<Test>::UsingCoin { coin_id, coin, retry_counter: 0 };
 		let info = Default::default();
 		let post_info = Default::default();
 		let ok = Ok(());
@@ -286,6 +286,38 @@ fn build_pay_for_token_ext(signer: u64) -> Extrinsic {
 /// Helper to build a transfer extrinsic.
 fn build_transfer_ext(signer: u64, to: u64) -> Extrinsic {
 	build_signed_as_coin_ext(signer, crate::Call::transfer { to }, true)
+}
+
+#[test]
+fn replayed_failed_coin_extrinsic_is_rejected_after_lock_expires() {
+	new_test_ext().execute_with(|| {
+		setup_asset();
+		CoinsByOwner::<Test>::insert(
+			ALICE,
+			Coin { instance_id: TEST_INSTANCE_ID, value: 0, age: 0 },
+		);
+
+		let ext = build_pay_for_token_ext(ALICE);
+		let result = Executive::apply_extrinsic(ext.clone());
+		assert!(matches!(result, Ok(Err(_))), "Dispatch should fail: {result:?}");
+		let first_lock = LockedCoins::<Test>::get(ALICE).unwrap();
+		assert_eq!(first_lock.reason, LockReason::FailedDispatch { retries: 0 });
+
+		advance_until_time(first_lock.until as u32);
+		assert_invalid(ext, CustomInvalidity::CoinTemporarilyLocked);
+
+		let current_time = MockTime::now().as_secs();
+		let retry = build_pay_for_token_ext(ALICE);
+		let result = Executive::apply_extrinsic(retry);
+		assert!(matches!(result, Ok(Err(_))), "Dispatch should fail: {result:?}");
+		assert_eq!(
+			LockedCoins::<Test>::get(ALICE),
+			Some(LockInfo {
+				reason: LockReason::FailedDispatch { retries: 1 },
+				until: current_time + 2 * COIN_FAILURE_LOCK_PERIOD
+			})
+		);
+	});
 }
 
 #[test]

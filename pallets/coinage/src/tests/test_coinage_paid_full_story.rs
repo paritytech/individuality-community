@@ -39,8 +39,10 @@ fn exec_signed(who: u64, call: RuntimeCall) {
 
 /// Helper to execute a transaction as a coin (using AsCoin extension).
 fn exec_as_coin(who_account: u64, call: RuntimeCall) {
-	let extension =
-		(AuthorizeCall::<Test>::new(), AsCoinage::<Test>::new(Some(AsCoinageInfo::AsCoin)));
+	let extension = (
+		AuthorizeCall::<Test>::new(),
+		AsCoinage::<Test>::new(Some(AsCoinageInfo::AsCoin { retry_counter: 0 })),
+	);
 	// Use the coin account as the signer. AsCoinage will verify ownership
 	// via the signature against the coin ID.
 	let uxt = Extrinsic::new_signed(call, who_account, UintAuthorityId(who_account), extension);

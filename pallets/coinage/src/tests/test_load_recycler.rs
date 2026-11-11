@@ -222,7 +222,7 @@ fn sponsored_load_with_coin_requires_and_charges_the_load_deposit() {
 		let member = CryptoOf::<Test>::member_from_secret(&secret);
 		let proof = CryptoOf::<Test>::sign(&secret, &signer.encode()).unwrap();
 		let build = |call: crate::Call<Test>| {
-			let info = Some(AsCoinageInfo::AsCoin);
+			let info = Some(AsCoinageInfo::AsCoin { retry_counter: 0 });
 			let extension = (AuthorizeCall::<Test>::new(), AsCoinage::<Test>::new(info));
 			Extrinsic::new_signed(call.into(), signer, UintAuthorityId(signer), extension)
 		};
