@@ -67,12 +67,14 @@ impl<T: Config> Pallet<T> {
 			GameState::Reporting { .. } => true,
 			GameState::PlayerProcess { .. } | GameState::Cancelling { .. } => false,
 		};
+		// A game whose window is zero opens and closes at play, so it takes no tenure claims.
 		ensure!(
 			state_open &&
-				u64::from(game.tenure_claim_opens) <= now &&
-				now < u64::from(game.game_date),
+				now < u64::from(game.game_date) &&
+				game.tenure_claim_opens < game.game_date,
 			Error::<T>::TenureClaimClosed
 		);
+		ensure!(u64::from(game.tenure_claim_opens) <= now, Error::<T>::TenureClaimNotOpen);
 		ensure!(
 			Players::<T>::get(player).is_some_and(|player| player.registered),
 			Error::<T>::NotRegistered

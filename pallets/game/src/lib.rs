@@ -930,7 +930,9 @@ pub mod pallet {
 		PhaseTooShort,
 		/// The tenure thresholds are not in strictly ascending order.
 		UnsortedTenureThresholds,
-		/// The game is not in its tenure claim window, or it is being cancelled.
+		/// The game's tenure claim window has not opened yet.
+		TenureClaimNotOpen,
+		/// The game's tenure claim window has closed, or the game takes no tenure claims.
 		TenureClaimClosed,
 		/// The caller's tenure reaches none of the [`TenureThresholds`], so a tenure claim earns
 		/// nothing.

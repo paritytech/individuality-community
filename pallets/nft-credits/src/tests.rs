@@ -4004,6 +4004,12 @@ mod claim_tenure_credits {
 
 			set_up_alice();
 			set_time(OPENS - 1);
+			assert_eq!(
+				Game::tenure_credits(alice.clone()),
+				Err(Error::<Test>::TenureClaimNotOpen.into())
+			);
+
+			set_time(PLAY.into());
 			assert_eq!(Game::tenure_credits(alice), Err(Error::<Test>::TenureClaimClosed.into()));
 
 			set_time(OPENS);
@@ -4095,7 +4101,7 @@ mod claim_tenure_credits {
 			set_time(OPENS - 1);
 			assert_err_ignore_postinfo!(
 				claim_tenure_credits(&ALICE),
-				Error::<Test>::TenureClaimClosed
+				Error::<Test>::TenureClaimNotOpen
 			);
 			set_time(PLAY.into());
 			assert_err_ignore_postinfo!(
@@ -4148,6 +4154,13 @@ mod claim_tenure_credits {
 					GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
 			});
 
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::TenureClaimClosed
+			);
+
+			// A cancelling game never opens, so the window is closed rather than not yet open.
+			set_time(OPENS - 1);
 			assert_err_ignore_postinfo!(
 				claim_tenure_credits(&ALICE),
 				Error::<Test>::TenureClaimClosed
