@@ -2178,8 +2178,8 @@ pub mod pallet {
 
 			let awarded = Self::do_claim_tenure_credits(player).map_err(failed)?;
 
-			// The benchmark awards at least one credit, so a tenure claim that awards none is
-			// charged as one that awards one.
+			// The weight function counts a spill at every `n`, so `claim_tenure_credits(1)` covers
+			// a tenure claim that awards one credit or none.
 			Ok(PostDispatchInfo {
 				actual_weight: Some(<T as Config>::WeightInfo::claim_tenure_credits(
 					awarded.max(1),
