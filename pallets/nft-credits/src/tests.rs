@@ -4023,16 +4023,20 @@ mod claim_tenure_credits {
 	#[test]
 	fn a_tenure_claim_refunds_down_to_the_credits_it_awards() {
 		new_test_ext().execute_with(|| {
-			set_thresholds(vec![1]);
-			set_up_alice();
-			set_tenure(&ALICE, 1);
+			set_thresholds(vec![0, 1, 2]);
+			let game = set_up_alice();
+			set_tenure(&ALICE, 2);
 			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 2);
 
 			let post = claim_tenure_credits(&ALICE).expect("ALICE claims tenure credits");
 
+			// ALICE earns three credits, but the buffers have room for two.
+			assert_eq!(tenure_claim_of(&ALICE), Some(3));
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1]);
 			let declared = Call::<Test>::claim_tenure_credits {}.get_dispatch_info().call_weight;
 			let actual = post.actual_weight.expect("the tenure claim reports its weight");
-			assert_eq!(actual, <MockWeightInfo as WeightInfo>::claim_tenure_credits(1));
+			assert_eq!(actual, <MockWeightInfo as WeightInfo>::claim_tenure_credits(2));
 			assert!(actual.all_lt(declared));
 		});
 	}
