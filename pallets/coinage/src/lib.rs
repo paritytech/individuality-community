@@ -497,8 +497,8 @@ pub mod pallet {
 	pub enum LockReason {
 		/// The previous dispatch using this coin failed after prepare.
 		FailedDispatch {
-			/// The retry count used to calculate the lock duration.
-			/// Coin locks use 0. Fee alias locks start at 0 and increase on each failure.
+			/// The number of times this coin has been retried after a failed dispatch.
+			/// Starts at 0 on the first failure.
 			retries: u8,
 		},
 	}
@@ -1279,8 +1279,10 @@ pub mod pallet {
 		#[pallet::constant]
 		type OffchainWorkerInterval: Get<BlockNumberFor<Self>>;
 
-		/// The number of seconds to lock a coin after a failed dispatch in `AsCoin` flow.
-		/// Fee alias locks use this as the base duration and double it on each retry.
+		/// The base number of seconds to lock a coin after a failed dispatch in `AsCoin` flow.
+		///
+		/// The actual lock duration is exponential: `2^retries * base` where `retries` is
+		/// the number of consecutive failures.
 		#[pallet::constant]
 		type CoinFailureLockPeriod: Get<u64>;
 
