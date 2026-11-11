@@ -1022,6 +1022,7 @@ pub mod benches {
 		assert_eq!(attendance.last(), Some(&game_index));
 		assert!(indiv_pallet_score::Pallet::<T>::reached_personhood(&target_player));
 		assert_eq!(game.pending_attendance, player_count - 1);
+		assert!(!TenureClaims::<T>::contains_key(&target_player));
 
 		Ok(())
 	}
