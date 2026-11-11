@@ -56,7 +56,7 @@ pub enum AsCoinageInfo<T: Config + Send + Sync> {
 	///
 	/// The calls are validated exhaustively in the extension: every condition outside the user's
 	/// control is checked, so the call can only fail if the user explicitly misconstructs it.
-	/// On failure the coin is locked temporarily, with a quadratic backoff.
+	/// On failure the coin is locked for [`Config::CoinFailureLockPeriod`].
 	///
 	/// Coin authorization is not nonce-based, so the transaction stays replayable while the coin
 	/// lives. The caller must send a mortal transaction that expires before the
@@ -191,14 +191,6 @@ pub struct AsCoinage<T: Config + Send + Sync>(Option<AsCoinageInfo<T>>);
 impl<T: Config + Send + Sync> AsCoinage<T> {
 	pub fn new(explicit: Option<AsCoinageInfo<T>>) -> Self {
 		Self(explicit)
-	}
-
-	// Apply the pallet's "quadratic" retry lock: each repeated failed dispatch doubles the
-	// base lock period, making rapid retries increasingly expensive.
-	fn failed_dispatch_lock(previous: Option<LockInfo>) -> LockInfo {
-		let new_retries = previous.map(Self::next_failed_dispatch_retry).unwrap_or(0);
-
-		Self::failed_dispatch_lock_with_retries(new_retries)
 	}
 
 	fn next_failed_dispatch_retry(previous: LockInfo) -> u8 {
@@ -824,8 +816,7 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 			Pre::NotUsing => Ok(Weight::zero()),
 			Pre::UsingCoin { coin_id, coin } => {
 				if result.is_err() {
-					let previous_lock = LockedCoins::<T>::get(&coin_id);
-					LockedCoins::<T>::insert(&coin_id, Self::failed_dispatch_lock(previous_lock));
+					LockedCoins::<T>::insert(&coin_id, Self::failed_dispatch_lock_with_retries(0));
 					CoinsByOwner::<T>::insert(&coin_id, coin);
 				} else {
 					LockedCoins::<T>::remove(&coin_id);

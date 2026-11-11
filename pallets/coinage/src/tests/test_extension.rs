@@ -21,8 +21,13 @@ use crate::{
 	*,
 };
 use codec::Encode;
-use frame_support::{assert_ok, traits::UnixTime};
-use sp_runtime::{traits::TransactionExtension as _, DispatchError};
+use frame_support::{assert_ok, dispatch::GetDispatchInfo, traits::UnixTime};
+use sp_runtime::{
+	generic::{self, Era, Preamble},
+	testing::UintAuthorityId,
+	traits::{Applyable, Checkable, TransactionExtension as _},
+	DispatchError,
+};
 use verifiable::GenerateVerifiable;
 
 #[test]
@@ -288,12 +293,63 @@ fn build_transfer_ext(signer: u64, to: u64) -> Extrinsic {
 	build_signed_as_coin_ext(signer, crate::Call::transfer { to }, true)
 }
 
+// Check mortality and nonce after AsCoinage, as in the runtime.
+type MortalExtrinsic = generic::UncheckedExtrinsic<
+	u64,
+	RuntimeCall,
+	UintAuthorityId,
+	(mock::TransactionExtension, frame_system::CheckEra<Test>, frame_system::CheckNonce<Test>),
+>;
+
 #[test]
-fn exponential_lock_duration_on_consecutive_failures_and_cleared_on_success() {
+fn replayed_failed_coin_extrinsic_keeps_lock_duration() {
+	new_test_ext().execute_with(|| {
+		create_coin(ALICE, 0, 0);
+		let coin = CoinsByOwner::<Test>::get(ALICE).unwrap();
+		assert_ok!(Assets::freeze_asset(RuntimeOrigin::signed(ALICE), TEST_ASSET_ID));
+		let ext = build_signed_as_coin_ext(
+			ALICE,
+			crate::Call::direct_offboard_coin_into_external_asset { to: BOB },
+			true,
+		);
+		let Preamble::Signed(signer, signature, extension) = ext.preamble else {
+			panic!("expected a signed extrinsic");
+		};
+		let era = Era::mortal(64, System::block_number());
+		let expiry = era.death(System::block_number());
+		let ext = MortalExtrinsic::new_signed(
+			ext.function,
+			signer,
+			signature,
+			(extension, frame_system::CheckEra::from(era), frame_system::CheckNonce::from(0)),
+		);
+
+		for _ in 0..2 {
+			let now = MockTime::now().as_secs();
+			assert!(System::block_number() < expiry);
+			let checked =
+				ext.clone().check(&frame_system::ChainContext::<Test>::default()).unwrap();
+			let info = checked.get_dispatch_info();
+			assert_eq!(
+				checked
+					.apply::<Test>(&info, ext.encoded_size())
+					.map(|result| result.map(|_| ()).map_err(|err| err.error)),
+				Ok(Err(pallet_assets::Error::<Test>::AssetNotLive.into()))
+			);
+			assert_eq!(CoinsByOwner::<Test>::get(ALICE), Some(coin));
+			let lock = LockedCoins::<Test>::get(ALICE).unwrap();
+			assert_eq!(lock.until - now, COIN_FAILURE_LOCK_PERIOD);
+			advance_until_time(lock.until as u32 + 1);
+			assert_eq!(Coinage::get_coin_lock_until(ALICE), None);
+		}
+	});
+}
+
+#[test]
+fn stable_lock_duration_on_consecutive_failures_and_cleared_on_success() {
 	// Test scenario:
-	// 1. A transaction using a coin fails → locked for 2^0 * base_period = 5 seconds
-	// 2. Lock expires, another transaction using the same coin fails → locked for 2^1 * base_period
-	//    = 10 seconds
+	// 1. A transaction using a coin fails, locking it for the base period of 5 seconds.
+	// 2. The lock expires and another failed transaction locks it for the same period.
 	// 3. Lock expires, a transaction succeeds → lock is completely removed
 	//
 	// We use pay_for_recycler_unload_fee_token_with_coin with a coin that has no asset backing
@@ -318,7 +374,7 @@ fn exponential_lock_duration_on_consecutive_failures_and_cleared_on_success() {
 
 		// --- First failure ---
 		let current_time = MockTime::now().as_secs();
-		let first_lock_duration = base_lock_period; // 2^0 * 5 = 5 seconds
+		let first_lock_duration = base_lock_period;
 		let first_lock_until = current_time + first_lock_duration;
 
 		let ext = build_pay_for_token_ext(coin_owner);
@@ -352,7 +408,7 @@ fn exponential_lock_duration_on_consecutive_failures_and_cleared_on_success() {
 
 		// --- Second failure ---
 		let current_time = MockTime::now().as_secs();
-		let second_lock_duration = 2 * base_lock_period; // 2^1 * 5 = 10 seconds
+		let second_lock_duration = base_lock_period;
 		let second_lock_until = current_time + second_lock_duration;
 
 		let ext = build_pay_for_token_ext(coin_owner);
@@ -360,7 +416,7 @@ fn exponential_lock_duration_on_consecutive_failures_and_cleared_on_success() {
 		// Transaction is valid but dispatch fails (still no asset backing).
 		assert!(matches!(res, Ok(Err(_))), "Dispatch should fail: {res:?}");
 
-		// Coin is restored and locked with retries=1 (exponential increase).
+		// Coin is restored and locked with the same duration.
 		assert_eq!(
 			CoinsByOwner::<Test>::get(coin_owner),
 			Some(Coin { instance_id: TEST_INSTANCE_ID, value: denomination, age: 0 })
@@ -368,7 +424,7 @@ fn exponential_lock_duration_on_consecutive_failures_and_cleared_on_success() {
 		assert_eq!(
 			LockedCoins::<Test>::get(coin_owner),
 			Some(LockInfo {
-				reason: LockReason::FailedDispatch { retries: 1 },
+				reason: LockReason::FailedDispatch { retries: 0 },
 				until: second_lock_until
 			})
 		);
