@@ -4223,10 +4223,23 @@ mod claim_tenure_credits {
 	#[test]
 	fn a_player_must_sign_up_to_claim_tenure_credits() {
 		new_test_ext().execute_with(|| {
-			set_up_alice();
+			set_up_full_group();
 			set_time(OPENS);
+			assert_err_ignore_postinfo!(claim_tenure_credits(&EVE), Error::<Test>::NotRegistered);
 
-			assert_err_ignore_postinfo!(claim_tenure_credits(&BOB), Error::<Test>::NotRegistered);
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+			let play = PLAY + 10_000;
+			start_scheduled_game(&GameSchedule { game_play_time: play, ..schedule() });
+			set_time((play - WINDOW).into());
+
+			// ALICE played the previous game, but did not sign up for this one.
+			let player = Players::<Test>::get(AccountOrPerson::Account(ALICE))
+				.expect("ALICE stays a player after the game");
+			assert!(!player.registered);
+			let refused = claim_tenure_credits(&ALICE).expect_err("ALICE did not sign up");
+			assert_eq!(refused.error, Error::<Test>::NotRegistered.into());
+			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
+			assert_eq!(tenure_claim_of(&ALICE), None);
 		});
 	}
 
