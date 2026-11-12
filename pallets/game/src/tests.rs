@@ -571,6 +571,41 @@ fn player_processing_moves_live_players_to_a_changed_limit() {
 }
 
 #[test]
+fn player_processing_moves_live_alias_players_to_a_changed_limit() {
+	new_test_ext().execute_with(|| {
+		let alias = id_to_alias(101);
+		let players = [AccountOrPerson::Person(alias), AccountOrPerson::Person(id_to_alias(102))];
+		run_game_scenario(live_player_schedule(25), &players, |p| Some(attending_report(p)));
+		let raised = StatementAllowance { max_count: 2000, max_size: 2000 };
+		PlayerStatementLimit::set(&raised);
+		run_game_scenario(live_player_schedule(60), &players, |p| Some(attending_report(p)));
+		assert_eq!(get_allowance(&AccountId32::new(alias)), raised);
+	});
+}
+
+#[test]
+fn player_processing_restores_the_limit_after_a_depleted_limit() {
+	new_test_ext().execute_with(|| {
+		let granted = PlayerStatementLimit::get();
+		let players = [AccountOrPerson::Account(ALICE), AccountOrPerson::Account(BOB)];
+		run_game_scenario(live_player_schedule(25), &players, |p| Some(attending_report(p)));
+
+		// A revocation of this size would remove more than `granted` holds.
+		PlayerStatementLimit::set(&StatementAllowance {
+			max_count: 0,
+			max_size: granted.max_size * 2,
+		});
+		run_game_scenario(live_player_schedule(60), &players, |p| Some(attending_report(p)));
+		assert_eq!(get_allowance(ALICE), StatementAllowance::default());
+		assert_eq!(PlayerStatementLimits::<Test>::get(), limits_granting(Default::default()));
+
+		PlayerStatementLimit::set(&granted);
+		run_game_scenario(live_player_schedule(95), &players, |p| Some(attending_report(p)));
+		assert_eq!(get_allowance(ALICE), granted);
+	});
+}
+
+#[test]
 fn player_processing_applies_the_limit_at_its_start() {
 	new_test_ext().execute_with(|| {
 		sign_up_live_players_with_other_grant(&[ALICE, BOB]);

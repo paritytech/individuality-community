@@ -195,6 +195,11 @@
 //! grants of all pallets per account, so a revocation uses the granted amount, not the current
 //! `PlayerStatementLimit`. The player processing of the next game moves every live player to a
 //! changed `PlayerStatementLimit`. Until then, new players get the previous limit.
+//! The pallet accepts no sign-up, offboard, statement account change or game cancellation
+//! during player processing, so one record covers every live player.
+//!
+//! A `PlayerStatementLimit` with a zero dimension grants zero. The statement store deletes such
+//! an allowance, so a later revocation of the other dimension would reduce the restored limit.
 //!
 //! # NFT claim credits
 //!
@@ -2619,10 +2624,20 @@ pub mod pallet {
 			Self::deposit_event(Event::<T>::GameCancelled { game_index: game.index, reason });
 		}
 
-		/// Return [`PlayerStatementLimits`], or the current `PlayerStatementLimit` when unset.
+		/// Return `PlayerStatementLimit`, or zero when one of its dimensions is zero.
+		fn player_statement_limit() -> BoundedStatementAllowance {
+			let limit = T::PlayerStatementLimit::get();
+			if limit.is_depleted() {
+				BoundedStatementAllowance::default()
+			} else {
+				limit.into()
+			}
+		}
+
+		/// Return [`PlayerStatementLimits`], or [`Self::player_statement_limit`] when unset.
 		pub(crate) fn player_statement_limits() -> PlayerStatementLimitsRecord {
 			PlayerStatementLimits::<T>::get().unwrap_or_else(|| PlayerStatementLimitsRecord {
-				granted: T::PlayerStatementLimit::get().into(),
+				granted: Self::player_statement_limit(),
 				next: None,
 			})
 		}
@@ -2634,7 +2649,7 @@ pub mod pallet {
 			let granted = PlayerStatementLimits::<T>::get()
 				.unwrap_or_else(|| {
 					let limits = PlayerStatementLimitsRecord {
-						granted: T::PlayerStatementLimit::get().into(),
+						granted: Self::player_statement_limit(),
 						next: None,
 					};
 					PlayerStatementLimits::<T>::put(&limits);
@@ -3671,7 +3686,7 @@ pub mod pallet {
 
 			if last_iteration.is_none() {
 				let limits = Self::player_statement_limits();
-				let limit = BoundedStatementAllowance::from(T::PlayerStatementLimit::get());
+				let limit = Self::player_statement_limit();
 				let next = (limit != limits.granted).then_some(limit);
 				if next != limits.next {
 					PlayerStatementLimits::<T>::put(PlayerStatementLimitsRecord { next, ..limits });
