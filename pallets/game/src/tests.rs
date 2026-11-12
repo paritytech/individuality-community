@@ -8678,7 +8678,8 @@ mod game_steps {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			clear_pool();
-			// One player, whose worst case is two credits with a group of three and one round.
+			// One player, whose worst case with a group of three and one round is two attestation
+			// credits plus one credit per tenure threshold.
 			let game_index = one_player_game(
 				3,
 				GameState::PlayerProcess {
@@ -8688,7 +8689,9 @@ mod game_steps {
 					},
 				},
 			);
-			MockCreditCapacity::set(&1);
+			let max_credits = 2 + MaxTenureThresholds::get();
+			// The buffer is one credit short of the worst case.
+			MockCreditCapacity::set(&(max_credits - 1));
 
 			// The step stays due on chain. Only its submission is skipped.
 			<Game as OffchainWorker<u64>>::offchain_worker(1);
@@ -8709,7 +8712,7 @@ mod game_steps {
 			));
 
 			// A committed tree frees the buffer and the step is submitted.
-			MockCreditCapacity::set(&2);
+			MockCreditCapacity::set(&max_credits);
 			<Game as OffchainWorker<u64>>::offchain_worker(1);
 			assert_eq!(
 				submitted_calls(),

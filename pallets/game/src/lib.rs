@@ -2461,7 +2461,7 @@ pub mod pallet {
 					step: PlayerProcessStep::Step1ProcessPlayers { .. },
 				} =>
 					T::NftClaimCredits::remaining_capacity(game.index) <
-						Self::max_attestations(game.rounds.into(), game.max_group_size),
+						Self::max_credits_per_player(game.rounds.into(), game.max_group_size),
 				_ => false,
 			}
 		}
@@ -3812,8 +3812,7 @@ pub mod pallet {
 			// case (credits already awarded during reporting or by the tenure claim) do not shorten
 			// the block.
 			let max_credits_per_player =
-				Self::max_attestations(game.rounds as u32, game.max_group_size)
-					.saturating_add(T::MaxTenureThresholds::get());
+				Self::max_credits_per_player(game.rounds.into(), game.max_group_size);
 			let mut credit_capacity = T::NftClaimCredits::remaining_capacity(game.index);
 			let mut next_player = iterator.next();
 
@@ -4112,6 +4111,16 @@ pub mod pallet {
 		/// ([`Self::max_received_votes`]).
 		pub(crate) fn max_attestations(rounds: u32, max_group_size: u32) -> u32 {
 			rounds.saturating_mul(max_group_size.saturating_sub(1))
+		}
+
+		/// The most NFT claim credits one player can receive while the players of a game with
+		/// these settings are processed: their attestations plus one credit per tenure threshold.
+		///
+		/// The processing loop and [`Self::game_awaits`] use the same bound, so that the offchain
+		/// worker does not submit a `process_players` call that processes no player.
+		pub(crate) fn max_credits_per_player(rounds: u32, max_group_size: u32) -> u32 {
+			Self::max_attestations(rounds, max_group_size)
+				.saturating_add(T::MaxTenureThresholds::get())
 		}
 
 		/// Add a game to a player's attendance historical record.
