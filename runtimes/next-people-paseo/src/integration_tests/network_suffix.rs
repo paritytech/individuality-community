@@ -16,7 +16,9 @@
 
 use super::*;
 use frame_support::{assert_ok, traits::Get};
-use indiv_support::context::{build_product_context, personhood, ProductContextNetworkSuffix};
+use indiv_support::context::{
+	build_product_context, personhood, signing_context, ProductContextNetworkSuffix,
+};
 
 #[test]
 fn genesis_config_selects_network_suffix() {
@@ -59,5 +61,45 @@ fn root_suffix_override_updates_all_people_product_contexts() {
 			PeopleAirdrops::people_airdrops_context(),
 			build_product_context(personhood::PRODUCT_NAME, b"test", personhood::PEOPLE_AIRDROPS,),
 		);
+		assert_eq!(
+			PeopleLite::signing_context(),
+			signing_context(personhood::PRODUCT_NAME, b"test")
+		);
+		assert_eq!(
+			Resources::signing_context(),
+			signing_context(personhood::PRODUCT_NAME, b"test")
+		);
+		assert_eq!(
+			Game::signing_context(),
+			signing_context(indiv_pallet_game::PRODUCT_NAME, b"test")
+		);
+	});
+}
+
+#[test]
+fn signing_contexts_are_published_as_pallet_constants() {
+	new_test_ext().execute_with(|| {
+		let frame_metadata::RuntimeMetadata::V14(metadata) = Runtime::metadata().1 else {
+			panic!("runtime metadata is not V14");
+		};
+		let constant = |pallet: &str| {
+			metadata
+				.pallets
+				.iter()
+				.find(|p| p.name == pallet)
+				.unwrap_or_else(|| panic!("{pallet} is in the metadata"))
+				.constants
+				.iter()
+				.find(|c| c.name == "SigningContext")
+				.unwrap_or_else(|| panic!("{pallet} publishes SigningContext"))
+				.value
+				.clone()
+		};
+
+		// Each verifying pallet publishes the context it verifies, as 32 raw bytes.
+		assert_eq!(constant("PeopleLite"), PeopleLite::signing_context().encode());
+		assert_eq!(constant("Resources"), Resources::signing_context().encode());
+		assert_eq!(constant("Game"), Game::signing_context().encode());
+		assert_eq!(constant("PeopleLite").len(), 32);
 	});
 }

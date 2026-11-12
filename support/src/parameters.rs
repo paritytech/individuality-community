@@ -4,47 +4,14 @@
 
 //! Reusable adapters for runtime-configured parameters.
 
-use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use crate::statement_allowance::BoundedStatementAllowance;
 use core::marker::PhantomData;
 use frame_support::traits::Get;
-use scale_info::TypeInfo;
 use sp_statement_store::StatementAllowance;
 
-/// A [`StatementAllowance`] representation with a fixed maximum encoded length.
-#[derive(
-	Clone,
-	Default,
-	PartialEq,
-	Eq,
-	Debug,
-	Encode,
-	Decode,
-	DecodeWithMemTracking,
-	MaxEncodedLen,
-	TypeInfo,
-)]
-pub struct StatementAllowanceParameter {
-	/// Maximum total statement size in bytes.
-	pub max_size: u32,
-	/// Maximum number of statements.
-	pub max_count: u32,
-}
-
-impl From<StatementAllowanceParameter> for StatementAllowance {
-	fn from(value: StatementAllowanceParameter) -> Self {
-		Self { max_size: value.max_size, max_count: value.max_count }
-	}
-}
-
-impl From<StatementAllowance> for StatementAllowanceParameter {
-	fn from(value: StatementAllowance) -> Self {
-		Self { max_size: value.max_size, max_count: value.max_count }
-	}
-}
-
-/// Adapts a [`StatementAllowanceParameter`] getter to the SDK allowance type.
+/// Adapts a [`BoundedStatementAllowance`] getter to the SDK allowance type.
 pub struct StatementAllowanceGetter<Parameter>(PhantomData<Parameter>);
-impl<Parameter: Get<StatementAllowanceParameter>> Get<StatementAllowance>
+impl<Parameter: Get<BoundedStatementAllowance>> Get<StatementAllowance>
 	for StatementAllowanceGetter<Parameter>
 {
 	fn get() -> StatementAllowance {
@@ -132,9 +99,9 @@ mod tests {
 	}
 
 	struct Allowance;
-	impl Get<StatementAllowanceParameter> for Allowance {
-		fn get() -> StatementAllowanceParameter {
-			StatementAllowanceParameter { max_size: 42, max_count: 3 }
+	impl Get<BoundedStatementAllowance> for Allowance {
+		fn get() -> BoundedStatementAllowance {
+			BoundedStatementAllowance { max_size: 42, max_count: 3 }
 		}
 	}
 

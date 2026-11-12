@@ -20,6 +20,7 @@ use super::*;
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use frame_support::{CloneNoBound, DebugNoBound, EqNoBound, PartialEqNoBound};
+use indiv_support::statement_allowance::BoundedStatementAllowance;
 use scale_info::TypeInfo;
 
 pub type SignatureOf<T> =
@@ -56,6 +57,8 @@ pub struct NotificationRegistration<Account> {
 	pub account_id: Account,
 	/// Notification slot used in the registration context.
 	pub reference: NotificationReference,
+	/// The allowance granted to `account_id`.
+	pub allowance: BoundedStatementAllowance,
 }
 
 /// Value stored per anonymous statement store allowance entry.
@@ -77,8 +80,10 @@ pub struct StmtStoreAllowanceEntry<T: Config> {
 	/// The slot sequence number within the period.
 	pub seq: u32,
 	/// Timestamp (seconds since Unix epoch) when this entry was last set.
-	/// Used to enforce a cooldown before the same alias can replace it within the same period.
+	/// A replacement needs a later timestamp and signs over this value.
 	pub since: u64,
+	/// The allowance granted to `account_id`.
+	pub allowance: BoundedStatementAllowance,
 }
 
 /// The information related to a particular consumer.

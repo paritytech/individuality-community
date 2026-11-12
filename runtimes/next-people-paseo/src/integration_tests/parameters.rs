@@ -24,7 +24,9 @@ use crate::{
 };
 use frame_support::{assert_noop, assert_ok, traits::Get, PalletId};
 use indiv_pallet_resources::WeightInfo as ResourcesWeightInfo;
-use indiv_support::{parameters::StatementAllowanceParameter, weight_budget::OcwWeightBudget};
+use indiv_support::{
+	statement_allowance::BoundedStatementAllowance, weight_budget::OcwWeightBudget,
+};
 use sp_keyring::Sr25519Keyring;
 use sp_runtime::{traits::AccountIdConversion, DispatchError};
 use sp_statement_store::StatementAllowance;
@@ -114,7 +116,7 @@ fn root_parameter_updates_change_what_the_game_pallet_reads() {
 	new_test_ext().execute_with(|| {
 		set_statement_parameter(
 			statement_storage::PlayerStatementLimit,
-			StatementAllowanceParameter { max_size: 42, max_count: 3 },
+			BoundedStatementAllowance { max_size: 42, max_count: 3 },
 		);
 		assert_eq!(
 			<Runtime as indiv_pallet_game::Config>::PlayerStatementLimit::get(),
@@ -134,7 +136,7 @@ fn root_parameter_updates_change_what_the_resources_pallet_reads() {
 
 		set_statement_parameter(
 			statement_storage::PersonStatementLimit,
-			StatementAllowanceParameter { max_size: 42, max_count: 3 },
+			BoundedStatementAllowance { max_size: 42, max_count: 3 },
 		);
 		assert_eq!(
 			<Runtime as indiv_pallet_resources::Config>::PersonStatementLimit::get(),
@@ -173,23 +175,6 @@ fn governance_cannot_break_statement_storage_invariants() {
 		assert_eq!(
 			<Runtime as indiv_pallet_resources::Config>::LiteStmtStoreSlotsPerPeriod::get(),
 			10
-		);
-
-		// The replacement cooldown stays non-zero and never exceeds the one day period.
-		set_statement_parameter(statement_storage::StmtStoreReplacementCooldown, 0);
-		assert_eq!(
-			<Runtime as indiv_pallet_resources::Config>::StmtStoreReplacementCooldown::get(),
-			1
-		);
-		set_statement_parameter(statement_storage::StmtStoreReplacementCooldown, u32::MAX);
-		assert_eq!(
-			<Runtime as indiv_pallet_resources::Config>::StmtStoreReplacementCooldown::get(),
-			24 * 60 * 60
-		);
-		set_statement_parameter(statement_storage::StmtStoreReplacementCooldown, 60);
-		assert_eq!(
-			<Runtime as indiv_pallet_resources::Config>::StmtStoreReplacementCooldown::get(),
-			60
 		);
 
 		// The grace window stays non-zero.

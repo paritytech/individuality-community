@@ -20,7 +20,7 @@
 //! to be compiled into the same crate, so `indiv-pallet-game` declares this module and
 //! `indiv-pallet-nft-credits` includes the same file by path. What differs between the two is left
 //! to the including module: the `construct_runtime!` pallet list, an `indiv_pallet_game` alias for
-//! the crate the game pallet is in each case, and a `MockNftClaimCredits` alias naming who owns the
+//! the crate the game pallet is in each case, and a `MockNftClaimCredits` type naming who owns the
 //! credits. The credits mock adds its own pallet's [`Config`](indiv_pallet_game::Config) on top.
 //!
 //! Items unused by one of the two are kept rather than pruned, so the runtime stays one runtime.
@@ -36,17 +36,16 @@ use super::{
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use frame_support::{
 	assert_ok, derive_impl,
-	dispatch::{DispatchErrorWithPostInfo, GetDispatchInfo},
+	dispatch::{DispatchClass, DispatchErrorWithPostInfo, GetDispatchInfo},
 	pallet_prelude::{Get, ValidTransaction},
 	parameter_types,
 	storage::with_transaction,
-	traits::{AsEnsureOriginWithArg, Everything, OnIdle, OnPoll, OriginTrait},
-	weights::WeightMeter,
+	traits::{AsEnsureOriginWithArg, Everything, OriginTrait},
 	PalletId,
 };
 use frame_system::{
 	offchain::{CreateAuthorizedTransaction, CreateBare, CreateTransaction, CreateTransactionBase},
-	EnsureRoot, RunToBlockHooks,
+	EnsureRoot,
 };
 use indiv_pallet_game::*;
 use indiv_pallet_people::Origin::PersonalAlias;
@@ -135,6 +134,38 @@ impl Verify for AccountAuthority {
 		signer: &<Self::Signer as IdentifyAccount>::AccountId,
 	) -> bool {
 		self.0 == *signer
+	}
+}
+
+/// A statement account signature that is valid for its own account over a message in the game's
+/// signing context.
+#[derive(
+	PartialEq, Eq, Clone, Encode, Decode, DecodeWithMemTracking, Debug, MaxEncodedLen, TypeInfo,
+)]
+pub struct StatementSignature(pub AccountId32);
+
+impl IdentifyAccount for StatementSignature {
+	type AccountId = AccountId32;
+	fn into_account(self) -> Self::AccountId {
+		self.0
+	}
+}
+
+impl Verify for StatementSignature {
+	type Signer = Self;
+
+	fn verify<L: sp_runtime::traits::Lazy<[u8]>>(
+		&self,
+		mut msg: L,
+		signer: &<Self::Signer as IdentifyAccount>::AccountId,
+	) -> bool {
+		let msg = msg.get();
+		let context = indiv_support::context::build_product_context(
+			indiv_pallet_game::PRODUCT_NAME,
+			&NetworkSuffix::get(),
+			indiv_support::context::SIGNING,
+		);
+		self.0 == *signer && msg.starts_with(&context)
 	}
 }
 
@@ -266,8 +297,12 @@ impl TransactionExtensionTrait<RuntimeCall> for DenyNotFundedAccount {
 	}
 }
 
-pub type TransactionExtension =
-	(GameAsInvited<Test>, indiv_pallet_score::ScoreAsParticipant<Test>, DenyNotFundedAccount);
+pub type TransactionExtension = (
+	frame_system::AuthorizeCall<Test>,
+	GameAsInvited<Test>,
+	indiv_pallet_score::ScoreAsParticipant<Test>,
+	DenyNotFundedAccount,
+);
 
 pub type Header = sp_runtime::generic::Header<u64, sp_runtime::traits::BlakeTwo256>;
 pub type Block = sp_runtime::generic::Block<Header, Extrinsic>;
@@ -314,6 +349,7 @@ where
 {
 	fn create_extension() -> Self::Extension {
 		(
+			frame_system::AuthorizeCall::<Test>::new(),
 			GameAsInvited::new(None),
 			indiv_pallet_score::ScoreAsParticipant::new(None),
 			DenyNotFundedAccount,
@@ -324,7 +360,7 @@ where
 #[derive_impl(frame_system::config_preludes::TestDefaultConfig)]
 impl frame_system::Config for Test {
 	type BaseCallFilter = frame_support::traits::Everything;
-	type BlockWeights = ();
+	type BlockWeights = MockBlockWeights;
 	type BlockLength = ();
 	type DbWeight = ();
 	type RuntimeOrigin = RuntimeOrigin;
@@ -428,24 +464,6 @@ parameter_types! {
 
 pub struct MockWeightInfo;
 impl WeightInfo for MockWeightInfo {
-	fn new_game(_n: u32) -> Weight {
-		Weight::zero()
-	}
-	fn get_game() -> Weight {
-		Weight::zero()
-	}
-	fn get_game_schedules(_n: u32) -> Weight {
-		Weight::zero()
-	}
-	fn unix_time() -> Weight {
-		Weight::zero()
-	}
-	fn put_game() -> Weight {
-		Weight::zero()
-	}
-	fn put_game_schedules() -> Weight {
-		Weight::zero()
-	}
 	fn shuffles_base() -> Weight {
 		Weight::from_parts(15, 15)
 	}
@@ -468,13 +486,13 @@ impl WeightInfo for MockWeightInfo {
 		Weight::from_parts(10, 10)
 	}
 	fn process_cancelling() -> Weight {
-		Weight::zero()
+		Weight::from_parts(15, 15)
 	}
-	fn process_cancelling_step_player(_n: u32) -> Weight {
-		Weight::zero()
+	fn process_cancelling_step_player(n: u32) -> Weight {
+		Weight::from_parts(10, 10).saturating_add(Weight::from_parts(1, 1).saturating_mul(n as u64))
 	}
 	fn process_cancelling_step_shuffle() -> Weight {
-		Weight::zero()
+		Weight::from_parts(10, 10)
 	}
 
 	fn sign_up_with_invite(n: u32) -> Weight {
@@ -559,8 +577,23 @@ impl WeightInfo for MockWeightInfo {
 			.saturating_add(Weight::from_parts(10, 10).saturating_mul(n as u64))
 	}
 
-	fn process_reporting() -> Weight {
+	fn start_game() -> Weight {
 		Weight::zero()
+	}
+	fn end_registration_shuffle() -> Weight {
+		Weight::from_parts(5, 5)
+	}
+	fn end_registration_cancel(n: u32) -> Weight {
+		Weight::from_parts(7, 7).saturating_add(Weight::from_parts(3, 3).saturating_mul(n as u64))
+	}
+	fn end_reporting() -> Weight {
+		Weight::zero()
+	}
+	fn authorize_game_step() -> Weight {
+		Weight::zero()
+	}
+	fn game_step_base() -> Weight {
+		Weight::from_parts(3, 3)
 	}
 
 	fn insert_attendance_history() -> Weight {
@@ -590,6 +623,7 @@ impl WeightInfo for MockWeightInfo {
 parameter_types! {
 	pub storage PeopleVoteWeight: u8 = 1;
 	pub storage CandidateVoteWeight: u8 = 1;
+	pub storage MinGroupSize: u32 = 2;
 	pub const PlayDepositDefault: u64 = 2;
 }
 
@@ -882,7 +916,7 @@ use frame_benchmarking::account;
 #[cfg(feature = "runtime-benchmarks")]
 impl
 	indiv_pallet_game::benchmarking::BenchmarkHelper<
-		AccountAuthority,
+		StatementSignature,
 		TestSignature,
 		u64,
 		AccountId32,
@@ -893,8 +927,8 @@ impl
 		account("acc", 0, seed as u32)
 	}
 
-	fn sign_account(seed: u64, _msg: &[u8]) -> AccountAuthority {
-		AccountAuthority(Self::create_account(seed))
+	fn sign_account(seed: u64, _msg: &[u8]) -> StatementSignature {
+		StatementSignature(Self::create_account(seed))
 	}
 
 	fn create_ticket(seed: u64) -> u64 {
@@ -923,15 +957,28 @@ impl
 	}
 }
 
+parameter_types! {
+	/// The shuffle duration the mock ships, in seconds.
+	///
+	/// It equals `MinStepPhaseDuration`, the floor the pallet enforces. Overridable so a test
+	/// can drive `integrity_test` below that floor.
+	pub storage MockShuffleDuration: u32 = 2;
+	/// The player process duration the mock ships, in seconds.
+	///
+	/// It equals `MinStepPhaseDuration`, the floor the pallet enforces. Overridable so a test
+	/// can drive `integrity_test` below that floor.
+	pub storage MockPlayerProcessDuration: u32 = 2;
+}
+
 pub struct GamePhaseDurations;
 impl Get<PhaseDurationValues> for GamePhaseDurations {
 	fn get() -> PhaseDurationValues {
 		PhaseDurationValues {
 			registration: 2,
-			shuffle: 1,
+			shuffle: MockShuffleDuration::get(),
 			post_shuffle_margin: 1,
 			reporting: 2,
-			player_process: 2,
+			player_process: MockPlayerProcessDuration::get(),
 		}
 	}
 }
@@ -943,6 +990,7 @@ impl indiv_pallet_people::Config for Test {
 	type AccountContexts = Everything;
 	type OnboardingQueuePageSize = ConstUint<512>;
 	type MemberService = Members;
+	type Clock = Test;
 	type CollectionOwner = MockCollectionOwner;
 	type RingExponent = FlexibleRingExp;
 	type StaleAliasCleanupInterval = ConstUint<5>;
@@ -976,6 +1024,11 @@ impl indiv_pallet_people_lite::Config for Test {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type MaxLitePeople = ConstU32<{ u32::MAX }>;
+	type Clock = Test;
+	type PaidRegistrationThreshold = ConstU32<0>;
+	type PaidRegistrationPeriod = ConstU32<0>;
+	type PaidRegistrationsPerPeriod = ConstU32<0>;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;
@@ -1108,14 +1161,27 @@ impl sp_statement_store::StatementStore for MockStatementStore {
 
 	fn take_recent_statements(
 		&self,
-	) -> sp_statement_store::Result<Vec<(sp_statement_store::Hash, Statement)>> {
+	) -> sp_statement_store::Result<Vec<(u64, sp_statement_store::Hash, Statement)>> {
 		unimplemented!();
 	}
 
 	fn has_statement(&self, _: &sp_statement_store::Hash) -> bool {
 		unimplemented!();
 	}
-	fn statement_hashes(&self) -> Vec<sp_statement_store::Hash> {
+	fn admission_watermark(&self) -> sp_statement_store::Result<u64> {
+		unimplemented!();
+	}
+	fn admitted_statements(
+		&self,
+		_cursor: u64,
+		_watermark: u64,
+		_scan_limit: usize,
+		_filter: &mut dyn FnMut(
+			&sp_statement_store::Hash,
+			&[u8],
+			&Statement,
+		) -> sp_statement_store::FilterDecision,
+	) -> sp_statement_store::Result<sp_statement_store::AdmittedBatch> {
 		unimplemented!();
 	}
 	fn statements_by_hashes(
@@ -1190,6 +1256,9 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	ext.register_extension(TransactionPoolExt::new(pool));
 	// 100k active members yields a personhood threshold of 21 and absence grace ratio (1, 6).
 	ext.execute_with(|| {
+		// `runtime_integrity_tests` reads the declared default of 2. Tests lower it to 1 to
+		// schedule groups of two.
+		MinGroupSize::set(&1);
 		indiv_pallet_members::ActiveMembers::<Test>::insert(
 			indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER,
 			100_000,
@@ -1260,7 +1329,7 @@ impl From<InvalidTransaction> for TransactionExecutionError {
 }
 
 /// Execute a bare extrinsic with the given call.
-pub fn exec_tx(x: Extrinsic) -> Result<(), TransactionExecutionError> {
+pub fn exec_tx(x: Extrinsic, source: TransactionSource) -> Result<(), TransactionExecutionError> {
 	let info = x.get_dispatch_info();
 	let len = x.encoded_size();
 
@@ -1268,7 +1337,7 @@ pub fn exec_tx(x: Extrinsic) -> Result<(), TransactionExecutionError> {
 
 	// validation is always rollbacked in production.
 	with_transaction(|| {
-		let valid = checked.validate::<Test>(TransactionSource::External, &info, len);
+		let valid = checked.validate::<Test>(source, &info, len);
 
 		TransactionOutcome::Rollback(Result::<_, DispatchError>::Ok(valid))
 	})
@@ -1284,7 +1353,7 @@ pub fn exec_tx(x: Extrinsic) -> Result<(), TransactionExecutionError> {
 pub fn exec_bare_tx(call: impl Into<RuntimeCall>) -> Result<(), TransactionExecutionError> {
 	let x = Extrinsic::new_bare(call.into());
 
-	exec_tx(x)
+	exec_tx(x, TransactionSource::External)
 }
 
 /// Execute a signed extrinsic with the invited transaction extension and the given call.
@@ -1298,13 +1367,14 @@ pub fn exec_invited_tx(
 		account.clone(),
 		AccountAuthority(account),
 		(
+			frame_system::AuthorizeCall::<Test>::new(),
 			GameAsInvited::<Test>::new(Some(tx_ext)),
 			indiv_pallet_score::ScoreAsParticipant::<Test>::new(None),
 			DenyNotFundedAccount,
 		),
 	);
 
-	exec_tx(x)
+	exec_tx(x, TransactionSource::External)
 }
 
 /// Execute a signed extrinsic with the given call.
@@ -1317,13 +1387,14 @@ pub fn exec_signed_tx(
 		account.clone(),
 		AccountAuthority(account),
 		(
+			frame_system::AuthorizeCall::<Test>::new(),
 			GameAsInvited::<Test>::new(None),
 			indiv_pallet_score::ScoreAsParticipant::<Test>::new(None),
 			DenyNotFundedAccount,
 		),
 	);
 
-	exec_tx(x)
+	exec_tx(x, TransactionSource::External)
 }
 
 /// Execute a signed extrinsic with the participant transaction extension and the given call.
@@ -1337,6 +1408,7 @@ pub fn exec_participant_tx(
 		account.clone(),
 		AccountAuthority(account),
 		(
+			frame_system::AuthorizeCall::<Test>::new(),
 			GameAsInvited::<Test>::new(None),
 			indiv_pallet_score::ScoreAsParticipant::<Test>::new(Some(
 				indiv_pallet_score::ScoreAsParticipantData { nonce },
@@ -1345,7 +1417,7 @@ pub fn exec_participant_tx(
 		),
 	);
 
-	exec_tx(x)
+	exec_tx(x, TransactionSource::External)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1374,7 +1446,7 @@ pub fn run_game_scenario<F>(
 							runtime_origin_for_alias(alias),
 							DEFAULT_IDENTIFIER_KEY,
 							account.clone(),
-							AccountAuthority(account),
+							StatementSignature(account),
 							None,
 						));
 					},
@@ -1411,9 +1483,9 @@ pub fn run_game_scenario_with_phase<FS, FR>(
 	FS: FnOnce(),
 	FR: FnOnce(),
 {
-	// Reach the game the way a live chain does: schedule it, then let `on_poll` open its
-	// registration. The clock stays where it is, so the setup happens before the registration
-	// phase ends.
+	// Reaching the game the way a live chain does: the game is scheduled, then the `start_game`
+	// step opens its registration. The clock stays where it is. The setup therefore happens before
+	// the registration phase ends.
 	assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]));
 	advance_process();
 	assert!(indiv_pallet_game::Game::<Test>::exists(), "the scheduled game opened");
@@ -1429,6 +1501,10 @@ pub fn run_game_scenario_with_phase<FS, FR>(
 	advance_process(); // registration to shuffle
 	advance_process(); // shuffle to report
 
+	// Move time to game day, when reports open
+	let game_play_time = GameTimes::<Test>::game_play_time(&schedule);
+	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_play_time as u64));
+
 	// Now do your `report_fn` (the user-supplied closure)
 	report_fn();
 
@@ -1440,41 +1516,53 @@ pub fn run_game_scenario_with_phase<FS, FR>(
 	advance_process(); // step3 to done
 }
 
-pub fn block_skipped() -> bool {
-	System::block_number().is_multiple_of(GAME_PROCESS_SKIPPED_BLOCK as u64)
+parameter_types! {
+	/// A block weight limit a test sets to bound the game step budget. See
+	/// [`advance_process_with_weights`].
+	pub storage MockBlockWeight: Option<Weight> = None;
 }
 
-pub fn advance_process_with_weights(on_poll: Weight, on_idle: Weight) {
-	record_events();
-	let bn = System::block_number() + 1;
-	System::run_to_block_with::<AllPalletsWithSystem>(
-		bn,
-		RunToBlockHooks::default().after_initialize(|bn| {
-			AllPalletsWithSystem::on_poll(bn, &mut WeightMeter::with_limit(on_poll));
-			AllPalletsWithSystem::on_idle(bn, on_idle);
-		}),
-	);
-	if block_skipped() {
-		advance_process_with_weights(on_poll, on_idle);
+/// The block weights: the frame defaults, or the limit a test set as the whole block.
+pub struct MockBlockWeights;
+impl Get<frame_system::limits::BlockWeights> for MockBlockWeights {
+	fn get() -> frame_system::limits::BlockWeights {
+		let Some(weight) = MockBlockWeight::get() else { return Default::default() };
+		// The whole block goes to non-mandatory extrinsics with no base costs. `max_extrinsic` is
+		// therefore `weight` itself.
+		frame_system::limits::BlockWeights::builder()
+			.base_block(Weight::zero())
+			.for_class(DispatchClass::all(), |weights| weights.base_extrinsic = Weight::zero())
+			.for_class(DispatchClass::non_mandatory(), |weights| weights.max_total = Some(weight))
+			.avg_block_initialization(sp_runtime::Perbill::zero())
+			.build_or_panic()
 	}
 }
 
-pub fn advance_process_with_on_poll_only() {
-	record_events();
-	let bn = System::block_number() + 1;
-	System::run_to_block_with::<AllPalletsWithSystem>(
-		bn,
-		RunToBlockHooks::default().after_initialize(|bn| {
-			AllPalletsWithSystem::on_poll(bn, &mut WeightMeter::with_limit(Weight::MAX));
-		}),
+/// Dispatches the due game step, if any, as the authorized transaction the offchain worker
+/// submits.
+pub fn dispatch_next_step() {
+	let Some(step) = Game::next_step() else { return };
+	let call = Game::next_step_call(step, System::block_number());
+	let tx = <Test as CreateAuthorizedTransaction<RuntimeCall>>::create_authorized_transaction(
+		call.into(),
 	);
-	if block_skipped() {
-		advance_process_with_on_poll_only();
-	}
+	exec_tx(tx, TransactionSource::Local).expect("the due game step is valid");
 }
 
+/// Advances one block and runs the due game step, if any, at the step budget `block_weight`
+/// gives. That budget is half of `block_weight`, as `OcwWeightBudget` takes half of the block's
+/// `max_extrinsic`.
+pub fn advance_process_with_weights(block_weight: Weight) {
+	MockBlockWeight::set(&Some(block_weight));
+	advance_process();
+	MockBlockWeight::set(&None);
+}
+
+/// Advances one block and runs the due game step, if any, with an unbounded step budget.
 pub fn advance_process() {
-	advance_process_with_weights(Weight::MAX, Weight::zero());
+	record_events();
+	System::run_to_block::<AllPalletsWithSystem>(System::block_number() + 1);
+	dispatch_next_step();
 }
 
 pub fn run_game_scenario_with_hooks<F>(
@@ -1504,7 +1592,7 @@ pub fn run_game_scenario_with_hooks<F>(
 					runtime_origin_for_alias(alias),
 					DEFAULT_IDENTIFIER_KEY,
 					account.clone(),
-					AccountAuthority(account),
+					StatementSignature(account),
 					None,
 				));
 			},
@@ -1593,7 +1681,7 @@ impl indiv_pallet_game::Config for Test {
 	type UnixTime = Test;
 	type MaxRounds = ConstUint<10>;
 	type MaxGroupSize = ConstUint<10>;
-	type MinGroupSize = ConstUint<0>;
+	type MinGroupSize = MinGroupSize;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type InviteIssuer = EnsureRoot<Self::AccountId>;
 	type EnsureLiteAlias = indiv_pallet_people_lite::EnsureLiteAliasInContext<Test>;
@@ -1602,11 +1690,12 @@ impl indiv_pallet_game::Config for Test {
 	type PlayDeposit = deposit::MockConsideration;
 	type DefaultPlayDeposit = PlayDepositDefault;
 	type DefaultPhaseDurations = GamePhaseDurations;
+	type MinStepPhaseDuration = ConstUint<2>;
 	type MaxGameSchedules = ConstUint<5>;
 	type MaxAttendanceHistoryDepth = ConstUint<2>;
 	type TicketSignature = TestSignature;
 	type PlayerStatementLimit = PlayerStatementLimit;
-	type AccountSignature = AccountAuthority;
+	type AccountSignature = StatementSignature;
 	type PeopleVoteWeight = PeopleVoteWeight;
 	type CandidateVoteWeight = CandidateVoteWeight;
 	type AirdropAssetId = u32;

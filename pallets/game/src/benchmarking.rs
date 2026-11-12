@@ -74,7 +74,7 @@ mod benches {
 		pallet_prelude::One,
 		traits::{
 			fungibles::{Create, Inspect, Mutate},
-			Consideration, ConstU32, EnsureOriginWithArg, UnixTime,
+			Authorize, Consideration, ConstU32, EnsureOriginWithArg, UnixTime,
 		},
 		BoundedVec,
 	};
@@ -88,6 +88,7 @@ mod benches {
 		traits::{
 			AsSystemOriginSigner, AsTransactionAuthorizedOrigin, DispatchTransaction, Dispatchable,
 		},
+		transaction_validity::TransactionSource,
 		Saturating,
 	};
 
@@ -144,6 +145,23 @@ mod benches {
 			.collect::<Vec<_>>()
 			.try_into()
 			.expect("n is bounded by MAX_GAME_AIRDROPS")
+	}
+
+	/// `n` schedules that follow each other, each with the maximum airdrops.
+	fn bench_schedules<T: Config>(n: u32) -> Vec<GameScheduleOf<T>> {
+		let mut prev_game_end = 2000u32;
+		(0..n)
+			.map(|_| {
+				let schedule = GameScheduleOf::<T> {
+					game_play_time: prev_game_end + 1000,
+					rounds: T::MaxRounds::get() as u8,
+					max_group_size: T::MaxGroupSize::get(),
+					airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
+				};
+				prev_game_end = GameTimes::<T>::player_process_end(&schedule);
+				schedule
+			})
+			.collect::<Vec<_>>()
 	}
 
 	/// Ensure the prize asset exists, is enabled in `indiv_pallet_airdrop::SupportedAssets`,
@@ -286,152 +304,136 @@ mod benches {
 		(account_id, AirdropVrfs::Account(vrfs))
 	}
 
-	// `n` is the number of airdrop events the schedule carries, each of which is scheduled in
-	// the airdrop pallet.
 	#[benchmark]
-	fn new_game(n: Linear<0, { MAX_GAME_AIRDROPS as u32 }>) -> Result<(), BenchmarkError> {
-		let schedule = GameScheduleOf::<T> {
-			game_play_time: 1000,
-			rounds: T::MaxRounds::get() as u8,
-			max_group_size: T::MaxGroupSize::get(),
-			airdrops: bench_airdrops::<T>(n),
-		};
-
+	fn start_game() -> Result<(), BenchmarkError> {
 		<T as Config>::BenchmarkHelper::set_valid_time();
 		bench_setup_airdrop_funds::<T>();
 
-		#[block]
-		{
-			assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
-		}
+		// Worst case: a full schedule list whose first game carries the maximum airdrops.
+		assert_ok!(pallet::Pallet::<T>::schedule_games(
+			RawOrigin::Root.into(),
+			bench_schedules::<T>(T::MaxGameSchedules::get())
+		));
+		assert_eq!(pallet::Pallet::<T>::next_step(), Some(NextStep::StartGame));
+
+		#[extrinsic_call]
+		_(RawOrigin::Authorized, 0u32.into());
 
 		let game = Game::<T>::get().expect("Game should exist");
 		assert_eq!(game.state, GameState::Registration { next_player_index: 0 });
-		assert_eq!(game.max_group_size, schedule.max_group_size);
-		assert_eq!(game.rounds, schedule.rounds);
-		assert_eq!(u32::from(game.airdrops_scheduled), n, "every airdrop should be scheduled");
+		assert_eq!(u32::from(game.airdrops_scheduled), u32::from(MAX_GAME_AIRDROPS));
+		assert_eq!(GameSchedules::<T>::get().len() as u32, T::MaxGameSchedules::get() - 1);
 
 		Ok(())
 	}
 
-	#[benchmark]
-	fn get_game() -> Result<(), BenchmarkError> {
+	/// A game in registration with `n` airdrop events and `max_group_size` one above
+	/// `MinGroupSize`. `MinGroupSize` sign-ups then take the shuffle branch of `end_registration`.
+	/// None takes the cancel branch. The airdrop funds are set up by the caller.
+	fn bench_game_with_airdrops<T: Config>(n: u32) -> GameScheduleOf<T> {
 		<T as Config>::BenchmarkHelper::set_valid_time();
-		bench_setup_airdrop_funds::<T>();
-
-		// One game exists
 		let schedule = GameScheduleOf::<T> {
 			game_play_time: 1000,
 			rounds: T::MaxRounds::get() as u8,
-			max_group_size: T::MaxGroupSize::get(),
-			airdrops: bench_airdrops::<T>(1),
+			max_group_size: T::MinGroupSize::get() + 1,
+			airdrops: bench_airdrops::<T>(n),
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
+		schedule
+	}
 
-		let game: Option<GameInfo<T::AccountId>>;
+	/// Moves time to the registration end of `schedule`. That makes `end_registration` due.
+	fn bench_pass_registration_end<T: Config>(schedule: &GameScheduleOf<T>) {
+		let registration_end = GameTimes::<T>::registration_end(schedule);
+		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(registration_end.into()));
+		assert_eq!(pallet::Pallet::<T>::next_step(), Some(NextStep::EndRegistration));
+	}
 
-		#[block]
-		{
-			game = Game::<T>::get();
+	#[benchmark]
+	fn end_registration_shuffle() -> Result<(), BenchmarkError> {
+		let schedule = bench_game_with_airdrops::<T>(0);
+		// One group of `max_group_size - 1` players is the smallest acceptable player count.
+		for i in 0..T::MinGroupSize::get() {
+			let player: T::AccountId = account("player", i, i);
+			<T as Config>::BenchmarkHelper::fund_account(player.clone());
+			assert_ok!(pallet::Pallet::<T>::sign_up_with_account(
+				RawOrigin::Signed(player).into(),
+				DEFAULT_IDENTIFIER_KEY,
+				None
+			));
 		}
+		bench_pass_registration_end::<T>(&schedule);
+		let game_index = GameIndex::<T>::get();
 
-		// `get` returns it
-		assert!(game.is_some());
+		#[extrinsic_call]
+		end_registration(RawOrigin::Authorized, game_index, 0u32.into());
+
+		let game = Game::<T>::get().expect("Game should exist");
+		assert_eq!(
+			game.state,
+			GameState::Shuffle { step: ShuffleStep::Step1Insert { last_iteration: None } }
+		);
 
 		Ok(())
 	}
 
+	// `n` is the number of airdrop events the cancellation cancels.
 	#[benchmark]
-	fn get_game_schedules(
-		n: Linear<1, { T::MaxGameSchedules::get() }>,
+	fn end_registration_cancel(
+		n: Linear<0, { MAX_GAME_AIRDROPS as u32 }>,
 	) -> Result<(), BenchmarkError> {
+		bench_setup_airdrop_funds::<T>();
+		let schedule = bench_game_with_airdrops::<T>(n);
+		bench_pass_registration_end::<T>(&schedule);
+		let game_index = GameIndex::<T>::get();
+
+		#[extrinsic_call]
+		end_registration(RawOrigin::Authorized, game_index, 0u32.into());
+
+		let game = Game::<T>::get().expect("Game should exist");
+		assert!(matches!(game.state, GameState::Cancelling { .. }));
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn authorize_game_step() -> Result<(), BenchmarkError> {
 		<T as Config>::BenchmarkHelper::set_valid_time();
 		bench_setup_airdrop_funds::<T>();
 
-		// No scheduled games
-		assert_eq!(GameSchedules::<T>::get().len(), 0);
-
-		// n games to schedule
-		let mut games_schedules = Vec::new();
-		let offset = 1000u32;
-		let mut prev_game_end = 2000u32;
-
-		for _ in 0..n {
-			let schedule = GameScheduleOf::<T> {
-				game_play_time: prev_game_end + offset,
-				rounds: T::MaxRounds::get() as u8,
-				max_group_size: T::MaxGroupSize::get(),
-				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
-			};
-			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
-
-			games_schedules.push(schedule);
-		}
-
-		assert_ok!(pallet::Pallet::<T>::schedule_games(RawOrigin::Root.into(), games_schedules));
-
-		let schedules: BoundedVec<GameScheduleOf<T>, T::MaxGameSchedules>;
+		// Heaviest branch of `next_step`: no game. That branch decodes the length of
+		// `GameSchedules` and pulls the whole value into the proof. Full list, maximum airdrops per
+		// schedule.
+		assert_ok!(pallet::Pallet::<T>::schedule_games(
+			RawOrigin::Root.into(),
+			bench_schedules::<T>(T::MaxGameSchedules::get())
+		));
+		let call = Call::<T>::start_game { discriminator: 0u32.into() };
 
 		#[block]
 		{
-			schedules = pallet::GameSchedules::<T>::get();
-		}
-
-		// All the n schedules were created successfully
-		assert_eq!(schedules.len(), n as usize);
-
-		Ok(())
-	}
-
-	#[benchmark]
-	fn unix_time() -> Result<(), BenchmarkError> {
-		<T as Config>::BenchmarkHelper::set_valid_time();
-		bench_setup_airdrop_funds::<T>();
-
-		#[block]
-		{
-			<T as Config>::UnixTime::now();
+			call.authorize(TransactionSource::InBlock)
+				.ok_or("call must require authorization")??;
 		}
 
 		Ok(())
 	}
 
 	#[benchmark]
-	fn put_game() -> Result<(), BenchmarkError> {
+	fn game_step_base() -> Result<(), BenchmarkError> {
+		bench_game_with_airdrops::<T>(0);
+		let game_index = GameIndex::<T>::get();
+
+		// The overhead of a metered step call before its inner function runs.
 		#[block]
 		{
-			Game::<T>::put(GameInfo {
-				index: 0,
-				registration_ends: 0,
-				shuffle_deadline: 1,
-				game_date: 0,
-				report_ends: 0,
-				state: GameState::Registration { next_player_index: 0 },
-				max_group_size: T::MaxGroupSize::get(),
-				rounds: T::MaxRounds::get() as u8,
-				pending_attendance: 0,
-				airdrops_scheduled: 0,
-			})
-		}
-		Ok(())
-	}
-
-	#[benchmark]
-	fn put_game_schedules() -> Result<(), BenchmarkError> {
-		let mut schedules = BoundedVec::<GameScheduleOf<T>, T::MaxGameSchedules>::default();
-		for _ in 0..T::MaxGameSchedules::get() {
-			let _ = schedules.try_push(GameScheduleOf::<T> {
-				game_play_time: 1000,
-				rounds: T::MaxRounds::get() as u8,
-				max_group_size: T::MaxGroupSize::get(),
-				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
-			});
+			frame_system::ensure_authorized(<T as frame_system::Config>::RuntimeOrigin::from(
+				RawOrigin::Authorized,
+			))
+			.map_err(sp_runtime::DispatchError::from)?;
+			pallet::Pallet::<T>::current_game(game_index)?;
 		}
 
-		#[block]
-		{
-			GameSchedules::<T>::put(schedules);
-		}
 		Ok(())
 	}
 
@@ -476,7 +478,7 @@ mod benches {
 		let schedule = crate::types::GameScheduleOf::<T> {
 			game_play_time: 1000,
 			rounds,
-			max_group_size: 2,
+			max_group_size: T::MinGroupSize::get() + 1,
 			airdrops: bench_airdrops::<T>(1),
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
@@ -555,7 +557,7 @@ mod benches {
 		let schedule = crate::types::GameScheduleOf::<T> {
 			game_play_time: 1000,
 			rounds,
-			max_group_size: 2,
+			max_group_size: T::MinGroupSize::get() + 1,
 			airdrops: bench_airdrops::<T>(1),
 		};
 		assert_ok!(pallet::Pallet::<T>::new_game(&schedule));
@@ -658,7 +660,7 @@ mod benches {
 		// `f(group_size, rounds)` weight cannot model, so we sweep a single component over the
 		// whole product range and derive the two dimensions from it below. (The benchmark macro
 		// requires single-letter parameter names, hence `p` rather than a spelled-out name.)
-		p: Linear<2, { T::MaxRounds::get() * T::MaxGroupSize::get() }>,
+		p: Linear<{ T::MinGroupSize::get() + 1 }, { T::MaxRounds::get() * T::MaxGroupSize::get() }>,
 	) -> Result<(), BenchmarkError> {
 		<T as Config>::BenchmarkHelper::set_valid_time();
 		bench_setup_airdrop_funds::<T>();
@@ -667,8 +669,8 @@ mod benches {
 		// first, up to `max_group_size`, then rounds take over for the rest of the range. This way
 		// small games (a low product) are measured too, instead of only sweeping rounds at the
 		// maximum group size. The runtime charges the worst case, `rounds * max_group_size`.
-		let group_size = p.clamp(2, T::MaxGroupSize::get());
-		let rounds = (p / group_size).max(1) as u8;
+		let group_size = p.min(T::MaxGroupSize::get());
+		let rounds = (p / group_size) as u8;
 		let player_count = 2u32 * group_size;
 
 		// One game exists with `max_group_size = group_size`.
@@ -1193,7 +1195,10 @@ mod benches {
 
 		let msg = (Pallet::<T>::proof_of_ownership_msg_base(), &person)
 			.using_encoded(sp_io::hashing::blake2_256);
-		let signature = <T as Config>::BenchmarkHelper::sign_account(seed, &msg[..]);
+		let signature = <T as Config>::BenchmarkHelper::sign_account(
+			seed,
+			&Pallet::<T>::account_signing_payload(&msg),
+		);
 
 		let score_context = indiv_pallet_score::Pallet::<T>::score_context();
 		let origin = T::EnsurePerson::try_successful_origin(&score_context)
@@ -1362,6 +1367,7 @@ mod benches {
 				has_ever_reached_personhood: true,
 				recognition: indiv_pallet_score::Recognition::ExternallyRecognized,
 				last_attended_game: None,
+				attended_games_while_recognized: 0,
 			},
 		);
 		let deposit = T::PlayDeposit::new(&caller, pallet::PlayDepositAmount::<T>::get())?;
@@ -1423,7 +1429,10 @@ mod benches {
 		// Valid signature
 		let msg = (Pallet::<T>::proof_of_ownership_msg_base(), &person)
 			.using_encoded(sp_io::hashing::blake2_256);
-		let signature = <T as Config>::BenchmarkHelper::sign_account(seed, &msg[..]);
+		let signature = <T as Config>::BenchmarkHelper::sign_account(
+			seed,
+			&Pallet::<T>::account_signing_payload(&msg),
+		);
 
 		// Origin for the personal alias
 		let score_context = indiv_pallet_score::Pallet::<T>::score_context();
@@ -1584,9 +1593,9 @@ mod benches {
 		let shuffle_time = GameTimes::<T>::registration_end(&game_schedule);
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(shuffle_time.into()));
 		let game = Game::<T>::get().expect("Game should exist");
-		Pallet::<T>::process_game(&mut WeightMeter::new(), 1u32.into(), game);
+		Pallet::<T>::end_registration_inner(game);
 		let game = Game::<T>::get().expect("Game should exist");
-		Pallet::<T>::process_game(&mut WeightMeter::new(), 1u32.into(), game);
+		Pallet::<T>::shuffles(&mut WeightMeter::new(), game);
 
 		let game_time = GameTimes::<T>::game_play_time(&game_schedule);
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(game_time.into()));
@@ -1596,7 +1605,7 @@ mod benches {
 		// `rounds * (MaxGroupSize - 1)` unique players. Rewrite the caller's indices
 		// and the other slots of the caller's group so each round exposes a disjoint
 		// set of co-players, pushing `reported_players.len()` to the max.
-		let num_groups = max_group_size; // player_count / max_per_group == MaxGroupSize
+		let num_groups = max_group_size; // player_count / full_group_size == MaxGroupSize
 
 		let caller_aop = AccountOrPerson::Account(caller.clone());
 		let caller_indices: BoundedVec<PlayerIndex, T::MaxRounds> =
@@ -1968,21 +1977,7 @@ mod benches {
 		assert_ok!(pallet::Pallet::<T>::new_game(&game_schedule));
 
 		// n games to schedule
-		let mut games_schedules = Vec::new();
-		let offset = 1000u32;
-		let mut prev_game_end = 2000u32;
-
-		for _ in 0..n {
-			let schedule = GameScheduleOf::<T> {
-				game_play_time: prev_game_end + offset,
-				rounds: T::MaxRounds::get() as u8,
-				max_group_size: T::MaxGroupSize::get(),
-				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
-			};
-			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
-
-			games_schedules.push(schedule);
-		}
+		let games_schedules = bench_schedules::<T>(n);
 
 		#[extrinsic_call]
 		_(RawOrigin::Root, games_schedules);
@@ -2000,21 +1995,7 @@ mod benches {
 
 		// The maximum number of games is scheduled
 		let max_schedules = T::MaxGameSchedules::get();
-		let mut games_schedules = Vec::new();
-		let offset = 1000u32;
-		let mut prev_game_end = 2000u32;
-
-		for _ in 0..max_schedules {
-			let schedule = GameScheduleOf::<T> {
-				game_play_time: prev_game_end + offset,
-				rounds: T::MaxRounds::get() as u8,
-				max_group_size: T::MaxGroupSize::get(),
-				airdrops: bench_airdrops::<T>(MAX_GAME_AIRDROPS.into()),
-			};
-			prev_game_end = GameTimes::<T>::player_process_end(&schedule);
-
-			games_schedules.push(schedule);
-		}
+		let games_schedules = bench_schedules::<T>(max_schedules);
 
 		let first_game_time = games_schedules[0].game_play_time;
 		GameSchedules::<T>::put(BoundedVec::try_from(games_schedules).unwrap());
@@ -2107,14 +2088,14 @@ mod benches {
 	}
 
 	#[benchmark]
-	fn process_reporting() -> Result<(), BenchmarkError> {
+	fn end_reporting() -> Result<(), BenchmarkError> {
 		// Ensure we have a valid (non-genesis) time API and move time past report_ends.
 		<T as Config>::BenchmarkHelper::set_valid_time();
 		bench_setup_airdrop_funds::<T>();
 		<T as Config>::BenchmarkHelper::set_time(core::time::Duration::from_secs(1));
 
-		// Put a game in the Reporting phase whose reporting window has already ended so
-		// `process_reporting` transitions the state to `PlayerProcess`.
+		// Put a game in the Reporting phase whose reporting window has already ended.
+		// `end_reporting` then transitions the state to `PlayerProcess`.
 		Game::<T>::put(GameInfo {
 			index: 0,
 			registration_ends: 0,
@@ -2128,15 +2109,11 @@ mod benches {
 			airdrops_scheduled: 0,
 		});
 
-		let mut meter = WeightMeter::new();
-
-		#[block]
-		{
-			pallet::Pallet::<T>::process_reporting(&mut meter);
-		}
+		#[extrinsic_call]
+		_(RawOrigin::Authorized, 0, 0u32.into());
 
 		// The game should have transitioned to PlayerProcess.
-		let game = Game::<T>::get().expect("game should exist after process_reporting");
+		let game = Game::<T>::get().expect("game should exist after end_reporting");
 		assert!(matches!(game.state, GameState::PlayerProcess { .. }));
 
 		Ok(())
@@ -2229,12 +2206,13 @@ mod benches {
 			GameState::Registration { .. },
 		));
 
+		let minimum = T::MinStepPhaseDuration::get().max(1);
 		let phases = PhaseDurationValues {
 			registration: 1,
-			shuffle: 1,
+			shuffle: minimum,
 			post_shuffle_margin: 1,
 			reporting: 1,
-			player_process: 1,
+			player_process: minimum,
 		};
 
 		#[extrinsic_call]
@@ -2261,7 +2239,7 @@ mod benches {
 
 		#[block]
 		{
-			pallet::Pallet::<T>::on_game_cancelled(&game);
+			pallet::Pallet::<T>::on_game_cancelled(&game, CancelReason::Manager);
 		}
 
 		// Cancellation routes each airdrop into the airdrop pallet's clean-up pipeline (or drops
@@ -2331,6 +2309,7 @@ mod benches {
 				has_ever_reached_personhood: true,
 				recognition: indiv_pallet_score::Recognition::ExternallyRecognized,
 				last_attended_game: Some(game.index),
+				attended_games_while_recognized: 0,
 			},
 		);
 
