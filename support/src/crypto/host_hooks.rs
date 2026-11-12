@@ -451,11 +451,13 @@ mod tests {
 		)
 	}
 
+	// Unit scalars make the MSM add the exceptional pair directly. The arkworks 0.6 MSM computes
+	// `2 * first + second` without that addition, so other scalars do not reach `z = 0`.
 	#[test]
 	fn msm_te_falls_back_on_degenerate_result() {
 		let (first, second) = exceptional_pair();
 		assert!(first.is_on_curve() && second.is_on_curve());
-		let scalars = [BandersnatchScalarField::from(2u64), BandersnatchScalarField::from(1u64)];
+		let scalars = [BandersnatchScalarField::from(1u64), BandersnatchScalarField::from(1u64)];
 		let result = <HostHooks as BandersnatchCurveHooks>::msm_te(&[first, second], &scalars);
 		assert_degenerate_fallback(result);
 	}

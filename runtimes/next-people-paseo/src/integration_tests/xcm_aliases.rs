@@ -7,8 +7,7 @@
 use super::new_test_ext;
 use crate::{
 	xcm_config::{
-		AssetHubLocation, AuthorizeAliasHoldReason, Barrier, CheapTrustedAliasers, NextAhLocation,
-		XcmConfig,
+		AssetHubLocation, AuthorizeAliasHoldReason, Barrier, CheapTrustedAliasers, XcmConfig,
 	},
 	AccountId, Balances, Block, PolkadotXcm, Runtime, RuntimeOrigin, System,
 };
@@ -224,7 +223,7 @@ fn barrier_accepts_cheap_aliases_only_when_the_result_has_unpaid_permission() {
 	for (target, expected) in [
 		(governance, true),
 		(Location::new(1, Parachain(4242)), false),
-		(NextAhLocation::get(), false),
+		(AssetHubLocation::get(), false),
 	] {
 		let mut instructions =
 			[AliasOrigin(target), UnpaidExecution { weight_limit: Unlimited, check_origin: None }];
@@ -324,9 +323,9 @@ fn metered_execution_applies_authorized_aliases_and_rejects_other_origins() {
 
 #[test]
 fn aliases_cannot_grant_root_dispatch() {
-	for origin in [AssetHubLocation::get(), Location::parent(), NextAhLocation::get()] {
+	for origin in [AssetHubLocation::get(), Location::parent()] {
 		new_test_ext().execute_with(|| {
-			let message = Xcm(vec![AliasOrigin(NextAhLocation::get()), root_storage_write()]);
+			let message = Xcm(vec![AliasOrigin(AssetHubLocation::get()), root_storage_write()]);
 			let outcome = execute_with_credit(origin, message);
 			assert!(
 				matches!(
@@ -344,11 +343,11 @@ fn aliases_cannot_grant_root_dispatch() {
 }
 
 #[test]
-fn next_asset_hub_can_still_dispatch_as_root_without_aliasing() {
+fn asset_hub_can_still_dispatch_as_root_without_aliasing() {
 	new_test_ext().execute_with(|| {
 		let message =
 			Xcm(vec![root_storage_write(), ExpectTransactStatus(MaybeErrorCode::Success)]);
-		let outcome = execute_with_credit(NextAhLocation::get(), message);
+		let outcome = execute_with_credit(AssetHubLocation::get(), message);
 		assert!(matches!(outcome, Outcome::Complete { .. }), "{outcome:?}");
 		assert_eq!(sp_io::storage::get(b"alias-root-test").unwrap().as_ref(), b"written");
 	});

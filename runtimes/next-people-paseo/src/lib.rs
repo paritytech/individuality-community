@@ -45,7 +45,7 @@ use cumulus_primitives_core::{AggregateMessageOrigin, ParaId, VerifySchedulingSi
 use frame_support::traits::NeverEnsureOrigin;
 use frame_support::{
 	construct_runtime, derive_impl,
-	dispatch::DispatchClass,
+	dispatch::{DispatchClass, GetDispatchInfo},
 	genesis_builder_helper::{build_state, get_preset},
 	parameter_types,
 	traits::{
@@ -53,7 +53,7 @@ use frame_support::{
 		AsEnsureOriginWithArg, ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, ContainsPair,
 		EitherOfDiverse, InstanceFilter, TransformOrigin,
 	},
-	weights::{ConstantMultiplier, Weight},
+	weights::{ConstantMultiplier, Weight, WeightToFee as WeightToFeeT},
 	PalletId,
 };
 use frame_system::{
@@ -80,13 +80,11 @@ use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
 pub use sp_runtime::BuildStorage;
 use sp_runtime::{
 	generic, impl_opaque_keys,
-	traits::{AccountIdLookup, BlakeTwo256, Block as BlockT},
+	traits::{AccountIdLookup, BlakeTwo256, Block as BlockT, ExtensionVariant},
 	transaction_validity::{TransactionSource, TransactionValidity},
 	ApplyExtrinsicResult, MultiSignature, MultiSigner,
 };
 pub use sp_runtime::{MultiAddress, Perbill, Permill};
-#[cfg(feature = "std")]
-use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 /// Paseo network constants - defined locally to avoid version conflicts
 pub mod paseo_constants {
@@ -277,6 +275,8 @@ pub type Migrations = (
 	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_nft_credits::migration::MigrateV0ToV1<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_score::migration::MigrateV0ToV1<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_airdrop::migration::MigrateV0ToV1<Runtime>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
@@ -315,12 +315,6 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	transaction_version: 6,
 	system_version: 1,
 };
-
-/// The version information used to identify this runtime when compiled natively.
-#[cfg(feature = "std")]
-pub fn native_version() -> NativeVersion {
-	NativeVersion { runtime_version: VERSION, can_author_with: Default::default() }
-}
 
 parameter_types! {
 	pub const Version: RuntimeVersion = VERSION;
@@ -812,7 +806,12 @@ impl pallet_migrations::Config for Runtime {
 	type Migrations = (
 		ForeignAssetsReservesMigration<Runtime, (), migrations::PeoplePaseoAssetsReservesProvider>,
 		// Single use! - remove once the upgrade carrying it is live.
-		indiv_pallet_resources::migration::v1::MigrateConsumerAllowances<Runtime>,
+		indiv_pallet_people_lite::migration::v1::LazyMigrationV0ToV1<Runtime>,
+		indiv_pallet_people::migration::MigrateV0ToV1<Runtime>,
+		// Single use! - remove once the upgrade carrying it is live.
+		indiv_pallet_resources::migration::v1::RecordGrantedAllowances<Runtime>,
+		// Single use! - remove once the upgrade carrying it is live.
+		indiv_pallet_resources::migration::v2::MigrateConsumerAllowances<Runtime>,
 	);
 	// Benchmarks need mocked migrations to guarantee that they succeed.
 	#[cfg(feature = "runtime-benchmarks")]
@@ -856,6 +855,79 @@ pub enum RestrictedEntity {
 	InvitedCandidate(AccountId),
 	LitePerson(AccountId),
 	LiteAlias(Alias),
+	/// The holder of the statement store slot of an alias. Usage is tracked per alias, so it
+	/// follows the slot across replacements.
+	StmtStoreHolder(Alias),
+}
+
+/// Drops the usage record of a statement store slot holder once the slot entry is removed.
+pub struct ClearStmtStoreHolderUsage;
+impl indiv_pallet_resources::OnStmtStoreSlotCleared for ClearStmtStoreHolderUsage {
+	fn on_cleared(alias: &Alias) {
+		indiv_pallet_origin_restriction::Usages::<Runtime>::remove(
+			RestrictedEntity::StmtStoreHolder(*alias),
+		);
+	}
+}
+
+/// Relay chain blocks over which a statement store slot holder recovers the fee of one
+/// replacement (15 minutes, 450 parachain blocks).
+const STMT_STORE_HOLDER_RECOVERY_RELAY_BLOCKS: u32 = 150;
+
+/// The fee the origin restriction charges for one statement store slot replacement.
+///
+/// It is the weight and length fee of a replacement transaction with an sr25519 signature, the
+/// scheme the benchmark signs with, and a mortal era. An ecdsa signature costs slightly more.
+fn stmt_store_replacement_fee() -> Balance {
+	let call =
+		RuntimeCall::Resources(indiv_pallet_resources::Call::replace_statement_store_account {
+			period: 0,
+			alias: [0u8; 32],
+			new_account: AccountId::new([0u8; 32]),
+			since: 0,
+		});
+	let signature = MultiSignature::Sr25519(sp_core::sr25519::Signature::from_raw([0u8; 64]));
+	let tx_ext: TxExtensionV1 = (
+		(
+			(),
+			pallet_verify_signature::VerifySignature::<Runtime>::Disabled,
+			indiv_pallet_people::extension::AsPerson::<Runtime>::new(None),
+			indiv_pallet_proof_of_ink::extension::AsProofOfInkParticipant::<Runtime>::new(None),
+			indiv_pallet_score::ScoreAsParticipant::<Runtime>::new(None),
+			indiv_pallet_game::GameAsInvited::<Runtime>::new(None),
+			indiv_pallet_people_lite::extension::PeopleLiteAuth::<Runtime>::new(None),
+			indiv_pallet_members::extension::AsMember::<Runtime>::new(None),
+			indiv_pallet_coinage::extension::AsCoinage::<Runtime>::new(None),
+			indiv_pallet_resources::extension::AsResources::<Runtime>::new(Some(
+				indiv_pallet_resources::extension::AsResourcesInfo::ReplaceStatementStoreAccount(
+					signature,
+				),
+			)),
+			indiv_pallet_honour::extension::VoterAuth::<Runtime>::new(None),
+			frame_system::AuthorizeCall::<Runtime>::new(),
+		),
+		indiv_pallet_origin_restriction::RestrictOrigin::<Runtime>::new(true),
+		frame_system::CheckNonZeroSender::<Runtime>::new(),
+		frame_system::CheckSpecVersion::<Runtime>::new(),
+		frame_system::CheckTxVersion::<Runtime>::new(),
+		frame_system::CheckGenesis::<Runtime>::new(),
+		frame_system::CheckEra::<Runtime>::from(generic::Era::mortal(64, 0)),
+		frame_system::CheckNonce::<Runtime>::from(0),
+		frame_system::CheckWeight::<Runtime>::new(),
+		pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
+		frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
+	)
+		.into();
+	let extrinsic = UncheckedExtrinsic::from_parts(
+		call,
+		generic::Preamble::General(ExtensionVariant::Other(TxExtensionOtherVersions::new(tx_ext))),
+	);
+	let weight_fee = WeightToFee::weight_to_fee(&extrinsic.get_dispatch_info().total_weight());
+	let length_fee = <LengthToFee as WeightToFeeT>::weight_to_fee(&Weight::from_parts(
+		extrinsic.encoded_size() as u64,
+		0,
+	));
+	weight_fee.saturating_add(length_fee)
 }
 
 impl indiv_pallet_origin_restriction::RestrictedEntity<OriginCaller, Balance> for RestrictedEntity {
@@ -876,6 +948,14 @@ impl indiv_pallet_origin_restriction::RestrictedEntity<OriginCaller, Balance> fo
 				max: LITE_PERSON_AND_ALIAS_ALLOWANCE_MAX,
 				recovery_per_block: LITE_PERSON_AND_ALIAS_ALLOWANCE_RECOVERY,
 			},
+			// With `max: 0`, a replacement runs only as a one-time excess at zero usage, so at most
+			// once per recovery of its fee.
+			RestrictedEntity::StmtStoreHolder(_) => Allowance {
+				max: 0,
+				recovery_per_block: stmt_store_replacement_fee()
+					.div_ceil(Balance::from(STMT_STORE_HOLDER_RECOVERY_RELAY_BLOCKS))
+					.max(1),
+			},
 		}
 	}
 	fn restricted_entity(origin_caller: &OriginCaller) -> Option<Self> {
@@ -894,6 +974,8 @@ impl indiv_pallet_origin_restriction::RestrictedEntity<OriginCaller, Balance> fo
 			PeopleLite(LitePerson(account_id)) =>
 				Some(RestrictedEntity::LitePerson(account_id.clone())),
 			PeopleLite(LiteAlias(rev_ca)) => Some(RestrictedEntity::LiteAlias(rev_ca.ca.alias)),
+			Resources(indiv_pallet_resources::Origin::StmtStoreHolder(alias)) =>
+				Some(RestrictedEntity::StmtStoreHolder(*alias)),
 			_ => None,
 		}
 	}
@@ -943,6 +1025,12 @@ impl ContainsPair<RestrictedEntity, RuntimeCall> for OperationAllowedOneTimeExce
 				matches!(call, RuntimeCall::Game(sign_up_with_account_lite_invite { .. }))
 			},
 			RestrictedEntity::LitePerson(_) => false,
+			RestrictedEntity::StmtStoreHolder(_) => matches!(
+				call,
+				RuntimeCall::Resources(
+					indiv_pallet_resources::Call::replace_statement_store_account { .. }
+				)
+			),
 		}
 	}
 }
@@ -953,12 +1041,17 @@ pub struct OriginRestrictionBenchmarkHelper;
 impl indiv_pallet_origin_restriction::BenchmarkHelper<OriginCaller, RuntimeCall>
 	for OriginRestrictionBenchmarkHelper
 {
+	/// The statement store holder pair, whose allowance computes the replacement fee estimate
+	/// on every validation, so the extension weight covers that cost.
 	fn excess_pair() -> (OriginCaller, RuntimeCall) {
 		(
-			OriginCaller::Score(indiv_pallet_score::Origin::AccountParticipant(
-				sp_runtime::AccountId32::new([0u8; 32]),
-			)),
-			RuntimeCall::Score(indiv_pallet_score::Call::cash_out {}),
+			OriginCaller::Resources(indiv_pallet_resources::Origin::StmtStoreHolder([0u8; 32])),
+			RuntimeCall::Resources(indiv_pallet_resources::Call::replace_statement_store_account {
+				period: 0,
+				alias: [0u8; 32],
+				new_account: AccountId::new([0u8; 32]),
+				since: 0,
+			}),
 		)
 	}
 }
@@ -1089,6 +1182,8 @@ parameter_types! {
 	pub StakingPotAccount: AccountId =
 		<pallet_collator_selection::StakingPotAccountId<Runtime> as frame_support::traits::TypedGet>::get();
 	pub LpFee: Permill = Permill::from_rational(3u32, 1_000u32); // 0.3%
+	/// The highest swap fee `AdminOrigin` can set on a single pool.
+	pub MaxSwapFee: Permill = Permill::from_percent(2);
 	/// Storage deposit for the pool entry and for its liquidity token, plus the deposit an asset
 	/// costs to register, so that creating a pool is no cheaper than creating the asset it pairs.
 	pub const PoolSetupFee: Balance = deposit(1, 4) + AssetDeposit::get();
@@ -1134,6 +1229,8 @@ impl pallet_asset_conversion::Config for Runtime {
 	type PoolSetupFeeTarget = ResolveAssetTo<StakingPotAccount, Self::Assets>;
 	type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
 	type LPFee = LpFee;
+	type AdminOrigin = EnsureRoot<AccountId>;
+	type MaxSwapFee = MaxSwapFee;
 	type PalletId = AssetConversionPalletId;
 	// Every pool holds the native asset on one side (see `PoolLocator`), so swapping one asset for
 	// another takes two hops through native. Coinage itself only ever swaps an asset for native,
@@ -1813,6 +1910,39 @@ impl_runtime_apis! {
 						id: AssetId(RelayLocation::get()),
 						fun: Fungible(ExistentialDeposit::get()),
 					}
+				}
+
+				fn get_assets(n: u32) -> XcmAssets {
+					use frame_support::traits::tokens::fungible;
+					let account: AccountId = frame_benchmarking::whitelisted_caller();
+					frame_support::assert_ok!(<Balances as fungible::Mutate<_>>::mint_into(
+						&account,
+						ExistentialDeposit::get(),
+					));
+					let amount = 1_000_000u128;
+					// Worst case: `n` distinct foreign assets, which `AssetTransactors` matches
+					// after the native token.
+					let assets = (0..n)
+						.map(|i| {
+							let asset_location = Location::new(
+								1,
+								[Parachain(3000), PalletInstance(53), GeneralIndex((1984 + i).into())],
+							);
+							frame_support::assert_ok!(Assets::force_create(
+								RuntimeOrigin::root(),
+								asset_location.clone(),
+								account.clone().into(),
+								true,
+								1u128,
+							));
+							Asset { id: AssetId(asset_location), fun: Fungible(amount) }
+						})
+						.collect::<Vec<_>>();
+					assets.into()
+				}
+
+				fn batch_call(calls: Vec<RuntimeCall>) -> Option<RuntimeCall> {
+					Some(RuntimeCall::Utility(pallet_utility::Call::batch { calls }))
 				}
 			}
 

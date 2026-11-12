@@ -14,35 +14,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Records of statement allowances that a pallet granted.
+//! A statement allowance with a fixed maximum encoded length.
 //!
-//! The statement allowance of an account is the sum of the grants of several pallets. A
-//! governance-mutable limit can change between a grant and its revocation, so a pallet records
-//! each grant and revokes the recorded amount, not the current limit.
+//! [`StatementAllowance`] does not implement `MaxEncodedLen`, so it can't be stored.
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 use sp_statement_store::StatementAllowance;
 
-/// A statement allowance that a pallet granted to an account.
+/// A [`StatementAllowance`] with a fixed maximum encoded length.
+///
+/// TODO(<https://github.com/paritytech/polkadot-sdk/issues/13675>): Remove once the upstream
+/// struct has `MaxEncodedLen`.
 #[derive(
-	Clone, PartialEq, Eq, Debug, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+	Clone,
+	Default,
+	PartialEq,
+	Eq,
+	Debug,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	MaxEncodedLen,
+	TypeInfo,
 )]
-pub struct GrantedStatementAllowance {
-	/// Maximum number of statements.
-	pub max_count: u32,
+pub struct BoundedStatementAllowance {
 	/// Maximum total statement size in bytes.
 	pub max_size: u32,
+	/// Maximum number of statements.
+	pub max_count: u32,
 }
 
-impl From<StatementAllowance> for GrantedStatementAllowance {
+impl From<StatementAllowance> for BoundedStatementAllowance {
 	fn from(value: StatementAllowance) -> Self {
-		Self { max_count: value.max_count, max_size: value.max_size }
+		Self { max_size: value.max_size, max_count: value.max_count }
 	}
 }
 
-impl From<GrantedStatementAllowance> for StatementAllowance {
-	fn from(value: GrantedStatementAllowance) -> Self {
-		Self { max_count: value.max_count, max_size: value.max_size }
+impl From<BoundedStatementAllowance> for StatementAllowance {
+	fn from(value: BoundedStatementAllowance) -> Self {
+		Self { max_size: value.max_size, max_count: value.max_count }
 	}
 }
