@@ -57,8 +57,7 @@ use crate::{
 		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
 		LongTermStoragePeriodDuration, MaxLitePeople, NotificationAllowance,
 		NotificationPeriodDuration, NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource,
-		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow,
-		StmtStoreReplacementCooldown, StmtStoreSlotsPerPeriod,
+		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -205,6 +204,7 @@ parameter_types! {
 impl indiv_pallet_people::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people::WeightInfo<Runtime>;
 	type MemberService = Members;
+	type Clock = RuntimeClock;
 	type RingExponent = MembersFlexibleRingExponent;
 	type CollectionOwner = PeopleCollectionOwner;
 	type AccountContexts = AccountContexts;
@@ -328,15 +328,17 @@ pub mod benchmark_utils {
 			pallet_timestamp::Now::<Runtime>::put(now.as_millis() as u64);
 		}
 
+		/// Signs with sr25519 through the host keystore. The fixed seed derives the same key on
+		/// every call, so a benchmark that signs after looking up the account signs for that
+		/// account.
 		fn sign_message(message: &[u8]) -> (sp_runtime::AccountId32, MultiSignature) {
-			use sp_core::Pair;
+			use sp_io::crypto::{sr25519_generate, sr25519_sign};
 			use sp_runtime::traits::IdentifyAccount;
-			let entropy = [1u8; 32];
-			let pair = sp_core::ed25519::Pair::from_seed(&entropy);
-			let account = pair.public().into_account().into();
-			let secret = ed25519_zebra::SigningKey::from(entropy);
-			let signature = sp_core::ed25519::Signature::from_raw(secret.sign(message).into());
-			(account, signature.into())
+			let public = sr25519_generate(0.into(), Some(b"//ResourcesBenchHelper".to_vec()));
+			let account = sp_runtime::MultiSigner::Sr25519(public).into_account();
+			let signature = sr25519_sign(0.into(), &public, message)
+				.expect("the benchmark keystore signs with a key it generated; qed");
+			(account, MultiSignature::Sr25519(signature))
 		}
 	}
 
@@ -668,12 +670,16 @@ impl indiv_pallet_game::Config for Runtime {
 	type MaxAttendanceHistoryDepth = ConstU32<12>;
 	type NftClaimCredits = NftCredits;
 	type DefaultPhaseDurations = GamePhaseDurations;
+	// Two 12-second jumps of the block timestamp. That covers the fewest steps a phase needs:
+	// `end_registration` then one `advance_shuffle` for the shuffle, `end_reporting` then two
+	// `process_players` for the player process.
+	type MinStepPhaseDuration = ConstU32<{ 2 * (SLOT_DURATION / 1_000) as u32 }>;
 	type AccountSignature = Signature;
 	type PlayerStatementLimit = PlayerStatementLimit;
 	type PeopleVoteWeight = ConstUint<2>;
 	type CandidateVoteWeight = ConstUint<1>;
 	// This is for the testnet, the value must be at least 2 in production.
-	type MinGroupSize = ConstUint<0>;
+	type MinGroupSize = ConstUint<1>;
 	type AirdropAssetId = <Runtime as pallet_assets::Config>::AssetId;
 	type AirdropAssetBalance = Balance;
 	type Airdrop = Airdrop;
@@ -1343,7 +1349,6 @@ impl indiv_pallet_resources::Config for Runtime {
 	type StmtStoreSlotsPerPeriod = StmtStoreSlotsPerPeriod;
 	type LiteStmtStoreSlotsPerPeriod = LiteStmtStoreSlotsPerPeriod;
 	type StmtStoreCleanupLimit = StmtStoreCleanupLimit;
-	type StmtStoreReplacementCooldown = StmtStoreReplacementCooldown;
 	type StmtStoreGraceWindow = StmtStoreGraceWindow;
 	type NotificationAllowance = NotificationAllowance;
 	type NotificationSlotsPerPeriod = NotificationSlotsPerPeriod;
@@ -1355,6 +1360,7 @@ impl indiv_pallet_resources::Config for Runtime {
 	type EnsureLitePerson = indiv_pallet_people_lite::EnsureLitePerson<Runtime>;
 	type Clock = RuntimeClock;
 	type OffchainSignature = Signature;
+	type OnStmtStoreSlotCleared = ClearStmtStoreHolderUsage;
 	type LitePersonStatementLimit = LitePersonStatementLimit;
 	type PersonStatementLimit = PersonStatementLimit;
 	type MaxReservationQueueLength = MaxReservationQueueLength;

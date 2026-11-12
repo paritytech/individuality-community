@@ -121,6 +121,7 @@ assets-common = { workspace = true }
 frame-metadata = { workspace = true, features = ["std"] }
 parachains-runtimes-test-utils = { workspace = true }
 parking_lot = { workspace = true }
+sp-keystore = { workspace = true }
 sp-trie = { workspace = true }
 
 [features]
@@ -208,6 +209,7 @@ std = [
 	"sp-inherents/std",
 	"sp-io/std",
 	"sp-keyring/std",
+	"sp-keystore/std",
 	"sp-offchain/std",
 	"sp-runtime/std",
 	"sp-session/std",

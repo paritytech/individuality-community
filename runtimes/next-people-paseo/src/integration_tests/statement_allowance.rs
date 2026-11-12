@@ -19,13 +19,28 @@
 //! exercised there; these tests only cover the runtime-side wiring.
 
 use super::*;
-use crate::parameters::{
-	LitePersonStatementLimit, NotificationAllowance, NotificationPeriodDuration,
-	StmtStoreGraceWindow,
+use crate::{
+	parameters::{
+		AccountsApiAllowance, LitePersonStatementLimit, NotificationAllowance,
+		NotificationPeriodDuration, StmtStoreGraceWindow,
+	},
+	OperationAllowedOneTimeExcess, RestrictedEntity,
 };
-use frame_support::traits::Authorize;
-use sp_runtime::transaction_validity::{InvalidTransaction, TransactionSource};
+use codec::Decode;
+use frame_support::traits::{Authorize, ContainsPair};
+use indiv_pallet_origin_restriction::{RestrictedEntity as _, Usages};
+#[cfg(feature = "runtime-benchmarks")]
+use indiv_pallet_resources::benchmarking::BenchmarkHelper;
+use indiv_pallet_resources::StatementStoreAllowances;
+#[cfg(feature = "runtime-benchmarks")]
+use sp_runtime::traits::Verify;
+use sp_runtime::{
+	generic::Preamble,
+	traits::ExtensionVariant,
+	transaction_validity::{InvalidTransaction, TransactionSource},
+};
 use sp_statement_store::{get_allowance, StatementAllowance};
+use xcm::latest::{Junction, Location, NetworkId};
 
 #[test]
 fn lite_person_registration_grants_lite_allowance() {
@@ -386,4 +401,349 @@ fn game_sign_up_grants_player_allowance() {
 		let allowance = get_allowance(&stmt_acc);
 		assert_eq!(allowance, crate::people::PlayerStatementLimit::get());
 	})
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+fn benchmark_helper_signs_with_sr25519() {
+	let mut ext = new_test_ext();
+	ext.register_extension(sp_keystore::KeystoreExt::new(
+		sp_keystore::testing::MemoryKeystore::new(),
+	));
+	ext.execute_with(|| {
+		let message = b"benchmark message";
+		let (account, signature) =
+			crate::people::benchmark_utils::ResourcesBenchHelper::sign_message(message);
+		assert!(matches!(signature, MultiSignature::Sr25519(_)));
+		assert!(signature.verify(&message[..], &account));
+		assert!(!signature.verify(&b"another message"[..], &account));
+		// The benchmarks look the account up with one call and sign with another.
+		let (same_account, _) =
+			crate::people::benchmark_utils::ResourcesBenchHelper::sign_message(b"other");
+		assert_eq!(same_account, account);
+	});
+}
+
+/// Returns the implication the `AsResources` extension inherits in `tx_ext` for `call`. It holds
+/// the extension version and call, then the explicit and implicit data of the later extensions.
+fn resources_inherited_implication(call: &RuntimeCall, tx_ext: &TxExtensionV1) -> impl Encode {
+	let following = (
+		(tx_ext.0 .0 .10.clone(), tx_ext.0 .0 .11.clone()),
+		tx_ext.0 .1.clone(),
+		tx_ext.0 .2.clone(),
+		tx_ext.0 .3.clone(),
+		tx_ext.0 .4.clone(),
+		tx_ext.0 .5.clone(),
+		tx_ext.0 .6.clone(),
+		tx_ext.0 .7.clone(),
+		tx_ext.0 .8.clone(),
+		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
+	);
+	let implicit = following.implicit().expect("the following extensions have implicit data");
+	((INDIVIDUALITY_EXTENSION_VERSION, call.clone()), following, implicit)
+}
+
+/// Builds the general transaction that moves the statement store slot of `alias` in `period`
+/// to `new_account` with the witness `since`. The `AsResources` extension carries `holder`'s
+/// sr25519 signature over the blake2 hash of the inherited implication.
+fn build_signed_replacement_ext(
+	holder: &sr25519::Pair,
+	period: u32,
+	alias: indiv_support::traits::Alias,
+	new_account: AccountId32,
+	since: u64,
+) -> UncheckedExtrinsic {
+	let call =
+		RuntimeCall::Resources(indiv_pallet_resources::Call::replace_statement_store_account {
+			period,
+			alias,
+			new_account,
+			since,
+		});
+	let mut tx_ext = base_tx_ext(call.clone());
+	let msg =
+		resources_inherited_implication(&call, &tx_ext).using_encoded(sp_io::hashing::blake2_256);
+	let signature: MultiSignature = holder.sign(&msg).into();
+	tx_ext.0 .0 .9 = indiv_pallet_resources::extension::AsResources::new(Some(
+		indiv_pallet_resources::extension::AsResourcesInfo::ReplaceStatementStoreAccount(signature),
+	));
+	finalize_uxt(call, tx_ext)
+}
+
+/// Returns a copy of `broadcast` with the nonce, tip and asset id set to their longest
+/// encodings, as a relaying node could forward it. The call and the holder's signature are
+/// unchanged.
+fn pad_relayed_replacement(broadcast: &[u8]) -> UncheckedExtrinsic {
+	let mut uxt = UncheckedExtrinsic::decode(&mut &broadcast[..]).expect("relayed bytes decode");
+	let Preamble::General(ExtensionVariant::Other(pipeline)) = &mut uxt.preamble else {
+		panic!("a signed replacement is a general transaction");
+	};
+	// An account on a forked network is the longest junction, 75 bytes. A location holds at most
+	// 8 junctions.
+	let junction = Junction::AccountId32 {
+		network: Some(NetworkId::ByFork { block_number: u64::MAX, block_hash: [0xff; 32] }),
+		id: [0xff; 32],
+	};
+	let asset_id = Location::new(0, [junction; 8]);
+	pipeline.extension.0 .7 = frame_system::CheckNonce::<Runtime>::from(u32::MAX);
+	pipeline.extension.0 .9 =
+		pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(u128::MAX, Some(asset_id));
+	uxt
+}
+
+#[test]
+fn signed_replacement_moves_the_slot_allowance() {
+	new_test_ext().execute_with(|| {
+		let holder_pair = sr25519::Pair::from_seed(&[90u8; 32]);
+		let holder = pair_to_account_id(&holder_pair);
+		let new_account = pair_to_account_id(&sr25519::Pair::from_seed(&[91u8; 32]));
+		let alias = [7u8; 32];
+		advance_block();
+		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
+		let period = Resources::stmt_store_period_from_timestamp(now_secs);
+
+		Resources::set_statement_store_account(
+			OriginCaller::Resources(indiv_pallet_resources::Origin::StmtStoreAlias(alias)).into(),
+			period,
+			0,
+			holder.clone(),
+		)
+		.unwrap();
+		let since = StatementStoreAllowances::<Runtime>::get(
+			indiv_support::utils::BigEndianU32::from(period),
+			alias,
+		)
+		.expect("slot is claimed")
+		.since;
+		set_time(since + 1);
+
+		// A signature by another key is refused before dispatch.
+		let intruder = sr25519::Pair::from_seed(&[92u8; 32]);
+		let uxt =
+			build_signed_replacement_ext(&intruder, period, alias, new_account.clone(), since);
+		assert_eq!(
+			Executive::apply_extrinsic(uxt),
+			Err(InvalidTransaction::Custom(
+				indiv_pallet_resources::extension::CustomValidity::StmtStoreReplacementBadSignature
+					as u8,
+			)
+			.into())
+		);
+
+		let uxt =
+			build_signed_replacement_ext(&holder_pair, period, alias, new_account.clone(), since);
+		Executive::apply_extrinsic(uxt)
+			.expect("signed replacement transaction is valid")
+			.expect("signed replacement dispatch succeeds");
+
+		assert_eq!(get_allowance(&holder), StatementAllowance::default());
+		assert_eq!(get_allowance(&new_account), AccountsApiAllowance::get());
+	});
+}
+
+/// The origin restriction charges the slot by the transaction length. The holder's signature
+/// covers the extension fields a relaying node could pad.
+#[test]
+fn signed_replacement_rejects_a_padded_relayed_copy() {
+	new_test_ext().execute_with(|| {
+		let holder_pair = sr25519::Pair::from_seed(&[95u8; 32]);
+		let holder = pair_to_account_id(&holder_pair);
+		let new_account = pair_to_account_id(&sr25519::Pair::from_seed(&[96u8; 32]));
+		let alias = [8u8; 32];
+		advance_block();
+		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
+		let period = Resources::stmt_store_period_from_timestamp(now_secs);
+
+		Resources::set_statement_store_account(
+			OriginCaller::Resources(indiv_pallet_resources::Origin::StmtStoreAlias(alias)).into(),
+			period,
+			0,
+			holder.clone(),
+		)
+		.unwrap();
+		let since = StatementStoreAllowances::<Runtime>::get(
+			indiv_support::utils::BigEndianU32::from(period),
+			alias,
+		)
+		.expect("slot is claimed")
+		.since;
+		set_time(since + 1);
+
+		let broadcast =
+			build_signed_replacement_ext(&holder_pair, period, alias, new_account.clone(), since)
+				.encode();
+		let padded = pad_relayed_replacement(&broadcast);
+		assert!(padded.encoded_size() > 4 * broadcast.len());
+
+		assert_eq!(
+			Executive::apply_extrinsic(padded),
+			Err(InvalidTransaction::Custom(
+				indiv_pallet_resources::extension::CustomValidity::StmtStoreReplacementBadSignature
+					as u8,
+			)
+			.into())
+		);
+
+		// The copy the holder broadcast is still valid.
+		let uxt = UncheckedExtrinsic::decode(&mut &broadcast[..]).expect("broadcast bytes decode");
+		Executive::apply_extrinsic(uxt)
+			.expect("signed replacement transaction is valid")
+			.expect("signed replacement dispatch succeeds");
+		assert_eq!(get_allowance(&new_account), AccountsApiAllowance::get());
+	});
+}
+
+#[test]
+fn signed_replacement_is_limited_to_one_per_fifteen_minutes() {
+	new_test_ext().execute_with(|| {
+		let holder_pair = sr25519::Pair::from_seed(&[93u8; 32]);
+		let holder = pair_to_account_id(&holder_pair);
+		let second_pair = sr25519::Pair::from_seed(&[94u8; 32]);
+		let second = pair_to_account_id(&second_pair);
+		let third = pair_to_account_id(&sr25519::Pair::from_seed(&[95u8; 32]));
+		let alias = [8u8; 32];
+
+		// The first replacement lands on a relay chain block boundary.
+		advance_to_block(3);
+		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
+		let period = Resources::stmt_store_period_from_timestamp(now_secs);
+		let period_key = indiv_support::utils::BigEndianU32::from(period);
+		Resources::set_statement_store_account(
+			OriginCaller::Resources(indiv_pallet_resources::Origin::StmtStoreAlias(alias)).into(),
+			period,
+			0,
+			holder.clone(),
+		)
+		.unwrap();
+		let since = || StatementStoreAllowances::<Runtime>::get(period_key, alias).unwrap().since;
+		set_time(since() + 1);
+		let uxt =
+			build_signed_replacement_ext(&holder_pair, period, alias, second.clone(), since());
+		Executive::apply_extrinsic(uxt)
+			.expect("first replacement is valid")
+			.expect("first replacement dispatch succeeds");
+
+		// The next replacement is refused until the fee of one replacement has recovered.
+		let attempt = |block: BlockNumber| {
+			advance_to_block(block);
+			let uxt =
+				build_signed_replacement_ext(&second_pair, period, alias, third.clone(), since());
+			Executive::apply_extrinsic(uxt)
+		};
+		assert_eq!(attempt(4), Err(InvalidTransaction::Payment.into()));
+		assert_eq!(attempt(3 + 60), Err(InvalidTransaction::Payment.into()));
+		assert_eq!(attempt(3 + 449), Err(InvalidTransaction::Payment.into()));
+		attempt(3 + 450)
+			.expect("replacement is valid after 15 minutes")
+			.expect("replacement dispatch succeeds");
+		assert_eq!(get_allowance(&second), StatementAllowance::default());
+		assert_eq!(get_allowance(&third), AccountsApiAllowance::get());
+	});
+}
+
+#[test]
+fn cleanup_drops_the_holder_usage_of_a_replaced_slot() {
+	new_test_ext().execute_with(|| {
+		let holder_pair = sr25519::Pair::from_seed(&[96u8; 32]);
+		let holder = pair_to_account_id(&holder_pair);
+		let new_account = pair_to_account_id(&sr25519::Pair::from_seed(&[97u8; 32]));
+		let alias = [9u8; 32];
+		advance_block();
+		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
+		let period = Resources::stmt_store_period_from_timestamp(now_secs);
+		let period_key = indiv_support::utils::BigEndianU32::from(period);
+		Resources::set_statement_store_account(
+			OriginCaller::Resources(indiv_pallet_resources::Origin::StmtStoreAlias(alias)).into(),
+			period,
+			0,
+			holder.clone(),
+		)
+		.unwrap();
+		let since = StatementStoreAllowances::<Runtime>::get(period_key, alias).unwrap().since;
+		set_time(since + 1);
+		let uxt = build_signed_replacement_ext(&holder_pair, period, alias, new_account, since);
+		Executive::apply_extrinsic(uxt).unwrap().unwrap();
+		let entity = crate::RestrictedEntity::StmtStoreHolder(alias);
+		let usage = indiv_pallet_origin_restriction::Usages::<Runtime>::get(&entity).unwrap();
+		let other_entity = crate::RestrictedEntity::StmtStoreHolder([10u8; 32]);
+		indiv_pallet_origin_restriction::Usages::<Runtime>::insert(&other_entity, usage.clone());
+
+		let grace = u64::from(StmtStoreGraceWindow::get());
+		set_time(u64::from(period + 1) * 24 * 60 * 60 + grace + 1);
+		Resources::clear_expired_stmt_store_allowances(
+			frame_system::RawOrigin::Authorized.into(),
+			period,
+			alias,
+		)
+		.unwrap();
+		assert!(indiv_pallet_origin_restriction::Usages::<Runtime>::get(&entity).is_none());
+		assert_eq!(
+			indiv_pallet_origin_restriction::Usages::<Runtime>::get(&other_entity),
+			Some(usage)
+		);
+		assert_eq!(StatementStoreAllowances::<Runtime>::get(period_key, alias), None);
+	});
+}
+
+#[test]
+fn replacement_fee_estimate_covers_a_signed_replacement() {
+	new_test_ext().execute_with(|| {
+		let holder_pair = sr25519::Pair::from_seed(&[98u8; 32]);
+		let holder = pair_to_account_id(&holder_pair);
+		let new_account = pair_to_account_id(&sr25519::Pair::from_seed(&[99u8; 32]));
+		let alias = [11u8; 32];
+		advance_block();
+		let now_secs = pallet_timestamp::Now::<Runtime>::get() / 1000;
+		let period = Resources::stmt_store_period_from_timestamp(now_secs);
+		let period_key = indiv_support::utils::BigEndianU32::from(period);
+		Resources::set_statement_store_account(
+			OriginCaller::Resources(indiv_pallet_resources::Origin::StmtStoreAlias(alias)).into(),
+			period,
+			0,
+			holder,
+		)
+		.unwrap();
+		let since = StatementStoreAllowances::<Runtime>::get(period_key, alias).unwrap().since;
+		set_time(since + 1);
+		let uxt = build_signed_replacement_ext(&holder_pair, period, alias, new_account, since);
+		Executive::apply_extrinsic(uxt).unwrap().unwrap();
+
+		let used = Usages::<Runtime>::get(RestrictedEntity::StmtStoreHolder(alias)).unwrap().used;
+		let estimate = crate::stmt_store_replacement_fee();
+		assert!(used > 0);
+		assert!(estimate >= used, "estimate {estimate} below the usage {used} of a replacement");
+	});
+}
+
+#[test]
+fn stmt_store_holder_entity_allows_only_the_replacement_call() {
+	let alias = [3u8; 32];
+	let account = AccountId32::new([0u8; 32]);
+	let entity = RestrictedEntity::StmtStoreHolder(alias);
+	let replace =
+		RuntimeCall::Resources(indiv_pallet_resources::Call::replace_statement_store_account {
+			period: 0,
+			alias,
+			new_account: account.clone(),
+			since: 0,
+		});
+	let claim = RuntimeCall::Resources(indiv_pallet_resources::Call::set_statement_store_account {
+		period: 0,
+		seq: 0,
+		target_account: account.clone(),
+	});
+
+	assert!(OperationAllowedOneTimeExcess::contains(&entity, &replace));
+	assert!(!OperationAllowedOneTimeExcess::contains(&entity, &claim));
+	assert!(!OperationAllowedOneTimeExcess::contains(
+		&RestrictedEntity::LitePerson(account),
+		&replace
+	));
+	assert_eq!(
+		RestrictedEntity::restricted_entity(&OriginCaller::Resources(
+			indiv_pallet_resources::Origin::StmtStoreHolder(alias)
+		)),
+		Some(entity)
+	);
 }
