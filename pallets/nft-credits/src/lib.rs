@@ -1148,7 +1148,9 @@ impl<T: Config> Pallet<T> {
 	/// One tree a block, over at most [`CHUNKS_PER_TREE`] chunks of awards, bounds this hook. Each
 	/// tree stands alone. It is built once, from a complete leaf set, so no root grows over time
 	/// and no inclusion proof can go stale. The awards it was built over stay for the retained
-	/// window, so a claim can be proven from state; the root itself is never removed.
+	/// window, so a claim can be proven from state. The root stays until the claims chain reports
+	/// the tree finished, in [`Pallet::receive_tree_deletions`], or until
+	/// [`Pallet::sweep_expired_roots`] removes it once [`Pallet::root_ttl`] has passed.
 	///
 	/// Every root recorded is also queued for delivery to the NFT claims chain, which the
 	/// offchain worker then ships (see [`Pallet::send_credit_trees`]).
