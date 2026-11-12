@@ -3998,6 +3998,8 @@ mod contracts {
 			assert_eq!(contract_instances(CONTRACT), vec![1]);
 			assert_eq!(Scarcity::balance_of(&CONTRACT, 0), 2);
 			assert_ok!(Scarcity::do_try_state());
+			mint(0, OTHER);
+			assert!(validate_transfer(OTHER, CONTRACT).is_ok());
 
 			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(CONTRACT), 0, RECIPIENT));
 			assert!(!NftsByOwner::<Test>::contains_key(CONTRACT));

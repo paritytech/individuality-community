@@ -403,9 +403,9 @@ pub mod pallet {
 		MaxEncodedLen,
 	)]
 	pub enum Transferability {
-		/// The holder may move the instance to another purse key.
+		/// The holder may move the instance to another purse key or contract.
 		Transferable,
-		/// The instance stays with the purse key it was minted into.
+		/// The instance stays with the purse key or contract it was minted into.
 		Soulbound,
 	}
 
@@ -1989,7 +1989,8 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Mint an instance after enforcing collection ownership and the one-NFT-per-key rule.
+		/// Mint an instance after enforcing collection ownership and that a purse key holds at
+		/// most one instance.
 		pub fn do_mint(
 			owner: T::AccountId,
 			collection: CollectionId,
@@ -2044,6 +2045,7 @@ pub mod pallet {
 				let record_size = nft
 					.encoded_size()
 					.saturating_add(to.encoded_size().saturating_mul(2))
+					.saturating_add(collection.encoded_size())
 					.saturating_add(instance.encoded_size().saturating_mul(3))
 					.saturating_add(BalanceOf::<T>::max_encoded_len())
 					.saturating_add(u32::max_encoded_len());

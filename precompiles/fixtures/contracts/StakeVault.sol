@@ -29,6 +29,7 @@ import "../../scarcity/sol/IScarcityCollection.sol";
 /// `reserve` records the token's `stateNonce`, which each move raises by one. `confirm` credits a
 /// token only if the push is its one move since `reserve`, so a token sold in between stays
 /// uncredited. A failed fee-less dispatch also raises the nonce, so the player then reserves again.
+/// A token that `confirm` cannot credit stays until the collection owner calls `forceTransfer`.
 ///
 /// Each check costs the same whatever the vault holds, so the vault never reads `balanceOf` or
 /// `tokenOfOwnerByIndex`. A copy of this contract adds its own game rules, for example when a
