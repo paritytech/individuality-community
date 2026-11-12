@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs dot CLI and jq, imports signer accounts.
+# Installs dot CLI, jq and bc, imports signer accounts.
 # Run this once before using other scripts. Chain aliases are registered by load-config.sh.
 set -euo pipefail
 
@@ -56,9 +56,24 @@ ensure_bc_installed() {
     return
   fi
 
-  echo "ERROR: bc is not installed." >&2
-  echo "Install bc and rerun this script." >&2
-  exit 1
+  echo "bc not found. Attempting to install bc..."
+  if command -v brew >/dev/null 2>&1; then
+    brew install bc
+  elif command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y bc
+  else
+    echo "ERROR: bc is not installed and no supported package manager was found." >&2
+    echo "Install bc manually and rerun this script." >&2
+    exit 1
+  fi
+
+  if ! command -v bc >/dev/null 2>&1; then
+    echo "ERROR: bc is still not available after install." >&2
+    exit 1
+  fi
+
+  echo "bc is available: $(bc --version 2>/dev/null | head -1 || echo unknown version)"
 }
 
 ensure_npm_installed() {

@@ -28,7 +28,7 @@ use frame_support::{
 		fungible::HoldConsideration,
 		tokens::imbalance::{ResolveAssetTo, ResolveTo},
 		ConstU32, Contains, ContainsPair, Equals, Everything, EverythingBut, LinearStoragePrice,
-		Nothing, ProcessMessageError,
+		Nothing,
 	},
 };
 use frame_system::EnsureRoot;
@@ -42,7 +42,7 @@ use parachains_common::{
 	},
 	TREASURY_PALLET_ID,
 };
-use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, COLLECTIVES_ID, NEXT_ASSET_HUB_ID};
+use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, COLLECTIVES_ID};
 use polkadot_parachain_primitives::primitives::Sibling;
 use sp_runtime::traits::{AccountIdConversion, TryConvertInto};
 use xcm::latest::prelude::*;
@@ -59,10 +59,7 @@ use xcm_builder::{
 	TrailingSetTopicAsId, UsingComponents, WeightInfoBounds, WithComputedOrigin,
 	WithLatestLocationConverter, WithUniqueTopic, XcmFeeManagerFromComponents,
 };
-use xcm_executor::{
-	traits::{Properties, ShouldExecute},
-	XcmExecutor,
-};
+use xcm_executor::XcmExecutor;
 
 parameter_types! {
 	pub const RootLocation: Location = Location::here();
@@ -87,7 +84,6 @@ parameter_types! {
 	pub UniversalLocationNetworkId: NetworkId = UniversalLocation::get().global_consensus().unwrap();
 	pub CheckingAccount: AccountId = PolkadotXcm::check_account();
 	pub AssetHubLocation: Location = Location::new(1, [Parachain(ASSET_HUB_ID)]);
-	pub NextAhLocation: Location = Location::new(1, [Parachain(NEXT_ASSET_HUB_ID)]);
 }
 
 pub type PriceForParentDelivery = polkadot_runtime_common::xcm_sender::ExponentialPrice<
@@ -190,9 +186,9 @@ pub type XcmOriginToTransactDispatchOrigin = (
 	// Native converter for sibling Parachains; will convert to a `SiblingPara` origin when
 	// recognized.
 	SiblingParachainAsNative<cumulus_pallet_xcm::Origin, RuntimeOrigin>,
-	// Superuser converter for the AH-next location. This will allow it to issue a transaction from
+	// Superuser converter for Asset Hub. This will allow it to issue a transaction from
 	// the Root origin.
-	LocationAsSuperuser<Equals<NextAhLocation>, RuntimeOrigin>,
+	LocationAsSuperuser<Equals<AssetHubLocation>, RuntimeOrigin>,
 	// Native signed account converter; this just converts an `AccountId32` origin into a normal
 	// `RuntimeOrigin::Signed` origin of the same 32-byte value.
 	SignedAccountId32AsNative<RelayNetwork, RuntimeOrigin>,
@@ -214,21 +210,10 @@ impl Contains<Location> for ParentOrParentsPlurality {
 	}
 }
 
-/// Custom barrier for Asset Hub - allows any execution from Asset Hub
-pub struct AllowAssetHubExecution;
-impl ShouldExecute for AllowAssetHubExecution {
-	fn should_execute<RuntimeCall>(
-		origin: &Location,
-		_instructions: &mut [Instruction<RuntimeCall>],
-		_max_weight: Weight,
-		_properties: &mut Properties,
-	) -> Result<(), ProcessMessageError> {
-		if origin == &AssetHubLocation::get() {
-			log::trace!(target: "xcm::barriers", "AllowAssetHubExecution: Asset Hub origin allowed");
-			Ok(())
-		} else {
-			Err(ProcessMessageError::Unsupported)
-		}
+pub struct AssetHubPlurality;
+impl Contains<Location> for AssetHubPlurality {
+	fn contains(location: &Location) -> bool {
+		matches!(location.unpack(), (1, [Parachain(ASSET_HUB_ID), Plurality { .. }]))
 	}
 }
 
@@ -240,24 +225,14 @@ pub type Barrier = TrailingSetTopicAsId<
 			TakeWeightCredit,
 			// Expected responses are OK.
 			AllowKnownQueryResponses<PolkadotXcm>,
-			AllowAssetHubExecution,
 			WithComputedOrigin<
 				(
 					// If the message is one that immediately attempts to pay for execution, then
 					// allow it.
 					AllowTopLevelPaidExecutionFrom<Everything>,
-					// Parent and its pluralities (i.e. governance bodies) get free execution.
+					// Parent, Asset Hub and their pluralities get free execution.
 					AllowExplicitUnpaidExecutionFrom<
-						ParentOrParentsPlurality,
-						// The barrier runs before fees: keep this computation-only.
-						// Do not use `TrustedAliasers` here.
-						CheapTrustedAliasers,
-					>,
-					// The chain the credit trees are delivered to. It sends back the roots it is
-					// finished with. Unlike `AllowAssetHubExecution` above, this accepts only a
-					// message that asks for free execution.
-					AllowExplicitUnpaidExecutionFrom<
-						Equals<NextAhLocation>,
+						(ParentOrParentsPlurality, AssetHubPlurality, Equals<AssetHubLocation>),
 						// The barrier runs before fees: keep this computation-only.
 						// Do not use `TrustedAliasers` here.
 						CheapTrustedAliasers,
@@ -289,7 +264,7 @@ impl<Inner: ContainsPair<Location, Location>> ContainsPair<Location, Location>
 	for DenyAliasIntoSuperuser<Inner>
 {
 	fn contains(origin: &Location, target: &Location) -> bool {
-		target != &NextAhLocation::get() && Inner::contains(origin, target)
+		target != &AssetHubLocation::get() && Inner::contains(origin, target)
 	}
 }
 

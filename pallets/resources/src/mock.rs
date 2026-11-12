@@ -131,7 +131,7 @@ pub fn comm_id(s: &[u8]) -> CommunicationIdentifier {
 
 /// Helper to create a valid signature for a lite identity proof
 pub fn mock_lite_proof(lite_account: AccountId32) -> AccountAuthority {
-	AccountAuthority(lite_account)
+	AccountAuthority(lite_account, None)
 }
 
 /// Helper to mock the LitePerson origin
@@ -168,9 +168,21 @@ pub fn notification_origin(alias_id: u64) -> RuntimeOrigin {
 	))))
 }
 
+/// An account signature of `account` over exactly `payload`.
+pub fn account_signature(account: AccountId32, payload: &[u8]) -> AccountAuthority {
+	AccountAuthority(account, Some(sp_io::hashing::blake2_256(payload)))
+}
+
 /// Helper to mock the Resources statement store slot origin.
 pub fn stmt_store_slot_origin(alias_id: u64) -> RuntimeOrigin {
 	RuntimeOrigin::from(OriginCaller::Resources(crate::Origin::StmtStoreAlias(id_to_alias(
+		alias_id,
+	))))
+}
+
+/// Helper to mock the Resources statement store slot holder origin.
+pub fn stmt_store_holder_origin(alias_id: u64) -> RuntimeOrigin {
+	RuntimeOrigin::from(OriginCaller::Resources(crate::Origin::StmtStoreHolder(id_to_alias(
 		alias_id,
 	))))
 }
@@ -191,6 +203,23 @@ pub fn lts_lite_people_origin(alias_id: u64) -> RuntimeOrigin {
 	)))
 }
 
+thread_local! {
+	static CLEARED_SLOTS: RefCell<Vec<Alias>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Records the aliases of the statement store slot entries the cleanup removed.
+pub struct RecordClearedSlots;
+impl crate::OnStmtStoreSlotCleared for RecordClearedSlots {
+	fn on_cleared(alias: &Alias) {
+		CLEARED_SLOTS.with(|slots| slots.borrow_mut().push(*alias));
+	}
+}
+
+/// The aliases of the statement store slot entries the cleanup removed so far.
+pub fn cleared_slots() -> Vec<Alias> {
+	CLEARED_SLOTS.with(|slots| slots.borrow().clone())
+}
+
 /// Helper to advance time (seconds)
 pub fn advance_time_sec(secs: u64) {
 	let current_time = TestClock::now().as_secs();
@@ -202,8 +231,9 @@ pub fn set_time_sec(secs: u64) {
 	TestClock::set_time(Duration::from_secs(secs));
 }
 
-/// An account signature that is valid for its own account over a message in the personhood
-/// signing context.
+/// An account signature that is valid for its own account only. The message must be in the
+/// personhood signing context. With a payload hash it is valid for that exact payload only,
+/// which may also be a 32-byte implication hash.
 #[derive(
 	PartialEq,
 	Eq,
@@ -218,7 +248,7 @@ pub fn set_time_sec(secs: u64) {
 	MaxEncodedLen,
 	TypeInfo,
 )]
-pub struct AccountAuthority(pub AccountId32);
+pub struct AccountAuthority(pub AccountId32, pub Option<[u8; 32]>);
 
 impl IdentifyAccount for AccountAuthority {
 	type AccountId = AccountId32;
@@ -241,7 +271,10 @@ impl Verify for AccountAuthority {
 			&NetworkSuffix::get(),
 			indiv_support::context::SIGNING,
 		);
-		self.0 == *signer && msg.starts_with(&context)
+		let implication_hash = self.1.is_some() && msg.len() == 32;
+		self.0 == *signer &&
+			(msg.starts_with(&context) || implication_hash) &&
+			self.1.is_none_or(|hash| hash == sp_io::hashing::blake2_256(msg))
 	}
 }
 
@@ -441,7 +474,7 @@ pub struct Helper;
 #[cfg(feature = "runtime-benchmarks")]
 impl indiv_pallet_people_lite::BenchmarkHelper<AccountId32, AccountAuthority> for Helper {
 	fn sign_message(_message: &[u8]) -> (AccountId32, AccountAuthority) {
-		([0u8; 32].into(), AccountAuthority([0u8; 32].into()))
+		([0u8; 32].into(), AccountAuthority([0u8; 32].into(), None))
 	}
 }
 
@@ -510,7 +543,6 @@ parameter_types! {
 	pub storage StmtStoreSlotsPerPeriod: u32 = 8;
 	pub storage LiteStmtStoreSlotsPerPeriod: u32 = 4;
 	pub storage StmtStoreCleanupLimit: u32 = 10;
-	pub storage StmtStoreReplacementCooldown: u32 = 60 * 60; // 1 hour
 	pub storage StmtStoreGraceWindow: u32 = 2 * 24 * 60 * 60;
 	pub const LongTermStoragePeriodDuration: u32 = 24 * 60 * 60;
 	pub const LongTermStorageGraceWindow: u32 = 60 * 60;
@@ -537,7 +569,8 @@ impl benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 
 	fn sign_message(message: &[u8]) -> (AccountId32, AccountAuthority) {
 		let account = AccountId32::new([42u8; 32]);
-		let signature = AccountAuthority(account.clone());
+		let signature =
+			AccountAuthority(account.clone(), Some(sp_io::hashing::blake2_256(message)));
 		(account, signature)
 	}
 }
@@ -554,7 +587,6 @@ impl Config for Test {
 	type StmtStoreSlotsPerPeriod = StmtStoreSlotsPerPeriod;
 	type LiteStmtStoreSlotsPerPeriod = LiteStmtStoreSlotsPerPeriod;
 	type StmtStoreCleanupLimit = StmtStoreCleanupLimit;
-	type StmtStoreReplacementCooldown = StmtStoreReplacementCooldown;
 	type StmtStoreGraceWindow = StmtStoreGraceWindow;
 	type NotificationAllowance = NotificationAllowance;
 	type NotificationSlotsPerPeriod = NotificationSlotsPerPeriod;
@@ -565,6 +597,7 @@ impl Config for Test {
 	type EnsureLitePerson = indiv_pallet_people_lite::EnsureLitePerson<Test>;
 	type Clock = TestClock;
 	type OffchainSignature = AccountAuthority;
+	type OnStmtStoreSlotCleared = RecordClearedSlots;
 	type LitePersonStatementLimit = LitePersonStatementLimit;
 	type PersonStatementLimit = PersonStatementLimit;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;

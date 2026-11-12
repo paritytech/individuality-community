@@ -44,5 +44,18 @@ fund_targets() {
   done
 }
 
+# Verify People sudo has enough PAS on the Relay before funding the People sovereign.
+if [ "$ENV" = "next" ]; then
+  # Worst case the fund step spends RELAY_FUND_PAS on the People sovereign.
+  # The +5 PAS covers tx fees + ED.
+  relay_min_pas=$((RELAY_FUND_PAS * ${#RELAY_FUND_TARGETS[@]} + 5))
+  relay_min=$((relay_min_pas * 10**NATIVE_DECIMALS))
+  free=$(dot relay.query.System.Account "$ACCOUNT_PEOPLE_SUDO" --output json | jq -r '.data.free // 0')
+  if ! int_ge "$free" "$relay_min"; then
+    echo "ERROR: People sudo on Relay has $free units, need >= $relay_min ($relay_min_pas PAS); drip from https://faucet.polkadot.io" >&2
+    exit 1
+  fi
+fi
+
 fund_targets people "$PEOPLE_FUND_PAS" "${PEOPLE_FUND_TARGETS[@]}"
 fund_targets relay "$RELAY_FUND_PAS" "${RELAY_FUND_TARGETS[@]}"
