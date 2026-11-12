@@ -811,7 +811,7 @@ impl pallet_migrations::Config for Runtime {
 		// Single use! - remove once the upgrade carrying it is live.
 		indiv_pallet_resources::migration::v1::RecordGrantedAllowances<Runtime>,
 		// Single use! - remove once the upgrade carrying it is live.
-		indiv_pallet_resources::migration::v2::MigrateConsumerAllowances<Runtime>,
+		indiv_pallet_resources::migration::v2::RecordConsumerAllowances<Runtime>,
 	);
 	// Benchmarks need mocked migrations to guarantee that they succeed.
 	#[cfg(feature = "runtime-benchmarks")]

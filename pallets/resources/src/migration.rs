@@ -21,10 +21,12 @@
 //! after the single-block migrations and before the multi-block migrations.
 
 use crate::{
-	types::{Credibility, NotificationReference, NotificationRegistration, StmtStoreAllowanceEntry},
+	types::{
+		ConsumerInfo, Credibility, NotificationReference, NotificationRegistration,
+		StmtStoreAllowanceEntry,
+	},
 	weights::WeightInfo,
-	Config, ConsumerAllowances, Consumers, NotificationRegistrationByAlias, Pallet,
-	StatementStoreAllowances,
+	Config, Consumers, NotificationRegistrationByAlias, Pallet, StatementStoreAllowances,
 };
 use frame_support::{
 	migrations::{MigrationId, SteppedMigration, SteppedMigrationError},
@@ -33,9 +35,9 @@ use frame_support::{
 	weights::WeightMeter,
 };
 use indiv_support::{
-	statement_allowance::BoundedStatementAllowance, traits::Alias, utils::BigEndianU32,
+	traits::{Alias, CommunicationIdentifier, Username},
+	utils::BigEndianU32,
 };
-use sp_statement_store::StatementAllowance;
 
 #[cfg(feature = "try-runtime")]
 use codec::DecodeAll;
@@ -292,14 +294,40 @@ pub mod v1 {
 pub mod v2 {
 	use super::*;
 
-	/// Records the personhood statement allowance of every consumer in [`ConsumerAllowances`].
+	/// The storage as version 1 sees it.
+	pub mod v1 {
+		use super::*;
+
+		/// A consumer without its granted allowance.
+		#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+		pub struct ConsumerInfo {
+			pub identifier_key: CommunicationIdentifier,
+			pub full_username: Option<Username>,
+			pub lite_username: Username,
+			pub credibility: Credibility,
+		}
+
+		#[storage_alias]
+		pub type Consumers<T: Config> = StorageMap<
+			Pallet<T>,
+			Blake2_128Concat,
+			<T as frame_system::Config>::AccountId,
+			ConsumerInfo,
+		>;
+	}
+
+	/// Records the personhood statement allowance in every consumer over several blocks.
 	///
 	/// A lite or demoted consumer gets the current `LitePersonStatementLimit` and a person gets
 	/// the current `PersonStatementLimit`. This is correct only if the limits have not changed
 	/// since the first consumer registered.
-	pub struct MigrateConsumerAllowances<T>(PhantomData<T>);
+	///
+	/// [`Consumers`] does not decode an entry that the migration has not rewritten yet. Until the
+	/// migration completes, a reader of [`Consumers`], such as a runtime API or another pallet
+	/// through `ConsumerRegistrar`, sees such a consumer as not registered.
+	pub struct RecordConsumerAllowances<T>(PhantomData<T>);
 
-	impl<T: Config> SteppedMigration for MigrateConsumerAllowances<T> {
+	impl<T: Config> SteppedMigration for RecordConsumerAllowances<T> {
 		type Cursor = T::AccountId;
 		type Identifier = MigrationId<22>;
 
@@ -323,34 +351,47 @@ pub mod v2 {
 				if meter.try_consume(required).is_err() {
 					return Ok(cursor);
 				}
-
-				let mut iter = match &cursor {
-					Some(last) => Consumers::<T>::iter_from(Consumers::<T>::hashed_key_for(last)),
-					None => Consumers::<T>::iter(),
-				};
-				let Some((account, info)) = iter.next() else {
-					log::info!(target: LOG_TARGET, "recorded the allowances of all consumers");
+				let Some(account) = Self::migrate_consumer(cursor) else {
+					log::info!(target: LOG_TARGET, "recorded the allowance of all consumers");
 					StorageVersion::new(2).put::<Pallet<T>>();
 					return Ok(None);
 				};
-				let allowance = granted_allowance::<T>(&info.credibility);
-				ConsumerAllowances::<T>::insert(
-					&account,
-					BoundedStatementAllowance::from(allowance),
-				);
 				cursor = Some(account);
 			}
 		}
 
 		#[cfg(feature = "try-runtime")]
-		fn post_upgrade(_state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
-			for (account, info) in Consumers::<T>::iter() {
+		fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
+			if Pallet::<T>::on_chain_storage_version() != 1 {
+				return Ok(None::<alloc::vec::Vec<(T::AccountId, v1::ConsumerInfo)>>.encode());
+			}
+			Ok(Some(v1::Consumers::<T>::iter().collect::<alloc::vec::Vec<_>>()).encode())
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+			let state = Option::<alloc::vec::Vec<(T::AccountId, v1::ConsumerInfo)>>::decode_all(
+				&mut &state[..],
+			)
+			.map_err(|_| "the pre-upgrade state must decode")?;
+			let Some(consumers) = state else {
+				log::info!(target: LOG_TARGET, "the storage version was not 1; nothing to check");
+				return Ok(());
+			};
+
+			ensure!(
+				Consumers::<T>::iter_keys().count() == consumers.len(),
+				"the migration must keep every consumer"
+			);
+			for (account, info) in consumers {
+				let migrated = Consumers::<T>::get(&account)
+					.ok_or("a consumer must decode with its allowance")?;
 				ensure!(
-					ConsumerAllowances::<T>::get(&account) ==
-						Some(granted_allowance::<T>(&info.credibility).into()),
-					"a consumer has no recorded allowance"
+					migrated == Self::with_allowance(info),
+					"a consumer must keep its fields and record the allowance of its credibility"
 				);
 			}
+
 			ensure!(
 				Pallet::<T>::on_chain_storage_version() == 2,
 				"the storage version must be 2 after the migration"
@@ -359,12 +400,28 @@ pub mod v2 {
 		}
 	}
 
-	/// The allowance that a consumer with `credibility` holds before the upgrade.
-	fn granted_allowance<T: Config>(credibility: &Credibility) -> StatementAllowance {
-		match credibility {
-			Credibility::Person { demoted: false, .. } => T::PersonStatementLimit::get(),
-			Credibility::Lite | Credibility::Person { demoted: true, .. } =>
-				T::LitePersonStatementLimit::get(),
+	impl<T: Config> RecordConsumerAllowances<T> {
+		/// Migrates the consumer after `last`, or returns `None` when no consumer is left.
+		fn migrate_consumer(last: Option<T::AccountId>) -> Option<T::AccountId> {
+			let mut iter = match last {
+				Some(account) =>
+					v1::Consumers::<T>::iter_from(v1::Consumers::<T>::hashed_key_for(account)),
+				None => v1::Consumers::<T>::iter(),
+			};
+			let (account, info) = iter.next()?;
+			Consumers::<T>::insert(&account, Self::with_allowance(info));
+			Some(account)
+		}
+
+		/// `info` with the allowance that its credibility holds under the current limits.
+		fn with_allowance(info: v1::ConsumerInfo) -> ConsumerInfo {
+			ConsumerInfo {
+				allowance: Pallet::<T>::credibility_allowance(&info.credibility).into(),
+				identifier_key: info.identifier_key,
+				full_username: info.full_username,
+				lite_username: info.lite_username,
+				credibility: info.credibility,
+			}
 		}
 	}
 }
