@@ -144,7 +144,7 @@ jobs:
   # runtime-diff-summary job, which sums every candidate).
   notify-breaking-diff:
     needs: chain-tests
-    if: ${{ always() && needs.chain-tests.result == 'success' && needs.chain-tests.outputs.runtime_diff_breaking != '' && needs.chain-tests.outputs.runtime_diff_unknown != '' && (needs.chain-tests.outputs.runtime_diff_breaking != '0' || needs.chain-tests.outputs.runtime_diff_unknown != '0') }}
+    if: ${{ always() && needs.chain-tests.result == 'success' && (needs.chain-tests.outputs.runtime_diff_breaking == '' || needs.chain-tests.outputs.runtime_diff_unknown == '' || needs.chain-tests.outputs.runtime_diff_breaking != '0' || needs.chain-tests.outputs.runtime_diff_unknown != '0') }}
     runs-on: parity-ubuntu
     permissions:
       contents: read
@@ -160,16 +160,18 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          if [ "$BREAKING" != "0" ]; then
+          if [ -z "$BREAKING" ] || [ -z "$UNKNOWN" ]; then
+            HEAD="[WARNING] E2E Nightly runtime diff summary produced no counts, tests passed ($REF)"
+          elif [ "$BREAKING" != "0" ]; then
             HEAD="[WARNING] E2E Nightly runtime diff: $BREAKING breaking change(s) for product-sdk, tests passed ($REF)"
           else
-            HEAD="[WARNING] E2E Nightly runtime diff could not be checked for $UNKNOWN candidate(s), tests passed ($REF); $BREAKING breaking change(s) found in the rest"
+            HEAD="[WARNING] E2E Nightly runtime diff: $UNKNOWN runtime diff(s) could not be checked, tests passed ($REF); $BREAKING breaking change(s) found in the rest"
           fi
           {
             echo "text<<NIGHTLYMSG"
             echo "$HEAD"
-            if [ "$BREAKING" != "0" ] && [ "$UNKNOWN" != "0" ]; then
-              echo "$UNKNOWN candidate(s) could not be checked."
+            if [ -n "$BREAKING" ] && [ -n "$UNKNOWN" ] && [ "$BREAKING" != "0" ] && [ "$UNKNOWN" != "0" ]; then
+              echo "$UNKNOWN runtime diff(s) could not be checked."
             fi
             echo "$RUN_URL"
             echo 'See the "runtime-diff-summary" job summary in this run.'
