@@ -3304,7 +3304,7 @@ mod stmt_store_allowance {
 	}
 
 	#[test]
-	fn extension_rejects_replacement_during_cooldown() {
+	fn extension_rejects_a_claim_of_an_occupied_slot() {
 		new_test_ext().execute_with(|| {
 			set_time_sec(SECONDS_PER_DAY + 100);
 
@@ -3363,7 +3363,8 @@ mod stmt_store_allowance {
 				extension_version,
 			));
 
-			// Second claim with a different target account: extension should reject.
+			// A later second proof for the same slot is refused.
+			advance_time_sec(1000);
 			let second_call = RuntimeCall::Resources(crate::Call::set_statement_store_account {
 				period,
 				seq: 0,
@@ -3392,24 +3393,137 @@ mod stmt_store_allowance {
 				extension_version,
 			);
 
-			assert!(matches!(
-				result,
-				Err(sp_runtime::transaction_validity::TransactionValidityError::Invalid(
-					sp_runtime::transaction_validity::InvalidTransaction::Custom(code),
-				)) if code == crate::extension::CustomValidity::StmtStoreReplacementTooEarly as u8
+			assert_eq!(
+				result.map(|_| ()),
+				Err(crate::extension::CustomValidity::StmtStoreSlotAlreadyClaimed.into())
+			);
+		});
+	}
+
+	/// Claims slot `0` of the current period for `holder` under alias `alias_id` and returns
+	/// the period and the alias.
+	fn claim_slot_for(alias_id: u64, holder: AccountId32) -> (u32, Alias) {
+		set_time_sec(SECONDS_PER_DAY + 100);
+		let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+		assert_ok!(Resources::set_statement_store_account(
+			stmt_store_slot_origin(alias_id),
+			period,
+			0,
+			holder,
+		));
+		(period, id_to_alias(alias_id))
+	}
+
+	fn replace_call(
+		period: u32,
+		alias: Alias,
+		new_account: AccountId32,
+		since: u64,
+	) -> RuntimeCall {
+		RuntimeCall::Resources(crate::Call::replace_statement_store_account {
+			period,
+			alias,
+			new_account,
+			since,
+		})
+	}
+
+	/// The timestamp recorded in the slot entry of `alias` in `period`.
+	fn entry_since(period: u32, alias: Alias) -> u64 {
+		StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), alias)
+			.expect("slot is claimed")
+			.since
+	}
+
+	/// The extension carrying `signer`'s signature for the call that moves the slot of `alias` in
+	/// `period` to `new_account` with the witness `since`. The signed bytes are the blake2 hash of
+	/// the call's base implication at extension version 0.
+	fn signed_replacement(
+		signer: AccountId32,
+		period: u32,
+		alias: Alias,
+		new_account: &AccountId32,
+		since: u64,
+	) -> crate::extension::AsResources<Test> {
+		let call = replace_call(period, alias, new_account.clone(), since);
+		let msg = sp_runtime::traits::TxBaseImplication((0u8, &call))
+			.using_encoded(sp_io::hashing::blake2_256);
+		crate::extension::AsResources::<Test>::new(Some(
+			crate::extension::AsResourcesInfo::ReplaceStatementStoreAccount(account_signature(
+				signer, &msg,
+			)),
+		))
+	}
+
+	fn validate_resources_ext(
+		tx_ext: &crate::extension::AsResources<Test>,
+		call: &RuntimeCall,
+	) -> Result<
+		sp_runtime::transaction_validity::ValidTransaction,
+		sp_runtime::transaction_validity::TransactionValidityError,
+	> {
+		tx_ext
+			.validate_only(
+				SystemOrigin::None.into(),
+				call,
+				&call.get_dispatch_info(),
+				0,
+				TransactionSource::External,
+				0,
+			)
+			.map(|(validity, _, _)| validity)
+	}
+
+	fn next_second() {
+		advance_time_sec(1);
+	}
+
+	#[test]
+	fn extension_accepts_a_signed_replacement_in_a_later_second() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			let holder = id_to_account(550);
+			let new_account = id_to_account(551);
+			let (period, alias) = claim_slot_for(55, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = replace_call(period, alias, new_account.clone(), since);
+			let tx_ext = signed_replacement(holder.clone(), period, alias, &new_account, since);
+			assert_ok!(tx_ext.dispatch_transaction(
+				SystemOrigin::None.into(),
+				call.clone(),
+				&call.get_dispatch_info(),
+				0,
+				0,
 			));
+
+			let accounts_allowance = <Test as Config>::AccountsApiAllowance::get();
+			assert_eq!(get_allowance(&holder), StatementAllowance::default());
+			assert_eq!(get_allowance(&new_account), accounts_allowance);
+			let entry =
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), alias).unwrap();
+			assert_eq!(entry.account_id, new_account);
+			assert_eq!(entry.seq, 0);
+			assert_eq!(entry.since, TestClock::now().as_secs());
+			System::assert_has_event(
+				Event::<Test>::StmtStoreAccountReplaced {
+					alias,
+					period,
+					seq: 0,
+					previous_account: holder,
+					new_account,
+				}
+				.into(),
+			);
 		});
 	}
 
 	#[test]
-	fn extension_accepts_replacement_after_cooldown() {
+	fn signed_replacement_shares_the_pool_tag_of_the_proof_claim() {
 		new_test_ext().execute_with(|| {
 			set_time_sec(SECONDS_PER_DAY + 100);
-
-			let now = TestClock::now().as_secs();
-			let period = Resources::stmt_store_period_from_timestamp(now);
-
-			// Set up a lite-people ring with one member.
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
 			assert_ok!(Members::create_collection(
 				0,
 				indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER,
@@ -3418,7 +3532,7 @@ mod stmt_store_allowance {
 				indiv_support::traits::RingExponent::R2e9,
 				None,
 			));
-			let secret = MockCrypto::new_secret([55u8; 32]);
+			let secret = MockCrypto::new_secret([56u8; 32]);
 			let member = MockCrypto::member_from_secret(&secret);
 			assert_ok!(Members::add_members(
 				indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER,
@@ -3426,78 +3540,357 @@ mod stmt_store_allowance {
 			));
 			advance_to_block(3);
 			set_time_sec(SECONDS_PER_DAY + 100);
+			let holder = id_to_account(560);
+			let new_account = id_to_account(561);
 
-			let context = Resources::stmt_store_slot_context(period, 0);
-			let extension_version = 0u8;
-
-			// First claim through the extension.
-			let first_call = RuntimeCall::Resources(crate::Call::set_statement_store_account {
+			// The proof claim's validity, then its dispatch.
+			let claim_call = RuntimeCall::Resources(crate::Call::set_statement_store_account {
 				period,
 				seq: 0,
-				target_account: id_to_account(550),
+				target_account: holder.clone(),
 			});
-			let first_msg = sp_runtime::traits::TxBaseImplication((extension_version, &first_call))
+			let claim_msg = sp_runtime::traits::TxBaseImplication((0u8, &claim_call))
 				.using_encoded(sp_io::hashing::blake2_256);
 			let ring_members =
 				Members::ring_members(indiv_pallet_people_lite::LITE_PEOPLE_MEMBER_IDENTIFIER, 0);
 			let commitment = MockCrypto::open((), &member, ring_members.into_iter())
 				.expect("commitment should open");
-			let (first_proof, _) =
-				MockCrypto::create(commitment.clone(), &secret, &context, &first_msg)
-					.expect("first proof should build");
-			let first_tx_ext = crate::extension::AsResources::<Test>::new(Some(
+			let context = Resources::stmt_store_slot_context(period, 0);
+			let (proof, alias) = MockCrypto::create(commitment, &secret, &context, &claim_msg)
+				.expect("proof should build");
+			let claim_tx_ext = crate::extension::AsResources::<Test>::new(Some(
 				crate::extension::AsResourcesInfo::RegisterStatementStoreAllowance(
-					first_proof,
+					proof,
 					0,
 					0,
 					crate::types::MembershipCollection::LitePeople,
 				),
 			));
-			assert_ok!(first_tx_ext.dispatch_transaction(
+			let claim_validity =
+				validate_resources_ext(&claim_tx_ext, &claim_call).expect("claim is valid");
+			assert_ok!(claim_tx_ext.dispatch_transaction(
 				SystemOrigin::None.into(),
-				first_call.clone(),
-				&first_call.get_dispatch_info(),
+				claim_call.clone(),
+				&claim_call.get_dispatch_info(),
 				0,
-				extension_version,
+				0,
 			));
+			let since = TestClock::now().as_secs();
+			next_second();
 
-			// Advance past the replacement cooldown.
-			let cooldown =
-				<<Test as Config>::StmtStoreReplacementCooldown as Get<u32>>::get() as u64;
-			advance_time_sec(cooldown + 1);
+			let call = replace_call(period, alias, new_account.clone(), since);
+			let tx_ext = signed_replacement(holder, period, alias, &new_account, since);
+			let validity = validate_resources_ext(&tx_ext, &call).expect("replacement is valid");
+			assert_eq!(validity.provides, claim_validity.provides);
+			assert_eq!(validity.priority, claim_validity.priority);
+		});
+	}
 
-			// Replacement claim should now succeed through the extension.
-			let second_call = RuntimeCall::Resources(crate::Call::set_statement_store_account {
+	#[test]
+	fn extension_rejects_a_signed_replacement_in_the_same_second() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(570);
+			let new_account = id_to_account(571);
+			let (period, alias) = claim_slot_for(57, holder.clone());
+			let since = TestClock::now().as_secs();
+
+			let call = replace_call(period, alias, new_account.clone(), since);
+			let tx_ext = signed_replacement(holder, period, alias, &new_account, since);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementTooEarly.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_signed_replacement_by_another_account() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(580);
+			let new_account = id_to_account(581);
+			let (period, alias) = claim_slot_for(58, holder);
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = replace_call(period, alias, new_account.clone(), since);
+			let tx_ext = signed_replacement(id_to_account(582), period, alias, &new_account, since);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementBadSignature.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_signature_over_another_replacement() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(590);
+			let new_account = id_to_account(591);
+			let (period, alias) = claim_slot_for(59, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			// The signature names a different account than the call.
+			let call = replace_call(period, alias, new_account, since);
+			let tx_ext = signed_replacement(holder, period, alias, &id_to_account(592), since);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementBadSignature.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_signature_over_another_slot_or_period() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(650);
+			let new_account = id_to_account(651);
+			let (period, alias) = claim_slot_for(65, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+			let call = replace_call(period, alias, new_account.clone(), since);
+
+			// The holder signed for another alias.
+			let tx_ext =
+				signed_replacement(holder.clone(), period, id_to_alias(66), &new_account, since);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementBadSignature.into())
+			);
+
+			// The holder signed for another period.
+			let tx_ext = signed_replacement(holder, period + 1, alias, &new_account, since);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementBadSignature.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_signed_replacement_for_a_future_period() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(670);
+			let new_account = id_to_account(671);
+			let (period, alias) = claim_slot_for(67, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = replace_call(period + 1, alias, new_account.clone(), since);
+			let tx_ext = signed_replacement(holder, period + 1, alias, &new_account, since);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::InvalidStmtStorePeriod.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_register_person_signature_as_a_replacement() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(710);
+			let new_account = id_to_account(711);
+			let (period, alias) = claim_slot_for(71, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = replace_call(period, alias, new_account, since);
+			let payload =
+				Resources::account_signing_payload(&Resources::register_person_message(&alias));
+			let tx_ext = crate::extension::AsResources::<Test>::new(Some(
+				crate::extension::AsResourcesInfo::ReplaceStatementStoreAccount(account_signature(
+					holder, &payload,
+				)),
+			));
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementBadSignature.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_replacement_signature_over_another_implication() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(730);
+			let new_account = id_to_account(731);
+			let (period, alias) = claim_slot_for(73, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = replace_call(period, alias, new_account.clone(), since);
+			let msg = sp_runtime::traits::TxBaseImplication((1u8, &call))
+				.using_encoded(sp_io::hashing::blake2_256);
+			let tx_ext = crate::extension::AsResources::<Test>::new(Some(
+				crate::extension::AsResourcesInfo::ReplaceStatementStoreAccount(account_signature(
+					holder, &msg,
+				)),
+			));
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementBadSignature.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_replacement_with_a_stale_since_witness() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(740);
+			let new_account = id_to_account(741);
+			let (period, alias) = claim_slot_for(74, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = replace_call(period, alias, new_account.clone(), since - 1);
+			let tx_ext = signed_replacement(holder, period, alias, &new_account, since - 1);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementSinceMismatch.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_replayed_replacement_signature() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(600);
+			let other = id_to_account(601);
+			let (period, alias) = claim_slot_for(60, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			// The holder moves the slot to `other`, then `other` moves it back.
+			let call = replace_call(period, alias, other.clone(), since);
+			let tx_ext = signed_replacement(holder.clone(), period, alias, &other, since);
+			assert_ok!(tx_ext.clone().dispatch_transaction(
+				SystemOrigin::None.into(),
+				call.clone(),
+				&call.get_dispatch_info(),
+				0,
+				0,
+			));
+			next_second();
+			let back_since =
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), alias)
+					.unwrap()
+					.since;
+			let back_call = replace_call(period, alias, holder.clone(), back_since);
+			let back_tx_ext = signed_replacement(other, period, alias, &holder, back_since);
+			assert_ok!(back_tx_ext.dispatch_transaction(
+				SystemOrigin::None.into(),
+				back_call.clone(),
+				&back_call.get_dispatch_info(),
+				0,
+				0,
+			));
+			next_second();
+
+			// The holder's first call carries a timestamp the entry no longer has.
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementSinceMismatch.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_signed_replacement_to_the_same_account() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(700);
+			let (period, alias) = claim_slot_for(70, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = replace_call(period, alias, holder.clone(), since);
+			let tx_ext = signed_replacement(holder.clone(), period, alias, &holder, since);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementSameAccount.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_signed_replacement_without_an_entry() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let alias = id_to_alias(61);
+			let new_account = id_to_account(611);
+
+			let call = replace_call(period, alias, new_account.clone(), 0);
+			let tx_ext = signed_replacement(id_to_account(610), period, alias, &new_account, 0);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::StmtStoreEntryNotFound.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_signed_replacement_for_a_previous_period() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(620);
+			let new_account = id_to_account(621);
+			let (period, alias) = claim_slot_for(62, holder.clone());
+			let since = TestClock::now().as_secs();
+			advance_time_sec(SECONDS_PER_DAY);
+
+			let call = replace_call(period, alias, new_account.clone(), since);
+			let tx_ext = signed_replacement(holder, period, alias, &new_account, since);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(crate::extension::CustomValidity::InvalidStmtStorePeriod.into())
+			);
+		});
+	}
+
+	#[test]
+	fn extension_rejects_a_signed_replacement_of_another_call() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(630);
+			let new_account = id_to_account(631);
+			let (period, alias) = claim_slot_for(63, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = RuntimeCall::Resources(crate::Call::set_statement_store_account {
 				period,
 				seq: 0,
-				target_account: id_to_account(551),
+				target_account: new_account.clone(),
 			});
-			let second_msg =
-				sp_runtime::traits::TxBaseImplication((extension_version, &second_call))
-					.using_encoded(sp_io::hashing::blake2_256);
-			let (second_proof, _) = MockCrypto::create(commitment, &secret, &context, &second_msg)
-				.expect("second proof should build");
-			let second_tx_ext = crate::extension::AsResources::<Test>::new(Some(
-				crate::extension::AsResourcesInfo::RegisterStatementStoreAllowance(
-					second_proof,
-					0,
-					0,
-					crate::types::MembershipCollection::LitePeople,
-				),
-			));
+			let tx_ext = signed_replacement(holder, period, alias, &new_account, since);
+			assert_eq!(
+				validate_resources_ext(&tx_ext, &call),
+				Err(sp_runtime::transaction_validity::InvalidTransaction::Call.into())
+			);
+		});
+	}
 
-			assert_ok!(second_tx_ext.dispatch_transaction(
-				SystemOrigin::None.into(),
-				second_call.clone(),
-				&second_call.get_dispatch_info(),
+	#[test]
+	fn extension_rejects_a_signed_replacement_from_a_signed_origin() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(640);
+			let new_account = id_to_account(641);
+			let (period, alias) = claim_slot_for(64, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = replace_call(period, alias, new_account.clone(), since);
+			let tx_ext = signed_replacement(holder.clone(), period, alias, &new_account, since);
+			let result = tx_ext.validate_only(
+				RuntimeOrigin::signed(holder),
+				&call,
+				&call.get_dispatch_info(),
 				0,
-				extension_version,
-			));
-
-			// Old account allowance is gone, new account has it.
-			let accounts_allowance = <Test as Config>::AccountsApiAllowance::get();
-			assert_eq!(get_allowance(id_to_account(550)), StatementAllowance::default());
-			assert_eq!(get_allowance(id_to_account(551)), accounts_allowance);
+				TransactionSource::External,
+				0,
+			);
+			assert_eq!(
+				result.map(|_| ()),
+				Err(sp_runtime::transaction_validity::InvalidTransaction::BadSigner.into())
+			);
 		});
 	}
 
@@ -3953,14 +4346,13 @@ mod stmt_store_allowance {
 				granted.saturating_add(StatementAllowance { max_size: 4096, max_count: 3 });
 			AccountsApiAllowance::set(&raised);
 
-			let cooldown: u64 =
-				<<Test as Config>::StmtStoreReplacementCooldown as Get<u32>>::get() as u64;
-			advance_time_sec(cooldown + 1);
-			assert_ok!(Resources::set_statement_store_account(
-				stmt_store_slot_origin(72),
+			next_second();
+			assert_ok!(Resources::replace_statement_store_account(
+				stmt_store_holder_origin(72),
 				period,
-				1,
+				id_to_alias(72),
 				new_target.clone(),
+				entry_since(period, id_to_alias(72)),
 			));
 
 			assert_eq!(get_allowance(&old_target), base);
@@ -4022,13 +4414,11 @@ mod stmt_store_allowance {
 	}
 
 	#[test]
-	fn replacement_with_the_same_target_records_the_current_allowance() {
+	fn replacement_with_the_same_account_is_rejected() {
 		new_test_ext().execute_with(|| {
 			set_time_sec(SECONDS_PER_DAY + 100);
 			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
 			let target = id_to_account(760);
-			let base = StatementAllowance { max_size: 10_000, max_count: 100 };
-			increase_allowance_by(&target, base.clone());
 			let granted = <Test as Config>::AccountsApiAllowance::get();
 			assert_ok!(Resources::set_statement_store_account(
 				stmt_store_slot_origin(76),
@@ -4036,28 +4426,25 @@ mod stmt_store_allowance {
 				0,
 				target.clone(),
 			));
-
-			let raised =
-				granted.saturating_add(StatementAllowance { max_size: 4096, max_count: 3 });
-			AccountsApiAllowance::set(&raised);
-			let cooldown: u64 =
-				<<Test as Config>::StmtStoreReplacementCooldown as Get<u32>>::get() as u64;
-			advance_time_sec(cooldown + 1);
-			assert_ok!(Resources::set_statement_store_account(
-				stmt_store_slot_origin(76),
-				period,
-				1,
-				target.clone(),
-			));
-
-			assert_eq!(get_allowance(&target), base.saturating_add(raised.clone()));
 			let entry =
 				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), id_to_alias(76))
 					.expect("allowance entry should exist");
-			assert_eq!(StatementAllowance::from(entry.allowance), raised);
+			next_second();
+
+			assert_noop!(
+				Resources::replace_statement_store_account(
+					stmt_store_holder_origin(76),
+					period,
+					id_to_alias(76),
+					target.clone(),
+					entry.since,
+				),
+				Error::<Test>::StmtStoreReplacementSameAccount
+			);
+			assert_eq!(get_allowance(&target), granted);
 			assert_eq!(
-				StmtStoreAllowanceByAccount::<Test>::iter_prefix(&target).collect::<Vec<_>>(),
-				vec![((BigEndianU32::from(period), 1, id_to_alias(76)), ())]
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), id_to_alias(76)),
+				Some(entry)
 			);
 		});
 	}
@@ -4091,7 +4478,7 @@ mod stmt_store_allowance {
 	}
 
 	#[test]
-	fn replacement_within_cooldown_is_rejected() {
+	fn replacement_in_the_same_second_is_rejected() {
 		new_test_ext().execute_with(|| {
 			set_time_sec(SECONDS_PER_DAY + 100);
 			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
@@ -4103,17 +4490,14 @@ mod stmt_store_allowance {
 				id_to_account(900),
 			));
 
-			// Same alias trying to replace before cooldown elapses.
-			let cooldown =
-				<<Test as Config>::StmtStoreReplacementCooldown as Get<u32>>::get() as u64;
-			advance_time_sec(cooldown - 1);
-
+			// The entry was written at this timestamp.
 			assert_noop!(
-				Resources::set_statement_store_account(
-					stmt_store_slot_origin(90),
+				Resources::replace_statement_store_account(
+					stmt_store_holder_origin(90),
 					period,
-					0,
+					id_to_alias(90),
 					id_to_account(901),
+					TestClock::now().as_secs(),
 				),
 				Error::<Test>::StmtStoreReplacementTooEarly
 			);
@@ -4121,7 +4505,7 @@ mod stmt_store_allowance {
 	}
 
 	#[test]
-	fn replacement_after_cooldown_succeeds_and_swaps_allowance() {
+	fn replacement_in_a_later_second_succeeds_and_swaps_allowance() {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			set_time_sec(SECONDS_PER_DAY + 100);
@@ -4134,50 +4518,352 @@ mod stmt_store_allowance {
 			assert_ok!(Resources::set_statement_store_account(
 				stmt_store_slot_origin(91),
 				period,
-				0,
+				3,
 				target_a.clone(),
 			));
 
 			let accounts_allowance = <Test as Config>::AccountsApiAllowance::get();
 			assert_eq!(get_allowance(&target_a), accounts_allowance);
 
-			// Advance past the cooldown.
-			let cooldown =
-				<<Test as Config>::StmtStoreReplacementCooldown as Get<u32>>::get() as u64;
-			advance_time_sec(cooldown + 1);
-
-			assert_ok!(Resources::set_statement_store_account(
-				stmt_store_slot_origin(91),
+			next_second();
+			assert_ok!(Resources::replace_statement_store_account(
+				stmt_store_holder_origin(91),
 				period,
-				1,
+				alias,
 				target_b.clone(),
+				entry_since(period, alias),
 			));
 
 			// Old account's allowance is revoked, new account's is granted.
 			assert_eq!(get_allowance(&target_a), StatementAllowance::default());
 			assert_eq!(get_allowance(&target_b), accounts_allowance);
 
-			// Reverse lookup for the old account/seq is gone; new entry exists.
+			// Reverse lookup moves to the new account under the slot's sequence.
 			assert_eq!(
 				StmtStoreAllowanceByAccount::<Test>::get(
 					&target_a,
-					(BigEndianU32::from(period), 0u32, alias),
+					(BigEndianU32::from(period), 3u32, alias),
 				),
 				None,
 			);
 			assert_eq!(
 				StmtStoreAllowanceByAccount::<Test>::get(
 					&target_b,
-					(BigEndianU32::from(period), 1u32, alias),
+					(BigEndianU32::from(period), 3u32, alias),
 				),
 				Some(()),
 			);
 
-			// Stored entry now points at target_b with seq 1.
+			// The entry keeps its sequence and records the new timestamp.
 			let entry =
 				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), alias).unwrap();
 			assert_eq!(entry.account_id, target_b);
-			assert_eq!(entry.seq, 1);
+			assert_eq!(entry.seq, 3);
+			assert_eq!(entry.since, TestClock::now().as_secs());
+		});
+	}
+
+	#[test]
+	fn claim_of_an_occupied_slot_is_rejected() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			let holder = id_to_account(920);
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(92),
+				period,
+				0,
+				holder.clone(),
+			));
+			next_second();
+
+			assert_noop!(
+				Resources::set_statement_store_account(
+					stmt_store_slot_origin(92),
+					period,
+					0,
+					id_to_account(921),
+				),
+				Error::<Test>::StmtStoreSlotAlreadyClaimed
+			);
+			assert_eq!(get_allowance(&holder), <Test as Config>::AccountsApiAllowance::get());
+			assert_eq!(get_allowance(id_to_account(921)), StatementAllowance::default());
+		});
+	}
+
+	#[test]
+	fn replacement_with_a_stale_since_witness_is_rejected() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(99),
+				period,
+				0,
+				id_to_account(990),
+			));
+			let since = entry_since(period, id_to_alias(99));
+			next_second();
+
+			assert_noop!(
+				Resources::replace_statement_store_account(
+					stmt_store_holder_origin(99),
+					period,
+					id_to_alias(99),
+					id_to_account(991),
+					since - 1,
+				),
+				Error::<Test>::StmtStoreReplacementSinceMismatch
+			);
+		});
+	}
+
+	#[test]
+	fn replacement_of_a_missing_entry_is_rejected() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+
+			assert_noop!(
+				Resources::replace_statement_store_account(
+					stmt_store_holder_origin(93),
+					period,
+					id_to_alias(93),
+					id_to_account(930),
+					0,
+				),
+				Error::<Test>::StmtStoreEntryNotFound
+			);
+		});
+	}
+
+	#[test]
+	fn replacement_rejects_an_origin_for_another_alias() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(94),
+				period,
+				0,
+				id_to_account(940),
+			));
+			next_second();
+
+			assert_noop!(
+				Resources::replace_statement_store_account(
+					stmt_store_holder_origin(95),
+					period,
+					id_to_alias(94),
+					id_to_account(941),
+					0,
+				),
+				sp_runtime::DispatchError::BadOrigin
+			);
+		});
+	}
+
+	#[test]
+	fn replacement_rejects_the_proof_origin_and_claim_rejects_the_holder_origin() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			assert_noop!(
+				Resources::set_statement_store_account(
+					stmt_store_holder_origin(97),
+					period,
+					0,
+					id_to_account(970),
+				),
+				sp_runtime::DispatchError::BadOrigin
+			);
+			assert_ok!(Resources::set_statement_store_account(
+				stmt_store_slot_origin(97),
+				period,
+				0,
+				id_to_account(970),
+			));
+			next_second();
+			assert_noop!(
+				Resources::replace_statement_store_account(
+					stmt_store_slot_origin(97),
+					period,
+					id_to_alias(97),
+					id_to_account(971),
+					0,
+				),
+				sp_runtime::DispatchError::BadOrigin
+			);
+		});
+	}
+
+	#[test]
+	fn replacement_cannot_run_twice_in_one_block() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(980);
+			let second = id_to_account(981);
+			let third = id_to_account(982);
+			let (period, alias) = claim_slot_for(98, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+
+			let call = replace_call(period, alias, second.clone(), since);
+			let tx_ext = signed_replacement(holder, period, alias, &second, since);
+			assert_ok!(tx_ext.dispatch_transaction(
+				SystemOrigin::None.into(),
+				call.clone(),
+				&call.get_dispatch_info(),
+				0,
+				0,
+			));
+
+			// The new holder signs over the new entry timestamp in the same second.
+			let again_call = replace_call(period, alias, third.clone(), TestClock::now().as_secs());
+			let again_tx_ext = signed_replacement(
+				second.clone(),
+				period,
+				alias,
+				&third,
+				TestClock::now().as_secs(),
+			);
+			assert_eq!(
+				again_tx_ext
+					.dispatch_transaction(
+						SystemOrigin::None.into(),
+						again_call.clone(),
+						&again_call.get_dispatch_info(),
+						0,
+						0,
+					)
+					.map(|_| ()),
+				Err(crate::extension::CustomValidity::StmtStoreReplacementTooEarly.into())
+			);
+			assert_eq!(get_allowance(&second), <Test as Config>::AccountsApiAllowance::get());
+			assert_eq!(get_allowance(&third), StatementAllowance::default());
+		});
+	}
+
+	#[test]
+	fn cleanup_after_a_replacement_revokes_the_new_holder_only() {
+		new_test_ext().execute_with(|| {
+			let holder = id_to_account(990);
+			let new_account = id_to_account(991);
+			let (period, alias) = claim_slot_for(99, holder.clone());
+			let since = TestClock::now().as_secs();
+			next_second();
+			let call = replace_call(period, alias, new_account.clone(), since);
+			let tx_ext = signed_replacement(holder.clone(), period, alias, &new_account, since);
+			assert_ok!(tx_ext.dispatch_transaction(
+				SystemOrigin::None.into(),
+				call.clone(),
+				&call.get_dispatch_info(),
+				0,
+				0,
+			));
+			let base = StatementAllowance { max_size: 10_000, max_count: 100 };
+			increase_allowance_by(&holder, base.clone());
+
+			let grace = <<Test as Config>::StmtStoreGraceWindow as Get<u32>>::get() as u64;
+			set_time_sec(u64::from(period + 1) * SECONDS_PER_DAY + grace + 1);
+			assert_ok!(Resources::clear_expired_stmt_store_allowances(
+				frame_system::RawOrigin::Authorized.into(),
+				period,
+				alias,
+			));
+
+			assert_eq!(get_allowance(&new_account), StatementAllowance::default());
+			assert_eq!(get_allowance(&holder), base);
+			assert_eq!(
+				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), alias),
+				None
+			);
+			assert_eq!(StmtStoreAllowanceByAccount::<Test>::iter_prefix(&holder).count(), 0);
+			assert_eq!(StmtStoreAllowanceByAccount::<Test>::iter_prefix(&new_account).count(), 0);
+			assert_eq!(cleared_slots(), vec![alias]);
+		});
+	}
+
+	#[test]
+	fn cleanup_notifies_only_the_cleared_slots() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			for id in [120u64, 121] {
+				assert_ok!(Resources::set_statement_store_account(
+					stmt_store_slot_origin(id),
+					period,
+					0,
+					id_to_account(1000 + id),
+				));
+			}
+			StmtStoreCleanupLimit::set(&1);
+
+			let grace = <<Test as Config>::StmtStoreGraceWindow as Get<u32>>::get() as u64;
+			set_time_sec(u64::from(period + 1) * SECONDS_PER_DAY + grace + 1);
+			assert_ok!(Resources::clear_expired_stmt_store_allowances(
+				frame_system::RawOrigin::Authorized.into(),
+				period,
+				id_to_alias(120),
+			));
+
+			let cleared = cleared_slots();
+			assert_eq!(cleared.len(), 1);
+			let period_key = BigEndianU32::from(period);
+			let remaining = StatementStoreAllowances::<Test>::iter_prefix(period_key)
+				.map(|(alias, _)| alias)
+				.collect::<Vec<_>>();
+			assert_eq!(remaining.len(), 1);
+			assert_ne!(remaining[0], cleared[0]);
+		});
+	}
+
+	#[test]
+	fn cleanup_notifies_each_cleared_slot() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+			for id in [120u64, 121] {
+				assert_ok!(Resources::set_statement_store_account(
+					stmt_store_slot_origin(id),
+					period,
+					0,
+					id_to_account(1000 + id),
+				));
+			}
+			assert_eq!(cleared_slots(), Vec::<Alias>::new());
+
+			let grace = <<Test as Config>::StmtStoreGraceWindow as Get<u32>>::get() as u64;
+			set_time_sec(u64::from(period + 1) * SECONDS_PER_DAY + grace + 1);
+			assert_ok!(Resources::clear_expired_stmt_store_allowances(
+				frame_system::RawOrigin::Authorized.into(),
+				period,
+				id_to_alias(120),
+			));
+
+			let mut cleared = cleared_slots();
+			cleared.sort();
+			let mut expected = vec![id_to_alias(120), id_to_alias(121)];
+			expected.sort();
+			assert_eq!(cleared, expected);
+		});
+	}
+
+	#[test]
+	fn replacement_rejects_bad_origin() {
+		new_test_ext().execute_with(|| {
+			set_time_sec(SECONDS_PER_DAY + 100);
+			let period = Resources::stmt_store_period_from_timestamp(TestClock::now().as_secs());
+
+			assert_noop!(
+				Resources::replace_statement_store_account(
+					RuntimeOrigin::signed(id_to_account(1)),
+					period,
+					id_to_alias(96),
+					id_to_account(960),
+					0,
+				),
+				sp_runtime::DispatchError::BadOrigin
+			);
 		});
 	}
 
@@ -4502,51 +5188,6 @@ mod dynamic_parameters {
 				}
 				.into(),
 			);
-		});
-	}
-
-	#[test]
-	fn stmt_store_replacement_cooldown_applies_to_existing_entries() {
-		new_test_ext().execute_with(|| {
-			set_time_sec(SECONDS_PER_DAY + 100);
-			let claimed_at = TestClock::now().as_secs();
-			let period = Resources::stmt_store_period_from_timestamp(claimed_at);
-			let cooldown = StmtStoreReplacementCooldown::get();
-
-			assert_ok!(Resources::set_statement_store_account(
-				stmt_store_slot_origin(60),
-				period,
-				0,
-				id_to_account(600),
-			));
-
-			// Past the cooldown the entry was created under, but within the raised one.
-			StmtStoreReplacementCooldown::set(&(cooldown * 2));
-			set_time_sec(claimed_at + cooldown as u64 + 1);
-			assert_noop!(
-				Resources::set_statement_store_account(
-					stmt_store_slot_origin(60),
-					period,
-					1,
-					id_to_account(601),
-				),
-				Error::<Test>::StmtStoreReplacementTooEarly
-			);
-
-			// Lowering the cooldown allows the replacement at the same time.
-			StmtStoreReplacementCooldown::set(&(cooldown / 2));
-			assert_ok!(Resources::set_statement_store_account(
-				stmt_store_slot_origin(60),
-				period,
-				1,
-				id_to_account(601),
-			));
-			let entry =
-				StatementStoreAllowances::<Test>::get(BigEndianU32::from(period), id_to_alias(60))
-					.expect("entry exists");
-			assert_eq!(entry.account_id, id_to_account(601));
-			assert_eq!(get_allowance(id_to_account(600)), StatementAllowance::default());
-			assert_eq!(get_allowance(id_to_account(601)), AccountsApiAllowance::get());
 		});
 	}
 
