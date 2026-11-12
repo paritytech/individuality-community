@@ -65,38 +65,13 @@ fn create_definition<T: Config>(
 	Ok((collection, item))
 }
 
-/// Make `contract` a contract, which is the costlier destination and source.
-///
-/// The contract also holds an instance in `NftsByOwner`, as it does when it received one before it
-/// had code, so every lookup of its `ContractNfts` instances reads both maps. A runtime without
-/// contracts ignores the request, and the benchmark then measures an ordinary key.
-fn make_contract<T: Config>(
-	owner: &T::AccountId,
-	collection: CollectionId,
-	item: ItemIndex,
-	contract: &T::AccountId,
-) -> Result<(), BenchmarkError> {
-	T::ContractAccounts::set_contract(contract);
-	if !T::ContractAccounts::is_contract(contract) {
-		return Ok(());
-	}
-	let scratch: T::AccountId = account("scratch", 0, 0);
-	let instance =
-		Pallet::<T>::do_mint(owner.clone(), collection, item, scratch.clone(), Vec::new())?;
-	let nft = NftsByOwner::<T>::take(&scratch).expect("scratch purse holds the minted NFT");
-	NftsByOwner::<T>::insert(contract, nft);
-	Instances::<T>::insert(instance, Location { holder: contract.clone(), collection });
-	Ok(())
-}
-
 /// The instance `instance` as `holder` holds it, in either map.
 fn held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> Option<Nft> {
 	Pallet::<T>::nft_held_by(holder, instance).map(|(nft, _)| nft)
 }
 
-/// The instance `instance`, after a check that `holder` holds it and [`Instances`] names it.
+/// The instance `instance`, after a check that `holder` holds it.
 fn assert_held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> Nft {
-	assert_eq!(Instances::<T>::get(instance).map(|location| location.holder), Some(holder.clone()));
 	held::<T>(holder, instance).expect("holder holds the instance")
 }
 
@@ -270,7 +245,7 @@ mod benchmarks {
 		let caller: T::AccountId = whitelisted_caller();
 		let destination: T::AccountId = account("destination", 0, 0);
 		let (collection, item) = create_definition::<T>(&caller)?;
-		make_contract::<T>(&caller, collection, item, &destination)?;
+		T::ContractAccounts::set_contract(&destination);
 		let instance =
 			Pallet::<T>::do_mint(caller.clone(), collection, item, destination, Vec::new())?;
 		let key = metadata_key::<T>(0);
@@ -291,7 +266,7 @@ mod benchmarks {
 		let caller: T::AccountId = whitelisted_caller();
 		let destination: T::AccountId = account("destination", 0, 0);
 		let (collection, item) = create_definition::<T>(&caller)?;
-		make_contract::<T>(&caller, collection, item, &destination)?;
+		T::ContractAccounts::set_contract(&destination);
 		let metadata = (0..m)
 			.map(|index| {
 				let key = metadata_key::<T>(index);
@@ -318,7 +293,7 @@ mod benchmarks {
 		let to: T::AccountId = account("to", 0, 0);
 		NftsByOwner::<T>::remove(&to);
 		let (collection, item) = create_definition::<T>(&caller)?;
-		make_contract::<T>(&caller, collection, item, &from)?;
+		T::ContractAccounts::set_contract(&from);
 		T::ContractAccounts::set_contract(&to);
 		let instance =
 			Pallet::<T>::do_mint(caller.clone(), collection, item, from.clone(), Vec::new())?;
@@ -342,7 +317,7 @@ mod benchmarks {
 		let to: T::AccountId = account("to", 0, 0);
 		NftsByOwner::<T>::remove(&to);
 		let (collection, item) = create_definition::<T>(&owner)?;
-		make_contract::<T>(&owner, collection, item, &from)?;
+		T::ContractAccounts::set_contract(&from);
 		T::ContractAccounts::set_contract(&to);
 		let instance =
 			Pallet::<T>::do_mint(owner.clone(), collection, item, from.clone(), Vec::new())?;

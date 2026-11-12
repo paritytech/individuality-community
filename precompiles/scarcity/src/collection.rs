@@ -295,7 +295,7 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
 		charge_reads(env, 2)?;
-		let (purse, _) = live_instance::<T>(collection, &call.tokenId, env)?;
+		let (purse, _) = live_instance::<T>(collection, &call.tokenId)?;
 		Ok(IScarcityCollection::ownerOfCall::abi_encode_returns(&address_of::<T>(&purse)))
 	}
 
@@ -355,7 +355,7 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
 		charge_reads(env, 2)?;
-		live_instance::<T>(collection, &call.tokenId, env)?;
+		live_instance::<T>(collection, &call.tokenId)?;
 		Ok(IScarcityCollection::getApprovedCall::abi_encode_returns(&Address::ZERO))
 	}
 
@@ -366,7 +366,7 @@ where
 	) -> Result<Vec<u8>, Error> {
 		// The instance lookup, then the definition carrying the flag.
 		charge_reads(env, 3)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let transferability =
 			Scarcity::<T>::transferability_of(&nft).map_err(revert_scarcity::<T>)?;
 		let locked = transferability == Transferability::Soulbound;
@@ -391,7 +391,7 @@ where
 	) -> Result<Vec<u8>, Error> {
 		// The instance lookup, then the item and collection scopes of both keys.
 		charge_reads(env, 6)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let Some((receiver, basis_points)) = Self::royalty_terms(&nft)? else {
 			return Ok(IScarcityCollection::royaltyInfoCall::abi_encode_returns(
 				&IScarcityCollection::royaltyInfoReturn {
@@ -492,7 +492,7 @@ where
 		// `Nft` rather than through `instance_metadata_of`, which would repeat the instance
 		// lookup.
 		charge_reads(env, 5)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let key = MetadataKeyOf::<T>::try_from(TOKEN_URI_KEY.to_vec())
 			.map_err(|_| revert(ERR_KEY_TOO_LONG))?;
 		let value = InstanceMetadata::<T>::get(nft.instance, &key)
@@ -599,7 +599,7 @@ where
 		}
 		// Collection-membership validation reads and both reverse address mappings.
 		charge_reads(env, 4)?;
-		let (holder, nft) = live_instance::<T>(collection, transfer.token, env)?;
+		let (holder, nft) = live_instance::<T>(collection, transfer.token)?;
 		if account_of::<T>(transfer.from) != holder {
 			return Err(revert(ERR_WRONG_HOLDER));
 		}
@@ -670,7 +670,7 @@ where
 		if call.to == Address::ZERO {
 			return Err(revert(ERR_ZERO_DESTINATION));
 		}
-		let (from, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
+		let (from, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let who = caller_account::<T>(env)?;
 		let to = account_of::<T>(&call.to);
 		let from_address = address_of::<T>(&from);
@@ -716,7 +716,7 @@ where
 		// charge of the heaviest call in the crate, which
 		// `force_burn_refunds_unused_weight` pins against.
 		charge_reads(env, 2)?;
-		let (purse, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
+		let (purse, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let who = caller_account::<T>(env)?;
 		let worst = <T as indiv_pallet_scarcity::Config>::WeightInfo::force_burn(
 			<T as indiv_pallet_scarcity::Config>::MaxInstanceMetadata::get(),
@@ -845,7 +845,7 @@ where
 					<T as indiv_pallet_scarcity::Config>::MetadataPolicy::validate_weight(1),
 				),
 		)?;
-		let (_, nft) = live_instance::<T>(collection, token, env)?;
+		let (_, nft) = live_instance::<T>(collection, token)?;
 		let bounded = bounded_key::<T>(key)?;
 		let who = caller_account::<T>(env)?;
 		Scarcity::<T>::set_instance_metadata(
@@ -1014,7 +1014,7 @@ where
 	) -> Result<Vec<u8>, Error> {
 		// Instance lookup plus the presence check.
 		charge_reads(env, 3)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let key = bounded_key::<T>(&call.key)?;
 		let present = InstanceMetadata::<T>::contains_key(nft.instance, &key);
 		Ok(IScarcityCollection::hasInstanceMetadataCall::abi_encode_returns(&present))
@@ -1042,7 +1042,7 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
 		charge_reads(env, 2)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		Ok(IScarcityCollection::instanceInfoCall::abi_encode_returns(
 			&IScarcityCollection::instanceInfoReturn {
 				item: nft.item,
@@ -1095,7 +1095,7 @@ where
 		// Instance lookup plus the three metadata scopes; see `token_uri` on the direct
 		// resolution.
 		charge_reads(env, 5)?;
-		let (_, nft) = live_instance::<T>(collection, &call.tokenId, env)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
 		let key = MetadataKeyOf::<T>::try_from(call.key.to_vec())
 			.map_err(|_| revert(ERR_KEY_TOO_LONG))?;
 		let value = InstanceMetadata::<T>::get(nft.instance, &key)

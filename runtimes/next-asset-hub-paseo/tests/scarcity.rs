@@ -105,7 +105,7 @@ fn scarcity_purse_test_state(state_nonce: u64) -> (sp_io::TestExternalities, Acc
 		);
 		indiv_pallet_scarcity::Instances::<Runtime>::insert(
 			0,
-			indiv_pallet_scarcity::Location { holder: from.clone(), collection: 0 },
+			indiv_pallet_scarcity::Location::Purse(from.clone()),
 		);
 		// The holder transfer resolves its item's transferability, so the definition the
 		// instance names has to exist as it would on a chain that minted it.
@@ -335,7 +335,8 @@ fn an_unfunded_purse_cannot_refill_the_move_budget() {
 			.expect("the purse keeps the NFT");
 		assert_eq!((nft.state_nonce, nft.moves), (0, spent));
 		assert_eq!(
-			indiv_pallet_scarcity::Instances::<Runtime>::get(0).map(|location| location.holder),
+			indiv_pallet_scarcity::Instances::<Runtime>::get(0)
+				.map(|location| location.holder().clone()),
 			Some(from)
 		);
 		assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&to));

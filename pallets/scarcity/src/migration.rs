@@ -182,10 +182,10 @@ pub mod v2 {
 	}
 }
 
-/// Adds the collection to every [`Instances`] entry.
+/// Changes every [`Instances`] entry from a holder to a [`Location`].
 ///
-/// [`ContractNfts`](crate::ContractNfts) is keyed by contract, collection and instance, so a
-/// lookup by instance needs the collection. An entry written before the change holds only the
+/// A [`Location`] names the map that holds the instance and, for a contract, the collection that
+/// keys [`ContractNfts`](crate::ContractNfts). An entry written before the change holds only the
 /// holder, and it no longer decodes under the current type.
 pub type MigrateV2ToV3<T> = VersionedMigration<
 	2,
@@ -200,8 +200,8 @@ pub mod v3 {
 
 	/// Use [`MigrateV2ToV3`] rather than this directly.
 	///
-	/// Before this version no contract holds an instance, so every holder is a purse key and
-	/// [`NftsByOwner`] gives the collection.
+	/// Before this version no contract holds an instance, so every holder is a purse key. The
+	/// migration removes an entry whose holder does not hold the instance in [`NftsByOwner`].
 	///
 	/// It translates every [`Instances`] entry in one block and reads two entries per instance.
 	/// Schedule it only on a chain whose instance count fits one block's weight. A chain with more
@@ -213,16 +213,14 @@ pub mod v3 {
 			let mut translated = 0u64;
 			Instances::<T>::translate(|instance, holder: T::AccountId| {
 				translated.saturating_inc();
-				let Some(nft) =
-					NftsByOwner::<T>::get(&holder).filter(|nft| nft.instance == instance)
-				else {
+				if !NftsByOwner::<T>::get(&holder).is_some_and(|nft| nft.instance == instance) {
 					log::error!(
 						target: LOG_TARGET,
 						"Instances entry {instance} has no matching NftsByOwner entry; removed"
 					);
 					return None;
-				};
-				Some(Location { holder, collection: nft.collection })
+				}
+				Some(Location::Purse(holder))
 			});
 			log::info!(target: LOG_TARGET, "translated {translated} instance locations");
 			T::DbWeight::get()

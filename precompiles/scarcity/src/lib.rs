@@ -206,7 +206,7 @@ use core::{marker::PhantomData, num::NonZero};
 use frame_support::traits::Get;
 use indiv_pallet_scarcity::{
 	CollectionId, CollectionMetadata, Collections, ContractAccounts, ContractNfts,
-	Error as ScarcityError, Holding, InstanceId, InstanceMetadata, ItemMetadata, MetadataKeyOf,
+	Error as ScarcityError, InstanceId, InstanceMetadata, ItemMetadata, MetadataKeyOf,
 	MetadataValueOf, Nft, NftsByOwner, Transferability,
 };
 use pallet_revive::{
@@ -222,8 +222,8 @@ use pallet_revive::{
 };
 
 pub(crate) use indiv_precompile_support::{
-	address_of, caller_account, charge_reads, ensure_no_value, ensure_not_delegate, read_weight,
-	revert, PROOF_SIZE_PER_READ,
+	address_of, caller_account, charge_reads, ensure_no_value, ensure_not_delegate, revert,
+	PROOF_SIZE_PER_READ,
 };
 
 mod collection;
@@ -460,24 +460,13 @@ const REF_TIME_PER_METADATA_BYTE: u64 = 1_000;
 /// Look up a live instance and check it belongs to `collection`.
 ///
 /// `InstanceId`s are global, so an instance of another collection must answer as unknown on
-/// this collection's address. The caller charges the `Instances` and `NftsByOwner` reads. An
-/// instance a contract holds in `ContractNfts` costs one more read. This charges that read and
-/// refunds it when the lookup does not reach `ContractNfts`.
+/// this collection's address. The caller charges two reads: `Instances` and the map it names.
 fn live_instance<T: indiv_pallet_scarcity::Config + pallet_revive::Config>(
 	collection: CollectionId,
 	token: &U256,
-	env: &mut impl Ext<T = T>,
 ) -> Result<(T::AccountId, Nft), Error> {
 	let id: InstanceId = u64::try_from(*token).map_err(|_| revert(ERR_UNKNOWN_TOKEN))?;
-	let contract_read = read_weight::<T>(1);
-	let charged = env.charge(contract_read)?;
-	let found = indiv_pallet_scarcity::Pallet::<T>::holding_of(id);
-	let actual = match found {
-		Some((_, _, Holding::Contract)) => contract_read,
-		_ => Weight::zero(),
-	};
-	env.adjust_gas(charged, actual);
-	match found {
+	match indiv_pallet_scarcity::Pallet::<T>::holding_of(id) {
 		Some((holder, nft, _)) if nft.collection == collection => Ok((holder, nft)),
 		_ => Err(revert(ERR_UNKNOWN_TOKEN)),
 	}

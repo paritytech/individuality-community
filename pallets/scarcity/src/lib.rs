@@ -474,13 +474,22 @@ pub mod pallet {
 
 	/// Where a live instance is held.
 	#[frame_support::stored]
-	pub struct Location<AccountId> {
-		/// The purse key or contract that holds the instance.
-		pub holder: AccountId,
-		/// The collection of the instance.
+	pub enum Location<AccountId> {
+		/// The purse key holds the instance in [`NftsByOwner`].
+		Purse(AccountId),
+		/// The contract `holder` holds the instance in [`ContractNfts`].
 		///
 		/// A contract's instances are keyed by collection, so a lookup needs it.
-		pub collection: CollectionId,
+		Contract { holder: AccountId, collection: CollectionId },
+	}
+
+	impl<AccountId> Location<AccountId> {
+		/// The purse key or contract that holds the instance.
+		pub fn holder(&self) -> &AccountId {
+			match self {
+				Self::Purse(holder) | Self::Contract { holder, .. } => holder,
+			}
+		}
 	}
 
 	/// Post-failure backoff lock for an NFT purse key.
@@ -745,7 +754,8 @@ pub mod pallet {
 	}
 
 	/// Version 1 added `transferability` to `ItemDefinition`, version 2 `moves` to `Nft`. Version 3
-	/// changed the `Instances` value from a holder to a `Location`, which adds the collection.
+	/// changed the `Instances` value from a holder to a `Location`, which names the map and, for a
+	/// contract, the collection.
 	const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
 	#[pallet::pallet]
@@ -1715,10 +1725,7 @@ pub mod pallet {
 			Ok(actual_metadata_count)
 		}
 
-		fn do_force_burn(
-			owner: &T::AccountId,
-			instance: InstanceId,
-		) -> Result<u32, DispatchError> {
+		fn do_force_burn(owner: &T::AccountId, instance: InstanceId) -> Result<u32, DispatchError> {
 			let (purse, nft, holding) =
 				Self::holding_of(instance).ok_or(Error::<T>::UnknownInstance)?;
 			let info =
@@ -1755,17 +1762,14 @@ pub mod pallet {
 
 		/// The instance `instance` if `holder` holds it, and the map that holds it.
 		///
-		/// A purse key answers from [`NftsByOwner`] alone. A contract also reads [`Instances`] for
-		/// the collection that keys [`ContractNfts`].
+		/// Reads [`Instances`] and then the one map that it names.
 		pub(crate) fn nft_held_by(
 			holder: &T::AccountId,
 			instance: InstanceId,
 		) -> Option<(Nft, Holding)> {
-			Self::purse_nft(holder, instance).or_else(|| {
-				let location =
-					Instances::<T>::get(instance).filter(|location| location.holder == *holder)?;
-				Self::contract_nft(holder, location.collection, instance)
-			})
+			let location =
+				Instances::<T>::get(instance).filter(|location| location.holder() == holder)?;
+			Self::nft_at(&location, instance)
 		}
 
 		/// The instance `instance` at `location`, and the map that holds it.
@@ -1773,23 +1777,14 @@ pub mod pallet {
 			location: &Location<T::AccountId>,
 			instance: InstanceId,
 		) -> Option<(Nft, Holding)> {
-			Self::purse_nft(&location.holder, instance)
-				.or_else(|| Self::contract_nft(&location.holder, location.collection, instance))
-		}
-
-		fn purse_nft(holder: &T::AccountId, instance: InstanceId) -> Option<(Nft, Holding)> {
-			NftsByOwner::<T>::get(holder)
-				.filter(|nft| nft.instance == instance)
-				.map(|nft| (nft, Holding::Purse))
-		}
-
-		fn contract_nft(
-			holder: &T::AccountId,
-			collection: CollectionId,
-			instance: InstanceId,
-		) -> Option<(Nft, Holding)> {
-			ContractNfts::<T>::get((holder, collection, instance))
-				.map(|nft| (nft, Holding::Contract))
+			match location {
+				Location::Purse(holder) => NftsByOwner::<T>::get(holder)
+					.filter(|nft| nft.instance == instance)
+					.map(|nft| (nft, Holding::Purse)),
+				Location::Contract { holder, collection } =>
+					ContractNfts::<T>::get((holder, collection, instance))
+						.map(|nft| (nft, Holding::Contract)),
+			}
 		}
 
 		/// The holder of the live instance `instance`, the instance and the map that holds it.
@@ -1802,7 +1797,7 @@ pub mod pallet {
 				);
 				return None;
 			};
-			Some((location.holder, nft, holding))
+			Some((location.holder().clone(), nft, holding))
 		}
 
 		/// The map an instance arriving at `to` goes into.
@@ -1830,16 +1825,19 @@ pub mod pallet {
 		/// count saturates, because no contract can hold `u32::MAX` instances of one collection.
 		/// Notifies [`Config::OnPurseOccupied`] for a purse key.
 		fn place(to: &T::AccountId, nft: &Nft, holding: Holding) {
-			match holding {
-				Holding::Purse => NftsByOwner::<T>::insert(to, nft),
+			let location = match holding {
+				Holding::Purse => {
+					NftsByOwner::<T>::insert(to, nft);
+					Location::Purse(to.clone())
+				},
 				Holding::Contract => {
 					ContractNftCount::<T>::mutate(to, nft.collection, |count| {
 						*count = count.saturating_add(1)
 					});
 					ContractNfts::<T>::insert((to, nft.collection, nft.instance), nft);
+					Location::Contract { holder: to.clone(), collection: nft.collection }
 				},
-			}
-			let location = Location { holder: to.clone(), collection: nft.collection };
+			};
 			Instances::<T>::insert(nft.instance, location);
 			if holding == Holding::Purse {
 				T::OnPurseOccupied::on_purse_occupied(to);
@@ -2041,11 +2039,13 @@ pub mod pallet {
 				// reverse index, `InstanceDeposits`, and `InstanceMetadataCount`. This measures
 				// their logical encoded payload; the runtime's per-record base can price trie
 				// and hash-prefix overhead. The deposit does not follow the instance when it
-				// moves, so an instance held in `ContractNfts` is priced as a purse entry.
+				// moves, so an instance held in `ContractNfts` is priced as a purse entry. The
+				// `Instances` value is priced as the larger contract location.
+				let location = Location::Contract { holder: to.clone(), collection };
 				let record_size = nft
 					.encoded_size()
-					.saturating_add(to.encoded_size().saturating_mul(2))
-					.saturating_add(collection.encoded_size())
+					.saturating_add(to.encoded_size())
+					.saturating_add(location.encoded_size())
 					.saturating_add(instance.encoded_size().saturating_mul(3))
 					.saturating_add(BalanceOf::<T>::max_encoded_len())
 					.saturating_add(u32::max_encoded_len());
@@ -2178,8 +2178,7 @@ pub mod pallet {
 				if nft.instance >= next_instance {
 					return Err(TryRuntimeError::Other("NFT instance is not below NextInstanceId"));
 				}
-				let location = Location { holder: owner, collection: nft.collection };
-				if Instances::<T>::get(nft.instance) != Some(location) {
+				if Instances::<T>::get(nft.instance) != Some(Location::Purse(owner)) {
 					return Err(TryRuntimeError::Other(
 						"NftsByOwner entry has no matching Instances entry",
 					));
@@ -2204,15 +2203,10 @@ pub mod pallet {
 				if instance >= next_instance {
 					return Err(TryRuntimeError::Other("NFT instance is not below NextInstanceId"));
 				}
-				let location = Location { holder: holder.clone(), collection };
+				let location = Location::Contract { holder: holder.clone(), collection };
 				if Instances::<T>::get(instance) != Some(location) {
 					return Err(TryRuntimeError::Other(
 						"ContractNfts entry has no matching Instances entry",
-					));
-				}
-				if NftsByOwner::<T>::get(&holder).is_some_and(|held| held.instance == instance) {
-					return Err(TryRuntimeError::Other(
-						"instance is in both NftsByOwner and ContractNfts",
 					));
 				}
 				let definition = ItemDefs::<T>::get(nft.collection, nft.item)
@@ -2257,9 +2251,7 @@ pub mod pallet {
 				if !InstanceMetadataCount::<T>::contains_key(instance) {
 					return Err(TryRuntimeError::Other("live instance has no metadata count entry"));
 				}
-				if Self::nft_at(&location, instance)
-					.is_none_or(|(nft, _)| nft.collection != location.collection)
-				{
+				if Self::nft_at(&location, instance).is_none() {
 					return Err(TryRuntimeError::Other(
 						"Instances entry has no matching NftsByOwner or ContractNfts entry",
 					));

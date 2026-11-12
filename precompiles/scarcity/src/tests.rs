@@ -1267,7 +1267,10 @@ fn holder_transfer_moves_the_token() {
 		assert_eq!(moved.collection, collection);
 		// Any outstanding native authorization is invalidated by the move.
 		assert_eq!(moved.state_nonce, nonce_before + 1);
-		assert_eq!(Instances::<Test>::get(instance).map(|location| location.holder), Some(to));
+		assert_eq!(
+			Instances::<Test>::get(instance).map(|location| location.holder().clone()),
+			Some(to)
+		);
 		assert_contract_event(
 			target,
 			IScarcityCollection::Transfer {
@@ -4442,7 +4445,9 @@ mod evm_fixture {
 			let target = alloy_address(collection_address(collection));
 			let vault = deploy(&alice, code.clone());
 			let vault_account = contract_account(vault);
-			let held = (0..2).map(|_| mint_into(&alice, collection, &vault_account)).collect::<Vec<_>>();
+			let held = (0..2)
+				.map(|_| mint_into(&alice, collection, &vault_account))
+				.collect::<Vec<_>>();
 
 			call_ok(
 				&alice,
@@ -4479,7 +4484,10 @@ mod evm_fixture {
 				}
 				.abi_encode(),
 			);
-			assert_eq!(NftsByOwner::<Test>::get(&vault_account).map(|nft| nft.instance), Some(pushed));
+			assert_eq!(
+				NftsByOwner::<Test>::get(&vault_account).map(|nft| nft.instance),
+				Some(pushed)
+			);
 
 			assert_eq!(deploy(&alice, code), vault);
 			for (token, byte) in held.iter().zip([0xE3, 0xE4]) {
@@ -4546,7 +4554,10 @@ mod evm_fixture {
 			}
 
 			assert_eq!(NftsByOwner::<Test>::get(&sender).map(|nft| nft.instance), Some(token));
-			assert_eq!(Instances::<Test>::get(token).map(|location| location.holder), Some(sender));
+			assert_eq!(
+				Instances::<Test>::get(token).map(|location| location.holder().clone()),
+				Some(sender)
+			);
 			assert_eq!(ContractNfts::<Test>::iter_prefix((&vault_account,)).count(), 0);
 			assert_eq!(ContractNftCount::<Test>::get(&vault_account, collection), 0);
 			assert_no_contract_event();
@@ -4840,10 +4851,7 @@ mod evm_fixture {
 			let in_purse = mint_into(&alice, collection, &scratch);
 			let nft = NftsByOwner::<Test>::take(&scratch).unwrap();
 			NftsByOwner::<Test>::insert(&vault_account, nft);
-			Instances::<Test>::insert(
-				in_purse,
-				Location { holder: vault_account.clone(), collection },
-			);
+			Instances::<Test>::insert(in_purse, Location::Purse(vault_account.clone()));
 			let mut held = (0..2)
 				.map(|_| mint_into(&alice, collection, &vault_account))
 				.collect::<Vec<_>>();
@@ -4868,7 +4876,7 @@ mod evm_fixture {
 	}
 
 	#[test]
-	fn a_token_a_contract_holds_costs_one_read_more_to_find() {
+	fn a_token_a_contract_holds_costs_as_much_to_find_as_a_purse_token() {
 		let code = fixture_code("TokenVault");
 		new_test_ext().execute_with(|| {
 			let alice = id_to_account(1);
@@ -4887,7 +4895,7 @@ mod evm_fixture {
 
 			let (contract, purse) = (weight_of(held_by_contract), weight_of(held_by_purse));
 
-			assert_eq!(contract.proof_size() - purse.proof_size(), PROOF_SIZE_PER_READ);
+			assert_eq!(contract, purse);
 		});
 	}
 
@@ -5095,7 +5103,7 @@ mod evm_fixture {
 			);
 
 			assert_eq!(
-				Instances::<Test>::get(token).map(|location| location.holder),
+				Instances::<Test>::get(token).map(|location| location.holder().clone()),
 				Some(destination)
 			);
 			assert_eq!(world.entry(token), (Address::ZERO, 0));
