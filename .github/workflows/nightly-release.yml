@@ -137,6 +137,54 @@ jobs:
           kind: Nightly
           access_token: ${{ secrets.ENG_AUT_MATRIX_TOKEN }}
 
+  # The gate passed, but its runtime diff found breaking changes for product-sdk, or
+  # could not check some candidates. A warning only: publish-nightly does not wait on
+  # this job, and the gate's result is unchanged. Both counts come from chain-tests'
+  # runtime_diff_breaking and runtime_diff_unknown outputs (release-gate.yml's
+  # runtime-diff-summary job, which sums every candidate).
+  notify-breaking-diff:
+    needs: chain-tests
+    if: ${{ always() && needs.chain-tests.result == 'success' && (needs.chain-tests.outputs.runtime_diff_breaking == '' || needs.chain-tests.outputs.runtime_diff_unknown == '' || needs.chain-tests.outputs.runtime_diff_breaking != '0' || needs.chain-tests.outputs.runtime_diff_unknown != '0') }}
+    runs-on: parity-ubuntu
+    permissions:
+      contents: read
+    steps:
+      # Built in a shell step, as notify-gate-failure does, so the lines can depend on
+      # the counts. Values come in through env:, never interpolated into the script.
+      - name: Compose the message
+        id: msg
+        env:
+          BREAKING: ${{ needs.chain-tests.outputs.runtime_diff_breaking }}
+          UNKNOWN: ${{ needs.chain-tests.outputs.runtime_diff_unknown }}
+          REF: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BREAKING" ] || [ -z "$UNKNOWN" ]; then
+            HEAD="[WARNING] E2E Nightly runtime diff summary produced no counts, tests passed ($REF)"
+          elif [ "$BREAKING" != "0" ]; then
+            HEAD="[WARNING] E2E Nightly runtime diff: $BREAKING breaking change(s) for product-sdk, tests passed ($REF)"
+          else
+            HEAD="[WARNING] E2E Nightly runtime diff: $UNKNOWN runtime diff(s) could not be checked, tests passed ($REF); $BREAKING breaking change(s) found in the rest"
+          fi
+          {
+            echo "text<<NIGHTLYMSG"
+            echo "$HEAD"
+            if [ -n "$BREAKING" ] && [ -n "$UNKNOWN" ] && [ "$BREAKING" != "0" ] && [ "$UNKNOWN" != "0" ]; then
+              echo "$UNKNOWN runtime diff(s) could not be checked."
+            fi
+            echo "$RUN_URL"
+            echo 'See the "runtime-diff-summary" job summary in this run.'
+            echo "NIGHTLYMSG"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: s3krit/matrix-message-action@v0.0.3
+        with:
+          room_id: "!llIELBsiHpuJTvtzhb:parity.io"
+          access_token: ${{ secrets.ENG_AUT_MATRIX_TOKEN }}
+          server: m.parity.io
+          message: ${{ steps.msg.outputs.text }}
+
   publish-nightly:
     runs-on: parity-ubuntu
     needs: [check-changes, build-runtimes, chain-tests]
