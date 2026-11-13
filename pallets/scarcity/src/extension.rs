@@ -42,17 +42,24 @@
 //! An authorization specifies the instance it expects at the signer's purse key, and the state
 //! nonce it expects on that instance. Anyone who has seen the transaction can submit it while both
 //! still match. Every dispatch increments the nonce, which retires the authorizations signed for
-//! the old state. An authorization that never executes stays valid, so callers should sign mortal
-//! transactions.
+//! the old state. A pledge is a dispatch under the nonce and retires it like a transfer. An
+//! authorization that never executes stays valid, so callers should sign mortal transactions.
 //!
 //! # Feeless move budget
 //!
 //! An instance carries [`Config::MaximumMoves`] feeless moves and spends one per authorized
-//! transfer. Once they are gone only a paid move can move it, and that move sets the count back
-//! to zero. The holder's paid move is [`Call::transfer_by_holder`], signed without this
+//! transfer or pledge. Once they are gone only a paid move can move it, and that move sets the
+//! count back to zero. The holder's paid move is [`Call::transfer_by_holder`], signed without this
 //! extension. Burns stay feeless throughout, because they free storage.
+//!
+//! # Pledges
+//!
+//! While a pledge has effect, this extension refuses the holder's transfer and burn with
+//! [`CustomInvalidity::Pledged`]. The pool drops such a transaction rather than keep it: the
+//! pledge can end by a seize or a release, which advance the state nonce the transaction names,
+//! or by expiry, after which the holder submits again.
 
-use crate::{pallet::*, weights::WeightInfo, Config, Nft, Transferability};
+use crate::{pallet::*, weights::WeightInfo, Config, Nft, NftOf, Transferability};
 use codec::{Decode, DecodeWithMemTracking, Encode};
 use core::marker::PhantomData;
 use frame_support::{
@@ -82,7 +89,7 @@ use sp_runtime::{
 	DebugNoBound,
 )]
 pub enum AsScarcityInfo {
-	/// Authorize a transfer or burn using the NFT's current purse-key state.
+	/// Authorize a transfer, burn or pledge using the NFT's current purse-key state.
 	AsNft {
 		/// The permanent instance expected at the purse key.
 		instance: InstanceId,
@@ -115,12 +122,27 @@ pub enum CustomInvalidity {
 	/// The instance has spent its feeless moves. The holder refills them with a paid
 	/// [`Call::transfer_by_holder`].
 	MovesExhausted = 8,
+	/// The instance carries a pledge with effect, so its holder cannot move or burn it.
+	Pledged = 9,
+	/// The instance already carries a pledge with effect.
+	AlreadyPledged = 10,
+	/// The pledge must end in the future and within [`Config::MaxPledgeDuration`].
+	PledgeExpiry = 11,
+	/// The pledge names the holder's own purse key.
+	PledgeToSelf = 12,
 }
 
 impl From<CustomInvalidity> for TransactionValidityError {
 	fn from(value: CustomInvalidity) -> Self {
 		InvalidTransaction::Custom(value as u8).into()
 	}
+}
+
+/// What an authorized purse-key call asks of the NFT.
+enum Action<'a, AccountId> {
+	Transfer { to: &'a AccountId },
+	Burn,
+	Pledge { to: &'a AccountId, until: u64 },
 }
 
 /// Information carried from validation to preparation.
@@ -132,10 +154,10 @@ pub enum Val<T: Config + Send + Sync> {
 /// Information carried from preparation to post-dispatch.
 pub enum Pre<T: Config + Send + Sync> {
 	NotUsing,
-	UsingNft { owner: T::AccountId, nft: Nft },
+	UsingNft { owner: T::AccountId, nft: NftOf<T> },
 }
 
-/// Purse-key authorization for Scarcity transfers and burns.
+/// Purse-key authorization for Scarcity transfers, burns and pledges.
 ///
 /// An authorization names the permanent instance and its ownership-state nonce. The instance
 /// identifier prevents an authorization from acting on a different NFT if a purse key is reused,
@@ -166,6 +188,30 @@ impl<T: Config + Send + Sync> AsScarcity<T> {
 		Self(explicit, PhantomData)
 	}
 
+	/// Refuse an instance its holder may not move.
+	///
+	/// Neither refusal can come good: transferability is fixed when the item is defined, and an
+	/// instance never outlives its definition, so every retry would earn a longer lock. They are
+	/// told apart because they send a caller looking in different places.
+	fn check_transferable(nft: &NftOf<T>) -> Result<(), TransactionValidityError> {
+		match Pallet::<T>::transferability_of(nft) {
+			Ok(Transferability::Transferable) => Ok(()),
+			Ok(Transferability::Soulbound) => Err(CustomInvalidity::Soulbound.into()),
+			Err(_) => Err(CustomInvalidity::UnknownItem.into()),
+		}
+	}
+
+	/// Refuse an instance that has spent its feeless moves.
+	///
+	/// Permanent for this transaction: the paid move that refills the budget also increments the
+	/// state nonce the authorization names.
+	fn check_moves(nft: &NftOf<T>) -> Result<(), TransactionValidityError> {
+		if nft.moves >= T::MaximumMoves::get() {
+			return Err(CustomInvalidity::MovesExhausted.into());
+		}
+		Ok(())
+	}
+
 	fn failed_dispatch_lock(previous: Option<LockInfo>) -> LockInfo {
 		let retries = previous.map(|lock| lock.retries.saturating_add(1)).unwrap_or(1);
 		let exponent = retries.saturating_sub(1);
@@ -191,7 +237,9 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 		if matches!(self.0.as_ref(), Some(AsScarcityInfo::AsNft { .. })) &&
 			matches!(
 				call.is_sub_type(),
-				Some(Call::<T>::transfer { .. }) | Some(Call::<T>::burn {})
+				Some(Call::<T>::transfer { .. }) |
+					Some(Call::<T>::burn {}) |
+					Some(Call::<T>::pledge { .. })
 			) {
 			T::WeightInfo::as_scarcity_pipeline()
 		} else {
@@ -209,9 +257,10 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 		_inherited_implication: &impl Implication,
 		_source: TransactionSource,
 	) -> ValidateResult<Self::Val, <T as frame_system::Config>::RuntimeCall> {
-		let transfer_to = match call.is_sub_type() {
-			Some(Call::<T>::transfer { to }) => Some(to),
-			Some(Call::<T>::burn {}) => None,
+		let action = match call.is_sub_type() {
+			Some(Call::<T>::transfer { to }) => Action::Transfer { to },
+			Some(Call::<T>::burn {}) => Action::Burn,
+			Some(Call::<T>::pledge { to, until }) => Action::Pledge { to, until: *until },
 			_ => return Ok((ValidTransaction::default(), Val::NotUsing, origin)),
 		};
 		let Some(AsScarcityInfo::AsNft { instance, state_nonce }) = self.0.as_ref() else {
@@ -232,31 +281,44 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 		if nft.instance != *instance || nft.state_nonce != *state_nonce {
 			return Err(CustomInvalidity::NftStateMismatch.into());
 		}
-		if let Some(to) = transfer_to {
-			// Pre-validate the destination so ordinary user error is rejected at the pool and
-			// never reaches dispatch, where a failure triggers the backoff lock. The
-			// dispatch-time checks remain for genuine same-block races. Mirrors coinage's
-			// `validate_transfer` pattern. Burns have no destination checks.
-			if to == &owner {
-				return Err(CustomInvalidity::TransferToSelf.into());
-			}
-			if NftsByOwner::<T>::contains_key(to) {
-				return Err(CustomInvalidity::DestinationOccupied.into());
-			}
-			// Unlike the checks above, neither of these can come good: transferability is fixed
-			// when the item is defined, and an instance never outlives its definition, so every
-			// retry would earn a longer lock. They are told apart because they send a caller
-			// looking in different places.
-			match Pallet::<T>::transferability_of(&nft) {
-				Ok(Transferability::Transferable) => {},
-				Ok(Transferability::Soulbound) => return Err(CustomInvalidity::Soulbound.into()),
-				Err(_) => return Err(CustomInvalidity::UnknownItem.into()),
-			}
-			// Permanent for this transaction, like the two above: the paid move that refills the
-			// budget also increments the state nonce this authorization names.
-			if nft.moves >= T::MaximumMoves::get() {
-				return Err(CustomInvalidity::MovesExhausted.into());
-			}
+		// Pre-validate every condition dispatch checks, so ordinary user error is rejected at the
+		// pool and never reaches dispatch, where a failure triggers the backoff lock. The
+		// dispatch-time checks remain for genuine same-block races. Mirrors coinage's
+		// `validate_transfer` pattern.
+		let live_pledge = Pallet::<T>::live_pledge(&nft, now).is_some();
+		match action {
+			Action::Transfer { to } => {
+				// First, so a caller learns of the pledge rather than of a destination problem
+				// that would not let the transfer through either.
+				if live_pledge {
+					return Err(CustomInvalidity::Pledged.into());
+				}
+				if to == &owner {
+					return Err(CustomInvalidity::TransferToSelf.into());
+				}
+				if NftsByOwner::<T>::contains_key(to) {
+					return Err(CustomInvalidity::DestinationOccupied.into());
+				}
+				Self::check_transferable(&nft)?;
+				Self::check_moves(&nft)?;
+			},
+			Action::Burn =>
+				if live_pledge {
+					return Err(CustomInvalidity::Pledged.into());
+				},
+			Action::Pledge { to, until } => {
+				if to == &owner {
+					return Err(CustomInvalidity::PledgeToSelf.into());
+				}
+				Self::check_transferable(&nft)?;
+				if until <= now || until > now.saturating_add(T::MaxPledgeDuration::get()) {
+					return Err(CustomInvalidity::PledgeExpiry.into());
+				}
+				if live_pledge {
+					return Err(CustomInvalidity::AlreadyPledged.into());
+				}
+				Self::check_moves(&nft)?;
+			},
 		}
 		let priority = now.saturating_sub(nft.last_moved).min(T::MaxTransferPriority::get());
 		let validity = ValidTransaction::with_tag_prefix("Scarcity")
@@ -284,7 +346,7 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 			Val::UsingNft { owner, instance, state_nonce } => {
 				let nft = NftsByOwner::<T>::try_mutate_exists(
 					&owner,
-					|maybe_nft| -> Result<Nft, TransactionValidityError> {
+					|maybe_nft| -> Result<NftOf<T>, TransactionValidityError> {
 						let nft = maybe_nft.as_ref().ok_or(CustomInvalidity::NoNft)?;
 						if nft.instance != instance || nft.state_nonce != state_nonce {
 							return Err(CustomInvalidity::NftStateMismatch.into());

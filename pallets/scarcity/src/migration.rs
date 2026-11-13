@@ -155,6 +155,84 @@ pub mod v2 {
 					// A full budget. Moves made before this runtime were unbounded, so counting
 					// them now would strand an instance already past the new limit.
 					moves: 0,
+					pledge: None,
+				})
+			});
+			log::info!(target: LOG_TARGET, "translated {translated} NFTs");
+			T::DbWeight::get().reads_writes(translated.saturating_add(1), translated)
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
+			// Keys, not entries: the values do not decode under the current type yet, and
+			// `iter` would skip every one of them and report an empty map.
+			Ok((NftsByOwner::<T>::iter_keys().count() as u32).encode())
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+			let before = u32::decode(&mut &state[..]).map_err(|_| {
+				sp_runtime::TryRuntimeError::Other("pre_upgrade state is not a u32")
+			})?;
+			// `iter` now, so an entry that failed to translate is counted as missing rather than
+			// silently skipped.
+			let after = NftsByOwner::<T>::iter().count() as u32;
+			ensure!(before == after, "an NFT did not survive the migration");
+			Ok(())
+		}
+	}
+}
+
+/// Adds an empty pledge to every stored NFT.
+///
+/// `pledge` is a trailing field, so an NFT written before it existed no longer decodes under the
+/// current type. [`NftsByOwner`] then reports an empty purse key, which takes transfer, burn and
+/// every authorization with it.
+pub type MigrateV2ToV3<T> = VersionedMigration<
+	2,
+	3,
+	v3::MigrateToPledge<T>,
+	Pallet<T>,
+	<T as frame_system::Config>::DbWeight,
+>;
+
+pub mod v3 {
+	use super::*;
+
+	/// An NFT as stored before pledges existed.
+	#[derive(Decode)]
+	pub struct OldNft {
+		pub instance: InstanceId,
+		pub collection: CollectionId,
+		pub item: ItemIndex,
+		pub minted_at: u64,
+		pub last_moved: u64,
+		pub state_nonce: u64,
+		pub moves: u16,
+	}
+
+	/// Use [`MigrateV2ToV3`] rather than this directly.
+	///
+	/// Running this twice would clear every pledge: the new encoding is the old one plus at least
+	/// one trailing byte, and `Decode` reads a prefix, so a migrated NFT still decodes as
+	/// [`OldNft`] with the pledge left over and ignored. The version gate is what makes that
+	/// unreachable.
+	pub struct MigrateToPledge<T>(PhantomData<T>);
+
+	impl<T: Config> UncheckedOnRuntimeUpgrade for MigrateToPledge<T> {
+		fn on_runtime_upgrade() -> Weight {
+			let mut translated = 0u64;
+			NftsByOwner::<T>::translate_values(|old: OldNft| {
+				translated.saturating_inc();
+				Some(Nft {
+					instance: old.instance,
+					collection: old.collection,
+					item: old.item,
+					minted_at: old.minted_at,
+					last_moved: old.last_moved,
+					state_nonce: old.state_nonce,
+					moves: old.moves,
+					pledge: None,
 				})
 			});
 			log::info!(target: LOG_TARGET, "translated {translated} NFTs");
