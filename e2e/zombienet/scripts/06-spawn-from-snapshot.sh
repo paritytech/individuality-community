@@ -60,6 +60,9 @@ done
 # Assert network-snap.toml's RPC ports agree with config-local.env before spawning (see the script).
 bash "$HERE/scripts/helper/check-rpc-ports.sh" "$HERE/network-snap.toml"
 
+# Work around a litep2p crash on hosts with a scoped IPv6 nameserver (see the script).
+source "$HERE/scripts/helper/litep2p-dns-workaround.sh"
+
 # Same host-fn preflight as 03-spawn.sh (catches node binaries older than the pinned release).
 if ! err=$(polkadot-omni-node export-genesis-wasm --chain specs/people-local.json 2>&1 >/dev/null); then
 	echo "$err" >&2

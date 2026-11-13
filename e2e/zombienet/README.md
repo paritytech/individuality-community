@@ -254,6 +254,11 @@ Findings from bringing this up on macOS — the relay binary was the hard part. 
   binaries omit it** — which is why `scripts/get_polkadot_binaries.sh` builds polkadot from source with
   `--features fast-runtime`. If you hit this, `.tools/bin/polkadot` is a stale/downloaded binary: remove
   `.tools/` and re-run `bash scripts/00-install-binaries.sh`.
+- **People collator exits with `Cannot read system DNS config`**: the collator's embedded relay node
+  uses litep2p by default, and litep2p cannot read a scoped IPv6 nameserver such as
+  `nameserver fe80::1%en0` in `/etc/resolv.conf`. macOS writes one on some networks. `03-spawn.sh` and
+  `06-spawn-from-snapshot.sh` detect it and put a `polkadot-omni-node` wrapper in `.tools/wrap` that
+  gives the embedded relay node `--network-backend libp2p` (`scripts/helper/litep2p-dns-workaround.sh`).
 - **`Library not loaded: @rpath/libclang.dylib`** (librocksdb-sys): macOS has no libclang on the loader
   path. `brew install llvm`; the script auto-detects and exports `LIBCLANG_PATH`.
 - **`failed to select a version for ... core2 ... is yanked`**: a fresh resolve hits yanked deps. Always
