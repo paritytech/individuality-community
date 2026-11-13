@@ -748,7 +748,14 @@ pub fn assert_invalid(ext: Extrinsic, error: CustomInvalidity) {
 /// [`TEST_INSTANCE_ID`]. Otherwise, it is configured with `None` (passthrough), which
 /// should result in a BadOrigin when the pallet expects a Coin origin.
 pub fn build_signed_as_coin_ext(signer: u64, call: crate::Call<Test>, as_coin: bool) -> Extrinsic {
-	let info = as_coin.then_some(AsCoinageInfo::AsCoin);
+	let info = as_coin.then(|| {
+		let retry_counter = LockedCoins::<Test>::get(signer)
+			.map(|locked| match locked.reason {
+				LockReason::FailedDispatch { retries } => retries.saturating_add(1),
+			})
+			.unwrap_or(0);
+		AsCoinageInfo::AsCoin { retry_counter }
+	});
 	let extension = (AuthorizeCall::<Test>::new(), AsCoinage::<Test>::new(info));
 	Extrinsic::new_signed(call.into(), signer, UintAuthorityId(signer), extension)
 }

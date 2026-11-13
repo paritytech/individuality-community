@@ -54,14 +54,14 @@ pub enum AsCoinageInfo<T: Config + Send + Sync> {
 	/// Transmute the signed origin into [Origin::Coin] for the calls: [Call::split],
 	/// [Call::transfer], [Call::load_recycler_with_coin].
 	///
-	/// The calls are validated exhaustively in the extension: every condition outside the user's
-	/// control is checked, so the call can only fail if the user explicitly misconstructs it.
-	/// On failure the coin is locked temporarily, with a quadratic backoff.
-	///
-	/// Coin authorization is not nonce-based, so the transaction stays replayable while the coin
-	/// lives. The caller must send a mortal transaction that expires before the
-	/// [`Config::CoinFailureLockPeriod`] to avoid replay.
-	AsCoin,
+	/// A failed dispatch locks the coin temporarily with exponential backoff. Coin authorization
+	/// is not nonce-based, so the caller must send a mortal transaction: a success clears the
+	/// lock, and a later coin under the same account accepts the same transaction again.
+	AsCoin {
+		/// The next failed-dispatch retry for the coin, or 0 if the coin has no failure lock.
+		/// A failed transaction cannot be included again, because its counter is then stale.
+		retry_counter: u8,
+	},
 	/// Transmute the None origin into [Origin::UnloadToken] for the calls:
 	/// [Call::unload_recycler_into_coin], [Call::unload_recycler_into_external_asset],
 	/// [Call::unload_recycler_into_external_asset_and_loaded_coins], and
@@ -193,14 +193,6 @@ impl<T: Config + Send + Sync> AsCoinage<T> {
 		Self(explicit)
 	}
 
-	// Apply the pallet's "quadratic" retry lock: each repeated failed dispatch doubles the
-	// base lock period, making rapid retries increasingly expensive.
-	fn failed_dispatch_lock(previous: Option<LockInfo>) -> LockInfo {
-		let new_retries = previous.map(Self::next_failed_dispatch_retry).unwrap_or(0);
-
-		Self::failed_dispatch_lock_with_retries(new_retries)
-	}
-
 	fn next_failed_dispatch_retry(previous: LockInfo) -> u8 {
 		match previous.reason {
 			LockReason::FailedDispatch { retries } => retries.saturating_add(1),
@@ -253,6 +245,7 @@ pub enum Val<T: Config + Send + Sync> {
 	NotUsing,
 	UsingCoin {
 		coin_id: T::AccountId,
+		retry_counter: u8,
 	},
 	UsingFreeToken {
 		token: Alias,
@@ -287,6 +280,7 @@ pub enum Pre<T: Config + Send + Sync> {
 	UsingCoin {
 		coin_id: T::AccountId,
 		coin: Coin,
+		retry_counter: u8,
 	},
 	UsingFreeToken,
 	UsingPaidToken,
@@ -329,7 +323,7 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 					T::WeightInfo::as_none_tx_ext_unload_archived_recycler_into_external_asset(),
 				_ => T::WeightInfo::as_none_tx_ext_others(),
 			},
-			Some(AsCoinageInfo::AsCoin) => match call.is_sub_type() {
+			Some(AsCoinageInfo::AsCoin { .. }) => match call.is_sub_type() {
 				Some(Call::<T>::split { split_into }) => {
 					let n =
 						split_into.iter().map(|(_, dests)| dests.len() as u32).sum::<u32>().max(1);
@@ -394,17 +388,21 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 				// effective priority comes from whichever extension authorizes the call.
 				Ok((ValidTransaction::default(), Val::NotUsing, origin))
 			},
-			Some(AsCoinageInfo::AsCoin) => {
+			Some(AsCoinageInfo::AsCoin { retry_counter }) => {
 				let Some(frame_system::Origin::<T>::Signed(coin_id)) = origin.as_system_ref()
 				else {
 					return Err(CustomInvalidity::OriginToAsCoinMustBeSigned.into());
 				};
 				let coin_id = coin_id.clone();
 				let current_time = T::UnixTime::now().as_secs();
-				if let Some(locked_coin) = LockedCoins::<T>::get(&coin_id) {
-					if current_time < locked_coin.until {
-						return Err(CustomInvalidity::CoinTemporarilyLocked.into());
-					}
+				let locked_coin = LockedCoins::<T>::get(&coin_id);
+				if locked_coin.is_some_and(|locked| current_time < locked.until) {
+					return Err(CustomInvalidity::CoinTemporarilyLocked.into());
+				}
+				let expected_retry_counter =
+					locked_coin.map(Self::next_failed_dispatch_retry).unwrap_or(0);
+				if *retry_counter != expected_retry_counter {
+					return Err(CustomInvalidity::CoinTemporarilyLocked.into());
 				}
 
 				let coin = CoinsByOwner::<T>::get(&coin_id).ok_or(CustomInvalidity::NoCoin)?;
@@ -449,7 +447,7 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 					.priority(tx_priority::USER_DEFAULT)
 					.into();
 				origin.set_caller_from(Origin::Coin { coin_id: coin_id.clone(), coin });
-				Ok((validity, Val::UsingCoin { coin_id }, origin))
+				Ok((validity, Val::UsingCoin { coin_id, retry_counter: *retry_counter }, origin))
 			},
 			Some(AsCoinageInfo::AsUnloadTokenPeople { proof, period, counter, alias_proofs }) => {
 				Pallet::<T>::validate_unload_calls(call, UnloadFee::Prepaid)?;
@@ -757,12 +755,12 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 	) -> Result<Self::Pre, TransactionValidityError> {
 		let pre = match val {
 			Val::NotUsing => Pre::NotUsing,
-			Val::UsingCoin { coin_id } => {
+			Val::UsingCoin { coin_id, retry_counter } => {
 				let coin = CoinsByOwner::<T>::take(&coin_id).ok_or(CustomInvalidity::NoCoin)?;
 
 				// Coin is removed in prepare to prevent concurrent use in the same block.
 				// On dispatch failure it is restored in post_dispatch.
-				Pre::UsingCoin { coin_id, coin }
+				Pre::UsingCoin { coin_id, coin, retry_counter }
 			},
 			Val::UsingFreeToken { token, period, kind } => {
 				ConsumedFreeUnloadTokens::<T>::insert(period, token, ());
@@ -822,10 +820,12 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 	) -> Result<Weight, TransactionValidityError> {
 		match pre {
 			Pre::NotUsing => Ok(Weight::zero()),
-			Pre::UsingCoin { coin_id, coin } => {
+			Pre::UsingCoin { coin_id, coin, retry_counter } => {
 				if result.is_err() {
-					let previous_lock = LockedCoins::<T>::get(&coin_id);
-					LockedCoins::<T>::insert(&coin_id, Self::failed_dispatch_lock(previous_lock));
+					LockedCoins::<T>::insert(
+						&coin_id,
+						Self::failed_dispatch_lock_with_retries(retry_counter),
+					);
 					CoinsByOwner::<T>::insert(&coin_id, coin);
 				} else {
 					LockedCoins::<T>::remove(&coin_id);

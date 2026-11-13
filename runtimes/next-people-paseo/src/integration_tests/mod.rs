@@ -1338,7 +1338,7 @@ fn build_as_coin_ext(who_pair: &sr25519::Pair, call: RuntimeCall) -> UncheckedEx
 
 	// 1. Set the extension to AsCoin (Index 0.0.8)
 	tx_ext.0 .0 .8 = indiv_pallet_coinage::extension::AsCoinage::<Runtime>::new(Some(
-		indiv_pallet_coinage::extension::AsCoinageInfo::AsCoin,
+		indiv_pallet_coinage::extension::AsCoinageInfo::AsCoin { retry_counter: 0 },
 	));
 
 	// 2. Update Nonce (Index 0.7)

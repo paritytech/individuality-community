@@ -4053,7 +4053,7 @@ mod benches {
 
 		let split_into = split_into.try_into().unwrap();
 		let call = Call::<T>::split { split_into };
-		let tx_ext = AsCoinage::<T>::new(Some(AsCoinageInfo::AsCoin));
+		let tx_ext = AsCoinage::<T>::new(Some(AsCoinageInfo::AsCoin { retry_counter: 0 }));
 		let origin = SystemOrigin::Signed(coin_owner);
 		let len = call.encode().len();
 
@@ -4080,7 +4080,7 @@ mod benches {
 		let to: T::AccountId = account("dest", 0, 0);
 
 		let call = Call::<T>::transfer { to };
-		let tx_ext = AsCoinage::<T>::new(Some(AsCoinageInfo::AsCoin));
+		let tx_ext = AsCoinage::<T>::new(Some(AsCoinageInfo::AsCoin { retry_counter: 0 }));
 		let origin = SystemOrigin::Signed(coin_owner);
 		let len = call.encode().len();
 
@@ -4111,7 +4111,7 @@ mod benches {
 		let proof_of_ownership = create_proof_of_ownership::<T>(&secret, &coin_owner);
 
 		let call = Call::<T>::load_recycler_with_coin { member_key, proof_of_ownership };
-		let tx_ext = AsCoinage::<T>::new(Some(AsCoinageInfo::AsCoin));
+		let tx_ext = AsCoinage::<T>::new(Some(AsCoinageInfo::AsCoin { retry_counter: 0 }));
 		let origin = SystemOrigin::Signed(coin_owner);
 		let len = call.encode().len();
 
@@ -4153,7 +4153,7 @@ mod benches {
 			member_key,
 			proof_of_ownership,
 		};
-		let tx_ext = AsCoinage::<T>::new(Some(AsCoinageInfo::AsCoin));
+		let tx_ext = AsCoinage::<T>::new(Some(AsCoinageInfo::AsCoin { retry_counter: 0 }));
 		let origin = SystemOrigin::Signed(coin_owner);
 		let len = call.encode().len();
 
