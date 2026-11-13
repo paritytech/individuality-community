@@ -24,6 +24,7 @@ use frame_support::{assert_noop, assert_ok, dispatch::GetDispatchInfo, BoundedVe
 use indiv_support::credit_trees::{
 	CreditProofNode, CreditTreeBlock, CreditTreeDelivery, ExpiryTimestamp, NftClaimCreditTree,
 };
+use sp_core::bounded_vec;
 use sp_runtime::DispatchError;
 
 #[test]
@@ -37,7 +38,10 @@ fn receive_credit_trees_stores_the_batch() {
 		assert_eq!(CreditTrees::<Test>::get(10), Some(tree(10)));
 		assert_eq!(CreditTrees::<Test>::get(14), Some(tree(14)));
 		assert_eq!(NextExpectedSequence::<Test>::get(), 2);
-		assert_eq!(nft_claims_events(), vec![Event::CreditTreesReceived { count: 2, stored: 2 }]);
+		assert_eq!(
+			nft_claims_events(),
+			vec![Event::CreditTreesReceived { count: 2, stored: bounded_vec![10, 14] }]
+		);
 	});
 }
 
@@ -86,7 +90,10 @@ fn a_replayed_tree_that_is_already_stored_changes_nothing() {
 
 		assert_eq!(CreditTrees::<Test>::get(10), Some(tree(10)));
 		assert_eq!(NextExpectedSequence::<Test>::get(), 1);
-		assert_eq!(nft_claims_events(), vec![Event::CreditTreesReceived { count: 1, stored: 0 }]);
+		assert_eq!(
+			nft_claims_events(),
+			vec![Event::CreditTreesReceived { count: 1, stored: bounded_vec![] }]
+		);
 	});
 }
 
@@ -110,7 +117,7 @@ fn a_conflicting_root_keeps_the_stored_tree() {
 			nft_claims_events(),
 			vec![
 				Event::CreditTreeConflict { block: 10 },
-				Event::CreditTreesReceived { count: 1, stored: 0 },
+				Event::CreditTreesReceived { count: 1, stored: bounded_vec![] },
 			]
 		);
 	});
@@ -169,7 +176,7 @@ fn an_empty_or_zero_rooted_tree_is_rejected_without_consuming_its_sequence() {
 				Event::CreditTreeRejected { block: 10 },
 				Event::CreditTreeRejected { block: 11 },
 				Event::CreditTreesMissing { from_sequence: 0, to_sequence: 1 },
-				Event::CreditTreesReceived { count: 3, stored: 1 },
+				Event::CreditTreesReceived { count: 3, stored: bounded_vec![12] },
 			]
 		);
 	});
@@ -225,7 +232,7 @@ fn a_sequence_gap_is_reported() {
 			nft_claims_events(),
 			vec![
 				Event::CreditTreesMissing { from_sequence: 1, to_sequence: 2 },
-				Event::CreditTreesReceived { count: 2, stored: 2 },
+				Event::CreditTreesReceived { count: 2, stored: bounded_vec![20, 21] },
 			]
 		);
 	});
@@ -288,7 +295,10 @@ fn a_late_batch_below_the_expected_sequence_stores_but_reports_no_gap() {
 
 		assert_eq!(NextExpectedSequence::<Test>::get(), 6);
 		assert_eq!(CreditTrees::<Test>::get(15), Some(tree(15)));
-		assert_eq!(nft_claims_events(), vec![Event::CreditTreesReceived { count: 1, stored: 1 }]);
+		assert_eq!(
+			nft_claims_events(),
+			vec![Event::CreditTreesReceived { count: 1, stored: bounded_vec![15] }]
+		);
 	});
 }
 
@@ -296,8 +306,8 @@ mod claim {
 	use super::*;
 	use crate::{
 		runtime_api::{
-			PreviewFailure, PreviewOutcome, PreviewQueries, PreviewQuery, SelectionKind,
-			MAX_PREVIEW_QUERIES,
+			CreditStatus, CreditStatusQueries, CreditStatusQuery, PreviewFailure, PreviewOutcome,
+			PreviewQueries, PreviewQuery, SelectionKind, MAX_PREVIEW_QUERIES, MAX_STATUS_QUERIES,
 		},
 		ClaimedLeaves, CollectionMinter, CollectionMinters, Error, ItemSelection,
 	};
@@ -401,6 +411,7 @@ mod claim {
 				vec![Event::CreditClaimed {
 					block: BLOCK,
 					leaf,
+					leaf_index: 0,
 					collection: COLLECTION,
 					item: 1,
 					owner: PURSE,
@@ -2006,6 +2017,129 @@ mod claim {
 			);
 		});
 	}
+
+	/// The status of the credit at `leaf_index` of [`BLOCK`].
+	fn status(leaf_index: u32) -> CreditStatus {
+		let queries: CreditStatusQueries =
+			vec![CreditStatusQuery { block: BLOCK, leaf_index }].try_into().unwrap();
+		NftClaims::credit_statuses(queries)[0]
+	}
+
+	fn claim_leaf(awards: &[Award], leaf_index: u32) {
+		let (claimant, credit) = &awards[leaf_index as usize];
+		let (origin, kind) = match claimant {
+			AccountOrPerson::Account(account) =>
+				(RuntimeOrigin::signed(*account), ClaimantKind::Account),
+			AccountOrPerson::Person(_) => (RuntimeOrigin::signed(PERSON), ClaimantKind::Person),
+		};
+		assert_ok!(NftClaims::claim(
+			origin,
+			kind,
+			BLOCK,
+			*credit,
+			leaf_index,
+			proof_of(awards, leaf_index),
+			COLLECTION,
+			PURSE + u64::from(leaf_index)
+		));
+	}
+
+	#[test]
+	fn credit_statuses_follow_a_credit_from_delivery_to_claim() {
+		new_test_ext().execute_with(|| {
+			let awards = awards();
+			assert_eq!(status(0), CreditStatus::NotStored);
+
+			store_tree(&awards);
+			let expires_at = due_at(tree_of(BLOCK, &awards).timestamp);
+			assert_eq!(status(0), CreditStatus::Claimable { expires_at });
+			assert_eq!(status(3), CreditStatus::LeafIndexOutOfBounds);
+
+			claim_leaf(&awards, 0);
+			assert_eq!(status(0), CreditStatus::Claimed);
+			assert_eq!(status(1), CreditStatus::Claimable { expires_at });
+		});
+	}
+
+	#[test]
+	fn a_credit_stays_claimed_after_its_fully_claimed_tree_is_removed() {
+		new_test_ext().execute_with(|| {
+			let awards = awards();
+			store_tree(&awards);
+			for leaf_index in 0..3 {
+				claim_leaf(&awards, leaf_index);
+			}
+			assert!(!CreditTrees::<Test>::contains_key(BLOCK));
+
+			assert_eq!(status(2), CreditStatus::Claimed);
+			let (claimant, credit) = &awards[2];
+			assert!(nft_claims_events().contains(&Event::CreditClaimed {
+				block: BLOCK,
+				leaf: credit_leaf(claimant, credit),
+				leaf_index: 2,
+				collection: COLLECTION,
+				item: 1,
+				owner: PURSE + 2,
+				instance: 3
+			}));
+		});
+	}
+
+	#[test]
+	fn an_expired_credit_is_claimable_until_the_sweep_removes_its_tree() {
+		new_test_ext().execute_with(|| {
+			let awards = awards();
+			store_tree(&awards);
+			claim_leaf(&awards, 0);
+			let timestamp = tree_of(BLOCK, &awards).timestamp;
+			set_now(due_at(timestamp));
+
+			assert_eq!(status(1), CreditStatus::Claimable { expires_at: due_at(timestamp) });
+
+			assert_ok!(NftClaims::sweep_expired_trees(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				timestamp,
+				1
+			));
+			assert_eq!(status(0), CreditStatus::NotStored);
+			assert_eq!(status(1), CreditStatus::NotStored);
+		});
+	}
+
+	#[test]
+	fn credit_statuses_align_with_their_queries() {
+		new_test_ext().execute_with(|| {
+			let awards = awards();
+			store_tree(&awards);
+			claim_leaf(&awards, 1);
+			let queries: CreditStatusQueries = vec![
+				CreditStatusQuery { block: BLOCK, leaf_index: 1 },
+				CreditStatusQuery { block: BLOCK + 1, leaf_index: 0 },
+				CreditStatusQuery { block: BLOCK, leaf_index: 7 },
+			]
+			.try_into()
+			.unwrap();
+
+			assert_eq!(
+				NftClaims::credit_statuses(queries),
+				vec![
+					CreditStatus::Claimed,
+					CreditStatus::NotStored,
+					CreditStatus::LeafIndexOutOfBounds
+				]
+			);
+		});
+	}
+
+	#[test]
+	fn a_status_request_over_the_limit_does_not_decode() {
+		let queries = vec![
+			CreditStatusQuery { block: BLOCK, leaf_index: 0 };
+			MAX_STATUS_QUERIES as usize + 1
+		];
+
+		assert!(CreditStatusQueries::decode(&mut &queries.encode()[..]).is_err());
+	}
 }
 
 mod set_collection_minter {
@@ -2186,7 +2320,7 @@ mod expiry {
 				nft_claims_events(),
 				vec![
 					Event::CreditTreeStale { block: 10 },
-					Event::CreditTreesReceived { count: 1, stored: 0 },
+					Event::CreditTreesReceived { count: 1, stored: bounded_vec![] },
 				]
 			);
 		});
@@ -2208,7 +2342,7 @@ mod expiry {
 				nft_claims_events(),
 				vec![
 					Event::CreditTreeOversized { block: 10 },
-					Event::CreditTreesReceived { count: 1, stored: 0 },
+					Event::CreditTreesReceived { count: 1, stored: bounded_vec![] },
 				]
 			);
 		});

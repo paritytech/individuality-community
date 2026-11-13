@@ -65,7 +65,8 @@
 //!   and the submitter picks which one to spend, so a minter must not treat it as unpredictable.
 //!   The current collection owner makes the bounded call and collateralizes its storage writes. Any
 //!   failure fails the claim and leaves the credit unspent because the contract is how an owner
-//!   gates their collection.
+//!   gates their collection. Each call loads the contract's whole code into the proof, so a small
+//!   minter makes claims cheaper. The runtime refuses to register a minter too large to call.
 //! - [`ItemSelection::Random`] needs no contract: the item index is the credit modulo the
 //!   collection's next item index. A claimant chooses which collection to claim into, but not the
 //!   item within it: for a fixed collection and item set the credit maps to one item and the credit
@@ -85,12 +86,11 @@
 //! submit. A resent tree carries no sequence number and leaves the tracking of the live stream
 //! alone.
 //!
-//! The sequences a gap names are turned back into those tree blocks on the game chain. Its
-//! `CreditTreesSent` event lists the blocks one message delivered, in the order they go out, and
-//! its `send_credit_trees` call names the sequence the run starts at, so walking the run pairs
-//! each sequence with a block. The sequences left out of it are the ones the game pallet spent on
-//! a tree whose root it had already dropped, named one by one by `CreditTreeDeliverySkipped`. No
-//! replay recovers those: the root a proof would verify against no longer exists on either chain.
+//! This chain does not know the blocks of a gap, because their trees never arrived. The game
+//! chain's `CreditTreesSent` event pairs every sequence a message carried with its tree block. A
+//! sequence that is in no `CreditTreesSent` event is in a `CreditTreeDeliverySkipped` event
+//! instead: The game pallet spent it on a tree whose root it had already dropped. No replay
+//! recovers it, because the root a proof would verify against no longer exists on either chain.
 //!
 //! ## Removing trees
 //!
@@ -147,7 +147,7 @@ pub use weights::WeightInfo;
 use alloc::vec;
 use frame_support::{
 	dispatch::{PostDispatchInfo, WithPostDispatchInfo},
-	traits::{EnsureOrigin, EnsureOriginWithArg, Get, UnixTime},
+	traits::{Defensive, EnsureOrigin, EnsureOriginWithArg, Get, UnixTime},
 	weights::Weight,
 };
 use frame_system::offchain::CreateAuthorizedTransaction;
@@ -231,13 +231,12 @@ pub trait CollectionSelector<AccountId> {
 	/// budget.
 	fn contract_max_weight() -> Weight;
 
-	/// Confirm `contract` can be registered as a minter, which is that code is deployed at the
-	/// address.
+	/// Confirm `contract` can be registered as a minter: Code is deployed at the address and
+	/// loading that code fits the weight ceiling of one call.
 	///
-	/// Run once at registration to fail typos and not-yet-deployed contracts there, with a
-	/// clear error, rather than on every claim. It is a courtesy, not a guarantee: nothing
-	/// on-chain proves the code implements the minter interface, so [`Self::select`] still
-	/// validates every call's outcome.
+	/// Run once at registration, so typos, contracts that are not deployed yet and minters
+	/// that no claim could call fail there with a clear error. Nothing on-chain proves the code
+	/// implements the minter interface, so [`Self::select`] still validates every call's outcome.
 	fn validate(contract: H160) -> Result<(), DispatchError>;
 
 	/// Ask `contract` as `owner` which of `collection`'s items the claim of `credit` mints.
@@ -486,14 +485,18 @@ pub mod pallet {
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		/// Credit trees were received and stored.
-		CreditTreesReceived { count: u32, stored: u32 },
-		/// Trees of the live stream never arrived. The game pallet's `CreditTreesSent` events
-		/// resolve these sequences to the tree blocks they were delivered under, and a
-		/// `replay_credit_trees` naming those blocks recovers the trees.
+		/// A batch of `count` credit trees was received. `stored` contains the blocks whose trees
+		/// were stored.
 		///
-		/// A sequence that resolves to no block is one the game pallet spent on a tree it had
-		/// already dropped the root of, and no replay brings it back.
+		/// A tree this chain already holds is not stored again and is not in `stored`.
+		CreditTreesReceived {
+			count: u32,
+			stored: BoundedVec<CreditTreeBlock, T::MaxTreesPerMessage>,
+		},
+		/// The trees of the sequences `from_sequence` to `to_sequence` of the live stream never
+		/// arrived.
+		///
+		/// The module doc describes how to resolve the sequences to tree blocks and recover them.
 		CreditTreesMissing { from_sequence: TreeSequence, to_sequence: TreeSequence },
 		/// A tree was received for a block that already holds a different root. The stored
 		/// root is kept, so the proofs built against it stay valid.
@@ -502,11 +505,12 @@ pub mod pallet {
 		/// sequence stays unconsumed, so the gap check reports it and a replay can deliver the
 		/// genuine tree.
 		CreditTreeRejected { block: CreditTreeBlock },
-		/// A credit `block` committed was claimed, minting `instance` of `collection`'s `item`
-		/// to the purse key `owner`.
+		/// The credit at `leaf_index` of `block`'s tree was claimed, minting `instance` of
+		/// `collection`'s `item` to the purse key `owner`.
 		CreditClaimed {
 			block: CreditTreeBlock,
 			leaf: NftClaimCreditLeaf,
+			leaf_index: u32,
 			collection: CollectionId,
 			item: ItemIndex,
 			owner: T::AccountId,
@@ -580,6 +584,9 @@ pub mod pallet {
 		/// An [`ItemSelection::Random`] draw reaches this by landing on a deleted index, which
 		/// stays inside the draw range, and a contract selection by naming such an index.
 		UnknownItem,
+		/// The minter contract's code exceeds the runtime's size cap. Loading it would leave too
+		/// little of the selector's weight ceiling for the call.
+		MinterCodeTooLarge,
 	}
 
 	/// Why an offchain worker's submission was rejected, reported to the caller as
@@ -620,7 +627,7 @@ pub mod pallet {
 			T::EnsureGameChainOrigin::ensure_origin(origin)?;
 
 			let count = batch.trees.len() as u32;
-			let mut stored = 0u32;
+			let mut stored = BoundedVec::<CreditTreeBlock, T::MaxTreesPerMessage>::new();
 			let now = T::UnixTime::now().as_secs();
 			// Sequences of the deliveries the loop accepts. A rejected delivery stays out, so
 			// its sequence is unconsumed and the gap check reports it.
@@ -685,7 +692,9 @@ pub mod pallet {
 				} else {
 					CreditTrees::<T>::insert(update.block, update.tree);
 					Self::note_tree_expiry(update.block, update.tree.timestamp);
-					stored = stored.saturating_add(1);
+					let _ = stored
+						.try_push(update.block)
+						.defensive_proof("a batch holds at most `MaxTreesPerMessage` trees");
 				}
 				if let Some(sequence) = update.sequence {
 					accepted.push(sequence);
@@ -826,6 +835,7 @@ pub mod pallet {
 			Self::deposit_event(Event::CreditClaimed {
 				block,
 				leaf,
+				leaf_index,
 				collection,
 				item,
 				owner: mint_to,
@@ -866,7 +876,8 @@ pub mod pallet {
 		/// registration through [`indiv_pallet_scarcity::OnCollectionDeleted`] and
 		/// [`indiv_pallet_scarcity::OnCollectionOwnerChanged`], so a new owner has to register
 		/// again. A contract selection is validated through [`CollectionSelector::validate`], so
-		/// an address with no code fails here rather than on the first claim.
+		/// an address with no code, or with code too large to load within the selector's ceiling,
+		/// fails here rather than on every claim.
 		///
 		/// Registering a contract selection commits the owner's funds: the owner pays the
 		/// storage deposit of every minter call, up to the runtime's per-call limit. The
@@ -1204,6 +1215,39 @@ pub mod pallet {
 				.into_iter()
 				.map(|query| Self::preview_mint(query.credit, query.collection))
 				.collect::<Vec<_>>()
+		}
+
+		/// Returns the status of each credit in `queries`, positionally aligned.
+		pub fn credit_statuses(
+			queries: crate::runtime_api::CreditStatusQueries,
+		) -> Vec<crate::runtime_api::CreditStatus> {
+			queries
+				.into_iter()
+				.map(|query| Self::credit_status(query.block, query.leaf_index))
+				.collect::<Vec<_>>()
+		}
+
+		/// Returns the status of the credit at `leaf_index` of the tree of `block`.
+		///
+		/// [`ClaimedLeaves`] is read first, because it outlives a fully claimed tree.
+		pub fn credit_status(
+			block: CreditTreeBlock,
+			leaf_index: u32,
+		) -> crate::runtime_api::CreditStatus {
+			use crate::runtime_api::CreditStatus;
+
+			if Self::leaf_is_claimed(&ClaimedLeaves::<T>::get(block), leaf_index) {
+				return CreditStatus::Claimed;
+			}
+			let Some(tree) = CreditTrees::<T>::get(block) else {
+				return CreditStatus::NotStored;
+			};
+			if leaf_index >= tree.leaf_count {
+				return CreditStatus::LeafIndexOutOfBounds;
+			}
+			CreditStatus::Claimable {
+				expires_at: expiry_deadline(tree.timestamp, T::TreeTtl::get()),
+			}
 		}
 
 		/// The item of `collection` that claiming `credit` mints, per the collection's

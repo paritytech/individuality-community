@@ -10,9 +10,11 @@
 - Avoid uncommon compound-adjective constructions (e.g. "ring-stale aliases"); spell them out instead
 - When a condition guards against inconsistent state (not user error), log an error rather than silently skipping
 - Omit trailing commas in macro invocations so that rustfmt keeps arguments on one line where possible. E.g. `assert_ok!(Pallet::call(origin, arg1, arg2))` not `assert_ok!(Pallet::call(origin, arg1, arg2,))`
+- After a colon, start a full sentence with an uppercase letter and a fragment with a lowercase letter
 - Use sentence case for headings. E.g. `## Reward amount` not `## Reward Amount`
 - Avoid boolean parameters; match on a meaningful enum instead
 - Doc comments describe the current state, not changes relative to a prior version
 - Target three short sentences in a field, variant or trait-method doc, one message each: what it is, then what a caller cannot get right unaided. Fewer is better; rationale belongs in the module doc
 - When editing an item, rewrite its doc comment rather than appending to it, so it does not grow with every change
 - Comments state facts plainly. Follow [ASD-STE100](https://asd-ste100.org/) Simplified Technical English: one idea per sentence, active voice, present tense, the same term for the same thing, and the plain verb over a noun phrase. Avoid editorialising ("this is what keeps it out of a block", "the two can never drift apart"); say what holds and why a caller cannot infer it. Delete a comment that only restates the code
+- Prefer specific verbs over "names" or "gives". E.g. an event "contains" a field, a call "specifies" an argument, a function "returns" a value

@@ -43,6 +43,11 @@ signatures, parameters, and behavior, read the pallet docs (see [Reference](#ref
 - `increase_attestation_allowance` / `clear_attestation_allowance` — manage a
   verifier's attestation quota
 
+**NftCredits** (`pallets/nft-credits`)
+- `replay_credit_trees` — resend credit trees that the Asset Hub did not
+  receive. Permissionless, rate limited by `ReplayCooldownSeconds`. See
+  [Recover missing credit trees](#recover-missing-credit-trees).
+
 **MembersNotifier** (`pallets/members-notifier`)
 - `subscribe` — register a parachain to receive ring-root updates
 - `unsubscribe` — remove a subscriber (also notifies the subscriber chain)
@@ -110,6 +115,23 @@ governance), or `unsubscribe` here.
    address.
 2. `increase_attestation_allowance` for each attester.
 3. Users reserve and register names (see [usage.md](./usage.md)).
+
+## Troubleshooting
+
+### Recover missing credit trees
+Each credit tree that the People chain sends has a delivery sequence number.
+Asset Hub emits `NftClaims::CreditTreesMissing { from_sequence, to_sequence }`
+when sequences are missing. Asset Hub cannot identify the blocks of these trees,
+because they did not arrive.
+
+1. Look up each missing sequence in the `trees` of the People chain's
+   `NftCredits::CreditTreesSent` events to get its tree block.
+2. Call `replay_credit_trees` on the People chain with those blocks. Any signed
+   account can call it, once per `ReplayCooldownSeconds`.
+
+A sequence that is in no `CreditTreesSent` event is in a
+`CreditTreeDeliverySkipped { sequence, block }` event. Its root was removed
+before it was sent, and no replay can recover it.
 
 ## Reference
 

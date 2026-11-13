@@ -112,6 +112,8 @@
 //!   tree blocks, against [`NftClaimCreditRoots`], so a claimant finds their roots by one lookup
 //!   instead of a scan. That index is a bounded ring, so a runtime that sizes it below the
 //!   retention window leaves the older blocks to be found from the events.
+//! - `nft_claim_credit_blocks` returns every block in that index with the state of its tree:
+//!   pending, committed or removed.
 //! - `nft_claim_credit_proofs` returns, for one tree block and one claimant, the inclusion proof of
 //!   each credit the claimant holds there: the credit, its leaf index and the sibling hashes, which
 //!   is what the claims chain verifies. `nft_claim_credit_proof_from_awards` does the same for a
@@ -311,11 +313,11 @@ pub mod pallet {
 		/// The index is a lookup aid, not the record of what a claimant is owed, so a full list
 		/// drops its oldest block rather than rejecting an award. A dropped block stays mintable
 		/// for [`Config::AwardRetentionTtl`], its proof coming from the block's
-		/// [`NftClaimCreditAwards`] entry, so the claimant loses discovery through
-		/// [`Pallet::nft_claim_credit_roots`] and nothing else. Size it to the tree blocks a
-		/// claimant accumulates over [`Config::AwardRetentionTtl`] at the chain's game cadence, and
-		/// account for the cost: the list is read and written whole at this bound, once per
-		/// distinct claimant an extrinsic awards to.
+		/// [`NftClaimCreditAwards`] entry, so the claimant only loses discovery through the runtime
+		/// API. Size it to the tree blocks a claimant accumulates over
+		/// [`Config::AwardRetentionTtl`] at the chain's game cadence, and account for the cost:
+		/// the list is read and written whole at this bound, once per distinct claimant an
+		/// extrinsic awards to.
 		#[pallet::constant]
 		type MaxCreditBlocksPerClaimant: Get<u32>;
 
@@ -578,13 +580,11 @@ pub mod pallet {
 		NftClaimCreditDropped { claimant: AccountOrPerson<T::AccountId>, credit: NftClaimCredit },
 		/// Credit trees were handed to the XCM router for delivery to the NFT claims chain.
 		CreditTreesSent {
-			/// The tree block of every tree the message carries, in the order they go out.
-			/// Empty means every tree of this message had lost its root, so nothing was sent.
+			/// The sequence and tree block of every tree the message carries, in the order they go
+			/// out. Empty means every tree of this message had lost its root, so nothing was sent.
 			///
-			/// The sequence each block travels under is not spelled out: the message takes a
-			/// contiguous run of sequences off the queue, starting at the call's `first_sequence`,
-			/// minus the ones this block's [`Event::CreditTreeDeliverySkipped`] names.
-			trees: BoundedVec<CreditTreeBlock, T::MaxCreditTreesPerMessage>,
+			/// A sequence in the claims chain's `CreditTreesMissing` resolves to its block here.
+			trees: BoundedVec<(TreeSequence, CreditTreeBlock), T::MaxCreditTreesPerMessage>,
 		},
 		/// A queued credit tree was not sent because its root is no longer recorded.
 		///
@@ -1148,7 +1148,7 @@ impl<T: Config> Pallet<T> {
 	/// One tree a block, over at most [`CHUNKS_PER_TREE`] chunks of awards, bounds this hook. Each
 	/// tree stands alone. It is built once, from a complete leaf set, so no root grows over time
 	/// and no inclusion proof can go stale. The awards it was built over stay for the retained
-	/// window, so a claim can be proven from state; the root itself is never removed.
+	/// window, so a claim can be proven from state.
 	///
 	/// Every root recorded is also queued for delivery to the NFT claims chain, which the
 	/// offchain worker then ships (see [`Pallet::send_credit_trees`]).
@@ -1591,6 +1591,27 @@ impl<T: Config> Pallet<T> {
 			.collect::<Vec<_>>()
 	}
 
+	/// Every block in the [`NftClaimCreditBlocks`] index of `claimant`, with the state of its tree.
+	///
+	/// A block without a root is pending while [`CreditBuffers`] still holds it. Otherwise its
+	/// root is removed.
+	pub fn nft_claim_credit_blocks(
+		claimant: &AccountOrPerson<T::AccountId>,
+	) -> Vec<(BlockNumberFor<T>, NftClaimCreditBlockState)> {
+		NftClaimCreditBlocks::<T>::get(claimant)
+			.into_iter()
+			.map(|block| {
+				let state = match NftClaimCreditRoots::<T>::get(block) {
+					Some(tree) => NftClaimCreditBlockState::Committed(tree),
+					None if CreditBuffers::<T>::contains_key(block) =>
+						NftClaimCreditBlockState::Pending,
+					None => NftClaimCreditBlockState::Removed,
+				};
+				(block, state)
+			})
+			.collect::<Vec<_>>()
+	}
+
 	/// Award every NFT claim credit a freshly-attended `attendee` is entitled to for the
 	/// current game.
 	///
@@ -1692,12 +1713,15 @@ impl<T: Config> Pallet<T> {
 			queued[..taken].iter().map(|(sequence, block)| (Some(*sequence), *block)),
 		);
 
-		// The blocks the message delivers, in sequence order, which the event carries so that a
-		// gap the claims chain reports can be turned back into the block a replay needs.
-		// Truncation is unreachable: `updates` came out of `queued[..taken]`, which
-		// `message_capacity` already held to this very bound.
+		// The sequence and block of each delivery, which the event carries so that a gap the
+		// claims chain reports resolves to the blocks a replay needs. Every queued delivery
+		// carries a sequence. Truncation is unreachable: `updates` comes from `queued[..taken]`,
+		// and `message_capacity` holds `taken` to this bound.
 		let sent = BoundedVec::<_, T::MaxCreditTreesPerMessage>::truncate_from(
-			updates.iter().map(|update| update.block).collect::<Vec<_>>(),
+			updates
+				.iter()
+				.filter_map(|update| update.sequence.map(|sequence| (sequence, update.block)))
+				.collect::<Vec<_>>(),
 		);
 
 		// An empty batch means every queued block has lost its tree in the meantime, so there

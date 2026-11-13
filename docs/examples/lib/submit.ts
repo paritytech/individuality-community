@@ -53,8 +53,8 @@ interface SudoTxResult extends SubmitResult {
  * `customSignedExtensions`); omit it for chains that need none.
  */
 export function signedSubmitter(signer: PolkadotSigner, signOptions?: unknown) {
-  return async <T extends SignedTx>(tx: T, label: string) => {
-    const r = await tx.signAndSubmit(signer, signOptions);
+  return async <T extends SignedTx>(tx: T, label: string): Promise<Awaited<ReturnType<T["signAndSubmit"]>>> => {
+    const r = (await tx.signAndSubmit(signer, signOptions)) as Awaited<ReturnType<T["signAndSubmit"]>>;
     if (!r.ok) throw new Error(`${label} failed: ${toJson(r.dispatchError)}`);
     console.log(`  ${label}: ok`);
     return r;
