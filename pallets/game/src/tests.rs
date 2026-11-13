@@ -579,7 +579,7 @@ fn player_processing_moves_live_alias_players_to_a_changed_limit() {
 		let raised = StatementAllowance { max_count: 2000, max_size: 2000 };
 		PlayerStatementLimit::set(&raised);
 		run_game_scenario(live_player_schedule(60), &players, |p| Some(attending_report(p)));
-		assert_eq!(get_allowance(&AccountId32::new(alias)), raised);
+		assert_eq!(get_allowance(AccountId32::new(alias)), raised);
 	});
 }
 
