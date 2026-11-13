@@ -202,6 +202,41 @@
 //! to one Merkle root per block, delivers those roots to the minting chain and serves the
 //! inclusion proofs a claimant needs. Its module documentation covers the whole path.
 //!
+//! # Tenure claim
+//!
+//! A player that signed up for a game claims tenure credits before the game begins.
+//! [`Pallet::claim_tenure_credits`] opens at the game's `tenure_claim_opens` time and closes when
+//! the game starts.
+//!
+//! The number of credits depends on the player's tenure: the number of games they attended while
+//! recognised as a person by indiv-pallet-score, which counts these games. A game attended while
+//! suspended or recognised by another DIM does not count. A suspended player keeps the games they
+//! attended before the suspension.
+//!
+//! A player earns one credit for each of the [`TenureThresholds`] their tenure reaches. With
+//! the thresholds `[0, 1, 5]`, a player that never attended a game while recognised earns one
+//! credit, a person with 3 games earns two and a person with 5 or more earns three. A
+//! threshold of zero thus gives every player a credit. A player claims once per game.
+//!
+//! ## Payout
+//!
+//! A paid credit is awarded through [`Config::NftClaimCredits`] and becomes mintable once it
+//! reaches the NFT claims chain. [`TenureClaims`] records a player's credits. When they are paid
+//! depends on the player's recognition in indiv-pallet-score:
+//!
+//! - A person is unique, whether recognised by indiv-pallet-score or by another DIM. A person
+//!   receives the credits when they claim as far as the credit buffers have room, and the rest
+//!   after the game.
+//! - One party can control any number of accounts that are not persons. Such an account receives
+//!   the credits after the game if it attends.
+//! - A suspended person receives the credits after the game if they attend, as an account that is
+//!   not a person does.
+//!
+//! "After the game" is the attendance backfill, which runs once attendance is final. It reads the
+//! recognition again. A candidate that becomes a person after claiming is paid without
+//! attending. A person suspended after claiming keeps the credits awarded when they claimed and
+//! receives the rest only if they attend. A cancelled game pays no further tenure credits.
+//!
 //! # Calls
 //!
 //! Player calls:
@@ -215,12 +250,14 @@
 //!   using the account bound to the lite person's alias in the score context. The account-based
 //!   player must be new or archived, otherwise they must use `sign_up_with_account` for free.
 //! - `report`: Each participant’s self-contained reporting of whether their peers are persons.
+//! - `claim_tenure_credits`: claim one credit per tenure threshold reached, before the game begins.
 //! - `offboard`: Offboard from the game.
 //!
 //! Manager origin calls: (configured origin [`Config::ManagerOrigin`])
 //!
 //! - `schedule_games`: schedule future games.
 //! - `set_play_deposit`: set the signup deposit amount for account-based players.
+//! - `set_tenure_thresholds`: set the tenures at which a tenure claim earns one more credit.
 //!
 //! Invite issuer calls: (configured origin [`Config::InviteIssuer`])
 //!
@@ -262,9 +299,11 @@ extern crate self as indiv_pallet_game;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 mod extension;
+pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
+mod tenure_claim;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -281,7 +320,7 @@ use crate::extension::CustomError;
 use alloc::{vec, vec::Vec};
 use core::time::Duration;
 use frame_support::{
-	dispatch::PostDispatchInfo,
+	dispatch::{DispatchErrorWithPostInfo, PostDispatchInfo},
 	sp_runtime::Saturating,
 	storage::{with_transaction, TransactionOutcome},
 	traits::{
@@ -338,6 +377,9 @@ pub mod pallet {
 	pub(crate) type TicketOf<T> =
 		<<<T as Config>::TicketSignature as Verify>::Signer as IdentifyAccount>::AccountId;
 
+	/// The tenures at which a player earns one more tenure credit per game.
+	pub type TenureThresholdsOf<T> = BoundedVec<GamesAttended, <T as Config>::MaxTenureThresholds>;
+
 	/// Native chain balance, used for the play deposit held on the `Balances` pallet.
 	pub type NativeBalanceOf<T> =
 		<<T as Config>::NativeFungible as Inspect<<T as frame_system::Config>::AccountId>>::Balance;
@@ -350,7 +392,11 @@ pub mod pallet {
 	/// RFC-0022](https://github.com/paritytech/trinity-user-agents/blob/63a450d025462f113311a26408dc53627d1a268d/docs/rfcs/0022-account-derivations.md).
 	pub const PRODUCT_NAME: &[u8] = b"dim2";
 
+	/// The current storage version.
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -453,6 +499,19 @@ pub mod pallet {
 		/// per-block Merkle roots and delivers those to the chain that mints against them. A
 		/// runtime that plays games without minting anything sets this to `()`.
 		type NftClaimCredits: AwardCredits<Self::AccountId>;
+
+		/// The maximum number of [`TenureThresholds`], which is the most tenure credits a player
+		/// earns in one game.
+		///
+		/// Each threshold takes a credit slot after the report slots in
+		/// [`Config::NftClaimCredits`], which bounds the sum.
+		#[pallet::constant]
+		type MaxTenureThresholds: Get<u32>;
+
+		/// The [`TenureThresholds`] until [`Pallet::set_tenure_thresholds`] sets them.
+		///
+		/// The thresholds must be in strictly ascending order, which the `integrity_test` asserts.
+		type DefaultTenureThresholds: Get<TenureThresholdsOf<Self>>;
 
 		/// Signature used to verify tickets.
 		type TicketSignature: Verify<Signer: IdentifyAccount<AccountId: Parameter + MaxEncodedLen + Send + Sync>>
@@ -727,6 +786,25 @@ pub mod pallet {
 	pub(crate) type CommunicationIdentifiers<T: Config> =
 		StorageMap<_, Blake2_128Concat, T::AccountId, CommunicationIdentifier>;
 
+	/// The tenures, in [`GamesAttended`], at which a player earns one more tenure credit per
+	/// game, in strictly ascending order.
+	///
+	/// A player whose tenure reaches the first `n` thresholds earns `n` tenure credits per game.
+	/// A player that never attended a game while recognised has a tenure of zero, so a first
+	/// threshold of zero gives every player one credit.
+	#[pallet::storage]
+	pub type TenureThresholds<T: Config> =
+		StorageValue<_, TenureThresholdsOf<T>, ValueQuery, T::DefaultTenureThresholds>;
+
+	/// The tenure claim of each player for the current game, stored as the number of tenure
+	/// credits it earns.
+	///
+	/// The number includes the credits paid when the player claims. The attendance backfill or
+	/// the game's cancellation removes every entry, so no entry outlives its game.
+	#[pallet::storage]
+	pub type TenureClaims<T: Config> =
+		StorageMap<_, Blake2_128Concat, AccountOrPerson<T::AccountId>, u32>;
+
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
@@ -773,6 +851,17 @@ pub mod pallet {
 		GameCancelled { game_index: GameIdx, reason: CancelReason },
 		/// A scheduled game failed to start. Its schedule was removed.
 		GameScheduleDropped { game_play_time: u32, error: DispatchError },
+		/// The [`TenureThresholds`] were set.
+		TenureThresholdsSet { thresholds: TenureThresholdsOf<T> },
+		/// `player` claimed `credits` tenure credits for the game `game_index`.
+		///
+		/// Each credit emits `NftClaimCreditAwarded` from [`Config::NftClaimCredits`] when it is
+		/// awarded.
+		TenureCreditsClaimed {
+			player: AccountOrPerson<T::AccountId>,
+			game_index: GameIdx,
+			credits: u32,
+		},
 	}
 
 	#[pallet::error]
@@ -851,6 +940,17 @@ pub mod pallet {
 		/// [`Config::MinStepPhaseDuration`], so the offchain worker could not complete that
 		/// phase in any game.
 		PhaseTooShort,
+		/// The tenure thresholds are not in strictly ascending order.
+		UnsortedTenureThresholds,
+		/// The game's tenure claim window has not opened yet.
+		TenureClaimNotOpen,
+		/// The game's tenure claim window has closed, or the game takes no tenure claims.
+		TenureClaimClosed,
+		/// The caller's tenure reaches none of the [`TenureThresholds`], so a tenure claim earns
+		/// nothing.
+		NoTenureCredit,
+		/// The caller claimed tenure credits for the game already.
+		TenureCreditsAlreadyClaimed,
 	}
 
 	/// A reason for this pallet placing a hold on funds.
@@ -966,6 +1066,17 @@ pub mod pallet {
 						.saturating_add(<T as Config>::WeightInfo::as_invited_tx_ext(max_airdrops)),
 				);
 			OcwWeightBudget::from_normal_max::<T>().assert_fits("sign_up", sign_up_worst_case);
+
+			// If the worst case of a tenure claim is above the per-extrinsic limit, no block can
+			// include the claim, so no player can claim tenure credits.
+			OcwWeightBudget::from_normal_max::<T>().assert_fits(
+				"claim_tenure_credits",
+				<T as Config>::WeightInfo::claim_tenure_credits(T::MaxTenureThresholds::get()),
+			);
+			assert!(
+				T::DefaultTenureThresholds::get().is_sorted_by(|a, b| a < b),
+				"`DefaultTenureThresholds` must be in strictly ascending order",
+			);
 		}
 
 		fn offchain_worker(block_number: BlockNumberFor<T>) {
@@ -2029,6 +2140,71 @@ pub mod pallet {
 			Self::process_cancelling(&mut meter);
 			Ok(Self::step_post_info(&meter))
 		}
+
+		/// Sets the [`TenureThresholds`].
+		///
+		/// ## Origin
+		/// Requires Root or [`Config::ManagerOrigin`].
+		///
+		/// ## Parameters
+		/// - `thresholds`: The tenures in [`GamesAttended`], in strictly ascending order. An empty
+		///   list awards no tenure credits.
+		#[pallet::call_index(28)]
+		#[pallet::weight(<T as Config>::WeightInfo::set_tenure_thresholds())]
+		pub fn set_tenure_thresholds(
+			origin: OriginFor<T>,
+			thresholds: TenureThresholdsOf<T>,
+		) -> DispatchResult {
+			<T as Config>::ManagerOrigin::ensure_origin_or_root(origin)?;
+			ensure!(thresholds.is_sorted_by(|a, b| a < b), Error::<T>::UnsortedTenureThresholds);
+
+			TenureThresholds::<T>::put(&thresholds);
+			Self::deposit_event(Event::<T>::TenureThresholdsSet { thresholds });
+
+			Ok(())
+		}
+
+		/// Claims the caller's tenure credits for the current game.
+		///
+		/// The caller receives one credit for each of the [`TenureThresholds`] their tenure
+		/// reaches. A person receives them at once, and an account that is not a person after the
+		/// game if it attends, see [Payout](crate#payout).
+		///
+		/// The game must be in its tenure claim window, from `tenure_claim_opens` until it starts,
+		/// and must not be cancelling. The caller must be signed up for it. On success the call
+		/// pays no fee.
+		///
+		/// ## Origin
+		/// Signed by an account, an alias, or signed with the `ScoreAsParticipant` extension.
+		#[pallet::call_index(29)]
+		#[pallet::weight(
+			<T as Config>::WeightInfo::claim_tenure_credits(T::MaxTenureThresholds::get())
+		)]
+		pub fn claim_tenure_credits(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
+			// Every error occurs before the first award, so it costs at most the weight of one
+			// award. A bare `?` charges the full pre-dispatch weight instead.
+			let failed = |error: DispatchError| DispatchErrorWithPostInfo {
+				post_info: PostDispatchInfo {
+					actual_weight: Some(<T as Config>::WeightInfo::claim_tenure_credits(1)),
+					pays_fee: Pays::Yes,
+				},
+				error,
+			};
+			let player =
+				indiv_pallet_score::Pallet::<T>::ensure_signed_or_participant_or_person(origin)
+					.map_err(failed)?;
+
+			let awarded = Self::do_claim_tenure_credits(player).map_err(failed)?;
+
+			// The weight function counts a spill at every `n`, so `claim_tenure_credits(1)` covers
+			// a tenure claim that awards one credit or none.
+			Ok(PostDispatchInfo {
+				actual_weight: Some(<T as Config>::WeightInfo::claim_tenure_credits(
+					awarded.max(1),
+				)),
+				pays_fee: Pays::No,
+			})
+		}
 	}
 
 	/// Reasons a game is not open for player registration.
@@ -2285,7 +2461,7 @@ pub mod pallet {
 					step: PlayerProcessStep::Step1ProcessPlayers { .. },
 				} =>
 					T::NftClaimCredits::remaining_capacity(game.index) <
-						Self::max_attestations(game.rounds.into(), game.max_group_size),
+						Self::max_credits_per_player(game.rounds.into(), game.max_group_size),
 				_ => false,
 			}
 		}
@@ -2496,6 +2672,7 @@ pub mod pallet {
 				rounds: schedule.rounds,
 				pending_attendance: 0,
 				airdrops_scheduled,
+				tenure_claim_opens: game_play_time.saturating_sub(schedule.tenure_claim_window),
 			});
 			GameHistory::<T>::insert(index, game_play_time);
 
@@ -3454,8 +3631,8 @@ pub mod pallet {
 		///
 		/// Side effects:
 		/// - May call into `indiv_pallet_score::Pallet::set_attendance`.
-		/// - Routes attendance NFT claim credits, archives or resets player state, and may drop a
-		///   play deposit.
+		/// - Routes attendance NFT claim credits, settles the player's tenure claim, archives or
+		///   resets player state, and may drop a play deposit.
 		/// - Updates `last_iteration` and returns the next item from `iterator`.
 		/// - Adds the number of NFT claim credits recorded for this player to `credits_awarded`, so
 		///   the caller can debit the block capacity it reserved.
@@ -3504,6 +3681,15 @@ pub mod pallet {
 						award_time,
 					));
 			}
+			// A non-attendee can still receive tenure credits, so every player settles.
+			let attendance_outcome =
+				if attendance { Attendance::Attended } else { Attendance::Absent };
+			*credits_awarded = credits_awarded.saturating_add(Self::settle_tenure_claim(
+				game_index,
+				&player_id,
+				attendance_outcome,
+				award_time,
+			));
 
 			let archived_player = match disposition {
 				PlayerDisposition::ArchiveKickable => Some(ArchivedPlayer::Kickable {
@@ -3622,10 +3808,11 @@ pub mod pallet {
 			// while its worst case still fits what the credit buffers can hold and no credit ever
 			// has to be dropped. The remaining players are processed in a later block, by which
 			// time a committed tree has freed a buffer. Only the credits really awarded are
-			// debited, so players that award nothing (non-attendees) or less than their worst case
-			// (credits already awarded during reporting) do not shorten the block.
+			// debited, so players that award nothing (most non-attendees) or less than their worst
+			// case (credits already awarded during reporting or by the tenure claim) do not shorten
+			// the block.
 			let max_credits_per_player =
-				Self::max_attestations(game.rounds as u32, game.max_group_size);
+				Self::max_credits_per_player(game.rounds.into(), game.max_group_size);
 			let mut credit_capacity = T::NftClaimCredits::remaining_capacity(game.index);
 			let mut next_player = iterator.next();
 
@@ -3795,6 +3982,7 @@ pub mod pallet {
 				// The credit mask names group positions, so it is only readable through the
 				// index maps and goes with them.
 				T::NftClaimCredits::forget_player_credits(game_index, &player_id);
+				TenureClaims::<T>::remove(&player_id);
 
 				// Clean index <-> player mapping.
 				if let Some(indices) = PlayerToIndex::<T>::take(&player_id) {
@@ -3923,6 +4111,16 @@ pub mod pallet {
 		/// ([`Self::max_received_votes`]).
 		pub(crate) fn max_attestations(rounds: u32, max_group_size: u32) -> u32 {
 			rounds.saturating_mul(max_group_size.saturating_sub(1))
+		}
+
+		/// The most NFT claim credits one player can receive while the players of a game with
+		/// these settings are processed: their attestations plus one credit per tenure threshold.
+		///
+		/// The processing loop and [`Self::game_awaits`] use the same bound, so that the offchain
+		/// worker does not submit a `process_players` call that processes no player.
+		pub(crate) fn max_credits_per_player(rounds: u32, max_group_size: u32) -> u32 {
+			Self::max_attestations(rounds, max_group_size)
+				.saturating_add(T::MaxTenureThresholds::get())
 		}
 
 		/// Add a game to a player's attendance historical record.

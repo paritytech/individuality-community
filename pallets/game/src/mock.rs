@@ -79,6 +79,17 @@ impl AwardCredits<AccountId32> for MockNftClaimCredits {
 		)
 	}
 
+	fn award_tenure_credits(
+		game_index: u32,
+		player: &AccountOrPerson<AccountId32>,
+		count: u32,
+		award_time: u32,
+	) -> u32 {
+		<() as AwardCredits<AccountId32>>::award_tenure_credits(
+			game_index, player, count, award_time,
+		)
+	}
+
 	fn remaining_capacity(_: u32) -> u32 {
 		MockCreditCapacity::get()
 	}
@@ -94,6 +105,11 @@ impl AwardCredits<AccountId32> for MockNftClaimCredits {
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_award_every_slot(game_index: u32, player: &AccountOrPerson<AccountId32>) {
 		<() as AwardCredits<AccountId32>>::benchmark_award_every_slot(game_index, player)
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_fill_buffer_but_one(game_index: u32) {
+		<() as AwardCredits<AccountId32>>::benchmark_fill_buffer_but_one(game_index)
 	}
 }
 
