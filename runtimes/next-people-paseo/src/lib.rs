@@ -280,6 +280,8 @@ pub type Migrations = (
 	indiv_pallet_airdrop::migration::MigrateV0ToV1<Runtime>,
 	// Single use! - remove once the upgrade carrying it is live.
 	indiv_pallet_game::migration::MigrateV0ToV1<Runtime>,
+	// Single use! - remove once the upgrade carrying it is live.
+	indiv_pallet_game::migration::MigrateV1ToV2<Runtime, people::PlayerStatementLimitBeforeV2>,
 	// permanent
 	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>,
 	// permanent, a no-op once the chunk page hashes are set (via genesis on this runtime)

@@ -51,6 +51,10 @@ pub mod dynamic_params {
 		#[codec(index = 11)]
 		pub static PersonStatementLimit: BoundedStatementAllowance =
 			BoundedStatementAllowance { max_size: 1024 * 1024, max_count: 200 };
+		// TODO(<https://github.com/paritytech/individuality/issues/1124>): find a reasonable value.
+		#[codec(index = 12)]
+		pub static PlayerStatementLimit: BoundedStatementAllowance =
+			BoundedStatementAllowance { max_size: 1_000_000, max_count: 1_000_000 };
 		#[codec(index = 1)]
 		pub static StmtStoreSlotsPerPeriod: u32 = 70;
 		#[codec(index = 2)]
@@ -137,6 +141,8 @@ pub type LitePersonStatementLimit =
 	StatementAllowanceGetter<dynamic_params::statement_storage::LitePersonStatementLimit>;
 pub type PersonStatementLimit =
 	StatementAllowanceGetter<dynamic_params::statement_storage::PersonStatementLimit>;
+pub type PlayerStatementLimit =
+	StatementAllowanceGetter<dynamic_params::statement_storage::PlayerStatementLimit>;
 
 /// Statement-store slots per period, kept non-zero.
 pub type StmtStoreSlotsPerPeriod =
