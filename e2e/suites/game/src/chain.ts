@@ -14,21 +14,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createClient, type PolkadotSigner } from "polkadot-api";
+import { AccountId, createClient, type PolkadotSigner, type SS58String } from "polkadot-api";
 import { getPolkadotSigner } from "polkadot-api/signer";
 import { getWsProvider } from "polkadot-api/ws";
 
 import { sr25519CreateDerive } from "@polkadot-labs/hdkd";
 import { DEV_PHRASE, entropyToMiniSecret, mnemonicToEntropy } from "@polkadot-labs/hdkd-helpers";
-import { customSignedExtensions, PEOPLE_RPC } from "../../../packages/shared/src/client.ts";
+import { ASSET_HUB_RPC, customSignedExtensions, PEOPLE_RPC } from "../../../packages/shared/src/client.ts";
 
-export { PEOPLE_RPC };
+export { ASSET_HUB_RPC, PEOPLE_RPC };
 
 /** Opens the People chain connection. The untyped API needs no PAPI descriptors. */
 export function connect() {
   const client = createClient(getWsProvider(PEOPLE_RPC));
   return { client, api: client.getUnsafeApi() as unknown as PeopleApi };
 }
+
+/** Opens the Asset Hub connection. The untyped API needs no PAPI descriptors. */
+export function connectAssetHub() {
+  const client = createClient(getWsProvider(ASSET_HUB_RPC));
+  return { client, api: client.getUnsafeApi() as unknown as AssetHubApi };
+}
+
+/** The Asset Hub API. It has the same untyped shape as the People chain API. */
+export type AssetHubApi = PeopleApi;
 
 export type PeopleClient = ReturnType<typeof connect>["client"];
 
@@ -42,12 +51,13 @@ export type PeopleClient = ReturnType<typeof connect>["client"];
 // biome-ignore lint/suspicious/noExplicitAny: the unsafe API is untyped by construction
 export type Untyped = any;
 
-/** The People chain API. PAPI's unsafe interface reaches it without descriptors. */
+/** A chain API. PAPI's unsafe interface reaches it without descriptors. */
 export interface PeopleApi {
   query: Untyped;
   tx: Untyped;
   event: Untyped;
   constants: Untyped;
+  apis: Untyped;
   getStaticApis: () => Promise<{ txFromCallData: TxFromCallData }>;
 }
 
@@ -65,6 +75,12 @@ export interface DecodedCall {
   value: { type: string; value: Untyped };
 }
 
+/** The sign options of a People chain transaction. */
+export const PEOPLE_SIGN_OPTIONS = { customSignedExtensions };
+
+/** The sign options of an Asset Hub transaction. Asset Hub has no `VerifyMultiSignature`. */
+export const ASSET_HUB_SIGN_OPTIONS = {};
+
 /** Submits a call wrapped in `Sudo.sudo`. Reports the inner call's result. */
 export type Sudo = (call: Untyped, label: string) => Promise<Untyped>;
 
@@ -78,6 +94,11 @@ export function devSigner(uri = "//Alice"): PolkadotSigner {
   return getPolkadotSigner(keypair.publicKey, "Sr25519", keypair.sign);
 }
 
+/** The SS58 address of `signer`. */
+export function addressOf(signer: PolkadotSigner): SS58String {
+  return AccountId().dec(signer.publicKey);
+}
+
 /** Serialises a value to JSON. `JSON.stringify` refuses the bigints chain values carry. */
 export function toJson(value: unknown): string {
   return JSON.stringify(value, (_key, v) => (typeof v === "bigint" ? v.toString() : v));
@@ -88,10 +109,13 @@ export function toJson(value: unknown): string {
  *
  * Both resolve at finalization. Both throw a labelled error on failure. `sudo` also reports a
  * failure of the wrapped call. The outer transaction reports that failure as success.
+ * `signOptions` defaults to the People chain's. Asset Hub needs `ASSET_HUB_SIGN_OPTIONS`.
  */
-export function submitters(api: PeopleApi, signer: PolkadotSigner) {
-  const signOptions = { customSignedExtensions };
-
+export function submitters(
+  api: PeopleApi,
+  signer: PolkadotSigner,
+  signOptions: object = PEOPLE_SIGN_OPTIONS,
+) {
   const submit: Submit = async (tx, label) => {
     const result = await tx.signAndSubmit(signer, signOptions);
     if (!result.ok) {

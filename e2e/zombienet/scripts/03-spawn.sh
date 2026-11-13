@@ -44,6 +44,9 @@ done
 # Assert network.toml's RPC ports agree with config-local.env before spawning (see the script).
 bash "$HERE/scripts/helper/check-rpc-ports.sh" "$HERE/network.toml"
 
+# Work around a litep2p crash on hosts with a scoped IPv6 nameserver (see the script).
+source "$HERE/scripts/helper/litep2p-dns-workaround.sh"
+
 # Preflight: this is the first thing zombienet does, and where a node that predates
 # the pinned polkadot-sdk release fails with a missing host import (e.g.
 # ext_statement_store_remove_by_version_1). Run it up front so the fix is obvious.

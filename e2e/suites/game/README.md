@@ -17,6 +17,21 @@ offchain worker applies every step of the game state machine: `start_game`, `end
 
 About 37 minutes at the default phase durations (measured).
 
+`nft-claim.test.ts` follows one credit from the game to an NFT on Asset Hub:
+
+| step | what runs |
+|---|---|
+| People | sets the tenure thresholds to `[0]`, so every player earns one tenure credit |
+| People | schedules a game with an open tenure claim window. Alice signs up and claims |
+| People | Alice reports alone, so she attends and the attendance backfill pays her credit |
+| People | `NftCreditsApi` returns the tree block and the inclusion proof of the credit |
+| Asset Hub | waits for the tree to arrive over XCM, then Alice creates a collection and registers it |
+| Asset Hub | Charlie's claim of Alice's credit fails with `InvalidProof` |
+| Asset Hub | Alice's claim mints the NFT to a fresh purse key. A replay fails |
+
+The suite restores the tenure thresholds afterwards. It needs the People ↔ Asset Hub HRMP channel
+and the Asset Hub funding that `just bootstrap` sets up.
+
 ## Prerequisites
 
 ```bash
@@ -40,8 +55,8 @@ pnpm run test:game
 Or from this directory: `RUN_ZOMBIENET_TESTS=1 ../../node_modules/.bin/vitest run`. Without
 `RUN_ZOMBIENET_TESTS=1` every test is skipped.
 
-`PEOPLE_RPC` overrides the endpoint, which otherwise comes from
-`scripts/initial-setup/config-local.env` (`ws://localhost:10010`).
+`PEOPLE_RPC` and `ASSET_HUB_RPC` override the endpoints, which otherwise come from
+`scripts/initial-setup/config-local.env` (`ws://localhost:10010` and `ws://localhost:10020`).
 
 ## What it prints
 

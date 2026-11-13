@@ -31,7 +31,7 @@ import {
   signUp,
 } from "./drive.ts";
 import { RUN_ZOMBIENET_TESTS } from "./env.ts";
-import { type BlockRecord, type Monitor, startMonitor } from "./monitor.ts";
+import { inPhase, type Monitor, sawEvent, startMonitor } from "./monitor.ts";
 
 const SECOND = 1_000;
 
@@ -47,13 +47,6 @@ const THREE_GAMES_TIMEOUT = GAME_MS + 2 * SPACING * SECOND + 3 * PHASE_SLACK_MS;
 
 /** An idle window plus room for the monitor to catch up before it starts. */
 const IDLE_TIMEOUT = IDLE_BLOCKS * 15 * SECOND + 120 * SECOND;
-
-/** Recognises a state string produced by `describeState`, ignoring its payload. */
-const inPhase = (phase: string) => (entry: BlockRecord) =>
-  entry.state === phase || entry.state.startsWith(`${phase}(`) || entry.state.startsWith(`${phase}/`);
-
-const sawEvent = (entry: BlockRecord, name: string) =>
-  entry.events.some(line => line.startsWith(`Game.${name} `));
 
 /**
  * Follows one game from registration until it finishes. Asserts the offchain worker applies every

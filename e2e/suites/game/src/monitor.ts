@@ -112,6 +112,14 @@ function stepDueAfter(state: string): boolean {
   return ["Shuffle/", "PlayerProcess/", "Cancelling/"].some(prefix => state.startsWith(prefix));
 }
 
+/** Recognises a state string produced by `describeState`, ignoring its payload. */
+export const inPhase = (phase: string) => (entry: BlockRecord) =>
+  entry.state === phase || entry.state.startsWith(`${phase}(`) || entry.state.startsWith(`${phase}/`);
+
+/** Whether `entry` holds the `Game.<name>` event. */
+export const sawEvent = (entry: BlockRecord, name: string) =>
+  entry.events.some(line => line.startsWith(`Game.${name} `));
+
 export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**

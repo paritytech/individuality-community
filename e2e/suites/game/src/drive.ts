@@ -16,7 +16,7 @@
 
 import { Binary } from "polkadot-api";
 
-import type { PeopleApi, Submit, Sudo } from "./chain.ts";
+import type { PeopleApi, Submit, Sudo, Untyped } from "./chain.ts";
 
 /**
  * The granularity of the chain's clock, in seconds.
@@ -146,15 +146,21 @@ export function playTimes(from: number, count: number, phases = PHASES, slack = 
 /**
  * Queues one game per play time. One player per group is enough on a `TESTNET` runtime.
  *
- * The suite claims no tenure credits, so `tenure_claim_window` is zero and the window is empty.
+ * `tenureClaimWindow` is the number of seconds before play in which a player claims tenure
+ * credits. Zero takes no tenure claims.
  */
-export async function scheduleGames(api: PeopleApi, sudo: Sudo, times: number[]): Promise<void> {
+export async function scheduleGames(
+  api: PeopleApi,
+  sudo: Sudo,
+  times: number[],
+  tenureClaimWindow = 0,
+): Promise<void> {
   const games_schedules = times.map(game_play_time => ({
     game_play_time,
     rounds: 1,
     max_group_size: 3,
     airdrops: [],
-    tenure_claim_window: 0,
+    tenure_claim_window: tenureClaimWindow,
   }));
   await sudo(
     api.tx.Game.schedule_games({ games_schedules }).decodedCall,
@@ -168,4 +174,27 @@ export async function signUp(api: PeopleApi, submit: Submit): Promise<void> {
     api.tx.Game.sign_up_with_account({ identifier_key: IDENTIFIER_KEY, airdrops: undefined }),
     "Game.sign_up_with_account",
   );
+}
+
+/** Sets the tenures at which a tenure claim earns one more credit. */
+export async function setTenureThresholds(api: PeopleApi, sudo: Sudo, thresholds: number[]): Promise<void> {
+  await sudo(
+    api.tx.Game.set_tenure_thresholds({ thresholds }).decodedCall,
+    `Game.set_tenure_thresholds([${thresholds.join(", ")}])`,
+  );
+}
+
+/** Claims the signer's tenure credits for the current game. */
+export async function claimTenureCredits(api: PeopleApi, submit: Submit): Promise<Untyped> {
+  return submit(api.tx.Game.claim_tenure_credits(), "Game.claim_tenure_credits");
+}
+
+/**
+ * Sends the report of a player that is alone in its group, for a game of one round.
+ *
+ * The report lists no co-player, so it casts no vote. A player who reports and receives no vote
+ * attends.
+ */
+export async function reportAlone(api: PeopleApi, submit: Submit): Promise<void> {
+  await submit(api.tx.Game.report({ full_report: [[]] }), "Game.report");
 }
