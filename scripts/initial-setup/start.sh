@@ -23,9 +23,8 @@ SCRIPT_NAMES=(
   "03g-setup-dotusd-pool-people.sh"
   "04a-setup-usdt-usdc-ah.sh"
   "04b-setup-usdt-usdc-people.sh"
-  "05a-swap-stablecoins-ah.sh"
-  "05b-fund-faucet-stablecoins-people.sh"
-  "05c-fund-faucet-stablecoins-ah.sh"
+  "05a-fund-faucet-stablecoins-people.sh"
+  "05b-fund-faucet-stablecoins-ah.sh"
   "06a-setup-pgas.sh"
   "06b-setup-alias-fee.sh"
   "07-add-zk-chunks.sh"
@@ -36,8 +35,9 @@ SCRIPT_NAMES=(
   "11-setup-poi-design-families.sh"
   "12a-setup-attestation-invites.sh"
   "12b-setup-attestation-allowances.sh"
-  "12c-setup-attestation-proxy.sh"
+  "12c-setup-attestation-proxies.sh"
   "13-setup-dotns-dispatcher-address.sh"
+  "14-setup-psm.sh"
 )
 
 if [ "${#SCRIPT_NAMES[@]}" -eq 0 ]; then

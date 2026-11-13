@@ -9,5 +9,5 @@ if [ "$lite_people_collection_created" == "true" ]; then
   echo "Lite people collection already created, skipping"
 else
   echo "Lite people collection not created, creating"
-  dot people.tx.PeopleLite.create_lite_people_collection --unsigned
+  dot people.tx.PeopleLite.create_lite_people_collection --general
 fi

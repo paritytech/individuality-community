@@ -7,10 +7,10 @@ source ./load-config.sh
 source ./utils.sh
 
 dotusd_foreign=$(people_foreign_location "$DOTUSD_ASSET_ID")
-native_max=$(( 1000 * 10**NATIVE_DECIMALS ))
-native_min=$(( 500 * 10**NATIVE_DECIMALS ))
-dotusd_max=$(( 4000 * 10**DOTUSD_DECIMALS ))
-dotusd_min=$(( 2000 * 10**DOTUSD_DECIMALS ))
+native_max=$(( 50000 * 10**NATIVE_DECIMALS ))
+native_min=$(( 25000 * 10**NATIVE_DECIMALS ))
+dotusd_max=$(( 200000 * 10**DOTUSD_DECIMALS ))
+dotusd_min=$(( 100000 * 10**DOTUSD_DECIMALS ))
 dotusd_fund=$(( dotusd_max + DOTUSD_MIN_BALANCE ))
 
 echo "-> Create PAS/dotUSD liquidity pool on People"

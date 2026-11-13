@@ -53,7 +53,7 @@ cd e2e
 pnpm install --frozen-lockfile
 
 # bootstrap scripts require `dot` from polkadot-cli
-npm install -g polkadot-cli@1.19.0
+npm install -g polkadot-cli@1.25.0
 ```
 
 Build the network inputs:

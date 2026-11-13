@@ -25,7 +25,7 @@ ENV=local   ./08a-setup-people-collection.sh
 
 | Env | Relay | People | Target |
 |-----|-------|--------|--------|
-| `next` | paseo.dotters.network | paseo-people-next-system-rpc.polkadot.io | Paseo Next v2 |
+| `next` | paseo-v2.rpc.turboflakes.io | paseo-people-next-system-rpc.polkadot.io | Paseo Next v2 |
 | `preview` | previewnet.substrate.dev | previewnet.substrate.dev/people | PreviewNet |
 | `local` | localhost:10000 | localhost:10010 | Local development |
 
@@ -38,21 +38,22 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 | Script | What it does |
 |--------|-------------|
 | **00** | Installs `dot` CLI, `jq` and `bc`, imports signer accounts |
-| **01a** | Funds attestation, attestation proxy, faucet, and asset owner accounts on People; bootstraps the People sovereign on the Relay |
+| **01a** | Funds sudo proxy, attestation, attestation writer and inviter, faucet, and asset owner accounts on People; bootstraps the People sovereign on the Relay |
 | **01b-c** | HRMP channel setup (People<->AssetHub, People<->Bulletin) |
-| **01d** | Funds sudo, attestation, attestation proxy, faucet, and asset owner accounts on AssetHub by teleporting native PAS from People |
+| **01d** | Funds sudo, attestation, attestation writer, faucet, and asset owner accounts on AssetHub by teleporting native PAS from People |
 | **02** | Adds sudo proxy delegation on People |
 | **03a-g** | dotUSD: create, AssetHub pool, AssetHub metadata, People metadata, conversion rate, Coinage instance, People pool |
 | **04a-b** | USDT/USDC: create on AssetHub with metadata, pool, and liquidity; create as foreign assets on People with metadata |
-| **05a-c** | Stablecoin faucet: acquire USDT/USDC for the owner on AssetHub, fund the People faucet with dotUSD/USDT/USDC via XCM, fund the AssetHub faucet with USDT/USDC by swapping PAS |
+| **05a-b** | Stablecoin faucet: fund the People and AssetHub faucets with dotUSD/USDT/USDC from the asset owner |
 | **06a-b** | PGAS: create, alias fee |
 | **07** | Adds ZK chunks on People |
 | **08a-b** | Creates the people and people-lite collections on People |
 | **09** | Overrides onboarding size for the people and people-lite collections on People |
 | **10** | Subscribes AssetHub to ring root updates from People for the people and people-lite collections |
 | **11** | Adds Proof of Ink design families from snapshot |
-| **12a-c** | Attestation account: invites, allowances, proxy |
+| **12a-c** | Attestation account: invites, allowances, proxies |
 | **13** | Sets the DotNS gateway dispatcher address on AssetHub |
+| **14** | Creates the PSM that mints dotUSD against USDT on AssetHub |
 
 ## File Structure
 
