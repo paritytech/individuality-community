@@ -1,0 +1,16 @@
+{
+  "name": "@individuality-e2e/probes",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "nft-claim-latency": "tsx src/nft-claim-latency.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint src/"
+  },
+  "dependencies": {
+    "polkadot-api": "^2.1.7"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}
