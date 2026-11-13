@@ -309,7 +309,7 @@ use sp_statement_store::{
 };
 
 /// An upper bound on a number of operation
-const OP_UPPER_BOUND: u32 = 100_000;
+pub const OP_UPPER_BOUND: u32 = 100_000;
 
 /// Chunk size for clearing the per-game index <-> player maps in `player_process_step2`.
 pub const PLAYER_PROCESS_STEP2_CHUNK: u32 = 100;
