@@ -140,14 +140,14 @@ and the [members-notifier soak harness](../../internal/members-notifier-soak) ne
 > **Heavier prerequisites.** The Asset Hub runtime (`next-asset-hub-paseo`) pulls in
 > `pallet-revive`, which needs `solc` + `resolc` at build time (see [`docs/launch.md`](../launch.md)),
 > and the node binaries must match the polkadot-sdk release this repo pins
-> (`POLKADOT_RELEASE_VERSION` in [`.github/env`](../../.github/env), currently
-> **`polkadot-stable2609`**). The generic `zombienet setup polkadot` bundle is a *latest*
+> (`POLKADOT_RELEASE_VERSION`+`POLKADOT_RELEASE_PATCH` in [`.github/env`](../../.github/env),
+> currently **`polkadot-stable2609-2`**). The generic `zombienet setup polkadot` bundle is a *latest*
 > build and will fail the People PVF with a missing host import
 > (`ext_statement_store_remove_by_version_1`); install the `polkadot` relay bundle **and**
 > `polkadot-omni-node` from the pinned tag instead:
 > ```bash
-> TAG=polkadot-stable2609
-> cargo install polkadot          --git https://github.com/paritytech/polkadot-sdk --tag "$TAG" --locked
+> TAG=polkadot-stable2609-2
+> cargo install polkadot           --git https://github.com/paritytech/polkadot-sdk --tag "$TAG" --locked
 > cargo install polkadot-omni-node --git https://github.com/paritytech/polkadot-sdk --tag "$TAG" --locked
 > which -a polkadot polkadot-execute-worker polkadot-prepare-worker polkadot-omni-node
 > ```
