@@ -3155,6 +3155,7 @@ pub mod migrations {
 		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
 		pallet_staking_async::migrations::SetWeightedPointsFormulaStartEra<Runtime>,
+		pallet_election_provider_multi_block::signed::migrations::v1::MigrateV0ToV1<Runtime>,
 		ForceCreatePgasAsset,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_scarcity::migration::MigrateV1ToV2<Runtime>,
