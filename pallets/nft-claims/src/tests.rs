@@ -2133,12 +2133,13 @@ mod claim {
 
 	#[test]
 	fn a_status_request_over_the_limit_does_not_decode() {
-		let queries = vec![
-			CreditStatusQuery { block: BLOCK, leaf_index: 0 };
-			MAX_STATUS_QUERIES as usize + 1
-		];
+		let query = CreditStatusQuery { block: BLOCK, leaf_index: 0 };
+		let full = vec![query; MAX_STATUS_QUERIES as usize].encode();
+		let oversized = vec![query; MAX_STATUS_QUERIES as usize + 1].encode();
 
-		assert!(CreditStatusQueries::decode(&mut &queries.encode()[..]).is_err());
+		assert_eq!(MAX_STATUS_QUERIES, 256);
+		assert!(CreditStatusQueries::decode(&mut &full[..]).is_ok());
+		assert!(CreditStatusQueries::decode(&mut &oversized[..]).is_err());
 	}
 }
 
