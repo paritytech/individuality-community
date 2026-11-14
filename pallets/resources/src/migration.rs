@@ -323,8 +323,8 @@ pub mod v2 {
 	/// since the first consumer registered.
 	///
 	/// [`Consumers`] does not decode an entry that the migration has not rewritten yet. Until the
-	/// migration completes, a reader of [`Consumers`], such as a runtime API or another pallet
-	/// through `ConsumerRegistrar`, sees such a consumer as not registered.
+	/// migration completes, `Consumers::get` returns `None` for such a consumer, while
+	/// `Consumers::contains_key` still finds it.
 	pub struct RecordConsumerAllowances<T>(PhantomData<T>);
 
 	impl<T: Config> SteppedMigration for RecordConsumerAllowances<T> {
