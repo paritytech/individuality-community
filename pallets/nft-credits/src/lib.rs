@@ -28,7 +28,7 @@
 //! One earning has three names here, one per stage:
 //!
 //! - A *credit* ([`indiv_support::credit_trees::NftClaimCredit`]) is the hash of one successful
-//!   report. A player earns credits and capacity is counted in them.
+//!   report or of one tenure threshold. A player earns credits and capacity is counted in them.
 //! - An *award* ([`NftClaimCreditAward`]) is a credit paired with its claimant. Storage holds
 //!   awards, so chunk and buffer sizes count them.
 //! - A *leaf* ([`indiv_support::credit_trees::NftClaimCreditLeaf`]) is the hash of an award, at a
@@ -52,6 +52,13 @@
 //! the buffer of the block that commits it in [`NftClaimCreditAwards`] and emitted as
 //! `NftClaimCreditAwarded`, in leaf order.
 //!
+//! ## Tenure credits
+//!
+//! The game pallet's `claim_tenure_credits` grants a player one credit per tenure threshold they
+//! reach, and decides when to pay them. This pallet awards them like any other credit. A tenure
+//! credit takes an [`AwardedNftClaimCredits`] slot after the report slots, so a player receives it
+//! at most once per game.
+//!
 //! ## Committing
 //!
 //! `on_initialize` builds one binary Merkle tree over the previous block's buffer and records its
@@ -74,9 +81,11 @@
 //!
 //! The tree itself is never stored, only its root, and its leaves are recoverable two ways:
 //!
-//! - From [`NftClaimCreditAwards`], for as long as the tree block is one of the
-//!   [`Config::MaxRetainedCreditTrees`] most recent. This is the intended path and needs nothing
-//!   but chain state.
+//! - From [`NftClaimCreditAwards`], for as long as [`Config::AwardRetentionTtl`] has not run out on
+//!   the wall-clock time of the block's first award. That time is the one its root commits to, and
+//!   awarding spills, so it is at or before the tree block. This is the intended path and needs
+//!   nothing but chain state. The window is wall-clock rather than a count of tree blocks because
+//!   `report` is fee-less, so a count would shrink the window as the chain got busier.
 //! - From the `NftClaimCreditAwarded` events that name the tree block, one per awarded credit,
 //!   carrying the claimant, the credit and the leaf index. Awarding spills, so an event naming a
 //!   tree block is emitted in that block or in an earlier one. This is the fallback once a block's
@@ -108,7 +117,8 @@
 //!
 //! - `nft_claim_credit_roots` resolves [`NftClaimCreditBlocks`], which maps a claimant to their
 //!   tree blocks, against [`NftClaimCreditRoots`], so a claimant finds their roots by one lookup
-//!   instead of a scan.
+//!   instead of a scan. That index is a bounded ring, so a runtime that sizes it below the
+//!   retention window leaves the older blocks to be found from the events.
 //! - `nft_claim_credit_proofs` returns, for one tree block and one claimant, the inclusion proof of
 //!   each credit the claimant holds there: the credit, its leaf index and the sibling hashes, which
 //!   is what the claims chain verifies. `nft_claim_credit_proof_from_awards` does the same for a
@@ -213,6 +223,16 @@ pub const AWARDS_PER_TREE: u32 = CHUNKS_PER_TREE * AWARDS_PER_CHUNK;
 /// compile-time figure states exactly.
 pub const MAX_PENDING_CREDIT_TREES: u32 = 8;
 
+/// The prefix of the preimage of a report credit, see [`Pallet::compute_nft_claim_credit`].
+///
+/// A fixed-size array encodes without a length prefix, so the preimage starts with these bytes.
+pub const REPORT_CREDIT_PREFIX: [u8; 17] = *b"polkadot-pop-game";
+
+/// The prefix of the preimage of a tenure credit, see [`Pallet::compute_tenure_credit`].
+///
+/// It differs from [`REPORT_CREDIT_PREFIX`], so a tenure credit never equals a report credit.
+pub const TENURE_CREDIT_PREFIX: [u8; 19] = *b"polkadot-pop-tenure";
+
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-credits";
 
 #[frame_support::pallet]
@@ -293,34 +313,26 @@ pub mod pallet {
 		#[pallet::constant]
 		type NftClaimsRemoteWeight: Get<Weight>;
 
-		/// The number of most recently committed credit trees whose [`NftClaimCreditAwards`] stay
-		/// on chain.
+		/// How long, in seconds, a tree block's [`NftClaimCreditAwards`] stay on chain past the
+		/// wall-clock time of its first award, which is the time its root commits to.
 		///
-		/// This is the window in which a claim can be proven from state alone, through
-		/// [`Pallet::nft_claim_credit_proofs`]. Once a tree drops out of it, its awards are
-		/// removed and a proof has to be rebuilt from the `NftClaimCreditAwarded` events naming
-		/// its block and passed to [`Pallet::nft_claim_credit_proof_from_awards`]. The root itself
-		/// is kept for good, so dropping out delays no mint that a claimant, or an indexer, kept
-		/// the awards of.
-		///
-		/// It counts trees, not blocks, because only a block that committed one has an entry.
-		/// Sized against how long a claimant may take to mint, and paid for in state: the map
-		/// holds at most this many trees of [`AWARDS_PER_TREE`] awards each.
-		///
-		/// Raising the bound in a runtime upgrade is safe. Lowering it orphans the awards of the
-		/// blocks beyond the new bound, since `RetainedCreditTreeBlocks` no longer decodes and
-		/// the ring is what names the entries to remove, so clear the map first.
+		/// Set it to the claims chain's own deadline, [`Config::ClaimsChainTreeTtl`]: awards held
+		/// past that prove claims the chain no longer accepts, and awards dropped before it leave
+		/// a mintable credit whose proof has to come from the block's events. The
+		/// `integrity_test` holds it to [`Pallet::root_ttl`] as an upper bound.
 		#[pallet::constant]
-		type MaxRetainedCreditTrees: Get<u32>;
+		type AwardRetentionTtl: Get<u64>;
 
 		/// The maximum number of tree blocks [`NftClaimCreditBlocks`] keeps per claimant.
 		///
 		/// The index is a lookup aid, not the record of what a claimant is owed, so a full list
-		/// drops its oldest block rather than rejecting an award. Size it past the trees a
-		/// claimant's credits can land in over the games still worth minting against, and account
-		/// for the proof size: a read is charged at the list's maximum
-		/// encoded length, one block number per entry, once per distinct claimant an extrinsic
-		/// awards to.
+		/// drops its oldest block rather than rejecting an award. A dropped block stays mintable
+		/// for [`Config::AwardRetentionTtl`], its proof coming from the block's
+		/// [`NftClaimCreditAwards`] entry, so the claimant loses discovery through
+		/// [`Pallet::nft_claim_credit_roots`] and nothing else. Size it to the tree blocks a
+		/// claimant accumulates over [`Config::AwardRetentionTtl`] at the chain's game cadence, and
+		/// account for the cost: the list is read and written whole at this bound, once per
+		/// distinct claimant an extrinsic awards to.
 		#[pallet::constant]
 		type MaxCreditBlocksPerClaimant: Get<u32>;
 
@@ -354,6 +366,15 @@ pub mod pallet {
 		/// per block until nothing is due.
 		#[pallet::constant]
 		type MaxRootsPerSweep: Get<u32>;
+
+		/// Maximum number of tree blocks one [`Pallet::sweep_expired_awards`] removes.
+		///
+		/// Far below [`Config::MaxRootsPerSweep`], though both sweep the same way: a root is 56
+		/// bytes where a block's awards are charged at [`AWARDS_PER_TREE`] of them, so the same
+		/// count would cost two orders of magnitude more proof size. The `integrity_test` holds
+		/// the call to the block's budget, which is what really bounds this.
+		#[pallet::constant]
+		type MaxAwardBlocksPerSweep: Get<u32>;
 	}
 
 	/// A batch of credit trees as it is sent to the NFT claims chain.
@@ -402,12 +423,16 @@ pub mod pallet {
 	///
 	/// Each entry keys an [`NftClaimCreditRoots`] entry whose tree holds a leaf of the claimant's,
 	/// so this answers which roots the claimant has something to mint against without scanning
-	/// every block. An entry can name a block that is still to come, because awarding spills into
-	/// later buffers; that block gets its root, and its entry here becomes resolvable, once it is
-	/// built.
+	/// every block. The index states which blocks to fetch; the proof itself comes from the
+	/// block's [`NftClaimCreditAwards`] entry, or from its `NftClaimCreditAwarded` events once the
+	/// sweep has removed that entry. An entry can name a block that is still to come, because
+	/// awarding spills into later buffers; that block gets its root, and its entry here becomes
+	/// resolvable, once it is built.
 	///
 	/// Blocks are appended as credits are awarded and never removed once minted. The list is
-	/// therefore a ring bounded by [`Config::MaxCreditBlocksPerClaimant`].
+	/// therefore a ring bounded by [`Config::MaxCreditBlocksPerClaimant`]. A block it drops stays
+	/// mintable, so a claimant past the ring finds their blocks from the events rather than from
+	/// here.
 	#[pallet::storage]
 	pub type NftClaimCreditBlocks<T: Config> = StorageMap<
 		_,
@@ -423,9 +448,9 @@ pub mod pallet {
 	///
 	/// A block's chunks double as the buffer the next block's `on_initialize` computes the root
 	/// over: `Pallet::award_nft_claim_credit` appends to the last one, and once the root is
-	/// recorded the chunks stay as they are, so a claim can be proven from state alone. Every
-	/// chunk of a block is removed when a new root pushes it out of the
-	/// [`Config::MaxRetainedCreditTrees`] window, which is what bounds the map.
+	/// recorded the chunks stay as they are, so a claim can be proven from state alone. Every chunk
+	/// of a block is removed once [`Config::AwardRetentionTtl`] has run out on the wall-clock time
+	/// of the block's first award, by the sweep [`NftClaimCreditAwardExpiries`] files it for.
 	///
 	/// A block holds at most [`CHUNKS_PER_TREE`] chunks. The awards are chunked so that one award
 	/// reads one chunk instead of a whole tree's leaves, which keeps a `report`'s declared proof
@@ -445,15 +470,23 @@ pub mod pallet {
 		ValueQuery,
 	>;
 
-	/// The tree blocks whose [`NftClaimCreditAwards`] are still on chain, in ascending order.
+	/// Every tree block whose [`NftClaimCreditAwards`] are still on chain, filed under the
+	/// timestamp its root commits to.
 	///
-	/// A ring bounded by [`Config::MaxRetainedCreditTrees`]: recording a root appends its block
-	/// and, when that fills the ring, removes the awards of the block that drops off the front.
-	/// Keeping the list rather than pruning by block arithmetic means no block ever pays for the
-	/// removal of an entry that was never there, tree blocks being sparse.
+	/// Keyed as [`RootExpiries`] is, from the same timestamp, so the two agree on when a block
+	/// falls due. Kept apart from that map because the two run on different TTLs, and a sweep
+	/// removes the entries it reads: sharing one map would have whichever sweep came first take
+	/// the other's record with it.
 	#[pallet::storage]
-	pub type RetainedCreditTreeBlocks<T: Config> =
-		StorageValue<_, BoundedVec<BlockNumberFor<T>, T::MaxRetainedCreditTrees>, ValueQuery>;
+	pub type NftClaimCreditAwardExpiries<T: Config> = StorageDoubleMap<
+		_,
+		Identity,
+		ExpiryTimestamp,
+		Twox64Concat,
+		BlockNumberFor<T>,
+		(),
+		OptionQuery,
+	>;
 
 	/// The buffers that still owe a tree, keyed by the block whose tree commits each. An entry
 	/// holds what its [`NftClaimCreditRoots`] entry will carry besides the root, and how many
@@ -598,6 +631,12 @@ pub mod pallet {
 		/// The blocks are not named. A root this sweep removes is one the claims chain gave up on
 		/// long before, so nothing is waiting on the removal.
 		CreditRootsExpired { count: u32 },
+		/// `count` tree blocks outlived [`Config::AwardRetentionTtl`], so their awards were
+		/// removed. Their roots stay until [`Pallet::root_ttl`] runs out.
+		///
+		/// A credit of theirs is still mintable, but its proof now has to be rebuilt from the
+		/// tree block's `NftClaimCreditAwarded` events rather than read from state.
+		CreditAwardsExpired { count: u32 },
 	}
 
 	#[pallet::error]
@@ -633,6 +672,8 @@ pub mod pallet {
 		NoQueuedCreditTrees = 201,
 		/// No root is filed for expiry, so there is nothing to sweep.
 		NothingToSweep = 202,
+		/// No tree block is filed for expiry, so there is nothing to sweep.
+		NothingToSweepAwards = 203,
 	}
 
 	impl From<AuthorizeInvalidity> for TransactionValidityError {
@@ -656,6 +697,7 @@ pub mod pallet {
 		fn offchain_worker(block_number: BlockNumberFor<T>) {
 			Self::submit_credit_tree_delivery(block_number);
 			Self::submit_root_expiry_sweep(block_number);
+			Self::submit_award_expiry_sweep(block_number);
 		}
 	}
 
@@ -727,7 +769,7 @@ pub mod pallet {
 		/// idempotent: it skips a block whose root is already gone without reporting it, because
 		/// [`Pallet::root_ttl`] can remove a root in the same window its deletion is in flight.
 		///
-		/// [`Config::MaxRetainedCreditTrees`] removes the awards, and its own ring removes a
+		/// [`Config::AwardRetentionTtl`] removes the awards, and its own ring removes a
 		/// claimant's [`NftClaimCreditBlocks`] entry. The index resolves against the roots, so a
 		/// block whose root is gone drops out of the answer by itself.
 		///
@@ -776,14 +818,43 @@ pub mod pallet {
 			Ok(Self::do_sweep_expired_roots())
 		}
 
+		/// Removes the awards whose [`Config::AwardRetentionTtl`] has run out, oldest first.
+		///
+		/// This pallet's offchain worker submits this authorized call. It is accepted from a local
+		/// or in-block source only, so no external submission reaches it.
+		///
+		/// The block's root stays, on the longer [`Pallet::root_ttl`], so nothing mintable is
+		/// stranded: a proof for a swept block comes from its `NftClaimCreditAwarded` events
+		/// instead. `oldest` must be the timestamp [`NftClaimCreditAwardExpiries`] holds its oldest
+		/// entry under, which makes a retry that raced a successful sweep stale instead of a
+		/// second pass.
+		#[pallet::authorize(|source, oldest, _discriminator| {
+			Self::authorize_sweep_expired_awards(source, oldest)
+		})]
+		#[pallet::call_index(22)]
+		#[pallet::weight(
+			<T as Config>::WeightInfo::sweep_expired_awards(T::MaxAwardBlocksPerSweep::get())
+		)]
+		#[pallet::weight_of_authorize(<T as Config>::WeightInfo::authorize_sweep_expired_awards())]
+		pub fn sweep_expired_awards(
+			origin: OriginFor<T>,
+			_oldest: u32,
+			// The submitting block, as `sweep_expired_roots` carries. See
+			// `Pallet::submit_award_expiry_sweep`.
+			_discriminator: BlockNumberFor<T>,
+		) -> DispatchResultWithPostInfo {
+			ensure_authorized(origin)?;
+
+			Ok(Self::do_sweep_expired_awards())
+		}
+
 		/// Award an NFT claim credit to `claimant` outside of a game.
 		///
 		/// This action can only be performed by the root origin and is only meant for testing.
 		/// It exists because a credit is otherwise only earned by a `Person` vote in a played
 		/// game, which makes the claim chain's minting path hard to exercise on its own. The
-		/// credit it awards is a normal one: it is recorded in this block's
-		/// [`NftClaimCreditAwards`], committed to the block's tree and claimed with the same
-		/// proof as any other.
+		/// credit it awards is a normal one: it goes into the buffer [`CreditBufferCursor`] names,
+		/// is committed by that block's tree and is claimed with the same proof as any other.
 		///
 		/// The credit is the one `attester` would earn `claimant` by reporting them a person in
 		/// `round` of `game_index`, so it does not need any of those to exist. A slot is used
@@ -838,7 +909,7 @@ impl<T: Config> Pallet<T> {
 	/// walks the group. The attestee's own place goes unused.
 	///
 	/// Spacing slots by the configured `MaxGroupSize` rather than the game's keeps the
-	/// mapping independent of the group size, below `max_credit_slots`, which the
+	/// mapping independent of the group size, below `max_report_credit_slots`, which the
 	/// `integrity_test` holds to [`AwardedCredits::CAPACITY`].
 	pub fn credit_slot(round: RoundIndex, attester_position: AttesterPosition) -> CreditSlot {
 		CreditSlot::from(round)
@@ -846,16 +917,48 @@ impl<T: Config> Pallet<T> {
 			.saturating_add(attester_position)
 	}
 
-	/// The number of credit slots any game of this runtime can use.
-	pub(crate) fn max_credit_slots() -> u32 {
+	/// The number of report credit slots any game of this runtime can use.
+	pub(crate) fn max_report_credit_slots() -> u32 {
 		T::MaxRounds::get().saturating_mul(T::MaxGroupSize::get())
+	}
+
+	/// The number of credit slots any game of this runtime can use, the report slots followed by
+	/// the tenure credit slots.
+	pub(crate) fn max_credit_slots() -> u32 {
+		Self::max_report_credit_slots()
+			.saturating_add(<T as indiv_pallet_game::Config>::MaxTenureThresholds::get())
+	}
+
+	/// The [`AwardedNftClaimCredits`] slot of the tenure credit for the tenure threshold at
+	/// `index`.
+	///
+	/// Tenure credit slots start after the last report slot, so the two kinds never share a slot.
+	pub fn tenure_credit_slot(index: u32) -> CreditSlot {
+		Self::max_report_credit_slots().saturating_add(index)
+	}
+
+	/// Compute the NFT claim credit for the tenure threshold at `index` in a game.
+	///
+	/// Blake2 256 hash of
+	/// ```txt
+	/// "polkadot-pop-tenure" ++ game index ++ threshold index ++ claimant
+	/// ```
+	/// - `game_index` and `index`: unsigned 32bit.
+	/// - `claimant`: 0 ++ account id, or 1 ++ person id.
+	pub fn compute_tenure_credit(
+		game_index: GameIdx,
+		index: u32,
+		claimant: &AccountOrPerson<T::AccountId>,
+	) -> NftClaimCredit {
+		(TENURE_CREDIT_PREFIX, game_index, index, claimant)
+			.using_encoded(sp_io::hashing::blake2_256)
 	}
 
 	/// Compute the NFT claim credit for a successful report.
 	///
 	/// Blake2 256 hash of
 	/// ```txt
-	/// "polkadot-pop-game" ++ game index ++ attester ++ attestee ++ round
+	/// "polkadot-pop-game" ++ game index ++ round ++ attester ++ attestee
 	/// ```
 	/// - `game_index`: unsigned 32bit.
 	/// - `attester` and `attestee`:
@@ -868,7 +971,7 @@ impl<T: Config> Pallet<T> {
 		attester: &AccountOrPerson<T::AccountId>,
 		attestee: &AccountOrPerson<T::AccountId>,
 	) -> NftClaimCredit {
-		(b"polkadot-pop-game", game_index, round, attester, attestee)
+		(REPORT_CREDIT_PREFIX, game_index, round, attester, attestee)
 			.using_encoded(sp_io::hashing::blake2_256)
 	}
 
@@ -916,8 +1019,8 @@ impl<T: Config> Pallet<T> {
 		award_time: u32,
 	) -> u32 {
 		if !AwardedCredits::within_capacity(credit_slot) {
-			// `credit_slot` is below `max_received_votes()`, which the `integrity_test`
-			// holds to the mask's capacity, so this cannot be reached.
+			// `credit_slot` is a report or tenure credit slot, and the `integrity_test` holds both
+			// kinds to the mask's capacity, so this cannot be reached.
 			defensive!("indiv-pallet-nft-credits: credit slot must fit the awarded credit mask");
 			return 0;
 		}
@@ -1129,7 +1232,7 @@ impl<T: Config> Pallet<T> {
 		let credit_root = NftClaimCreditTree { game_index, root, leaf_count, timestamp };
 		NftClaimCreditRoots::<T>::insert(block, credit_root);
 		Self::note_root_expiry(block, timestamp);
-		Self::retain_credit_awards(block);
+		Self::note_award_expiry(block, timestamp);
 		Self::deposit_event(Event::<T>::NftClaimCreditRootRecorded { block, credit_root });
 		Self::queue_credit_tree_delivery(block);
 
@@ -1340,36 +1443,14 @@ impl<T: Config> Pallet<T> {
 		submit_authorized::<T, _>(call, "send_credit_trees", LOG_TARGET);
 	}
 
-	/// Note `block` as the newest tree block whose [`NftClaimCreditAwards`] are retained,
-	/// dropping the oldest one when that exceeds [`Config::MaxRetainedCreditTrees`].
+	/// Files `block`'s awards under the timestamp their [`Config::AwardRetentionTtl`] runs from,
+	/// so a sweep finds them once it has run out.
 	///
-	/// Only one block can drop out per call, one being added, so the ring is walked one entry
-	/// at a time and the map holds at most the bound.
-	fn retain_credit_awards(block: BlockNumberFor<T>) {
-		RetainedCreditTreeBlocks::<T>::mutate(|blocks| {
-			if blocks.try_push(block).is_ok() {
-				return;
-			}
-			if blocks.is_empty() {
-				// `MaxRetainedCreditTrees` is asserted non-zero by the `integrity_test`, so
-				// an empty ring always has room.
-				defensive!("indiv-pallet-nft-credits: retained tree ring must hold one block");
-				return;
-			}
-			let dropped = blocks.remove(0);
-			// Clears every chunk of the block: a tree holds `CHUNKS_PER_TREE` of them at most. A
-			// leftover cursor leaves chunks on chain with nothing naming the block to remove them
-			// under.
-			if NftClaimCreditAwards::<T>::clear_prefix(dropped, CHUNKS_PER_TREE, None)
-				.maybe_cursor
-				.is_some()
-			{
-				defensive!("indiv-pallet-nft-credits: a block's awards must fit one tree's chunks");
-			}
-			let _ = blocks
-				.try_push(block)
-				.defensive_proof("retained tree ring must hold one more block after pop");
-		});
+	/// The same timestamp [`Pallet::note_root_expiry`] files the block's root under. The two are
+	/// swept on different deadlines, the awards' TTL being the shorter, so they are filed in
+	/// separate maps.
+	pub(crate) fn note_award_expiry(block: BlockNumberFor<T>, timestamp: u32) {
+		NftClaimCreditAwardExpiries::<T>::insert(ExpiryTimestamp::from(timestamp), block, ());
 	}
 
 	/// The Merkle leaves `awards` commit to, in award order.
@@ -1389,7 +1470,7 @@ impl<T: Config> Pallet<T> {
 	/// but their own identity: neither the block's other awards, nor the leaf format, nor the
 	/// tree layout. Empty if the block committed nothing of `claimant`'s.
 	///
-	/// Only blocks inside the [`Config::MaxRetainedCreditTrees`] window can be served this
+	/// Only blocks whose [`Config::AwardRetentionTtl`] has not run out can be served this
 	/// way. An older block gives [`NftClaimCreditProofError::AwardsPruned`], its root being
 	/// kept but its awards not, and has to go through
 	/// [`Self::nft_claim_credit_proof_from_awards`] instead.
@@ -1598,7 +1679,7 @@ impl<T: Config> Pallet<T> {
 
 		let mut awarded = 0;
 
-		let groups_setting = GroupsSetting { max_per_group: max_group_size, player_count };
+		let groups_setting = GroupsSetting { full_group_size: max_group_size, player_count };
 
 		for round in 0..rounds {
 			let Some(&attendee_index) = attendee_indices.get(round as usize) else {
@@ -1700,7 +1781,7 @@ impl<T: Config> Pallet<T> {
 		blocks: BoundedVec<BlockNumberFor<T>, T::MaxCreditTreesPerMessage>,
 	) -> DispatchResult {
 		ensure!(!blocks.is_empty(), Error::<T>::NoBlocksToReplay);
-		ensure!(blocks.windows(2).all(|w| w[0] < w[1]), Error::<T>::UnsortedReplayBlocks);
+		ensure!(blocks.is_sorted_by(|a, b| a < b), Error::<T>::UnsortedReplayBlocks);
 
 		let message_capacity =
 			Self::max_credit_trees_per_message().ok_or(Error::<T>::ExceedsClaimsChannelCapacity)?;
@@ -1802,6 +1883,39 @@ impl<T: Config> Pallet<T> {
 		Some(<T as Config>::WeightInfo::sweep_expired_roots(count)).into()
 	}
 
+	/// Removes the awards of up to [`Config::MaxAwardBlocksPerSweep`] tree blocks whose TTL has
+	/// run out, as [`Pallet::sweep_expired_awards`] does once its origin is checked.
+	///
+	/// This sweep leaves the roots in place. Root expiry uses the tree's original timestamp plus
+	/// [`Pallet::root_ttl`]. A claimant holding a proof can still mint while the claims chain
+	/// retains the corresponding tree.
+	pub(crate) fn do_sweep_expired_awards() -> PostDispatchInfo {
+		let expired = drain_due_expiries::<NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>(
+			T::AwardRetentionTtl::get(),
+			T::UnixTime::now().as_secs(),
+			T::MaxAwardBlocksPerSweep::get(),
+		);
+
+		for block in &expired {
+			// Clears every chunk of the block: a tree holds `CHUNKS_PER_TREE` of them at most. A
+			// leftover cursor leaves chunks on chain with nothing naming the block to remove them
+			// under.
+			if NftClaimCreditAwards::<T>::clear_prefix(block, CHUNKS_PER_TREE, None)
+				.maybe_cursor
+				.is_some()
+			{
+				defensive!("indiv-pallet-nft-credits: a block's awards must fit one tree's chunks");
+			}
+		}
+
+		let count = expired.len() as u32;
+		if count > 0 {
+			Self::deposit_event(Event::<T>::CreditAwardsExpired { count });
+		}
+
+		Some(<T as Config>::WeightInfo::sweep_expired_awards(count)).into()
+	}
+
 	/// Validates a [`Pallet::sweep_expired_roots`] transaction, as [`authorize_expiry_sweep`] does,
 	/// the deadline being the one [`Pallet::root_ttl`] names.
 	pub fn authorize_sweep_expired_roots(
@@ -1847,6 +1961,45 @@ impl<T: Config> Pallet<T> {
 		submit_authorized::<T, _>(call, "sweep_expired_roots", LOG_TARGET);
 	}
 
+	/// Validates a [`Pallet::sweep_expired_awards`] transaction, as
+	/// [`Pallet::authorize_sweep_expired_roots`] does for roots, the deadline being the one
+	/// [`Config::AwardRetentionTtl`] names.
+	pub fn authorize_sweep_expired_awards(
+		source: TransactionSource,
+		oldest: &u32,
+	) -> Result<(ValidTransaction, Weight), TransactionValidityError> {
+		authorize_expiry_sweep::<T, NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>(
+			ExpirySweepTx {
+				tag: "game:sweep-expired-awards",
+				not_local: AuthorizeInvalidity::TransactionNotLocal.into(),
+				nothing_to_sweep: AuthorizeInvalidity::NothingToSweepAwards.into(),
+			},
+			source,
+			*oldest,
+			T::AwardRetentionTtl::get(),
+			T::UnixTime::now().as_secs(),
+		)
+	}
+
+	/// Submits a [`Pallet::sweep_expired_awards`] for the oldest filed timestamp, if its TTL has
+	/// run out.
+	///
+	/// Repeats the `authorize` check for the reason [`Pallet::submit_root_expiry_sweep`] does, and
+	/// carries the block number for the reason that sweep does.
+	pub(crate) fn submit_award_expiry_sweep(block_number: BlockNumberFor<T>) {
+		let Some(oldest) = oldest_expiry::<NftClaimCreditAwardExpiries<T>, BlockNumberFor<T>>()
+		else {
+			return;
+		};
+		if T::UnixTime::now().as_secs() < expiry_deadline(oldest, T::AwardRetentionTtl::get()) {
+			return;
+		}
+
+		let call = Call::<T>::sweep_expired_awards { oldest, discriminator: block_number };
+
+		submit_authorized::<T, _>(call, "sweep_expired_awards", LOG_TARGET);
+	}
+
 	/// Awards `claimant` the credit `attester` would earn them in `round` of `game_index`, as
 	/// [`Pallet::testnet_grant_nft_claim_credit`] does once its origin is checked.
 	#[cfg(feature = "testnet")]
@@ -1880,12 +2033,13 @@ impl<T: Config> Pallet<T> {
 	pub(crate) fn integrity_test_credits() {
 		// Every credit a claimant can earn in a game needs its own slot in
 		// `AwardedNftClaimCredits`, otherwise the overflowing ones would be awarded twice,
-		// once by `report` and once by the attendance backfill.
+		// once by `report` and once by the attendance backfill. Tenure credit slots come after the
+		// report slots.
+		let slots = Self::max_credit_slots();
 		assert!(
-			Self::max_credit_slots() <= AwardedCredits::CAPACITY,
+			slots <= AwardedCredits::CAPACITY,
 			"a game uses up to {slots} credit slots per claimant, more than the {capacity} \
 		of `AwardedNftClaimCredits`",
-			slots = Self::max_credit_slots(),
 			capacity = AwardedCredits::CAPACITY,
 		);
 
@@ -1897,6 +2051,16 @@ impl<T: Config> Pallet<T> {
 			e_max <= buffered,
 			"one `report` awards up to {e_max} credits, more than the {buffered} the credit \
 		buffers hold",
+		);
+
+		// The attendance backfill processes a player only while the buffers hold their report
+		// credits and their tenure credits. Below that, the game never ends.
+		let per_player =
+			e_max.saturating_add(<T as indiv_pallet_game::Config>::MaxTenureThresholds::get());
+		assert!(
+			per_player <= buffered,
+			"the attendance backfill awards one player up to {per_player} credits, more than the \
+		{buffered} the credit buffers hold",
 		);
 
 		// Empty buffers must also absorb a whole block of such reports, which is the state an idle
@@ -1991,24 +2155,28 @@ impl<T: Config> Pallet<T> {
 			"`ReplayCooldownSeconds` must be at least one",
 		);
 
-		// A ring with no room retains no awards at all, leaving every claim to be rebuilt
+		// A window of no length retains no awards at all, leaving every claim to be rebuilt
 		// from events, which is the fallback rather than the intended path.
 		assert!(
-			!T::MaxRetainedCreditTrees::get().is_zero(),
-			"`MaxRetainedCreditTrees` must be at least one",
+			!T::AwardRetentionTtl::get().is_zero(),
+			"`AwardRetentionTtl` must be greater than zero"
 		);
 
-		// Both bounds count trees and gain one per recorded root, so a queue wider than
-		// the ring holds trees whose awards have already been pruned. Their delivery still
-		// arrives, but the claims it carries are then provable from the block's events only.
+		// The awards are what a proof against a root is built from, so a root outliving them
+		// costs a claimant the state path to their proof, while awards outliving their root
+		// would prove nothing. `ROOT_TTL_GRACE` is what leaves room between the two.
 		assert!(
-			T::MaxRetainedCreditTrees::get() >= T::MaxQueuedCreditTrees::get(),
-			"MaxRetainedCreditTrees ({retained}) must be >= MaxQueuedCreditTrees ({queued})",
-			retained = T::MaxRetainedCreditTrees::get(),
-			queued = T::MaxQueuedCreditTrees::get(),
+			T::AwardRetentionTtl::get() <= Self::root_ttl(),
+			"AwardRetentionTtl ({awards}) must be <= root_ttl ({roots})",
+			awards = T::AwardRetentionTtl::get(),
+			roots = Self::root_ttl(),
 		);
 
 		assert!(T::MaxRootsPerSweep::get() > 0, "MaxRootsPerSweep must be greater than zero");
+		assert!(
+			T::MaxAwardBlocksPerSweep::get() > 0,
+			"MaxAwardBlocksPerSweep must be greater than zero",
+		);
 		assert!(
 			T::MaxTreeDeletionsPerMessage::get() > 0,
 			"MaxTreeDeletionsPerMessage must be greater than zero",
@@ -2025,6 +2193,14 @@ impl<T: Config> Pallet<T> {
 			"sweep_expired_roots",
 			<T as Config>::WeightInfo::sweep_expired_roots(T::MaxRootsPerSweep::get())
 				.saturating_add(<T as Config>::WeightInfo::authorize_sweep_expired_roots()),
+		);
+		// The binding check on `MaxAwardBlocksPerSweep`: a block's awards are charged at
+		// `AWARDS_PER_TREE` of them, so the proof size of a sweep is two orders of magnitude
+		// above the root sweep's at the same count.
+		budget.assert_fits(
+			"sweep_expired_awards",
+			<T as Config>::WeightInfo::sweep_expired_awards(T::MaxAwardBlocksPerSweep::get())
+				.saturating_add(<T as Config>::WeightInfo::authorize_sweep_expired_awards()),
 		);
 	}
 }
@@ -2071,6 +2247,28 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 		)
 	}
 
+	fn award_tenure_credits(
+		game_index: GameIdx,
+		player: &AccountOrPerson<T::AccountId>,
+		count: u32,
+		award_time: u32,
+	) -> u32 {
+		let awarded = AwardedNftClaimCredits::<T>::get(game_index, player);
+		(0..count)
+			.filter(|&index| !awarded.contains(Self::tenure_credit_slot(index)))
+			.take(Self::remaining_credit_capacity(game_index) as usize)
+			.map(|index| {
+				Self::award_nft_claim_credit(
+					game_index,
+					player,
+					Self::compute_tenure_credit(game_index, index, player),
+					Self::tenure_credit_slot(index),
+					award_time,
+				)
+			})
+			.sum()
+	}
+
 	fn remaining_capacity(game_index: GameIdx) -> u32 {
 		Self::remaining_credit_capacity(game_index)
 	}
@@ -2090,5 +2288,23 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_award_every_slot(game_index: GameIdx, player: &AccountOrPerson<T::AccountId>) {
 		AwardedNftClaimCredits::<T>::insert(game_index, player, AwardedCredits::FULL);
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_fill_buffer_but_one(game_index: GameIdx) {
+		let block = frame_system::Pallet::<T>::block_number();
+		let timestamp = T::UnixTime::now().as_secs() as u32;
+		let filler = AWARDS_PER_TREE - 1;
+		for chunk in 0..filler.div_ceil(AWARDS_PER_CHUNK) {
+			let awards = (chunk * AWARDS_PER_CHUNK..filler.min((chunk + 1) * AWARDS_PER_CHUNK))
+				.map(|i| NftClaimCreditAward {
+					claimant: AccountOrPerson::Person(sp_io::hashing::blake2_256(&i.encode())),
+					credit: sp_io::hashing::blake2_256(&(i, b"filler").encode()),
+				})
+				.collect::<Vec<_>>();
+			NftClaimCreditAwards::<T>::insert(block, chunk, BoundedVec::truncate_from(awards));
+		}
+		CreditBuffers::<T>::insert(block, CreditBuffer { game_index, timestamp, awards: filler });
+		CreditBufferCursor::<T>::put(block);
 	}
 }

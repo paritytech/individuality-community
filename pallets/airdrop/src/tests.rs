@@ -18,11 +18,11 @@ use crate::{
 	mock::*,
 	pallet::{ActionSchedule, EventEntropy, Events, Registrations, SupportedAssets, Winners},
 	types::Airdrop,
-	AirdropPrize, BigEndianU256, EventId, EventInfo, RegistrationEntry, Status,
+	AirdropPrize, BigEndianU256, EventId, EventInfo, ProductName, RegistrationEntry, Status,
 };
 use codec::Encode;
 use frame_support::{
-	assert_err, assert_ok,
+	assert_err, assert_noop, assert_ok,
 	traits::{fungibles::Mutate, Authorize, Hooks},
 };
 use indiv_support::{
@@ -90,6 +90,7 @@ fn default_prize(max_winners: u32, cap: Permill) -> AirdropPrize<u32, u64> {
 
 fn default_info(max_winners: u32, cap: Permill) -> EventInfo<u32, u64> {
 	EventInfo {
+		product_name: test_product_name(),
 		prize: default_prize(max_winners, cap),
 		registration_starts: 100,
 		draw_time: 200,
@@ -697,6 +698,7 @@ fn schedule_rejects_invalid_times_and_zero_winners() {
 	new_test_ext().execute_with(|| {
 		fund_source();
 		let bad_times = EventInfo {
+			product_name: test_product_name(),
 			prize: default_prize(1, Permill::one()),
 			registration_starts: 200,
 			draw_time: 100,
@@ -712,6 +714,32 @@ fn schedule_rejects_invalid_times_and_zero_winners() {
 			crate::Pallet::<Test>::schedule(SOURCE, event_id(2), zero_winners),
 			crate::Error::<Test>::NoWinnersConfigured,
 		);
+	});
+}
+
+#[test]
+fn schedule_rejects_invalid_product_names() {
+	new_test_ext().execute_with(|| {
+		fund_source();
+		for (index, name) in [&b""[..], b"Test", b"test.paseo", b"-test", b"test-", b"te_st"]
+			.into_iter()
+			.enumerate()
+		{
+			let info = EventInfo {
+				product_name: ProductName::truncate_from(name.to_vec()),
+				..default_info(1, Permill::one())
+			};
+			assert_noop!(
+				crate::Pallet::<Test>::schedule(SOURCE, event_id(index as u8), info),
+				crate::Error::<Test>::InvalidProductName
+			);
+		}
+
+		let info = EventInfo {
+			product_name: ProductName::truncate_from(b"my-product2".to_vec()),
+			..default_info(1, Permill::one())
+		};
+		assert_ok!(crate::Pallet::<Test>::schedule(SOURCE, event_id(100), info));
 	});
 }
 
@@ -1054,6 +1082,7 @@ fn clean_up_removes_event() {
 		// unclaimed half, so a partial refund.
 		let id2 = event_id(20);
 		let info2 = EventInfo {
+			product_name: test_product_name(),
 			prize: AirdropPrize {
 				asset_id: ASSET_ID,
 				asset_amount: PRIZE_VALUE,
@@ -1255,6 +1284,7 @@ fn end_to_end_lottery_lifecycle() {
 
 		let id = event_id(99);
 		let info = EventInfo {
+			product_name: test_product_name(),
 			prize: AirdropPrize {
 				asset_id: ASSET_ID,
 				asset_amount: PRIZE_VALUE,
@@ -1377,4 +1407,188 @@ fn integrity_test_rejects_oversized_draw_limit() {
 		DrawLimitValue::set(&u32::MAX);
 		<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
+}
+
+mod product_context {
+	use super::*;
+
+	#[test]
+	fn context_for_event_follows_the_product_context_scheme() {
+		let id = event_id(0xAB);
+		let mut preimage = b"product/test.paseo/".to_vec();
+		preimage.extend_from_slice(&id);
+
+		assert_eq!(
+			crate::Pallet::<Test>::context_for_event(TEST_PRODUCT_NAME, &id),
+			sp_crypto_hashing::blake2_256(&preimage)
+		);
+	}
+
+	#[test]
+	fn alias_proof_for_another_product_is_rejected() {
+		new_test_ext().execute_with(|| {
+			fund_source();
+			let id = event_id(1);
+			let info = default_info(1, Permill::one());
+			assert_ok!(crate::Pallet::<Test>::schedule(SOURCE, id, info.clone()));
+			set_now_secs(info.registration_starts);
+			run_to_next_ocw();
+
+			let entry = RegistrationEntry::<u64>::Alias { alias: alias_from(0x10) };
+			let msg = entry.encode();
+
+			let foreign = mock_proof_for_product(b"other", &id, alias_from(0xA0), &msg);
+			assert_err!(
+				crate::Pallet::<Test>::participate_with_alias(id, entry.clone(), foreign, 0, 0),
+				crate::Error::<Test>::InvalidMembershipProof
+			);
+
+			let own = mock_proof(&id, alias_from(0xA0), &msg);
+			assert_ok!(crate::Pallet::<Test>::participate_with_alias(id, entry, own, 0, 0));
+		});
+	}
+
+	#[test]
+	fn alias_proof_is_not_verified_unless_registering() {
+		new_test_ext().execute_with(|| {
+			fund_source();
+			let id = event_id(1);
+			assert_ok!(crate::Pallet::<Test>::schedule(
+				SOURCE,
+				id,
+				default_info(1, Permill::one())
+			));
+			assert!(matches!(Events::<Test>::get(id).unwrap().status, Status::Scheduled));
+
+			let entry = RegistrationEntry::<u64>::Alias { alias: alias_from(0x10) };
+			let invalid = mock_proof_for_product(b"other", &id, alias_from(0xA0), &entry.encode());
+			// The status is checked before the proof, so an invalid proof is never verified.
+			assert_noop!(
+				crate::Pallet::<Test>::participate_with_alias(id, entry, invalid, 0, 0),
+				crate::Error::<Test>::NotAcceptingRegistrations
+			);
+		});
+	}
+}
+
+mod migration_v1 {
+	use super::*;
+	use crate::migration::{v1, MigrateV0ToV1};
+	use frame_support::traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion};
+
+	/// Rewrites event `id` under the pre-upgrade layout.
+	fn store_as_old_layout(id: EventId) {
+		let event = Events::<Test>::get(id).expect("event scheduled");
+		v1::Events::<Test>::insert(
+			id,
+			v1::OldActiveEvent {
+				id: event.id,
+				info: v1::OldEventInfo {
+					prize: event.info.prize,
+					registration_starts: event.info.registration_starts,
+					draw_time: event.info.draw_time,
+					end_time: event.info.end_time,
+				},
+				status: event.status,
+				source: event.source,
+			},
+		);
+		// The new layout must not decode the old one, or the migration would be a no-op.
+		assert!(Events::<Test>::get(id).is_none());
+	}
+
+	fn migrate() {
+		StorageVersion::new(0).put::<crate::Pallet<Test>>();
+		#[cfg(feature = "try-runtime")]
+		{
+			let state = MigrateV0ToV1::<Test>::pre_upgrade().expect("pre-upgrade");
+			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+			MigrateV0ToV1::<Test>::post_upgrade(state).expect("post-upgrade");
+		}
+		#[cfg(not(feature = "try-runtime"))]
+		MigrateV0ToV1::<Test>::on_runtime_upgrade();
+		assert_eq!(crate::Pallet::<Test>::on_chain_storage_version(), StorageVersion::new(1));
+	}
+
+	#[test]
+	fn a_scheduled_event_is_refunded_and_dropped() {
+		new_test_ext().execute_with(|| {
+			fund_source();
+			let id = event_id(1);
+			assert_ok!(crate::Pallet::<Test>::schedule(
+				SOURCE,
+				id,
+				default_info(10, Permill::one())
+			));
+			assert_eq!(pot_balance_on_hold(), 10 * PRIZE_VALUE);
+			store_as_old_layout(id);
+
+			migrate();
+
+			assert!(Events::<Test>::get(id).is_none());
+			assert_eq!(pot_balance_on_hold(), 0);
+			assert_eq!(source_balance(), POT_FUNDING - MIN_BALANCE);
+			assert!(ActionSchedule::<Test>::iter().next().is_none());
+		});
+	}
+
+	#[test]
+	fn a_registering_event_is_cancelled_into_clean_up() {
+		new_test_ext().execute_with(|| {
+			fund_source();
+			let id = event_id(1);
+			let info = default_info(10, Permill::one());
+			assert_ok!(crate::Pallet::<Test>::schedule(SOURCE, id, info.clone()));
+			set_now_secs(info.registration_starts);
+			run_to_next_ocw();
+			participate_alias(id, alias_from(0x10), alias_from(0xA0));
+			assert!(matches!(Events::<Test>::get(id).unwrap().status, Status::Registering { .. }));
+			store_as_old_layout(id);
+
+			migrate();
+
+			let event = Events::<Test>::get(id).expect("event awaits clean-up");
+			assert!(event.info.product_name.is_empty());
+			assert!(matches!(
+				event.status,
+				Status::ClearingRegistrations {
+					total_participants: 1,
+					effective_winners: 0,
+					claimed: 0,
+					cleaned_registrations: 0,
+				}
+			));
+			assert_eq!(pot_balance_on_hold(), 0);
+			assert_eq!(source_balance(), POT_FUNDING - MIN_BALANCE);
+			assert_eq!(Registrations::<Test>::iter_prefix(id).count(), 1);
+			assert!(!ActionSchedule::<Test>::contains_key(BigEndianU64(info.draw_time), id));
+			assert!(ActionSchedule::<Test>::contains_key(BigEndianU64(info.end_time), id));
+			assert!(System::events().iter().any(|record| record.event ==
+				RuntimeEvent::Airdrop(crate::Event::<Test>::EventCancelled { event_id: id })));
+		});
+	}
+
+	#[test]
+	fn an_event_past_registration_only_gains_a_stub_product_name() {
+		new_test_ext().execute_with(|| {
+			fund_source();
+			let id = event_id(1);
+			let info = default_info(2, Permill::one());
+			drive_to_claiming(id, info, 2);
+			let before = Events::<Test>::get(id).expect("event claiming");
+			assert!(matches!(before.status, Status::Claiming { .. }));
+			let held_before = pot_balance_on_hold();
+			store_as_old_layout(id);
+
+			migrate();
+
+			let after = Events::<Test>::get(id).expect("event untouched");
+			assert!(after.info.product_name.is_empty());
+			assert_eq!(after.status, before.status);
+			assert_eq!(after.info.prize, before.info.prize);
+			assert_eq!(after.source, before.source);
+			assert_eq!(pot_balance_on_hold(), held_before);
+			assert_eq!(Registrations::<Test>::iter_prefix(id).count(), 2);
+		});
+	}
 }

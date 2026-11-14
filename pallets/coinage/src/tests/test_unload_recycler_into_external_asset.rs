@@ -970,7 +970,7 @@ fn sponsored_ring_lifecycle_settles_oldest_first_and_at_archival() {
 		// A recovery carries no settlement surcharge, and leaves the pot exactly as it was.
 		assert_eq!(
 			declared,
-			<Test as Config>::WeightInfo::unload_archived_recycler_into_external_asset()
+			<Test as Config>::WeightInfo::unload_archived_recycler_into_external_asset_fee_native()
 		);
 		assert_eq!((current_tier(instance_id), old_tier(instance_id)), ledger_before);
 		assert_eq!(pot_held(instance_id, NATIVE_DEPOSIT_ID), held_before);

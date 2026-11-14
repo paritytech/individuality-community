@@ -52,7 +52,7 @@ fn build_report_with_opinion(
 		GameState::Reporting { player_count } => player_count,
 		_ => panic!("game must be in Reporting state"),
 	};
-	let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+	let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 	let mut full = Vec::new();
 	for round in 0..game.rounds {
 		let reporter_idx = reporter_indices[round as usize];
@@ -83,34 +83,34 @@ fn start_game_in_reporting_phase(schedule: &GameSchedule<u32, u128>, accounts: &
 	advance_to_reporting_phase(schedule);
 }
 
-/// Advance a registered game to its reporting phase.
+/// Advance a registered game to its reporting phase at the start of the game.
 fn advance_to_reporting_phase(schedule: &GameSchedule<u32, u128>) {
 	let reg_end = GameTimes::<Test>::registration_end(schedule);
 	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
 	advance_process(); // registration -> shuffle
 	advance_process(); // shuffle -> reporting (steps 1-4)
 	assert!(matches!(GameStore::<Test>::get().unwrap().state, GameState::Reporting { .. }));
+	// Reports are accepted from the start of the game.
+	let game_play_time = GameTimes::<Test>::game_play_time(schedule);
+	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_play_time.into()));
 }
 
 /// Take a scheduled game up to its registration phase, which is where a player can sign up.
 ///
-/// The game is scheduled and then reached through `on_poll`, the way a live chain does it, rather
-/// than started directly: `new_game` is the game pallet's own.
+/// The game is scheduled and then reached through the `start_game` step, the way a live chain does
+/// it. It is not started directly, as `new_game` is the game pallet's own.
 fn start_scheduled_game(schedule: &GameSchedule<u32, u128>) {
 	assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]));
-	// The clock stays where it is: `new_game` sets a game up *before* its registration starts, and
-	// `on_poll` takes the first schedule as soon as there is no game. It skips every
-	// `GAME_PROCESS_SKIPPED_BLOCK`th block, so give it a few.
-	for _ in 0..4 {
-		if matches!(
+	// The clock stays where it is. `new_game` sets a game up *before* its registration starts. The
+	// `start_game` step takes the first schedule in the next block.
+	advance_process();
+	assert!(
+		matches!(
 			GameStore::<Test>::get().map(|game| game.state),
 			Some(GameState::Registration { .. })
-		) {
-			return;
-		}
-		advance_process();
-	}
-	panic!("the scheduled game did not open registration");
+		),
+		"the scheduled game did not open registration"
+	);
 }
 
 /// The total number of leaves committed across all blocks' trees.
@@ -179,6 +179,36 @@ fn nft_claim_credit_spec() {
 		[
 			86, 240, 179, 9, 73, 32, 219, 236, 202, 127, 104, 185, 169, 196, 74, 74, 168, 221, 30,
 			78, 35, 75, 128, 151, 175, 250, 203, 174, 199, 71, 243, 194
+		]
+	);
+}
+
+#[test]
+fn tenure_credit_spec() {
+	let calculated =
+		NftCredits::compute_tenure_credit(32, 0, &AccountOrPerson::Account([1u8; 32].into()));
+	let expected = (b"polkadot-pop-tenure", 32u32, 0u32, 0u8, [1u8; 32])
+		.using_encoded(sp_io::hashing::blake2_256);
+
+	assert_eq!(calculated, expected);
+	assert_eq!(
+		calculated,
+		[
+			255, 13, 217, 141, 172, 246, 84, 208, 236, 29, 227, 96, 146, 143, 14, 71, 2, 203, 176,
+			213, 140, 4, 151, 198, 63, 193, 73, 3, 23, 222, 246, 79
+		]
+	);
+
+	let calculated = NftCredits::compute_tenure_credit(35, 2, &AccountOrPerson::Person([3u8; 32]));
+	let expected = (b"polkadot-pop-tenure", 35u32, 2u32, 1u8, [3u8; 32])
+		.using_encoded(sp_io::hashing::blake2_256);
+
+	assert_eq!(calculated, expected);
+	assert_eq!(
+		calculated,
+		[
+			241, 155, 168, 115, 201, 224, 243, 79, 254, 16, 202, 214, 233, 200, 19, 98, 4, 130,
+			129, 2, 42, 47, 223, 38, 181, 87, 206, 167, 52, 66, 225, 53
 		]
 	);
 }
@@ -926,26 +956,28 @@ fn a_new_game_starts_a_tree_of_its_own() {
 }
 
 #[test]
-fn a_dropped_block_loses_every_chunk_it_held() {
-	// Retention removes a block's awards by clearing its chunks, so a block that filled several
-	// must leave none behind. A chunk that outlived its block would sit in state for good, since
-	// the ring no longer names the block to remove it under.
+fn a_swept_block_loses_every_chunk_it_held() {
+	// The sweep removes a block's awards by clearing its chunks, so a block that filled several
+	// must leave none behind. A chunk that outlived its block would sit in state for good, nothing
+	// naming the block to remove it under any more.
 	new_test_ext().execute_with(|| {
-		MaxRetainedCreditTrees::set(&1);
 		System::set_block_number(1);
 		let block = System::block_number();
 		award_credits(1, AWARDS_PER_CHUNK * 2 + 5);
 		advance_process();
-		assert_eq!(RetainedCreditTreeBlocks::<Test>::get().to_vec(), vec![block]);
+		let credit_root =
+			NftClaimCreditRoots::<Test>::get(block).expect("the block awarded credits");
+		assert!(NftClaimCreditAwards::<Test>::iter_prefix(block).count() > 1);
 
-		// A second tree block pushes the first out of the one-entry window.
-		let second_block = System::block_number();
-		award_credits(2, 1);
-		advance_process();
+		let due = expiry_deadline(credit_root.timestamp, AwardRetentionTtl::get());
+		MOCK_UNIX_TIME.with(|time| *time.borrow_mut() = core::time::Duration::from_secs(due));
+		assert_ok!(NftCredits::sweep_expired_awards(
+			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+			credit_root.timestamp,
+			1
+		));
 
 		assert_eq!(NftClaimCreditAwards::<Test>::iter_prefix(block).count(), 0);
-		assert_eq!(RetainedCreditTreeBlocks::<Test>::get().to_vec(), vec![second_block]);
-		assert!(!awards_of(second_block).is_empty());
 	});
 }
 
@@ -1174,28 +1206,23 @@ fn the_room_left_in_a_buffer_is_capacity_for_its_own_game_only() {
 
 #[test]
 fn pruned_tree_block_keeps_its_root_and_falls_back_to_the_events() {
-	// A block dropping out of the retained window must cost no claimant their mint: the root
+	// A block whose awards the sweep has removed must cost no claimant their mint: the root
 	// stays, and the awards rebuilt from the block's events still yield the same proof.
 	new_test_ext().execute_with(|| {
-		MaxRetainedCreditTrees::set(&1);
 		let (tree_block, awards) = award_credits_in_one_block();
 		let credit_root =
 			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
 		let claimant = awards[0].claimant.clone();
 
-		// A second tree block pushes the first out of the one-entry window.
-		let report = build_report_with_opinion(&AccountOrPerson::Account(DAVE), |_| Report::Person);
-		assert_ok!(Game::report(RuntimeOrigin::signed(DAVE), report));
-		let second_block = System::block_number();
-		advance_process();
+		let due = expiry_deadline(credit_root.timestamp, AwardRetentionTtl::get());
+		MOCK_UNIX_TIME.with(|time| *time.borrow_mut() = core::time::Duration::from_secs(due));
+		assert_ok!(NftCredits::sweep_expired_awards(
+			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+			credit_root.timestamp,
+			1
+		));
 
 		assert!(awards_of(tree_block).is_empty());
-		assert!(!awards_of(second_block).is_empty());
-		assert_eq!(
-			RetainedCreditTreeBlocks::<Test>::get().to_vec(),
-			vec![second_block],
-			"the ring holds only the newest tree block",
-		);
 		// The root outlives the awards, so the credits are still mintable.
 		assert_eq!(NftClaimCreditRoots::<Test>::get(tree_block), Some(credit_root));
 		assert_eq!(
@@ -1312,9 +1339,9 @@ fn credit_proofs_api_serves_every_credit_of_a_claimant_that_holds_several() {
 	// Each proof for the claimant with the most credits must be the one a single-index query
 	// returns.
 	new_test_ext().execute_with(|| {
-		let (award_block, awards) = award_credits_in_one_block();
+		let (tree_block, awards) = award_credits_in_one_block();
 		let credit_root =
-			NftClaimCreditRoots::<Test>::get(award_block).expect("the block awarded credits");
+			NftClaimCreditRoots::<Test>::get(tree_block).expect("the block awarded credits");
 		let claimant = awards
 			.iter()
 			.max_by_key(|award| {
@@ -1330,14 +1357,14 @@ fn credit_proofs_api_serves_every_credit_of_a_claimant_that_holds_several() {
 			.collect::<Vec<_>>();
 		assert!(expected.len() > 1, "the claimant must hold several credits in the block");
 
-		let proofs = NftCredits::nft_claim_credit_proofs(award_block, &claimant)
+		let proofs = NftCredits::nft_claim_credit_proofs(tree_block, &claimant)
 			.expect("the block's awards are retained");
 		assert_eq!(proofs.len(), expected.len());
 		for (proof, (leaf_index, award)) in proofs.iter().zip(expected) {
 			assert_credit_proof(proof, &credit_root, award, leaf_index as u32);
 			// The same proof the per-index path builds, which rebuilds the tree for the one leaf.
 			let single = NftCredits::nft_claim_credit_proof_from_awards(
-				award_block,
+				tree_block,
 				awards.clone(),
 				leaf_index as u32,
 			)
@@ -1506,7 +1533,7 @@ fn group_position(player: &AccountOrPerson<AccountId32>, round: RoundIndex) -> A
 		_ => panic!("game must be in Reporting state"),
 	};
 	let index = PlayerToIndex::<Test>::get(player).expect("player has indices")[round as usize];
-	let groups = GroupsSetting { max_per_group: game.max_group_size, player_count };
+	let groups = GroupsSetting { full_group_size: game.max_group_size, player_count };
 	let group_index = groups.group_index_from_player_index(index);
 	groups
 		.group_members(group_index)
@@ -1729,14 +1756,23 @@ fn credit_is_committed_once_and_keeps_its_first_tree_block() {
 	});
 }
 
-/// A delivery queue wider than the retained-awards ring is rejected: the tail of such a queue
-/// holds trees whose awards the ring has already pruned.
+/// A zero-length window retains nothing, leaving every claim on the events fallback.
 #[test]
-#[should_panic(expected = "MaxRetainedCreditTrees (8) must be >= MaxQueuedCreditTrees (9)")]
-fn integrity_test_rejects_queue_wider_than_retained_awards() {
+#[should_panic(expected = "`AwardRetentionTtl` must be greater than zero")]
+fn integrity_test_rejects_a_zero_award_window() {
 	new_test_ext().execute_with(|| {
-		MaxRetainedCreditTrees::set(&8);
-		MaxQueuedCreditTrees::set(&9);
+		AwardRetentionTtl::set(&0);
+		<Pallet<Test> as Hooks<u64>>::integrity_test();
+	});
+}
+
+/// Awards outliving their root would prove nothing, the root being what a proof is checked
+/// against.
+#[test]
+#[should_panic(expected = "AwardRetentionTtl")]
+fn integrity_test_rejects_awards_outliving_their_root() {
+	new_test_ext().execute_with(|| {
+		AwardRetentionTtl::set(&(NftCredits::root_ttl() + 1));
 		<Pallet<Test> as Hooks<u64>>::integrity_test();
 	});
 }
@@ -2657,9 +2693,10 @@ fn player_process_step1_defers_players_that_do_not_fit_the_block_awards() {
 				Duration::from_secs(GameTimes::<Test>::reporting_end(&schedule) as u64 + 1)
 		});
 
-		// One attendee's worst case is `rounds * (max_group_size - 1)` credits, so a buffer with
-		// room for exactly that fits one player and defers the rest. The buffer window slides with
-		// the block number, so the filler is topped up per block until step1 runs against it.
+		// One attendee's worst case is `rounds * (max_group_size - 1)` report credits plus
+		// `MaxTenureThresholds` tenure credits, so a buffer with room for exactly that fits one
+		// player and defers the rest. The buffer window slides with the block number, so the
+		// filler is topped up per block until step1 runs against it.
 		let game = GameStore::<Test>::get().expect("the game is reporting").index;
 		let mut filler = 0;
 		let deferred = |state| {
@@ -2671,7 +2708,11 @@ fn player_process_step1_defers_players_that_do_not_fit_the_block_awards() {
 			)
 		};
 		for _ in 0..4 {
-			filler += fill_credit_buffer(game, System::block_number() + 1, 3);
+			filler += fill_credit_buffer(
+				game,
+				System::block_number() + 1,
+				3 + MaxTenureThresholds::get(),
+			);
 			advance_process();
 			if GameStore::<Test>::get().is_some_and(|game| deferred(game.state)) {
 				break;
@@ -3022,6 +3063,255 @@ mod root_removal {
 	}
 }
 
+/// Removal of a block's awards once their own TTL has run out, the root outliving them.
+mod award_removal {
+	use super::*;
+	use frame_support::pallet_prelude::{
+		InvalidTransaction, TransactionSource, TransactionValidityError,
+	};
+	use indiv_support::credit_trees::{expiry_deadline, oldest_expiry, ExpiryTimestamp};
+
+	/// The wall-clock time the first tree block commits to. It is well above zero, so a test can
+	/// name a timestamp before it.
+	const TIMESTAMP: u32 = 1_000_000;
+
+	/// The wall-clock time the root of `block` commits to. One timestamp per block, so a sweep
+	/// takes the blocks in block order.
+	fn timestamp_of(block: u64) -> u32 {
+		TIMESTAMP.saturating_add(block as u32)
+	}
+
+	/// The first second at which `block`'s awards are past their TTL.
+	fn due_at(block: u64) -> u64 {
+		expiry_deadline(timestamp_of(block), AwardRetentionTtl::get())
+	}
+
+	fn set_now(secs: u64) {
+		MOCK_UNIX_TIME.with(|now| *now.borrow_mut() = Duration::from_secs(secs));
+	}
+
+	/// The timestamp the next award sweep starts at.
+	fn oldest_filed() -> Option<u32> {
+		oldest_expiry::<NftClaimCreditAwardExpiries<Test>, u64>()
+	}
+
+	fn credit_events() -> Vec<Event<Test>> {
+		recorded_events()
+			.into_iter()
+			.filter_map(|event| match event {
+				RuntimeEvent::NftCredits(event) => Some(event),
+				_ => None,
+			})
+			.collect()
+	}
+
+	/// Records a root and a block's worth of awards under each of `blocks`, as
+	/// `build_credit_tree` does once a block has awarded.
+	///
+	/// This also moves the block number off zero. `frame_system` drops the events of block zero,
+	/// and the sweep reports one.
+	fn record_tree_blocks(blocks: &[u64]) {
+		System::set_block_number(1);
+		for block in blocks {
+			let timestamp = timestamp_of(*block);
+			NftClaimCreditAwards::<Test>::insert(
+				block,
+				0,
+				BoundedVec::truncate_from(vec![NftClaimCreditAward {
+					claimant: AccountOrPerson::Account(ALICE),
+					credit: [*block as u8; 32],
+				}]),
+			);
+			NftClaimCreditRoots::<Test>::insert(
+				block,
+				NftClaimCreditTree {
+					game_index: 7,
+					root: CreditProofNode([*block as u8; 32]),
+					leaf_count: 1,
+					timestamp,
+				},
+			);
+			crate::Pallet::<Test>::note_root_expiry(*block, timestamp);
+			crate::Pallet::<Test>::note_award_expiry(*block, timestamp);
+		}
+	}
+
+	fn sweep(oldest: u32) -> frame_support::dispatch::DispatchResultWithPostInfo {
+		NftCredits::sweep_expired_awards(
+			RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+			oldest,
+			1,
+		)
+	}
+
+	#[test]
+	fn a_tree_block_is_filed_under_the_timestamp_of_its_root() {
+		new_test_ext().execute_with(|| {
+			let (block, _) = award_credits_in_one_block();
+			let root = NftClaimCreditRoots::<Test>::get(block).expect("the block awarded credits");
+
+			assert!(NftClaimCreditAwardExpiries::<Test>::contains_key(
+				ExpiryTimestamp::from(root.timestamp),
+				block
+			));
+			assert_eq!(oldest_filed(), Some(root.timestamp));
+		});
+	}
+
+	#[test]
+	fn a_sweep_removes_the_due_awards_and_leaves_the_roots() {
+		new_test_ext().execute_with(|| {
+			record_tree_blocks(&[10]);
+			set_now(due_at(10));
+
+			assert_ok!(sweep(timestamp_of(10)));
+
+			assert_eq!(NftClaimCreditAwards::<Test>::iter().count(), 0);
+			assert_eq!(oldest_filed(), None);
+			// The roots run on the longer TTL, so a claimant holding their own proof still mints.
+			assert_eq!(NftClaimCreditRoots::<Test>::iter().count(), 1);
+			assert!(credit_events().contains(&Event::CreditAwardsExpired { count: 1 }));
+		});
+	}
+
+	#[test]
+	fn a_sweep_stops_at_the_first_tree_block_that_is_not_due() {
+		new_test_ext().execute_with(|| {
+			// Block 11's root is timestamped one second after block 10's, so its awards fall due
+			// one second later as well.
+			record_tree_blocks(&[10, 11]);
+			set_now(due_at(10));
+
+			let post = sweep(timestamp_of(10)).expect("the sweep goes through");
+
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::sweep_expired_awards(1)));
+			assert!(awards_of(10).is_empty());
+			assert!(!awards_of(11).is_empty(), "the tree block that is not due stays");
+			assert_eq!(oldest_filed(), Some(timestamp_of(11)));
+		});
+	}
+
+	#[test]
+	fn more_due_tree_blocks_than_one_sweep_removes_take_several() {
+		new_test_ext().execute_with(|| {
+			// Three tree blocks against a `MaxAwardBlocksPerSweep` of two.
+			record_tree_blocks(&[10, 11, 12]);
+			set_now(due_at(12));
+
+			let post = sweep(timestamp_of(10)).expect("the first sweep goes through");
+			assert_eq!(post.actual_weight, Some(MockWeightInfo::sweep_expired_awards(2)));
+			assert_eq!(NftClaimCreditAwards::<Test>::iter().count(), 1);
+			assert_eq!(
+				oldest_filed(),
+				Some(timestamp_of(12)),
+				"the sweep is up to the third tree block",
+			);
+
+			assert_ok!(sweep(timestamp_of(12)));
+			assert_eq!(NftClaimCreditAwards::<Test>::iter().count(), 0);
+			assert_eq!(oldest_filed(), None);
+		});
+	}
+
+	#[test]
+	fn a_sweep_is_authorized_only_for_the_oldest_filed_timestamp() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::Local,
+					&timestamp_of(10)
+				),
+				Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(
+					AuthorizeInvalidity::NothingToSweepAwards as u8
+				))),
+				"nothing is filed",
+			);
+
+			record_tree_blocks(&[10, 11]);
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::Local,
+					&timestamp_of(10)
+				),
+				Err(InvalidTransaction::Future.into()),
+				"the oldest tree block's TTL has not run out",
+			);
+
+			set_now(due_at(10));
+			assert!(crate::Pallet::<Test>::authorize_sweep_expired_awards(
+				TransactionSource::Local,
+				&timestamp_of(10)
+			)
+			.is_ok());
+
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::External,
+					&timestamp_of(10)
+				),
+				Err(TransactionValidityError::Invalid(InvalidTransaction::Custom(
+					AuthorizeInvalidity::TransactionNotLocal as u8
+				))),
+			);
+
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::Local,
+					&timestamp_of(11)
+				),
+				Err(InvalidTransaction::Future.into()),
+				"a timestamp the sweep has not reached",
+			);
+
+			assert_eq!(
+				crate::Pallet::<Test>::authorize_sweep_expired_awards(
+					TransactionSource::Local,
+					&(timestamp_of(10) - 1)
+				),
+				Err(InvalidTransaction::Stale.into()),
+				"a timestamp the sweep is past",
+			);
+		});
+	}
+
+	#[test]
+	fn the_offchain_worker_submits_one_sweep_per_block() {
+		new_test_ext().execute_with(|| {
+			record_tree_blocks(&[10, 11, 12]);
+			set_now(due_at(10));
+			clear_pool();
+
+			crate::Pallet::<Test>::submit_award_expiry_sweep(5);
+			crate::Pallet::<Test>::submit_award_expiry_sweep(6);
+
+			// The discriminator is the submitting block, as it is for the root sweep: `oldest`
+			// alone cannot tell two blocks' sweeps apart while none has been included.
+			assert_eq!(
+				submitted_calls(),
+				vec![
+					RuntimeCall::NftCredits(Call::sweep_expired_awards {
+						oldest: timestamp_of(10),
+						discriminator: 5
+					}),
+					RuntimeCall::NftCredits(Call::sweep_expired_awards {
+						oldest: timestamp_of(10),
+						discriminator: 6
+					}),
+				]
+			);
+		});
+	}
+
+	#[test]
+	fn awards_fall_due_before_the_root_they_prove_against() {
+		new_test_ext().execute_with(|| {
+			// The ordering the two TTLs give, stated as the property it holds: a credit inside its
+			// claim deadline always has a root, whether or not its awards are still in state.
+			assert!(due_at(10) < expiry_deadline(timestamp_of(10), NftCredits::root_ttl()));
+		});
+	}
+}
+
 mod migration {
 	use super::*;
 	use crate::migration::MigrateV0ToV1;
@@ -3045,6 +3335,38 @@ mod migration {
 		);
 	}
 
+	/// The awards map as the old code declared it: one entry a block, holding every award of that
+	/// block. The key is the one the chunked map now shares between a block's chunks.
+	mod v0 {
+		use super::*;
+		use frame_support::{storage_alias, Twox64Concat};
+
+		#[storage_alias]
+		pub type NftClaimCreditAwards<T: Config> = StorageMap<
+			Pallet<T>,
+			Twox64Concat,
+			BlockNumberFor<T>,
+			BoundedVec<
+				NftClaimCreditAward<<T as frame_system::Config>::AccountId>,
+				frame_support::traits::ConstU32<1200>,
+			>,
+			ValueQuery,
+		>;
+	}
+
+	/// Records `block`'s awards the way a chain running the old code left them: one entry under the
+	/// old layout, with no expiry entry, and the block named by the ring that bounded them.
+	fn record_awards_without_an_expiry(block: u64) {
+		v0::NftClaimCreditAwards::<Test>::insert(
+			block,
+			BoundedVec::truncate_from(vec![NftClaimCreditAward {
+				claimant: AccountOrPerson::Account(ALICE),
+				credit: [block as u8; 32],
+			}]),
+		);
+		crate::migration::v1::NftClaimCreditAwardBlocks::<Test>::put(vec![block]);
+	}
+
 	#[test]
 	fn the_migration_files_every_root_under_its_timestamp() {
 		new_test_ext().execute_with(|| {
@@ -3061,6 +3383,88 @@ mod migration {
 			// The sweep starts at the oldest root, whichever was filed last.
 			assert_eq!(oldest_expiry::<RootExpiries<Test>, u64>(), Some(early));
 			assert_eq!(NftCredits::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn the_migration_files_the_awards_of_a_root_and_drops_the_ring() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<NftCredits>();
+			record_root_without_an_expiry(10, TIMESTAMP);
+			record_awards_without_an_expiry(10);
+			// A block the ring had already dropped: its root is filed, its awards are not there
+			// to file.
+			record_root_without_an_expiry(11, TIMESTAMP);
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			let timestamp = ExpiryTimestamp::from(TIMESTAMP);
+			assert!(NftClaimCreditAwardExpiries::<Test>::contains_key(timestamp, 10));
+			assert!(
+				!NftClaimCreditAwardExpiries::<Test>::contains_key(timestamp, 11),
+				"a block whose awards are gone is filed for its root alone",
+			);
+			assert!(
+				!crate::migration::v1::NftClaimCreditAwardBlocks::<Test>::exists(),
+				"the ring the awards used to be bounded by is dropped",
+			);
+		});
+	}
+
+	#[test]
+	fn the_migration_files_retained_awards_whose_root_is_gone_under_its_own_time() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<NftCredits>();
+			// A deletion message removed this block's root, so nothing on chain dates its awards.
+			record_awards_without_an_expiry(10);
+			let upgrade_time = 5 * TIMESTAMP;
+			MOCK_UNIX_TIME.with(|now| *now.borrow_mut() = Duration::from_secs(upgrade_time as u64));
+
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			assert!(
+				NftClaimCreditAwardExpiries::<Test>::contains_key(
+					ExpiryTimestamp::from(upgrade_time),
+					10
+				),
+				"a retained block with no root is filed, so a sweep still reaches its awards",
+			);
+		});
+	}
+
+	#[test]
+	fn migrated_awards_are_swept_like_recorded_ones() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			StorageVersion::new(0).put::<NftCredits>();
+			record_root_without_an_expiry(10, TIMESTAMP);
+			record_awards_without_an_expiry(10);
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			assert!(
+				v0::NftClaimCreditAwards::<Test>::contains_key(10),
+				"the migration leaves the awards where the old layout put them",
+			);
+
+			MOCK_UNIX_TIME.with(|now| {
+				*now.borrow_mut() =
+					Duration::from_secs(expiry_deadline(TIMESTAMP, AwardRetentionTtl::get()))
+			});
+			assert_ok!(NftCredits::sweep_expired_awards(
+				RuntimeOrigin::from(frame_system::RawOrigin::Authorized),
+				TIMESTAMP,
+				1
+			));
+
+			assert!(
+				!v0::NftClaimCreditAwards::<Test>::contains_key(10),
+				"the old layout wrote the key a block's chunks are cleared by, so the sweep \
+			removes it",
+			);
+			assert_eq!(NftClaimCreditAwardExpiries::<Test>::iter().count(), 0);
+			assert!(
+				NftClaimCreditRoots::<Test>::contains_key(10),
+				"the root outlives the awards it was built from",
+			);
 		});
 	}
 
@@ -3104,6 +3508,923 @@ mod migration {
 				!RootExpiries::<Test>::contains_key(ExpiryTimestamp::from(later), 11),
 				"the version gate must keep the migration from running twice"
 			);
+		});
+	}
+}
+
+mod claim_tenure_credits {
+	use super::*;
+	use frame_support::{assert_err_ignore_postinfo, dispatch::GetDispatchInfo};
+	// The tenure claim is the game's, so its calls, storage, errors, events and weights shadow this
+	// pallet's of the same name.
+	use indiv_pallet_game::{
+		Call, CancellingStep, Error, Event, GamesAttended, TenureClaims, TenureThresholds,
+		WeightInfo,
+	};
+	use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
+	use indiv_pallet_score::{Participants, Recognition};
+	use indiv_support::traits::{
+		AddOnlyPeopleTrait, AppendOnlyMembers, PersonalId, RingExponent, RingMode,
+	};
+	use sp_runtime::DispatchError;
+
+	/// The game's play time. The tenure claim window opens `WINDOW` seconds before it.
+	const PLAY: u32 = 1_000;
+	const WINDOW: u32 = 900;
+	const OPENS: u64 = (PLAY - WINDOW) as u64;
+
+	fn set_time(secs: u64) {
+		MOCK_UNIX_TIME.with(|time| *time.borrow_mut() = Duration::from_secs(secs));
+	}
+
+	fn schedule() -> GameSchedule<u32, u128> {
+		GameSchedule {
+			game_play_time: PLAY,
+			rounds: 1,
+			max_group_size: 4,
+			tenure_claim_window: WINDOW,
+			..Default::default()
+		}
+	}
+
+	fn set_thresholds(thresholds: Vec<GamesAttended>) {
+		assert_ok!(Game::set_tenure_thresholds(
+			RuntimeOrigin::root(),
+			BoundedVec::truncate_from(thresholds)
+		));
+	}
+
+	fn sign_up(who: &AccountId32) {
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(who.clone()),
+			DEFAULT_IDENTIFIER_KEY,
+			None,
+		));
+	}
+
+	/// Signs `who` up for the game, then recognises them as a person.
+	///
+	/// Returns their personal id.
+	fn sign_up_recognised(who: &AccountId32) -> PersonalId {
+		sign_up(who);
+		recognise(who)
+	}
+
+	/// Recognises `who`, a participant, as a person.
+	///
+	/// Returns their personal id.
+	fn recognise(who: &AccountId32) -> PersonalId {
+		let id = People::reserve_new_id();
+		let (key, _) = mock_key(id);
+		assert_ok!(People::recognize_personhood(id, Some(key)));
+		set_recognition(who, Recognition::Recognized(id));
+		id
+	}
+
+	fn set_recognition(who: &AccountId32, recognition: Recognition) {
+		Participants::<Test>::mutate(AccountOrPerson::Account(who.clone()), |participant| {
+			participant.as_mut().expect("sign-up onboards the account").recognition = recognition;
+		});
+	}
+
+	/// Suspends `who`, a participant, recognised as a person or not.
+	fn suspend(who: &AccountId32) {
+		let id = match Participants::<Test>::get(AccountOrPerson::Account(who.clone()))
+			.expect("sign-up onboards the account")
+			.recognition
+		{
+			Recognition::Recognized(id) => id,
+			_ => recognise(who),
+		};
+		set_recognition(who, Recognition::Suspended(id));
+	}
+
+	/// Sets the tenure of `who`, a participant.
+	fn set_tenure(who: &AccountId32, tenure: GamesAttended) {
+		Participants::<Test>::mutate(AccountOrPerson::Account(who.clone()), |participant| {
+			participant
+				.as_mut()
+				.expect("sign-up onboards the account")
+				.attended_games_while_recognized = tenure;
+		});
+	}
+
+	/// Starts the game at time zero and signs ALICE up as a recognised person.
+	fn set_up_alice() -> GameIdx {
+		assert_ok!(Members::create_collection(
+			0,
+			PEOPLE_MEMBER_IDENTIFIER,
+			1,
+			RingMode::Flexible,
+			RingExponent::R2e9,
+			None,
+		));
+		start_scheduled_game(&schedule());
+		sign_up_recognised(&ALICE);
+		GameStore::<Test>::get().expect("the game is registering").index
+	}
+
+	/// Starts the game at time zero and signs ALICE up as a recognised person and BOB, CHARLIE and
+	/// DAVE as accounts that are not persons.
+	fn set_up_full_group() -> GameIdx {
+		let game = set_up_alice();
+		for who in [BOB, CHARLIE, DAVE] {
+			sign_up(&who);
+		}
+		game
+	}
+
+	/// Plays the game to its end. Each of `reporters` reports every co-player as a person, so
+	/// they attend and the players that do not report do not.
+	fn play_to_end(reporters: &[AccountId32]) {
+		advance_to_reporting_phase(&schedule());
+		for who in reporters {
+			let player = AccountOrPerson::Account(who.clone());
+			assert_ok!(Game::report(
+				RuntimeOrigin::signed(who.clone()),
+				build_report_with_opinion(&player, |_| Report::Person),
+			));
+		}
+		set_time(GameTimes::<Test>::reporting_end(&schedule()) as u64 + 1);
+		while GameStore::<Test>::get().is_some() {
+			advance_process();
+		}
+	}
+
+	fn claim_tenure_credits(who: &AccountId32) -> DispatchResultWithPostInfo {
+		Game::claim_tenure_credits(RuntimeOrigin::signed(who.clone()))
+	}
+
+	fn slots(game: GameIdx, who: &AccountId32) -> AwardedCredits {
+		AwardedNftClaimCredits::<Test>::get(game, AccountOrPerson::Account(who.clone()))
+	}
+
+	fn tenure_claim_of(who: &AccountId32) -> Option<u32> {
+		TenureClaims::<Test>::get(AccountOrPerson::Account(who.clone()))
+	}
+
+	/// The tenure credits of `game` awarded to `who` so far, by threshold index.
+	fn awarded_tenure_credits(game: GameIdx, who: &AccountId32) -> Vec<u32> {
+		let player = AccountOrPerson::Account(who.clone());
+		let credits = awarded_credits(&player);
+		(0..MaxTenureThresholds::get())
+			.filter(|&index| {
+				credits.contains(&NftCredits::compute_tenure_credit(game, index, &player))
+			})
+			.collect::<Vec<_>>()
+	}
+
+	#[test]
+	fn a_new_game_opens_its_tenure_claim_window_before_play() {
+		new_test_ext().execute_with(|| {
+			start_scheduled_game(&schedule());
+			assert_eq!(GameStore::<Test>::get().unwrap().tenure_claim_opens, PLAY - WINDOW);
+		});
+	}
+
+	#[test]
+	fn a_person_is_awarded_one_credit_per_threshold_reached_at_tenure_claim() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1, 2, 5]);
+			let game = set_up_alice();
+			set_tenure(&ALICE, 3);
+			set_time(OPENS);
+
+			let post = claim_tenure_credits(&ALICE).expect("ALICE claims tenure credits");
+
+			assert_eq!(slots(game, &ALICE).count(), 3);
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1, 2]);
+			assert_eq!(tenure_claim_of(&ALICE), Some(3));
+			System::assert_has_event(
+				Event::<Test>::TenureCreditsClaimed {
+					player: AccountOrPerson::Account(ALICE),
+					game_index: game,
+					credits: 3,
+				}
+				.into(),
+			);
+			assert_eq!(post.pays_fee, Pays::No);
+		});
+	}
+
+	#[test]
+	fn a_candidate_tenure_claim_awards_nothing_before_the_game() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+
+			let post = claim_tenure_credits(&BOB).expect("BOB claims tenure credits");
+
+			assert_eq!(tenure_claim_of(&BOB), Some(1));
+			assert_eq!(slots(game, &BOB).count(), 0);
+			assert_eq!(awarded_credit_count(), 0);
+			// Charged as a tenure claim that awards one credit, the least the weight covers.
+			assert_eq!(
+				post.actual_weight,
+				Some(<MockWeightInfo as WeightInfo>::claim_tenure_credits(1))
+			);
+			assert_eq!(post.pays_fee, Pays::No);
+		});
+	}
+
+	#[test]
+	fn a_candidate_that_attends_is_awarded_their_tenure_credit() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&BOB));
+
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_tenure_credits(game, &BOB), vec![0]);
+			assert_eq!(tenure_claim_of(&BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_candidate_that_does_not_attend_forfeits_their_tenure_credit() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&BOB));
+
+			play_to_end(&[ALICE, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_tenure_credits(game, &BOB), Vec::<u32>::new());
+			assert_eq!(tenure_claim_of(&BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_candidate_recognised_after_tenure_claim_is_paid_without_attending() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&BOB));
+			recognise(&BOB);
+
+			play_to_end(&[ALICE, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_tenure_credits(game, &BOB), vec![0]);
+			assert_eq!(tenure_claim_of(&BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_player_that_does_not_claim_earns_no_tenure_credit() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			for who in [ALICE, BOB, CHARLIE, DAVE] {
+				assert_eq!(awarded_tenure_credits(game, &who), Vec::<u32>::new());
+			}
+		});
+	}
+
+	#[test]
+	fn tenure_counts_the_games_attended_while_recognised() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			set_up_full_group();
+			// ALICE attends as a person and BOB as an account that is not a person.
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			let play = PLAY + 10_000;
+			let next = GameSchedule { game_play_time: play, ..schedule() };
+			start_scheduled_game(&next);
+			sign_up(&ALICE);
+			sign_up(&BOB);
+			set_time((play - WINDOW).into());
+
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_ok!(claim_tenure_credits(&BOB));
+
+			assert_eq!(tenure_claim_of(&ALICE), Some(2));
+			assert_eq!(tenure_claim_of(&BOB), Some(1));
+		});
+	}
+
+	#[test]
+	fn a_player_that_claimed_in_a_game_claims_again_in_the_next() {
+		new_test_ext().execute_with(|| {
+			set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&ALICE));
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			let play = PLAY + 10_000;
+			let next = GameSchedule { game_play_time: play, ..schedule() };
+			start_scheduled_game(&next);
+			sign_up(&ALICE);
+			set_time((play - WINDOW).into());
+
+			// The first game raised ALICE's tenure, so this claim earns more than her first.
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_eq!(tenure_claim_of(&ALICE), Some(2));
+		});
+	}
+
+	#[test]
+	fn a_person_whose_tenure_claim_does_not_fit_the_buffers_is_awarded_after_the_game() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 0);
+
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_eq!(slots(game, &ALICE).count(), 0);
+			assert_eq!(tenure_claim_of(&ALICE), Some(2));
+
+			// ALICE does not attend, which a person's tenure claim does not depend on.
+			play_to_end(&[BOB, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1]);
+			assert_eq!(tenure_claim_of(&ALICE), None);
+		});
+	}
+
+	#[test]
+	fn a_person_awarded_at_tenure_claim_is_not_awarded_again_after_the_game() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 1);
+
+			// One credit fits the buffers now and the attendance backfill awards the other.
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			let alice = AccountOrPerson::Account(ALICE);
+			let credits = awarded_credits(&alice);
+			for index in 0..2 {
+				let credit = NftCredits::compute_tenure_credit(game, index, &alice);
+				assert_eq!(credits.iter().filter(|&&c| c == credit).count(), 1);
+			}
+		});
+	}
+
+	#[test]
+	fn a_suspended_person_keeps_their_tenure_but_is_awarded_nothing_at_tenure_claim() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1, 2]);
+			let game = set_up_full_group();
+			set_tenure(&BOB, 1);
+			suspend(&BOB);
+			set_time(OPENS);
+
+			assert_ok!(claim_tenure_credits(&BOB));
+
+			assert_eq!(tenure_claim_of(&BOB), Some(2));
+			assert_eq!(awarded_tenure_credits(game, &BOB), Vec::<u32>::new());
+		});
+	}
+
+	#[test]
+	fn a_suspended_person_that_attends_is_awarded_their_tenure_credits() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&BOB, 1);
+			suspend(&BOB);
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&BOB));
+
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_tenure_credits(game, &BOB), vec![0, 1]);
+			assert_eq!(tenure_claim_of(&BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_suspended_person_that_does_not_attend_forfeits_their_tenure_credits() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&BOB, 1);
+			suspend(&BOB);
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&BOB));
+
+			play_to_end(&[ALICE, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_tenure_credits(game, &BOB), Vec::<u32>::new());
+			assert_eq!(tenure_claim_of(&BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_person_suspended_after_tenure_claim_receives_the_rest_only_if_they_attend() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 1);
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+
+			suspend(&ALICE);
+			play_to_end(&[BOB, CHARLIE, DAVE]);
+
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+			assert_eq!(tenure_claim_of(&ALICE), None);
+		});
+	}
+
+	#[test]
+	fn an_alias_player_without_tenure_receives_one_credit() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_alice();
+			let alias = [9u8; 32];
+			let statement_account = AccountId32::new(alias);
+			assert_ok!(Game::sign_up_with_alias(
+				runtime_origin_for_alias(&alias),
+				DEFAULT_IDENTIFIER_KEY,
+				statement_account.clone(),
+				StatementSignature(statement_account),
+				None,
+			));
+			set_time(OPENS);
+
+			assert_ok!(Game::claim_tenure_credits(runtime_origin_for_alias(&alias)));
+
+			let player = AccountOrPerson::Person(alias);
+			assert_eq!(TenureClaims::<Test>::get(&player), Some(1));
+			assert_eq!(
+				awarded_credits(&player),
+				vec![NftCredits::compute_tenure_credit(game, 0, &player)]
+			);
+		});
+	}
+
+	#[test]
+	fn a_participant_origin_checks_in() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_alice();
+			set_time(OPENS);
+
+			assert_ok!(Game::claim_tenure_credits(
+				indiv_pallet_score::Origin::<Test>::AccountParticipant(ALICE).into()
+			));
+
+			assert!(slots(game, &ALICE).contains(NftCredits::tenure_credit_slot(0)));
+		});
+	}
+
+	#[test]
+	fn tenure_credits_counts_what_a_tenure_claim_grants() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 2, 5]);
+			set_up_alice();
+			set_tenure(&ALICE, 2);
+			let alice = AccountOrPerson::Account(ALICE);
+			set_time(OPENS);
+			assert_eq!(Game::tenure_credits(alice.clone()), Ok(2));
+			assert_ok!(claim_tenure_credits(&ALICE));
+
+			assert_eq!(
+				Game::tenure_credits(alice),
+				Err(Error::<Test>::TenureCreditsAlreadyClaimed.into())
+			);
+		});
+	}
+
+	#[test]
+	fn tenure_credits_reports_why_a_tenure_claim_fails() {
+		new_test_ext().execute_with(|| {
+			let alice = AccountOrPerson::Account(ALICE);
+			assert_eq!(Game::tenure_credits(alice.clone()), Err(Error::<Test>::NoGame.into()));
+
+			set_up_alice();
+			set_time(OPENS - 1);
+			assert_eq!(
+				Game::tenure_credits(alice.clone()),
+				Err(Error::<Test>::TenureClaimNotOpen.into())
+			);
+
+			set_time(PLAY.into());
+			assert_eq!(Game::tenure_credits(alice), Err(Error::<Test>::TenureClaimClosed.into()));
+
+			set_time(OPENS);
+			assert_eq!(
+				Game::tenure_credits(AccountOrPerson::Account(BOB)),
+				Err(Error::<Test>::NotRegistered.into())
+			);
+		});
+	}
+
+	#[test]
+	fn a_tenure_claim_refunds_down_to_the_credits_it_awards() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1, 2]);
+			let game = set_up_alice();
+			set_tenure(&ALICE, 2);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 2);
+
+			let post = claim_tenure_credits(&ALICE).expect("ALICE claims tenure credits");
+
+			// ALICE earns three credits, but the buffers have room for two.
+			assert_eq!(tenure_claim_of(&ALICE), Some(3));
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1]);
+			let declared = Call::<Test>::claim_tenure_credits {}.get_dispatch_info().call_weight;
+			let actual = post.actual_weight.expect("the tenure claim reports its weight");
+			assert_eq!(actual, <MockWeightInfo as WeightInfo>::claim_tenure_credits(2));
+			assert!(actual.all_lt(declared));
+		});
+	}
+
+	#[test]
+	fn a_player_checks_in_once_even_when_the_thresholds_drop() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![1, 3]);
+			let game = set_up_alice();
+			set_tenure(&ALICE, 2);
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&ALICE));
+
+			set_thresholds(vec![1, 2]);
+
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::TenureCreditsAlreadyClaimed
+			);
+			assert_eq!(slots(game, &ALICE).count(), 1);
+			assert_eq!(tenure_claim_of(&ALICE), Some(1));
+		});
+	}
+
+	#[test]
+	fn a_tenure_claim_with_nothing_new_is_refused_and_pays() {
+		new_test_ext().execute_with(|| {
+			set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&BOB));
+
+			let refused = claim_tenure_credits(&BOB).expect_err("nothing is left to claim");
+
+			assert_eq!(refused.error, Error::<Test>::TenureCreditsAlreadyClaimed.into());
+			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
+			assert_eq!(
+				refused.post_info.actual_weight,
+				Some(<MockWeightInfo as WeightInfo>::claim_tenure_credits(1))
+			);
+			assert_eq!(tenure_claim_of(&BOB), Some(1));
+		});
+	}
+
+	#[test]
+	fn a_tenure_below_every_threshold_earns_nothing() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![1]);
+			set_up_full_group();
+			set_time(OPENS);
+
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::NoTenureCredit
+			);
+			// Without a threshold of zero, a candidate earns nothing.
+			assert_err_ignore_postinfo!(claim_tenure_credits(&BOB), Error::<Test>::NoTenureCredit);
+			assert_eq!(tenure_claim_of(&BOB), None);
+		});
+	}
+
+	#[test]
+	fn a_player_with_tenure_earns_nothing_when_the_thresholds_are_emptied() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 3);
+			set_time(OPENS);
+
+			set_thresholds(vec![]);
+
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::NoTenureCredit
+			);
+			assert_err_ignore_postinfo!(claim_tenure_credits(&BOB), Error::<Test>::NoTenureCredit);
+			assert_eq!(tenure_claim_of(&ALICE), None);
+			assert_eq!(slots(game, &ALICE).count(), 0);
+		});
+	}
+
+	#[test]
+	fn a_tenure_claim_made_before_the_thresholds_are_emptied_is_awarded_after_the_game() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 0);
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_eq!(slots(game, &ALICE).count(), 0);
+
+			set_thresholds(vec![]);
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+
+			// The tenure claim holds the credits it earned when ALICE claimed.
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1]);
+			assert_eq!(tenure_claim_of(&ALICE), None);
+		});
+	}
+
+	#[test]
+	fn tenure_claims_open_at_the_window_and_close_at_play() {
+		new_test_ext().execute_with(|| {
+			set_up_alice();
+
+			set_time(OPENS - 1);
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::TenureClaimNotOpen
+			);
+			set_time(PLAY.into());
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::TenureClaimClosed
+			);
+
+			set_time(PLAY as u64 - 1);
+			assert_ok!(claim_tenure_credits(&ALICE));
+		});
+	}
+
+	#[test]
+	fn tenure_claims_stay_open_through_the_shuffle_and_reporting() {
+		new_test_ext().execute_with(|| {
+			set_up_full_group();
+			set_time(GameTimes::<Test>::registration_end(&schedule()) as u64 + 1);
+
+			advance_process();
+			assert!(matches!(GameStore::<Test>::get().unwrap().state, GameState::Shuffle { .. }));
+			assert_ok!(claim_tenure_credits(&ALICE));
+
+			advance_process();
+			assert!(matches!(GameStore::<Test>::get().unwrap().state, GameState::Reporting { .. }));
+			assert_ok!(claim_tenure_credits(&BOB));
+		});
+	}
+
+	#[test]
+	fn a_game_without_a_window_takes_no_tenure_claim() {
+		new_test_ext().execute_with(|| {
+			start_scheduled_game(&GameSchedule { tenure_claim_window: 0, ..schedule() });
+			set_time(PLAY as u64 - 1);
+
+			// Tenure claims open at play, which is also when they close.
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::TenureClaimClosed
+			);
+		});
+	}
+
+	#[test]
+	fn a_cancelling_game_takes_no_tenure_claim() {
+		new_test_ext().execute_with(|| {
+			set_up_alice();
+			set_time(OPENS);
+			GameStore::<Test>::mutate(|game| {
+				game.as_mut().unwrap().state =
+					GameState::Cancelling { step: CancellingStep::Step1DrainShuffle };
+			});
+
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::TenureClaimClosed
+			);
+
+			// A cancelling game never opens, so the window is closed rather than not yet open.
+			set_time(OPENS - 1);
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::TenureClaimClosed
+			);
+		});
+	}
+
+	#[test]
+	fn a_processing_game_takes_no_tenure_claim() {
+		new_test_ext().execute_with(|| {
+			set_up_alice();
+			set_time(OPENS);
+			GameStore::<Test>::mutate(|game| {
+				game.as_mut().unwrap().state = GameState::PlayerProcess {
+					step: PlayerProcessStep::Step1ProcessPlayers {
+						last_iteration: None,
+						player_count: 0,
+					},
+				};
+			});
+
+			assert_err_ignore_postinfo!(
+				claim_tenure_credits(&ALICE),
+				Error::<Test>::TenureClaimClosed
+			);
+		});
+	}
+
+	#[test]
+	fn a_cancelled_game_drops_its_tenure_claims() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_ok!(claim_tenure_credits(&BOB));
+
+			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
+			while GameStore::<Test>::get().is_some() {
+				advance_process();
+			}
+
+			assert_eq!(TenureClaims::<Test>::iter().count(), 0);
+			// ALICE keeps the credit awarded at the claim, and BOB receives none.
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+			assert_eq!(awarded_tenure_credits(game, &BOB), Vec::<u32>::new());
+		});
+	}
+
+	#[test]
+	fn a_tenure_claim_without_a_game_is_refused() {
+		new_test_ext().execute_with(|| {
+			assert_err_ignore_postinfo!(claim_tenure_credits(&ALICE), Error::<Test>::NoGame);
+		});
+	}
+
+	#[test]
+	fn a_player_must_sign_up_to_claim_tenure_credits() {
+		new_test_ext().execute_with(|| {
+			set_up_full_group();
+			set_time(OPENS);
+			assert_err_ignore_postinfo!(claim_tenure_credits(&EVE), Error::<Test>::NotRegistered);
+
+			play_to_end(&[ALICE, BOB, CHARLIE, DAVE]);
+			let play = PLAY + 10_000;
+			start_scheduled_game(&GameSchedule { game_play_time: play, ..schedule() });
+			set_time((play - WINDOW).into());
+
+			// ALICE played the previous game, but did not sign up for this one.
+			let player = Players::<Test>::get(AccountOrPerson::Account(ALICE))
+				.expect("ALICE stays a player after the game");
+			assert!(!player.registered);
+			let refused = claim_tenure_credits(&ALICE).expect_err("ALICE did not sign up");
+			assert_eq!(refused.error, Error::<Test>::NotRegistered.into());
+			assert_eq!(refused.post_info.pays_fee, Pays::Yes);
+			assert_eq!(tenure_claim_of(&ALICE), None);
+		});
+	}
+
+	#[test]
+	fn player_process_step1_reserves_room_for_tenure_credits() {
+		// The buffers hold a player's report credits but not their tenure credits too, so step1
+		// processes nobody.
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			advance_to_reporting_phase(&schedule());
+			set_time(GameTimes::<Test>::reporting_end(&schedule()) as u64 + 1);
+
+			for _ in 0..4 {
+				fill_credit_buffer(
+					game,
+					System::block_number() + 1,
+					3 + MaxTenureThresholds::get() - 1,
+				);
+				advance_process();
+			}
+
+			assert!(matches!(
+				GameStore::<Test>::get().map(|game| game.state),
+				Some(GameState::PlayerProcess {
+					step: PlayerProcessStep::Step1ProcessPlayers { last_iteration: None, .. },
+				})
+			));
+		});
+	}
+
+	#[test]
+	fn the_default_thresholds_apply_until_set() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(TenureThresholds::<Test>::get().into_inner(), vec![0, 1, 2]);
+			assert_eq!(Game::tenure_credit_count(0), 1);
+			assert_eq!(Game::tenure_credit_count(1), 2);
+			assert_eq!(Game::tenure_credit_count(2), 3);
+			assert_eq!(Game::tenure_credit_count(5), 3);
+		});
+	}
+
+	#[test]
+	fn setting_thresholds_requires_the_manager_origin() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			assert_noop!(
+				Game::set_tenure_thresholds(
+					RuntimeOrigin::signed(ALICE),
+					BoundedVec::truncate_from(vec![1])
+				),
+				DispatchError::BadOrigin
+			);
+
+			set_thresholds(vec![1, 2]);
+
+			assert_eq!(TenureThresholds::<Test>::get().into_inner(), vec![1, 2]);
+			System::assert_last_event(
+				Event::<Test>::TenureThresholdsSet {
+					thresholds: BoundedVec::truncate_from(vec![1, 2]),
+				}
+				.into(),
+			);
+		});
+	}
+
+	#[test]
+	fn thresholds_must_be_strictly_ascending() {
+		new_test_ext().execute_with(|| {
+			for unsorted in [vec![2, 1], vec![1, 1]] {
+				assert_noop!(
+					Game::set_tenure_thresholds(
+						RuntimeOrigin::root(),
+						BoundedVec::truncate_from(unsorted)
+					),
+					Error::<Test>::UnsortedTenureThresholds
+				);
+			}
+		});
+	}
+
+	#[test]
+	fn tenure_credit_slots_sit_above_the_report_slots() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(NftCredits::tenure_credit_slot(0), NftCredits::max_report_credit_slots());
+			let last_report_slot = NftCredits::credit_slot(
+				(<<Test as indiv_pallet_game::Config>::MaxRounds as Get<u32>>::get() - 1)
+					as RoundIndex,
+				<<Test as indiv_pallet_game::Config>::MaxGroupSize as Get<u32>>::get() - 1,
+			);
+			assert!(last_report_slot < NftCredits::tenure_credit_slot(0));
+		});
+	}
+}
+
+/// The game benchmarks that award credits, run against this pallet's buffers. The game's own mock
+/// awards nothing, so only here does the setup show that the awards spill.
+#[cfg(feature = "runtime-benchmarks")]
+mod game_benchmarks {
+	use super::*;
+	use indiv_pallet_game::benchmarking::benches::{
+		_claim_tenure_credits, _player_process_step1_inner_loop, _report,
+	};
+
+	/// The block the benchmarks award in.
+	const BLOCK: u64 = 10;
+
+	/// Asserts that the awards filled the buffer of [`BLOCK`] and spilled into the next one.
+	fn assert_spilled() {
+		assert_eq!(
+			CreditBuffers::<Test>::get(BLOCK).map(|buffer| buffer.awards),
+			Some(AWARDS_PER_TREE)
+		);
+		assert!(CreditBuffers::<Test>::get(BLOCK + 1).is_some_and(|buffer| buffer.awards > 0));
+	}
+
+	#[test]
+	fn player_process_step1_inner_loop_spills() {
+		new_test_ext().execute_with(|| {
+			let rounds = <<Test as indiv_pallet_game::Config>::MaxRounds as Get<u32>>::get();
+			assert_ok!(_player_process_step1_inner_loop::<Test>(rounds, true));
+
+			assert_spilled();
+		});
+	}
+
+	#[test]
+	fn claim_tenure_credits_spills() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(_claim_tenure_credits::<Test>(2, true));
+
+			assert_spilled();
+		});
+	}
+
+	#[test]
+	fn report_spills() {
+		new_test_ext().execute_with(|| {
+			let max_group_size =
+				<<Test as indiv_pallet_game::Config>::MaxGroupSize as Get<u32>>::get();
+			assert_ok!(_report::<Test>(max_group_size - 1, 0, true));
+
+			assert_spilled();
 		});
 	}
 }

@@ -21,20 +21,19 @@ use crate::{
 		ExternalAssetLocation, FungibleExternalAsset, GameAirdropSource, PlayDepositDefault,
 		COINAGE_ASSET_UNIT,
 	},
-	Address, Balances, Executive, Runtime, RuntimeCall, TransactionExtension, UncheckedExtrinsic,
-	*,
+	Address, Balances, Executive, Runtime, RuntimeCall, TxExtensionOtherVersions, TxExtensionV1,
+	UncheckedExtrinsic, *,
 };
 use codec::Encode;
 use cumulus_primitives_core::relay_chain::BlockNumber as RelayBlockNumber;
 use frame_support::{
 	traits::{
 		fungible::{Inspect, InspectHold, Mutate},
-		Get as _, Hooks, OffchainWorker, OnIdle,
+		Get, Hooks, OffchainWorker, OnIdle,
 	},
 	weights::{Weight, WeightMeter},
 };
 use indiv_pallet_airdrop::{
-	context_for_event,
 	types::{AirdropPrize, RegistrationEntry, Status},
 	vrf::transcript_for_event,
 };
@@ -72,8 +71,13 @@ mod coinage_non_anonymous_flow;
 mod coinage_paid_flow;
 mod coinage_people_flow;
 mod coinage_token_allowance;
+// The benchmarking build widens `MaxGroupSize` and `MaxRounds` to fit the game's linear
+// regressions, which would size the index for a runtime that is never deployed.
+#[cfg(not(feature = "runtime-benchmarks"))]
+mod credit_index_window;
 mod credit_root_deletion;
 mod external_asset_teleport;
+mod game_processing_time;
 mod lite_people_free_tx;
 mod lite_people_game_flow;
 mod members_notifier_whitelist;
@@ -88,7 +92,10 @@ mod score_game_person_flow;
 mod statement_allowance;
 mod transaction_era;
 mod trusted_query;
+mod tx_extension_pipeline;
 mod tx_payment_external_asset;
+mod xcm_aliases;
+mod xcm_asset_rate_trader;
 mod xcm_fee_api;
 
 type VrfSecret = <Crypto as GenerateVerifiable>::Secret;
@@ -172,7 +179,9 @@ fn register_lite_person_for_integration(
 			})
 		});
 
-		let candidate_signature = MultiSignature::from(pair.sign(&msg));
+		let candidate_signature = MultiSignature::from(
+			pair.sign(&indiv_pallet_people_lite::Pallet::<Runtime>::account_signing_payload(&msg)),
+		);
 		let proof = Crypto::sign(&ring_secret, &msg)
 			.expect("ring key can sign the lite attestation payload");
 
@@ -354,12 +363,17 @@ fn exec_unsigned(call: RuntimeCall) {
 		.expect("dispatch succeeds");
 }
 
-fn finalize_uxt(call: RuntimeCall, tx_ext: TransactionExtension) -> UncheckedExtrinsic {
-	UncheckedExtrinsic::new_transaction(call, tx_ext)
+fn finalize_uxt(call: RuntimeCall, tx_ext: TxExtensionV1) -> UncheckedExtrinsic {
+	UncheckedExtrinsic::from_parts(
+		call,
+		generic::Preamble::General(sp_runtime::traits::ExtensionVariant::Other(
+			TxExtensionOtherVersions::new(tx_ext),
+		)),
+	)
 }
 
 // Some basic transaction extension to be modified as needed.
-fn base_tx_ext(_call: RuntimeCall) -> TransactionExtension {
+fn base_tx_ext(_call: RuntimeCall) -> TxExtensionV1 {
 	(
 		(
 			(),
@@ -383,10 +397,8 @@ fn base_tx_ext(_call: RuntimeCall) -> TransactionExtension {
 		frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
 		frame_system::CheckNonce::<Runtime>::from(0),
 		frame_system::CheckWeight::<Runtime>::new(),
-		pallet_skip_feeless_payment::SkipCheckIfFeeless::<
-			Runtime,
-			pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-		>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None)),
+		pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0u128, None),
+		frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
 	)
 		.into()
 }
@@ -427,10 +439,11 @@ fn build_as_alias_with_proof_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -497,10 +510,11 @@ fn build_notification_registration_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -562,10 +576,11 @@ fn build_notification_for_collection_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -658,10 +673,11 @@ fn build_set_personal_id_account_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -723,10 +739,11 @@ fn build_signed_as_personal_id_ext(who: &sr25519::Pair, call: RuntimeCall) -> Un
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -792,9 +809,10 @@ fn build_signed_as_alias_with_account_revised_ext(
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let inherited_implication =
@@ -855,10 +873,11 @@ fn build_signed_as_alias_with_account_revised_ext(
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
@@ -934,10 +953,11 @@ fn build_signed_as_alias_with_account_ext(
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
@@ -966,6 +986,15 @@ fn exec_signed_as_alias_with_account(who: &sr25519::Pair, call: RuntimeCall) {
 }
 
 fn build_signed_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsic {
+	build_signed_ext_at_version(who, call, INDIVIDUALITY_EXTENSION_VERSION)
+}
+
+/// Builds a V1 transaction with a signature over the supplied implication version.
+fn build_signed_ext_at_version(
+	who: &sr25519::Pair,
+	call: RuntimeCall,
+	implication_version: u8,
+) -> UncheckedExtrinsic {
 	let mut tx_ext = base_tx_ext(call.clone());
 
 	let who_account = pair_to_account_id(who);
@@ -999,10 +1028,11 @@ fn build_signed_ext(who: &sr25519::Pair, call: RuntimeCall) -> UncheckedExtrinsi
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (implication_version, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
@@ -1084,10 +1114,11 @@ fn build_signed_game_invited_ext(
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =
@@ -1141,10 +1172,11 @@ fn build_as_lite_alias_with_proof_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -1213,10 +1245,11 @@ fn build_people_lite_auth_ext(
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -1268,10 +1301,11 @@ fn build_signed_as_participant_ext(who: &sr25519::Pair, call: RuntimeCall) -> Un
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -1340,10 +1374,11 @@ fn build_as_coin_ext(who_pair: &sr25519::Pair, call: RuntimeCall) -> UncheckedEx
 		tx_ext.0 .7.clone(),
 		tx_ext.0 .8.clone(),
 		tx_ext.0 .9.clone(),
+		tx_ext.0 .10.clone(),
 	);
 
 	let msg = {
-		let implication_base = (0u8, &call);
+		let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 		let implication_explicit = &rest_ext;
 		let implication_implicit = &rest_ext.implicit().unwrap();
 		let encoded_implications =
@@ -1420,8 +1455,6 @@ fn advance_to_block(target_block: frame_system::pallet_prelude::BlockNumberFor<R
 		// Run on_poll for pallets that drive state forward
 		let mut wm_people = WeightMeter::with_limit(Weight::MAX);
 		indiv_pallet_people::Pallet::<Runtime>::on_poll(next, &mut wm_people);
-		let mut wm_game = WeightMeter::with_limit(Weight::MAX);
-		indiv_pallet_game::Pallet::<Runtime>::on_poll(next, &mut wm_game);
 		let mut wm_score = WeightMeter::with_limit(Weight::MAX);
 		indiv_pallet_score::Pallet::<Runtime>::on_poll(next, &mut wm_score);
 
@@ -1620,15 +1653,20 @@ const PAYOUT_DURATION: u32 = 300 / GAME_PHASE_SPEEDUP; // 60 blocks (120 seconds
 /// Reduce game phase durations to speed up game integration tests.
 fn reduce_game_phase_durations() {
 	let durations = crate::people::GamePhaseDurations::get();
+	let minimum = <<Runtime as indiv_pallet_game::Config>::MinStepPhaseDuration as Get<u32>>::get();
+	let shuffle = (durations.shuffle / GAME_PHASE_SPEEDUP).max(minimum);
+	let player_process = (durations.player_process / GAME_PHASE_SPEEDUP).max(minimum);
+	let floor_surplus = (shuffle - durations.shuffle / GAME_PHASE_SPEEDUP) +
+		(player_process - durations.player_process / GAME_PHASE_SPEEDUP);
 
 	Game::set_game_phases(
 		RuntimeOrigin::root(),
 		indiv_pallet_game::PhaseDurationValues {
-			registration: durations.registration / GAME_PHASE_SPEEDUP,
-			shuffle: durations.shuffle / GAME_PHASE_SPEEDUP,
+			registration: durations.registration / GAME_PHASE_SPEEDUP - floor_surplus,
+			shuffle,
 			post_shuffle_margin: durations.post_shuffle_margin / GAME_PHASE_SPEEDUP,
 			reporting: durations.reporting / GAME_PHASE_SPEEDUP,
-			player_process: durations.player_process / GAME_PHASE_SPEEDUP,
+			player_process,
 		},
 	)
 	.unwrap();
@@ -1753,7 +1791,13 @@ fn build_alias_airdrop_vrfs(
 				members.into_iter(),
 			)
 			.expect("opening the ring commitment for the alias signer must succeed");
-			let context = context_for_event(event_id);
+			// The proof is scoped to the product the scheduler stored with the event.
+			let product_name = indiv_pallet_airdrop::Events::<Runtime>::get(event_id)
+				.expect("the airdrop event must have been scheduled")
+				.info
+				.product_name;
+			let context =
+				indiv_pallet_airdrop::Pallet::<Runtime>::context_for_event(&product_name, event_id);
 			Crypto::create(commitment, who_secret, &context[..], &msg[..])
 				.expect("creating the alias airdrop proof must succeed")
 				.0
@@ -1765,9 +1809,9 @@ fn build_alias_airdrop_vrfs(
 }
 
 /// Advance blocks until the airdrop event reaches `Status::Registering`. Tolerates the
-/// event not yet existing — `do_schedule_airdrop` runs inside `Game::on_poll` once a slot
-/// in `GameSchedules` becomes the active game, which takes at least one block after
-/// `Game::schedule_games`.
+/// event not yet existing. `do_schedule_airdrop` runs inside the `start_game` step once a slot
+/// in `GameSchedules` becomes the active game. That takes at least two blocks after
+/// `Game::schedule_games`: the offchain worker submits the step, the next block applies it.
 fn drive_airdrop_to_registering(event_id: [u8; 32]) {
 	const MAX_BLOCKS: u32 = 20_000;
 	let mut seen = false;

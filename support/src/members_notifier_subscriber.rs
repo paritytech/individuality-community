@@ -151,6 +151,9 @@ pub trait RingRootsProvider<RingRoot> {
 	/// Get specific ring roots by their indices.
 	/// Returns a vector of (ring_index, root, revision).
 	/// Output order must match the input `indices` order.
+	///
+	/// A collection marked for deletion has no roots, so a subscriber receives its rings only as
+	/// deletions.
 	fn get_ring_roots(
 		identifier: Identifier,
 		indices: &[RingIndex],
@@ -163,6 +166,8 @@ pub trait RingRootsProvider<RingRoot> {
 	/// Get ring roots in a collection with pagination.
 	/// Returns a vector of (ring_index, root, revision) starting after `after_key` (exclusive),
 	/// up to `limit` items. Pass `None` to start from the beginning.
+	///
+	/// A collection marked for deletion has no roots, as in [`Self::get_ring_roots`].
 	fn get_ring_roots_paginated(
 		identifier: Identifier,
 		after_key: Option<RingIndex>,

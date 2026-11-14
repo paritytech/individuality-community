@@ -1923,34 +1923,57 @@ fn instance_info_reports_nft_fields() {
 		let item = setup_item(&alice, collection);
 		let (_, holder) = purse(0xBB);
 		let (_, later_holder) = purse(0xCC);
+		let (_, last_holder) = purse(0xDD);
 		let minted_at = MockNow::get();
 		let instance = indiv_pallet_scarcity::Pallet::<Test>::do_mint(
 			alice.clone(),
 			collection,
 			item,
-			holder,
+			holder.clone(),
 			alloc::vec![],
 		)
 		.unwrap();
+		let info_of = || {
+			let data = call_ok(
+				&alice,
+				collection_address(collection),
+				IScarcityCollection::instanceInfoCall { tokenId: U256::from(instance) }
+					.abi_encode(),
+			);
+			IScarcityCollection::instanceInfoCall::abi_decode_returns(&data).unwrap()
+		};
+		let maximum_moves: u16 = <Test as indiv_pallet_scarcity::Config>::MaximumMoves::get();
+
+		let info = info_of();
+		assert_eq!(info.item, item);
+		assert_eq!(info.mintedAt, minted_at);
+		assert_eq!(info.lastMoved, minted_at);
+		assert_eq!(info.stateNonce, 0);
+		assert_eq!(info.feelessMovesLeft, maximum_moves);
+
+		// `AsScarcity` takes the NFT out of the purse before it dispatches a feeless move.
+		let nft = NftsByOwner::<Test>::take(&holder).unwrap();
+		let origin =
+			RuntimeOrigin::from(indiv_pallet_scarcity::Origin::<Test>::Nft { owner: holder, nft });
+		assert_ok!(Scarcity::transfer(origin, later_holder.clone()));
+
+		let info = info_of();
+		assert_eq!(info.stateNonce, 1);
+		assert_eq!(info.feelessMovesLeft, maximum_moves - 1);
 
 		let moved_at = minted_at + 777;
 		MockNow::set(moved_at);
 		assert_ok!(Scarcity::force_transfer(
 			RuntimeOrigin::signed(alice.clone()),
 			instance,
-			later_holder
+			last_holder
 		));
 
-		let data = call_ok(
-			&alice,
-			collection_address(collection),
-			IScarcityCollection::instanceInfoCall { tokenId: U256::from(instance) }.abi_encode(),
-		);
-		let info = IScarcityCollection::instanceInfoCall::abi_decode_returns(&data).unwrap();
-		assert_eq!(info.item, item);
+		let info = info_of();
 		assert_eq!(info.mintedAt, minted_at);
 		assert_eq!(info.lastMoved, moved_at);
-		assert_eq!(info.stateNonce, 1);
+		assert_eq!(info.stateNonce, 2);
+		assert_eq!(info.feelessMovesLeft, maximum_moves);
 	});
 }
 

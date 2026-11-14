@@ -43,14 +43,14 @@ fn credit(i: u32) -> NftClaimCredit {
 
 /// A batch of `n` trees of the live stream, one per block, as the game pallet sends it.
 ///
-/// The sequence numbers start at one, so a receiver still expecting zero sees the batch as
-/// ahead of the stream.
+/// The sequence numbers are odd and start at one, so a receiver still expecting zero sees each
+/// delivery as ahead of the stream and opening a gap of its own.
 fn batch<T: Config>(n: u32) -> CreditTreeBatch<T> {
 	let mut trees = BoundedVec::new();
 	for i in 0..n {
 		trees
 			.try_push(CreditTreeDelivery {
-				sequence: Some(i.saturating_add(1) as TreeSequence),
+				sequence: Some(i.saturating_mul(2).saturating_add(1) as TreeSequence),
 				block: i,
 				tree: NftClaimCreditTree {
 					game_index: 1,
@@ -70,8 +70,10 @@ fn batch<T: Config>(n: u32) -> CreditTreeBatch<T> {
 mod benches {
 	use super::*;
 
-	/// Worst case: every tree in the batch is new, so each one is written, and the batch is
-	/// ahead of the expected sequence, so the gap is reported as well.
+	/// Worst case: every tree in the batch is new, so each one is read and written, and no two
+	/// sequences are adjacent, so every delivery reports a gap as well.
+	///
+	/// A rejected delivery is cheaper: it emits one event and skips the read and the write.
 	#[benchmark]
 	fn receive_credit_trees(
 		n: Linear<1, { T::MaxTreesPerMessage::get() }>,
@@ -86,7 +88,8 @@ mod benches {
 		_(origin as T::RuntimeOrigin, batch);
 
 		assert_eq!(CreditTrees::<T>::iter().count(), n as usize);
-		assert_eq!(NextExpectedSequence::<T>::get(), n.saturating_add(1) as TreeSequence);
+		// The last sequence is `2n - 1`, so the stream expects `2n` next.
+		assert_eq!(NextExpectedSequence::<T>::get(), n.saturating_mul(2) as TreeSequence);
 
 		Ok(())
 	}

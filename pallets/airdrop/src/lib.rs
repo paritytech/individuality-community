@@ -28,6 +28,7 @@
 
 extern crate alloc;
 
+pub mod migration;
 pub mod types;
 pub mod vrf;
 pub mod weights;
@@ -44,7 +45,6 @@ pub use pallet::*;
 pub use types::*;
 pub use weights::WeightInfo;
 
-use alloc::vec::Vec;
 use codec::Encode;
 use frame_support::{
 	pallet_prelude::*,
@@ -61,6 +61,9 @@ use frame_system::{
 	pallet_prelude::*,
 };
 use indiv_support::{
+	context::{
+		build_product_context, is_product_name, ProductContextNetworkSuffix, ProductContextSuffix,
+	},
 	traits::{
 		Context, MembershipProver, MomentRandomness, RevisionIndex, RingIndex, PEOPLE_IDENTIFIER,
 	},
@@ -69,7 +72,6 @@ use indiv_support::{
 	weight_budget::OcwWeightBudget,
 };
 use sp_core::{hexdisplay::HexDisplay, sr25519};
-use sp_crypto_hashing::blake2_256;
 use sp_runtime::{
 	traits::{AccountIdConversion, TryConvert},
 	Saturating,
@@ -88,17 +90,7 @@ pub mod pallet {
 	/// The log target for the pallet.
 	pub(crate) const LOG_TARGET: &str = "runtime::indiv-pallet-airdrop";
 
-	/// Base label for the per-event personhood context. The full context is
-	/// `blake2_256(AIRDROP_CONTEXT_BASE ++ event_id)`.
-	pub const AIRDROP_CONTEXT_BASE: &[u8] = b"pop:polkadot.network/airdrop";
-
-	/// Compute the per-event context for the VRF.
-	pub fn context_for_event(event_id: &EventId) -> Context {
-		let mut buf = Vec::with_capacity(AIRDROP_CONTEXT_BASE.len() + size_of::<EventId>());
-		buf.extend_from_slice(AIRDROP_CONTEXT_BASE);
-		buf.extend_from_slice(event_id);
-		blake2_256(&buf)
-	}
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
 	/// Maximum number of winners per event.
 	pub const MAX_WINNERS: u32 = 10_000;
@@ -145,6 +137,7 @@ pub mod pallet {
 		StorageMap<_, Twox64Concat, AssetIdOf<T>, AssetBalanceOf<T>>;
 
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -155,6 +148,9 @@ pub mod pallet {
 		type MemberService: MembershipProver<
 			Crypto: GenerateVerifiable<Proof: Send + Sync, Signature: Send + Sync>,
 		>;
+
+		/// Runtime-wide network suffix used to derive product contexts.
+		type Suffix: Get<ProductContextNetworkSuffix>;
 
 		/// Fungible token interface.
 		type Fungibles: fungibles::Mutate<Self::AccountId>
@@ -206,6 +202,20 @@ pub mod pallet {
 		/// Account id of the prize pot.
 		pub fn airdrop_pot_id() -> T::AccountId {
 			T::PalletId::get().into_account_truncating()
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// The ring VRF context under which alias proofs for an event are verified.
+		///
+		/// [`build_product_context`] over `product_name`, [`Config::Suffix`] and `event_id` as the
+		/// raw suffix.
+		pub fn context_for_event(product_name: &[u8], event_id: &EventId) -> Context {
+			build_product_context(
+				product_name,
+				&T::Suffix::get(),
+				ProductContextSuffix::Raw(*event_id),
+			)
 		}
 	}
 
@@ -313,6 +323,8 @@ pub mod pallet {
 		AssetAlreadyEnabled,
 		/// No randomness produced after registration closed is available yet.
 		EntropyNotReady,
+		/// The event's product name is not a bare dotNS label (see [`ProductName`]).
+		InvalidProductName,
 	}
 
 	/// Custom transaction-validity errors.
@@ -1055,6 +1067,7 @@ pub mod pallet {
 			info: EventInfoOf<T>,
 			source: Option<T::AccountId>,
 		) -> DispatchResult {
+			ensure!(is_product_name(&info.product_name), Error::<T>::InvalidProductName);
 			ensure!(info.prize.max_winners > 0, Error::<T>::NoWinnersConfigured);
 			ensure!(info.prize.max_winners <= MAX_WINNERS, Error::<T>::TooManyWinners);
 			ensure!(
@@ -1356,7 +1369,17 @@ pub mod pallet {
 			slot: BigEndianU256,
 			entry: RegistrationEntryOf<T>,
 		) -> DispatchResult {
-			let mut event = Events::<T>::get(event_id).ok_or(Error::<T>::UnknownEvent)?;
+			let event = Events::<T>::get(event_id).ok_or(Error::<T>::UnknownEvent)?;
+			Self::register_slot_in(event_id, event, slot, entry)
+		}
+
+		/// [`Self::register_slot`] for an already loaded `event`.
+		fn register_slot_in(
+			event_id: EventId,
+			mut event: ActiveEventOf<T>,
+			slot: BigEndianU256,
+			entry: RegistrationEntryOf<T>,
+		) -> DispatchResult {
 			let Status::Registering { total_participants } = event.status else {
 				return Err(Error::<T>::NotAcceptingRegistrations.into());
 			};
@@ -1375,8 +1398,9 @@ pub mod pallet {
 		}
 
 		/// Register with a personal alias and a proof of membership in the People collection. The
-		/// proof is verified against the specific context of this event and generates a unique
-		/// alias which serves as the participant's ticket.
+		/// proof is verified against the specific context of this event (see
+		/// [`Self::context_for_event`]) and generates a unique alias which serves as the
+		/// participant's ticket.
 		///
 		/// The participant alias origin is authorized by the caller of this function to participate
 		/// in the lottery and it is the caller's responsibility to ensure it's eligible.
@@ -1387,7 +1411,12 @@ pub mod pallet {
 			ring_index: RingIndex,
 			revision: RevisionIndex,
 		) -> DispatchResult {
-			let context = context_for_event(&event_id);
+			let event = Events::<T>::get(event_id).ok_or(Error::<T>::UnknownEvent)?;
+			ensure!(
+				matches!(event.status, Status::Registering { .. }),
+				Error::<T>::NotAcceptingRegistrations
+			);
+			let context = Self::context_for_event(&event.info.product_name, &event_id);
 			let msg = participant_origin.encode();
 			let event_alias = T::MemberService::verify_membership(
 				PEOPLE_IDENTIFIER,
@@ -1400,7 +1429,7 @@ pub mod pallet {
 			.map_err(|_| Error::<T>::InvalidMembershipProof)?
 			.alias;
 			let slot = BigEndianU256::from(event_alias);
-			Self::register_slot(event_id, slot, participant_origin.clone())?;
+			Self::register_slot_in(event_id, event, slot, participant_origin.clone())?;
 			Self::deposit_event(Event::<T>::AliasRegistered { event_id, slot, participant_origin });
 			Ok(())
 		}

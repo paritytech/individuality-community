@@ -42,7 +42,10 @@ class HarvestTest(unittest.TestCase):
         run_capture.return_value = f"CACHE_ENTRY: {entry}\nCACHE_ENTRY: {entry}\n"
         self.assertEqual(regen_proof_cache.harvest("next-people-paseo", "production"), {entry})
         command = run_capture.call_args.args[0]
+        self.assertEqual(command[command.index("--pallet") + 1], "indiv_pallet_coinage")
         self.assertEqual(command[command.index("--extrinsic") + 1], "*")
+        self.assertNotIn("--all", command)
+        self.assertNotIn("--extra", command)
         self.assertEqual(command[command.index("--steps") + 1], "2")
         self.assertEqual(command[command.index("--repeat") + 1], "1")
         self.assertEqual(run_capture.call_args.kwargs["env"]["RUNTIME_LOG"], "error")

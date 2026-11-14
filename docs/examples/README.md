@@ -6,6 +6,9 @@ Runnable TypeScript examples for performing calls against a People chain and Ass
 Each example is a small script that performs one task end to end. The calls are
 typed from the chain's own metadata.
 
+> [!NOTE]
+> As of the moment of writing _(28th October 2026)_ the [polkadot.js apps UI](https://polkadot.js.org/apps/) can submit ordinary signed transactions, but it cannot build v5 general transactions. It therefore cannot submit `#[pallet::authorize]` calls (e.g. `People.create_people_collection`) or use the custom origin extensions in pipeline v1 (`AsPerson`, `VerifyMultiSignature`, …). Use PAPI for these. [`lib/general-signer.ts`](lib/general-signer.ts) builds a v5 general transaction on pipeline v0.
+
 | Script | Side | What it does |
 |---|---|---|
 | `game_scheduling.ts` | operations | Schedule a game (`Game.schedule_games`). |
@@ -137,14 +140,14 @@ and the [members-notifier soak harness](../../internal/members-notifier-soak) ne
 > **Heavier prerequisites.** The Asset Hub runtime (`next-asset-hub-paseo`) pulls in
 > `pallet-revive`, which needs `solc` + `resolc` at build time (see [`docs/launch.md`](../launch.md)),
 > and the node binaries must match the polkadot-sdk release this repo pins
-> (`POLKADOT_RELEASE_VERSION` in [`.github/env`](../../.github/env), currently
-> **`polkadot-stable2606`** `-2`). The generic `zombienet setup polkadot` bundle is a *latest*
+> (`POLKADOT_RELEASE_VERSION`+`POLKADOT_RELEASE_PATCH` in [`.github/env`](../../.github/env),
+> currently **`polkadot-stable2609-2`**). The generic `zombienet setup polkadot` bundle is a *latest*
 > build and will fail the People PVF with a missing host import
 > (`ext_statement_store_remove_by_version_1`); install the `polkadot` relay bundle **and**
 > `polkadot-omni-node` from the pinned tag instead:
 > ```bash
-> TAG=polkadot-stable2606-2
-> cargo install polkadot          --git https://github.com/paritytech/polkadot-sdk --tag "$TAG" --locked
+> TAG=polkadot-stable2609-2
+> cargo install polkadot           --git https://github.com/paritytech/polkadot-sdk --tag "$TAG" --locked
 > cargo install polkadot-omni-node --git https://github.com/paritytech/polkadot-sdk --tag "$TAG" --locked
 > which -a polkadot polkadot-execute-worker polkadot-prepare-worker polkadot-omni-node
 > ```

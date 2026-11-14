@@ -61,7 +61,7 @@ To run the People chain locally, you need the following components:
 * A local relay chain of choice and its chain-spec, e.g. Paseo relay.
 * The relay-chain node binary, [`polkadot`](https://crates.io/crates/polkadot), to run the relay validators. How to get it depends on your platform:
     * **Linux (x86_64):** download the prebuilt binaries from the [polkadot-sdk releases](https://github.com/paritytech/polkadot-sdk/releases) (grab `polkadot`, `polkadot-execute-worker`, and `polkadot-prepare-worker`), or build with `cargo install polkadot --locked`.
-    * **macOS:** there is no official release binary — build from source with `cargo install polkadot --locked` (a long build).
+    * **macOS (aarch64):** download the prebuilt binaries from the [polkadot-sdk releases](https://github.com/paritytech/polkadot-sdk/releases) (grab the `-aarch64-apple-darwin` builds of `polkadot`, `polkadot-execute-worker`, and `polkadot-prepare-worker`, then drop that suffix from their names), or build with `cargo install polkadot --locked`.
     * **Windows:** the node is not supported natively — use [WSL2](https://learn.microsoft.com/windows/wsl/) and follow the Linux steps.
 
     However you obtain it, the node needs `polkadot`, `polkadot-execute-worker`, and `polkadot-prepare-worker` side-by-side (`cargo install` keeps them together). Make sure `polkadot` is on your `PATH`.

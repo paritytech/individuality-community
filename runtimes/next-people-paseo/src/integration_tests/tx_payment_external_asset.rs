@@ -30,13 +30,10 @@ fn build_signed_ext_with_external_asset_payment(
 	let who_account = pair_to_account_id(who);
 
 	// update payment extension to pay in external asset with optional tip
-	tx_ext.0 .9 = pallet_skip_feeless_payment::SkipCheckIfFeeless::<
-		Runtime,
-		pallet_asset_tx_payment::ChargeAssetTxPayment<Runtime>,
-	>::from(pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
+	tx_ext.0 .9 = pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(
 		tip,
 		Some(ExternalAssetLocation::get()),
-	));
+	);
 
 	// update CheckNonce
 	{
@@ -67,10 +64,11 @@ fn build_signed_ext_with_external_asset_payment(
 			tx_ext.0 .7.clone(),
 			tx_ext.0 .8.clone(),
 			tx_ext.0 .9.clone(),
+			tx_ext.0 .10.clone(),
 		);
 
 		let msg = {
-			let implication_base = (0u8, &call);
+			let implication_base = (INDIVIDUALITY_EXTENSION_VERSION, &call);
 			let implication_explicit = &rest_ext;
 			let implication_implicit = &rest_ext.implicit().unwrap();
 			let encoded_implications =

@@ -18,8 +18,6 @@ use super::*;
 use assets_common::local_and_foreign_assets::TargetFromLeft;
 use codec::{Decode, Encode};
 use cumulus_primitives_core::Junction::{GeneralIndex, PalletInstance, Parachain};
-#[cfg(feature = "runtime-benchmarks")]
-use frame_support::BoundedVec;
 use frame_support::{
 	pallet_prelude::PhantomData,
 	parameter_types,
@@ -27,7 +25,7 @@ use frame_support::{
 		fungible::{HoldConsideration, ItemOf},
 		ConstU128, ConstU32, ConstU8, ConstUint, Footprint, Get, LinearStoragePrice, Randomness,
 	},
-	PalletId,
+	BoundedVec, PalletId,
 };
 #[cfg(feature = "runtime-benchmarks")]
 use indiv_support::traits::PersonalId;
@@ -50,14 +48,14 @@ use xcm::v5::{Location, WeightLimit};
 
 use crate::{
 	parameters::{
-		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePersonRegistrationFee,
+		AccountsApiAllowance, LiteNotificationSlotsPerPeriod, LitePaidRegistrationPeriod,
+		LitePaidRegistrationThreshold, LitePaidRegistrationsPerPeriod, LitePersonRegistrationFee,
 		LitePersonStatementLimit, LiteStmtStoreSlotsPerPeriod,
 		LongTermStorageAllowanceForLitePeople, LongTermStorageAllowanceForPeople,
 		LongTermStorageClaimsPerPeriod, LongTermStorageCleanupLimit, LongTermStorageGraceWindow,
-		LongTermStoragePeriodDuration, NotificationAllowance, NotificationPeriodDuration,
-		NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource, PersonStatementLimit,
-		StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreReplacementCooldown,
-		StmtStoreSlotsPerPeriod,
+		LongTermStoragePeriodDuration, MaxLitePeople, NotificationAllowance,
+		NotificationPeriodDuration, NotificationSlotsPerPeriod, PeopleAirdropsPrizeSource,
+		PersonStatementLimit, StmtStoreCleanupLimit, StmtStoreGraceWindow, StmtStoreSlotsPerPeriod,
 	},
 	paseo_constants::{CENTS, UNITS},
 };
@@ -204,6 +202,7 @@ parameter_types! {
 impl indiv_pallet_people::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_people::WeightInfo<Runtime>;
 	type MemberService = Members;
+	type Clock = RuntimeClock;
 	type RingExponent = MembersFlexibleRingExponent;
 	type CollectionOwner = PeopleCollectionOwner;
 	type AccountContexts = AccountContexts;
@@ -327,15 +326,17 @@ pub mod benchmark_utils {
 			pallet_timestamp::Now::<Runtime>::put(now.as_millis() as u64);
 		}
 
+		/// Signs with sr25519 through the host keystore. The fixed seed derives the same key on
+		/// every call, so a benchmark that signs after looking up the account signs for that
+		/// account.
 		fn sign_message(message: &[u8]) -> (sp_runtime::AccountId32, MultiSignature) {
-			use sp_core::Pair;
+			use sp_io::crypto::{sr25519_generate, sr25519_sign};
 			use sp_runtime::traits::IdentifyAccount;
-			let entropy = [1u8; 32];
-			let pair = sp_core::ed25519::Pair::from_seed(&entropy);
-			let account = pair.public().into_account().into();
-			let secret = ed25519_zebra::SigningKey::from(entropy);
-			let signature = sp_core::ed25519::Signature::from_raw(secret.sign(message).into());
-			(account, signature.into())
+			let public = sr25519_generate(0.into(), Some(b"//ResourcesBenchHelper".to_vec()));
+			let account = sp_runtime::MultiSigner::Sr25519(public).into_account();
+			let signature = sr25519_sign(0.into(), &public, message)
+				.expect("the benchmark keystore signs with a key it generated; qed");
+			(account, MultiSignature::Sr25519(signature))
 		}
 	}
 
@@ -383,7 +384,7 @@ pub mod benchmark_utils {
 		}
 
 		fn setup_ring_roots(count: u32) {
-			use indiv_support::traits::Identifier;
+			use indiv_support::traits::{Identifier, RingExponent, RingMode};
 			use verifiable::ring::RingDomainSize;
 
 			// Creating a valid intermediate and root using the smallest domain size.
@@ -410,6 +411,19 @@ pub mod benchmark_utils {
 				<Runtime as indiv_pallet_members_notifier::Config>::MaxCollections::get();
 			for coll in 0..max_collections {
 				let identifier = test_identifier(coll);
+				// `RingRootsProvider` reports no roots for an identifier without a collection.
+				indiv_pallet_members::Collections::<Runtime>::insert(
+					identifier,
+					indiv_pallet_members::types::CollectionInfo {
+						owner: indiv_pallet_members::types::CollectionOwner::External(
+							PeopleCollectionOwner::get(),
+						),
+						mode: RingMode::Flexible,
+						// `R2e9` has the `Domain11` domain of the roots below.
+						ring_size: RingExponent::R2e9,
+						self_inclusion_delay: None,
+					},
+				);
 				for i in 0..count {
 					let ring_root = indiv_pallet_members::RingRoot::<Runtime> {
 						root: root.clone(),
@@ -653,13 +667,19 @@ impl indiv_pallet_game::Config for Runtime {
 	type MaxGameSchedules = ConstU32<12>;
 	type MaxAttendanceHistoryDepth = ConstU32<12>;
 	type NftClaimCredits = NftCredits;
+	type MaxTenureThresholds = MaxTenureThresholds;
+	type DefaultTenureThresholds = DefaultTenureThresholds;
 	type DefaultPhaseDurations = GamePhaseDurations;
+	// Two 12-second jumps of the block timestamp. That covers the fewest steps a phase needs:
+	// `end_registration` then one `advance_shuffle` for the shuffle, `end_reporting` then two
+	// `process_players` for the player process.
+	type MinStepPhaseDuration = ConstU32<{ 2 * (SLOT_DURATION / 1_000) as u32 }>;
 	type AccountSignature = Signature;
 	type PlayerStatementLimit = PlayerStatementLimit;
 	type PeopleVoteWeight = ConstUint<2>;
 	type CandidateVoteWeight = ConstUint<1>;
 	// This is for the testnet, the value must be at least 2 in production.
-	type MinGroupSize = ConstUint<0>;
+	type MinGroupSize = ConstUint<1>;
 	type AirdropAssetId = <Runtime as pallet_assets::Config>::AssetId;
 	type AirdropAssetBalance = Balance;
 	type Airdrop = Airdrop;
@@ -717,54 +737,49 @@ impl indiv_pallet_nft_credits::Config for Runtime {
 	type NftClaimsPalletIndex = ConstU8<96>;
 	type ChannelInfo = ParachainSystem;
 	// One tree per block at most, and the offchain worker ships them every block, so the queue
-	// only fills while delivery to Asset Hub is down. Matched to `MaxRetainedCreditTrees`, which
-	// counts the same trees: the oldest tree still queued is then one whose awards are ordinarily
-	// still in state, so a delivery that outlasts the outage needs no proof rebuilt from events. A
-	// `replay_credit_trees` during the outage breaks that, its tree being claimable on Asset Hub
-	// while the delivery is still queued here, so its last claim there has that chain ask for a
-	// deletion the queue entry then finds nothing to deliver. Eight full messages drain it.
+	// only fills while delivery to Asset Hub is down. Far fewer blocks than `AwardRetentionTtl`
+	// retains, so the oldest queued tree is one whose awards are still in state and a delivery that
+	// outlasts an outage needs no proof rebuilt from events. Eight full messages drain it. A
+	// `replay_credit_trees` during the outage breaks that: its tree is claimable on Asset Hub while
+	// the delivery is still queued here, so the last claim there asks for a deletion this entry
+	// then cannot deliver.
 	//
-	// An entry is 12 bytes and the queue is read at the value's `MaxEncodedLen`, so
-	// `authorize_send_credit_trees` pays about 3 KB of the `Normal` proof budget for it. A tree
-	// past the bound is dropped from delivery, not lost: its root stays on chain for
-	// `replay_credit_trees`.
+	// An entry is 12 bytes, read at the value's `MaxEncodedLen`, so
+	// `authorize_send_credit_trees` pays about 3 KB of the `Normal` proof budget.
 	type MaxQueuedCreditTrees = ConstU32<256>;
 	type MaxCreditTreesPerMessage = ConstU32<32>;
 	type ReplayCooldownSeconds = ConstU64<60>;
 	type NftClaimsRemoteWeight = NftClaimsRemoteWeight;
-	// Entries are the distinct blocks whose trees commit a claimant's credits, not a window of
-	// consecutive ones, so the bound counts games rather than time. One game awards a claimant at
-	// most `(MaxGroupSize - 1) * MaxRounds = 15` credits, one per co-player that reported `Person`
-	// on them, plus the attendance backfill, which awards the rest in a single call. Those
-	// land in 16 distinct blocks only if no two reports ever share one, out of the 300 blocks
-	// the 10-minute reporting phase spans; reports cluster, so a few per game is the norm.
+	// Entries are the tree blocks that hold a claimant's credits, so the bound counts games rather
+	// than time. A game puts a claimant's credits in at most 19 blocks: 15 for reports and up to
+	// two each for the attendance backfill and the tenure claim, whose credits can spill into the
+	// next block's buffer. At one game a week `AwardRetentionTtl` spans about 13 games, so the
+	// worst case is 247 blocks. The list costs 1 KB at this bound.
 	//
-	// A game cycle runs 17.5 minutes, so back to back games fill this in about two hours at
-	// the usual few entries each, and in two games if both hit the worst case. That is the
-	// intended horizon: the index is a lookup aid for trees recent enough to still be worth
-	// minting against, not a record for the chain's lifetime, and the oldest block drops out
-	// once it is full.
-	type MaxCreditBlocksPerClaimant = ConstU32<32>;
-	// The window in which a claim is provable from state alone, counted in trees. Reports cluster
-	// inside a game's 10-minute reporting phase, so a game contributes a few dozen trees and this
-	// covers several games, well past the two hours the per-claimant index spans.
-	//
-	// It is also the state the chain carries for them: at most this many trees of the pallet's
-	// `AWARDS_PER_TREE` awards, an award being 65 bytes, so about 34 MB were every retained tree
-	// saturated. Trees run that full only while the chain awards faster than one tree a block, so
-	// the figure tracks the mints actually outstanding. A tree that drops out delays no mint,
-	// because its root stays on chain until the claims chain is finished with it or the root TTL
-	// runs out. Its awards then have to come from the events naming its tree block.
-	type MaxRetainedCreditTrees = ConstU32<256>;
+	// Being a count, the window shortens as games run more often. Governance sets the schedule and
+	// `new_game` only refuses a concurrent game, so back-to-back games would fill this in a day.
+	type MaxCreditBlocksPerClaimant = ConstU32<256>;
+	// The claims chain's own deadline, which is what the two have to agree on. What it costs this
+	// chain follows participation rather than a constant: a player earns at most
+	// `(MaxGroupSize - 1) * MaxRounds = 15` report credits and one tenure credit per
+	// `MaxTenureThresholds` entry a game, so at one game a week 90 days is about 299 credits,
+	// or 19 KB at 65 bytes an award. Retaining personhood needs one game per
+	// `NonPlayingKickoutTime` and costs a fraction of that.
+	type AwardRetentionTtl = ClaimsChainTreeTtl;
 	type EnsureClaimsChainOrigin = EnsureClaimsChainSibling;
 	// At least the claims pallet's `MaxTreeDeletionsPerMessage`. A larger message fails to decode
 	// here, and the root TTL then removes the roots its deletions named.
 	type MaxTreeDeletionsPerMessage = ConstU32<64>;
 	type ClaimsChainTreeTtl = ClaimsChainTreeTtl;
-	// One block records at most one root, so a day holds 43200 of them at 2 seconds a block, which
-	// 64 a block clears in about 20 minutes. The root TTL is the longer of the two, so a sweep only
-	// removes roots the claims chain has already given up on, with a month of slack for a backlog.
+	// One block records at most one root, so a day holds 43200 at 2 seconds a block, which 64 per
+	// block clears in about 20 minutes. The root TTL is the longer of the two, so a sweep only
+	// removes roots the claims chain has given up on, with a month of slack for a backlog.
 	type MaxRootsPerSweep = ConstU32<64>;
+	// A tree block's awards are `CHUNKS_PER_TREE` keys, each charged at a full chunk, so one block
+	// costs about 290 KB of the proof budget and eight of them about half of it. The
+	// `integrity_test` is what holds this to the budget. A block records at most one tree block, so
+	// a call per block removes them eight times faster than they are made.
+	type MaxAwardBlocksPerSweep = ConstU32<8>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = NftCreditsBenchmarkHelper;
 }
@@ -777,6 +792,14 @@ parameter_types! {
 	/// roots for less time than the claims chain gives a claimant, which strands credits inside their
 	/// deadline. A value above it keeps roots after the last credit has expired.
 	pub const ClaimsChainTreeTtl: u64 = 90 * 24 * 60 * 60;
+	/// The tenure credits a player earns in one game at most. Each takes a credit slot after the
+	/// game's 18 report slots, out of the 128 a claimant has per game.
+	pub const MaxTenureThresholds: u32 = 8;
+	/// Thresholds at 0, 1, 2, 4, 8 and 13 games attended while recognised. A player earns one
+	/// tenure credit per game for each threshold their tenure reaches. Every player reaches the
+	/// first, and a person earns 6 credits a game from 13 games on.
+	pub DefaultTenureThresholds: BoundedVec<indiv_pallet_game::GamesAttended, MaxTenureThresholds> =
+		BoundedVec::truncate_from(vec![0, 1, 2, 4, 8, 13]);
 }
 
 /// Origin check for the parachain the credit trees are delivered to. Only that chain may name the
@@ -891,6 +914,7 @@ parameter_types! {
 impl indiv_pallet_airdrop::Config for Runtime {
 	type WeightInfo = weights::indiv_pallet_airdrop::WeightInfo<Runtime>;
 	type MemberService = Members;
+	type Suffix = NetworkSuffix;
 	type Fungibles = AssetsWithHolder;
 	type ManagerOrigin = EnsureRoot<Self::AccountId>;
 	type PalletId = AirdropPalletId;
@@ -1087,6 +1111,7 @@ impl indiv_pallet_people_airdrops::benchmarking::BenchmarkHelper<Runtime>
 				Assets::mint_into(asset_id.clone(), source, BENCH_PRIZE)
 					.expect("fund prize source");
 				indiv_pallet_people_airdrops::AirdropEventInfoOf::<Runtime> {
+					product_name: Default::default(),
 					prize: indiv_pallet_airdrop::types::AirdropPrize {
 						asset_id,
 						asset_amount: BENCH_PRIZE,
@@ -1295,6 +1320,11 @@ impl indiv_pallet_people_lite::Config for Runtime {
 	type Currency = Balances;
 	type PotId = LitePeoplePotId;
 	type RegistrationFee = LitePersonRegistrationFee;
+	type MaxLitePeople = MaxLitePeople;
+	type Clock = RuntimeClock;
+	type PaidRegistrationThreshold = LitePaidRegistrationThreshold;
+	type PaidRegistrationPeriod = LitePaidRegistrationPeriod;
+	type PaidRegistrationsPerPeriod = LitePaidRegistrationsPerPeriod;
 	type Suffix = NetworkSuffix;
 	type AttestationAllowanceManager = EnsureRoot<Self::AccountId>;
 	type MemberService = Members;
@@ -1325,7 +1355,6 @@ impl indiv_pallet_resources::Config for Runtime {
 	type StmtStoreSlotsPerPeriod = StmtStoreSlotsPerPeriod;
 	type LiteStmtStoreSlotsPerPeriod = LiteStmtStoreSlotsPerPeriod;
 	type StmtStoreCleanupLimit = StmtStoreCleanupLimit;
-	type StmtStoreReplacementCooldown = StmtStoreReplacementCooldown;
 	type StmtStoreGraceWindow = StmtStoreGraceWindow;
 	type NotificationAllowance = NotificationAllowance;
 	type NotificationSlotsPerPeriod = NotificationSlotsPerPeriod;
@@ -1337,6 +1366,7 @@ impl indiv_pallet_resources::Config for Runtime {
 	type EnsureLitePerson = indiv_pallet_people_lite::EnsureLitePerson<Runtime>;
 	type Clock = RuntimeClock;
 	type OffchainSignature = Signature;
+	type OnStmtStoreSlotCleared = ClearStmtStoreHolderUsage;
 	type LitePersonStatementLimit = LitePersonStatementLimit;
 	type PersonStatementLimit = PersonStatementLimit;
 	type MaxReservationQueueLength = MaxReservationQueueLength;

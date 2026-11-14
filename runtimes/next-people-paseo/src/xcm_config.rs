@@ -18,36 +18,37 @@ extern crate alloc;
 
 use super::{
 	AccountId, AllPalletsWithSystem, Balances, ParachainInfo, ParachainSystem, PolkadotXcm,
-	Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, WeightToFee, XcmpQueue,
+	Runtime, RuntimeCall, RuntimeEvent, RuntimeHoldReason, RuntimeOrigin, WeightToFee, XcmpQueue,
 };
-use crate::{
-	people::{ExternalAssetLocation, FungibleExternalAsset},
-	AssetRate, Assets, Balance, TransactionByteFee, CENTS,
-};
+use crate::{people::ExternalAssetLocation, AssetRate, Assets, Balance, TransactionByteFee, CENTS};
+use cumulus_primitives_utility::TakeFirstAssetTrader;
 use frame_support::{
 	parameter_types,
 	traits::{
-		tokens::{imbalance::ResolveTo, ConversionToAssetBalance},
-		ConstU32, Contains, ContainsPair, Disabled, Equals, Everything, EverythingBut, Nothing,
-		ProcessMessageError,
+		fungible::HoldConsideration,
+		tokens::imbalance::{ResolveAssetTo, ResolveTo},
+		ConstU32, Contains, ContainsPair, Equals, Everything, EverythingBut, LinearStoragePrice,
+		Nothing,
 	},
 };
 use frame_system::EnsureRoot;
 use pallet_collator_selection::StakingPotAccountId;
-use pallet_xcm::XcmPassthrough;
+use pallet_xcm::{AuthorizedAliasers, XcmPassthrough};
 use parachains_common::{
 	xcm_config::{
-		AllSiblingSystemParachains, ConcreteAssetFromSystem, ParentRelayOrSiblingParachains,
-		RelayOrOtherSystemParachains,
+		AliasAccountId32FromSiblingSystemChain, AllSiblingSystemParachains,
+		AssetFeeAsExistentialDepositMultiplier, ConcreteAssetFromSystem,
+		ParentRelayOrSiblingParachains, RelayOrOtherSystemParachains,
 	},
 	TREASURY_PALLET_ID,
 };
-use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, COLLECTIVES_ID, NEXT_ASSET_HUB_ID};
+use paseo_runtime_constants::system_parachain::{ASSET_HUB_ID, COLLECTIVES_ID};
 use polkadot_parachain_primitives::primitives::Sibling;
 use sp_runtime::traits::{AccountIdConversion, TryConvertInto};
 use xcm::latest::prelude::*;
 use xcm_builder::{
-	AccountId32Aliases, AllowExplicitUnpaidExecutionFrom, AllowHrmpNotificationsFromRelayChain,
+	AccountId32Aliases, AliasChildLocation, AliasOriginRootUsingFilter,
+	AllowExplicitUnpaidExecutionFrom, AllowHrmpNotificationsFromRelayChain,
 	AllowKnownQueryResponses, AllowSubscriptionsFrom, AllowTopLevelPaidExecutionFrom,
 	DenyRecursively, DenyReserveTransferToRelayChain, DenyThenTry, DescribeTerminus,
 	EnsureXcmOrigin, FrameTransactionalProcessor, FungibleAdapter, FungiblesAdapter,
@@ -58,10 +59,7 @@ use xcm_builder::{
 	TrailingSetTopicAsId, UsingComponents, WeightInfoBounds, WithComputedOrigin,
 	WithLatestLocationConverter, WithUniqueTopic, XcmFeeManagerFromComponents,
 };
-use xcm_executor::{
-	traits::{Properties, ShouldExecute},
-	XcmExecutor,
-};
+use xcm_executor::XcmExecutor;
 
 parameter_types! {
 	pub const RootLocation: Location = Location::here();
@@ -86,7 +84,6 @@ parameter_types! {
 	pub UniversalLocationNetworkId: NetworkId = UniversalLocation::get().global_consensus().unwrap();
 	pub CheckingAccount: AccountId = PolkadotXcm::check_account();
 	pub AssetHubLocation: Location = Location::new(1, [Parachain(ASSET_HUB_ID)]);
-	pub NextAhLocation: Location = Location::new(1, [Parachain(NEXT_ASSET_HUB_ID)]);
 }
 
 pub type PriceForParentDelivery = polkadot_runtime_common::xcm_sender::ExponentialPrice<
@@ -189,9 +186,9 @@ pub type XcmOriginToTransactDispatchOrigin = (
 	// Native converter for sibling Parachains; will convert to a `SiblingPara` origin when
 	// recognized.
 	SiblingParachainAsNative<cumulus_pallet_xcm::Origin, RuntimeOrigin>,
-	// Superuser converter for the AH-next location. This will allow it to issue a transaction from
+	// Superuser converter for Asset Hub. This will allow it to issue a transaction from
 	// the Root origin.
-	LocationAsSuperuser<Equals<NextAhLocation>, RuntimeOrigin>,
+	LocationAsSuperuser<Equals<AssetHubLocation>, RuntimeOrigin>,
 	// Native signed account converter; this just converts an `AccountId32` origin into a normal
 	// `RuntimeOrigin::Signed` origin of the same 32-byte value.
 	SignedAccountId32AsNative<RelayNetwork, RuntimeOrigin>,
@@ -213,21 +210,10 @@ impl Contains<Location> for ParentOrParentsPlurality {
 	}
 }
 
-/// Custom barrier for Asset Hub - allows any execution from Asset Hub
-pub struct AllowAssetHubExecution;
-impl ShouldExecute for AllowAssetHubExecution {
-	fn should_execute<RuntimeCall>(
-		origin: &Location,
-		_instructions: &mut [Instruction<RuntimeCall>],
-		_max_weight: Weight,
-		_properties: &mut Properties,
-	) -> Result<(), ProcessMessageError> {
-		if origin == &AssetHubLocation::get() {
-			log::trace!(target: "xcm::barriers", "AllowAssetHubExecution: Asset Hub origin allowed");
-			Ok(())
-		} else {
-			Err(ProcessMessageError::Unsupported)
-		}
+pub struct AssetHubPlurality;
+impl Contains<Location> for AssetHubPlurality {
+	fn contains(location: &Location) -> bool {
+		matches!(location.unpack(), (1, [Parachain(ASSET_HUB_ID), Plurality { .. }]))
 	}
 }
 
@@ -239,18 +225,18 @@ pub type Barrier = TrailingSetTopicAsId<
 			TakeWeightCredit,
 			// Expected responses are OK.
 			AllowKnownQueryResponses<PolkadotXcm>,
-			AllowAssetHubExecution,
 			WithComputedOrigin<
 				(
 					// If the message is one that immediately attempts to pay for execution, then
 					// allow it.
 					AllowTopLevelPaidExecutionFrom<Everything>,
-					// Parent and its pluralities (i.e. governance bodies) get free execution.
-					AllowExplicitUnpaidExecutionFrom<ParentOrParentsPlurality>,
-					// The chain the credit trees are delivered to. It sends back the roots it is
-					// finished with. Unlike `AllowAssetHubExecution` above, this accepts only a
-					// message that asks for free execution.
-					AllowExplicitUnpaidExecutionFrom<Equals<NextAhLocation>>,
+					// Parent, Asset Hub and their pluralities get free execution.
+					AllowExplicitUnpaidExecutionFrom<
+						(ParentOrParentsPlurality, AssetHubPlurality, Equals<AssetHubLocation>),
+						// The barrier runs before fees: keep this computation-only.
+						// Do not use `TrustedAliasers` here.
+						CheapTrustedAliasers,
+					>,
 					// Subscriptions for version tracking are OK.
 					AllowSubscriptionsFrom<ParentRelayOrSiblingParachains>,
 					// HRMP notifications from the relay chain are OK.
@@ -271,6 +257,31 @@ pub type WaivedLocations = (
 	Equals<RootLocation>,
 	LocalPlurality,
 );
+
+/// Rejects aliases into the location that `LocationAsSuperuser` converts to Root.
+pub struct DenyAliasIntoSuperuser<Inner>(core::marker::PhantomData<Inner>);
+impl<Inner: ContainsPair<Location, Location>> ContainsPair<Location, Location>
+	for DenyAliasIntoSuperuser<Inner>
+{
+	fn contains(origin: &Location, target: &Location) -> bool {
+		target != &AssetHubLocation::get() && Inner::contains(origin, target)
+	}
+}
+
+/// Aliasing rules that the barrier evaluates before charging fees.
+/// These filters must not read storage selected by an untrusted message.
+/// Stored authorizations belong only in [`TrustedAliasers`].
+pub type CheapTrustedAliasers = DenyAliasIntoSuperuser<UnguardedCheapAliasers>;
+
+type UnguardedCheapAliasers = (
+	AliasChildLocation,
+	AliasAccountId32FromSiblingSystemChain,
+	AliasOriginRootUsingFilter<AssetHubLocation, Everything>,
+);
+
+/// Execution permits cheap aliases and stored authorizations except into the superuser location.
+pub type TrustedAliasers =
+	DenyAliasIntoSuperuser<(UnguardedCheapAliasers, AuthorizedAliasers<Runtime>)>;
 
 /// Accept an external asset as a teleport only when it comes from Asset Hub.
 pub struct ExternalAssetFromAssetHub;
@@ -306,18 +317,35 @@ impl ContainsPair<Asset, Location> for AssetHubReserveAsset {
 }
 
 pub type WeightToNativeFee = WeightToFee;
-pub struct WeightToExternalAssetFee;
-impl frame_support::weights::WeightToFee for WeightToExternalAssetFee {
-	type Balance = Balance;
 
-	fn weight_to_fee(weight: &Weight) -> Self::Balance {
-		let native_fee = WeightToNativeFee::weight_to_fee(weight);
+/// Prices weight in PAS and converts it at the rate registered by governance.
+/// Assets without a rate cannot pay execution fees.
+pub type WeightToAssetRateFee =
+	AssetFeeAsExistentialDepositMultiplier<Runtime, WeightToNativeFee, AssetRate, ()>;
 
-		AssetRate::to_asset_balance(native_fee, ExternalAssetLocation::get())
-			// Using max value will make the payment fail and go to the next trader component.
-			.unwrap_or(Balance::MAX)
-	}
-}
+/// Buys execution weight with a rated asset accepted by the asset transactor.
+/// Fees go to the staking pot in that asset; failed deposits are burned.
+/// Register assets with `is_sufficient = true` and `min_balance` no larger than the
+/// smallest fee, or seed the pot with the asset or the native existential deposit first.
+pub type AssetRateTrader = TakeFirstAssetTrader<
+	AccountId,
+	WeightToAssetRateFee,
+	AssetsConvertedConcreteId,
+	Assets,
+	ResolveAssetTo<StakingPotAccountId<Runtime>, Assets>,
+>;
+
+/// Pays execution fees in PAS or a foreign asset with a governance-registered rate.
+pub type Traders = (
+	UsingComponents<
+		WeightToNativeFee,
+		RelayLocation,
+		AccountId,
+		Balances,
+		ResolveTo<StakingPotAccountId<Runtime>, Balances>,
+	>,
+	AssetRateTrader,
+);
 
 pub struct XcmConfig;
 impl xcm_executor::Config for XcmConfig {
@@ -336,22 +364,7 @@ impl xcm_executor::Config for XcmConfig {
 		RuntimeCall,
 		MaxInstructions,
 	>;
-	type Trader = (
-		UsingComponents<
-			WeightToNativeFee,
-			RelayLocation,
-			AccountId,
-			Balances,
-			ResolveTo<StakingPotAccountId<Runtime>, Balances>,
-		>,
-		UsingComponents<
-			WeightToExternalAssetFee,
-			ExternalAssetLocation,
-			AccountId,
-			FungibleExternalAsset,
-			ResolveTo<StakingPotAccountId<Runtime>, FungibleExternalAsset>,
-		>,
-	);
+	type Trader = Traders;
 	type ResponseHandler = PolkadotXcm;
 	type AssetTrap = PolkadotXcm;
 	type SubscriptionService = PolkadotXcm;
@@ -367,7 +380,7 @@ impl xcm_executor::Config for XcmConfig {
 	type UniversalAliases = Nothing;
 	type CallDispatcher = RuntimeCall;
 	type SafeCallFilter = Everything;
-	type Aliasers = Nothing;
+	type Aliasers = TrustedAliasers;
 	type TransactionalProcessor = FrameTransactionalProcessor;
 	type HrmpNewChannelOpenRequestHandler = ();
 	type HrmpChannelAcceptedHandler = ();
@@ -388,8 +401,21 @@ pub type XcmRouter = WithUniqueTopic<(
 	XcmpQueue,
 )>;
 
+parameter_types! {
+	pub const DepositPerItem: Balance = crate::deposit(1, 0);
+	pub const DepositPerByte: Balance = crate::deposit(0, 1);
+	pub const AuthorizeAliasHoldReason: RuntimeHoldReason =
+		RuntimeHoldReason::PolkadotXcm(pallet_xcm::HoldReason::AuthorizeAlias);
+}
+
 impl pallet_xcm::Config for Runtime {
-	type AuthorizedAliasConsideration = Disabled;
+	// xcm_executor::Config::Aliasers includes pallet_xcm::AuthorizedAliasers.
+	type AuthorizedAliasConsideration = HoldConsideration<
+		AccountId,
+		Balances,
+		AuthorizeAliasHoldReason,
+		LinearStoragePrice<DepositPerItem, DepositPerByte, Balance>,
+	>;
 	type RuntimeEvent = RuntimeEvent;
 	// We want to disallow users sending (arbitrary) XCM programs from this chain.
 	type SendXcmOrigin = EnsureXcmOrigin<RuntimeOrigin, ()>;

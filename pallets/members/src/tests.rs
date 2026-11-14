@@ -18,7 +18,7 @@ use crate::{mock::*, *};
 use frame_support::{assert_noop, assert_ok};
 use indiv_support::traits::{
 	AppendOnlyMembers, FlexibleMembers, MembershipProver, RingExponent, RingMembershipProof,
-	RingStatus,
+	RingRootsProvider, RingStatus,
 };
 use sp_runtime::transaction_validity::InvalidTransaction;
 use verifiable::GenerateVerifiable;
@@ -2770,6 +2770,77 @@ mod collection_deletion_tests {
 			assert!(!IdentifiersOf::<Test>::get(&owner_key)
 				.unwrap_or_default()
 				.contains(&DELETION_IDENTIFIER));
+		});
+	}
+
+	/// A marked collection reports no roots, so the notifier sends its queued rings as deleted.
+	#[test]
+	fn a_marked_collection_reports_no_roots() {
+		TestExt::new().execute_with(|| {
+			let owner = MockLocation(1);
+			create_owned_collection(DELETION_IDENTIFIER, owner.clone(), 5);
+			setup_collection_with_members(DELETION_IDENTIFIER, 10, true);
+			let paginated = || {
+				<MembersPallet as RingRootsProvider<MembersOf<Test>>>::get_ring_roots_paginated(
+					DELETION_IDENTIFIER,
+					None,
+					10,
+				)
+			};
+			let indices = paginated().into_iter().map(|(index, _, _)| index).collect::<Vec<_>>();
+			let by_index = || {
+				<MembersPallet as RingRootsProvider<MembersOf<Test>>>::get_ring_roots(
+					DELETION_IDENTIFIER,
+					&indices,
+				)
+			};
+			assert!(!indices.is_empty(), "the collection has a built ring");
+			assert_eq!(by_index().len(), indices.len());
+
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::delete_collection(
+				owner,
+				&DELETION_IDENTIFIER
+			));
+
+			assert!(paginated().is_empty());
+			assert!(by_index().is_empty());
+		});
+	}
+
+	#[test]
+	fn deleted_collection_identifier_cannot_be_reused() {
+		TestExt::new().execute_with(|| {
+			System::set_block_number(1);
+			let owner = MockLocation(1);
+			create_owned_collection(DELETION_IDENTIFIER, owner.clone(), 5);
+
+			assert_ok!(<MembersPallet as AppendOnlyMembers>::delete_collection(
+				owner.clone(),
+				&DELETION_IDENTIFIER
+			));
+			assert!(RetiredIdentifiers::<Test>::contains_key(DELETION_IDENTIFIER));
+
+			advance_to_block(10);
+			assert!(!SuspendedCollections::<Test>::contains_key(DELETION_IDENTIFIER));
+			assert!(RetiredIdentifiers::<Test>::contains_key(DELETION_IDENTIFIER));
+
+			assert_noop!(
+				<MembersPallet as AppendOnlyMembers>::create_collection(
+					owner.clone(),
+					&DELETION_IDENTIFIER,
+					5,
+					RingMode::Flexible,
+					indiv_support::traits::RingExponent::R2e9,
+					None,
+				),
+				Error::<Test>::IdentifierRetired
+			);
+
+			let mut other = DELETION_IDENTIFIER;
+			other[31] ^= 1;
+			assert!(!RetiredIdentifiers::<Test>::contains_key(other));
+			create_owned_collection(other, owner, 5);
+			assert!(Collections::<Test>::contains_key(other));
 		});
 	}
 

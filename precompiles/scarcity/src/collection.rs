@@ -1020,6 +1020,8 @@ where
 				mintedAt: nft.minted_at,
 				lastMoved: nft.last_moved,
 				stateNonce: nft.state_nonce,
+				feelessMovesLeft: <T as indiv_pallet_scarcity::Config>::MaximumMoves::get()
+					.saturating_sub(nft.moves),
 			},
 		))
 	}

@@ -37,6 +37,7 @@ fn configurable_play_deposit_is_held_refunded_and_future_only() {
 			rounds: 1,
 			max_group_size: 2,
 			airdrops: Default::default(),
+			tenure_claim_window: 0,
 		};
 		Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]).unwrap();
 
@@ -115,6 +116,45 @@ fn configurable_play_deposit_is_held_refunded_and_future_only() {
 }
 
 #[test]
+fn account_participant_checks_in() {
+	new_test_ext().execute_with(|| {
+		let bob_pair = Sr25519Keyring::Bob.pair();
+		let bob = Sr25519Keyring::Bob.to_account_id();
+
+		reduce_game_phase_durations();
+		let now = (pallet_timestamp::Now::<Runtime>::get() / 1000) as u32;
+		let schedule = indiv_pallet_game::GameSchedule {
+			game_play_time: now + IN_BETWEEN_GAMES,
+			rounds: 1,
+			max_group_size: 2,
+			airdrops: Default::default(),
+			tenure_claim_window: 60,
+		};
+		Game::schedule_games(RuntimeOrigin::root(), vec![schedule.clone()]).unwrap();
+
+		let funding = PlayDepositDefault::get().saturating_add(Balances::minimum_balance());
+		Balances::mint_into(&bob, funding.saturating_mul(2)).unwrap();
+
+		advance_block();
+		let signup = indiv_pallet_game::Call::<Runtime>::sign_up_with_account {
+			identifier_key: [10u8; 65],
+			airdrops: None,
+		};
+		exec_signed(&bob_pair, signup.into());
+
+		advance_until_time(GameTimes::<Runtime>::game_play_time(&schedule) - 60);
+		let claim = indiv_pallet_game::Call::<Runtime>::claim_tenure_credits {};
+		exec_signed_as_score_participant(&bob_pair, claim.into());
+
+		assert_eq!(
+			indiv_pallet_game::TenureClaims::<Runtime>::get(AccountOrPerson::Account(bob)),
+			Some(1),
+			"a player without tenure reaches only the zero threshold"
+		);
+	});
+}
+
+#[test]
 fn deposit_player_flow() {
 	new_test_ext().execute_with(|| {
 		// Yields a personhood threshold of 3.
@@ -142,10 +182,10 @@ fn deposit_player_flow() {
 		let zoe_stmt_acc_pair = sr25519::Pair::from_seed(&[2u8; 32]);
 		let zoe_stmt_acc = pair_to_account_id(&zoe_stmt_acc_pair);
 		let zoe_stmt_acc_proof_of_ownership: MultiSignature = zoe_stmt_acc_pair
-			.sign(
+			.sign(&indiv_pallet_game::Pallet::<Runtime>::account_signing_payload(
 				&(b"pop:game:stmt_account_for_alias:", zoe_score_alias)
-					.using_encoded(sp_io::hashing::blake2_256)[..],
-			)
+					.using_encoded(sp_io::hashing::blake2_256),
+			))
 			.into();
 		let zoe_id = indiv_pallet_people::NextPersonalId::<Runtime>::get();
 		DummyDim::reserve_ids(RuntimeOrigin::root(), 1).unwrap();
@@ -183,6 +223,7 @@ fn deposit_player_flow() {
 				} else {
 					Default::default()
 				},
+				tenure_claim_window: 0,
 			})
 			.collect::<Vec<_>>();
 		Game::schedule_games(RuntimeOrigin::root(), schedules.clone()).unwrap();
@@ -487,6 +528,7 @@ fn deposit_player_flow() {
 				} else {
 					Default::default()
 				},
+				tenure_claim_window: 0,
 			})
 			.collect::<Vec<_>>();
 		// Top up the airdrop source for the second event's prize allocation.
