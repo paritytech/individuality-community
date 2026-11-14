@@ -107,7 +107,7 @@ pub mod pallet {
 	/// The prefix of the message a lite consumer account signs in [`Call::register_person`].
 	pub const REGISTER_PERSON_MSG_PREFIX: &[u8] = b"pop:resources:register_person";
 
-	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
 
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
@@ -775,7 +775,8 @@ pub mod pallet {
 			// Ensure this is a person.
 			let alias = T::EnsurePerson::ensure_origin(origin, &Self::resources_context())?;
 			let account = AccountOfAlias::<T>::get(alias).ok_or(Error::<T>::NotRegistered)?;
-			let consumer_info = Consumers::<T>::get(&account).ok_or(Error::<T>::NotRegistered)?;
+			let mut consumer_info =
+				Consumers::<T>::get(&account).ok_or(Error::<T>::NotRegistered)?;
 			let Credibility::Person { last_update, demoted: was_demoted, .. } =
 				consumer_info.credibility
 			else {
@@ -788,22 +789,17 @@ pub mod pallet {
 				Error::<T>::TouchNotReady
 			);
 
-			// Set the consumer's updated record.
-			Consumers::<T>::insert(
-				&account,
-				ConsumerInfo {
-					credibility: Credibility::Person { alias, last_update: now, demoted: false },
-					..consumer_info
-				},
-			);
-
 			if was_demoted {
 				// A person's allowance should be given back.
-				let person_allowance = T::PersonStatementLimit::get();
-				let lite_person_allowance = T::LitePersonStatementLimit::get();
-				let remaining_allowance = person_allowance.saturating_sub(lite_person_allowance);
-				increase_allowance_by(account.clone().into(), remaining_allowance);
+				Self::set_consumer_allowance(
+					&account,
+					&mut consumer_info,
+					T::PersonStatementLimit::get(),
+				);
 			}
+			consumer_info.credibility =
+				Credibility::Person { alias, last_update: now, demoted: false };
+			Consumers::<T>::insert(&account, consumer_info);
 
 			Self::deposit_event(Event::PersonAuthorizationTouched { account });
 			Ok(Pays::No.into())
@@ -889,18 +885,16 @@ pub mod pallet {
 		#[pallet::weight(<T as Config>::WeightInfo::demote_auth_expired())]
 		pub fn demote_auth_expired(origin: OriginFor<T>, account: T::AccountId) -> DispatchResult {
 			ensure_authorized(origin)?;
-			let consumer_info = Self::validate_demotion(&account)?;
+			let mut consumer_info = Self::validate_demotion(&account)?;
 			if let Credibility::Person { alias, last_update, .. } = consumer_info.credibility {
-				let allowance = T::PersonStatementLimit::get()
-					.saturating_sub(T::LitePersonStatementLimit::get());
-				decrease_allowance_by(account.clone().into(), allowance);
-				Consumers::<T>::insert(
+				Self::set_consumer_allowance(
 					&account,
-					ConsumerInfo {
-						credibility: Credibility::Person { alias, last_update, demoted: true },
-						..consumer_info
-					},
+					&mut consumer_info,
+					T::LitePersonStatementLimit::get(),
 				);
+				consumer_info.credibility =
+					Credibility::Person { alias, last_update, demoted: true };
+				Consumers::<T>::insert(&account, consumer_info);
 			}
 			Self::deposit_event(Event::PersonDemoted { account });
 			Ok(())
@@ -1538,14 +1532,13 @@ pub mod pallet {
 			// Mark the alias as used.
 			AccountOfAlias::<T>::insert(alias, linked_lite_identity);
 
+			Self::set_consumer_allowance(
+				linked_lite_identity,
+				&mut linked_consumer_info,
+				T::PersonStatementLimit::get(),
+			);
 			// Set the consumer's record.
 			Consumers::<T>::insert(linked_lite_identity, linked_consumer_info);
-
-			// Increase the allowance by the difference between the lite person allowance the user
-			// already has and the full person allowance they now have.
-			let allowance =
-				T::PersonStatementLimit::get().saturating_sub(T::LitePersonStatementLimit::get());
-			increase_allowance_by(linked_lite_identity.clone().into(), allowance);
 
 			Self::deposit_event(Event::PersonRegistered {
 				alias,
@@ -1883,6 +1876,9 @@ pub mod pallet {
 			}
 			// Add the username to the list.
 			UsernameOwnerOf::<T>::insert(&username, &account);
+			// A new lite person has been registered, so the initial allowance should be given.
+			let allowance = T::LitePersonStatementLimit::get();
+			increase_allowance_by(account.clone().into(), allowance.clone());
 			// Set the consumer's record.
 			Consumers::<T>::insert(
 				&account,
@@ -1891,15 +1887,38 @@ pub mod pallet {
 					full_username: None,
 					lite_username: username,
 					credibility: Credibility::Lite,
+					allowance: allowance.into(),
 				},
 			);
 			frame_system::Pallet::<T>::inc_sufficients(&account);
 
-			// A new lite person has been registered, so the initial allowance should be given
-			increase_allowance_by(account.clone().into(), T::LitePersonStatementLimit::get());
-
 			Self::deposit_event(Event::LitePersonRegistered { account });
 			Ok(())
+		}
+
+		/// Replace the personhood statement allowance of `account` with `allowance` and record it
+		/// in `info`. The caller writes `info` back to [`Consumers`].
+		///
+		/// It grants before it revokes, because a depleted dimension removes the whole allowance
+		/// of the account.
+		fn set_consumer_allowance(
+			account: &T::AccountId,
+			info: &mut ConsumerInfo,
+			allowance: StatementAllowance,
+		) {
+			increase_allowance_by(account.clone().into(), allowance.clone());
+			decrease_allowance_by(account.clone().into(), info.allowance.clone().into());
+			info.allowance = allowance.into();
+		}
+
+		/// The personhood statement allowance that a consumer with `credibility` holds under the
+		/// current limits.
+		pub(crate) fn credibility_allowance(credibility: &Credibility) -> StatementAllowance {
+			match credibility {
+				Credibility::Person { demoted: false, .. } => T::PersonStatementLimit::get(),
+				Credibility::Lite | Credibility::Person { demoted: true, .. } =>
+					T::LitePersonStatementLimit::get(),
+			}
 		}
 
 		/// Validate that `account` is in the reservation queue for `username` and that its

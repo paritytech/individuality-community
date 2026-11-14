@@ -20,7 +20,7 @@
 
 use super::*;
 use crate::{
-	migration::{self, v1::RecordGrantedAllowances},
+	migration::{self, v1::RecordGrantedAllowances, v2::RecordConsumerAllowances},
 	Pallet as Resources,
 };
 use codec::{Decode, Encode};
@@ -209,6 +209,7 @@ mod benches {
 			full_username: None,
 			lite_username: lite_uname,
 			credibility: Credibility::Lite,
+			allowance: T::LitePersonStatementLimit::get().into(),
 		};
 		Consumers::<T>::insert(&lite_account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&lite_account);
@@ -264,6 +265,7 @@ mod benches {
 			full_username: None,
 			lite_username: lite_uname,
 			credibility: Credibility::Lite,
+			allowance: T::LitePersonStatementLimit::get().into(),
 		};
 		Consumers::<T>::insert(&lite_account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&lite_account);
@@ -334,6 +336,7 @@ mod benches {
 			full_username: None,
 			lite_username: username,
 			credibility: Credibility::Lite,
+			allowance: T::LitePersonStatementLimit::get().into(),
 		};
 		Consumers::<T>::insert(&account, info);
 		frame_system::Pallet::<T>::inc_sufficients(&account);
@@ -452,6 +455,7 @@ mod benches {
 			full_username: Some(full_username),
 			lite_username,
 			credibility: Credibility::Person { alias, last_update: 0, demoted: false },
+			allowance: T::PersonStatementLimit::get().into(),
 		};
 		Consumers::<T>::insert(&caller, consumer_info);
 
@@ -496,10 +500,12 @@ mod benches {
 			full_username: Some(full_username),
 			lite_username,
 			credibility: Credibility::Person { alias, last_update: 0, demoted: false },
+			allowance: T::PersonStatementLimit::get().into(),
 		};
 		let mut post_consumer_info = consumer_info.clone();
 		post_consumer_info.credibility =
 			Credibility::Person { alias, last_update: 0, demoted: true };
+		post_consumer_info.allowance = post_allowance.clone().into();
 		Consumers::<T>::insert(&account, consumer_info);
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(
 			T::PersonAuthDuration::get() as u64 + 1,
@@ -527,6 +533,7 @@ mod benches {
 				full_username: Some(full_username),
 				lite_username,
 				credibility: Credibility::Person { alias, last_update: 0, demoted: false },
+				allowance: T::PersonStatementLimit::get().into(),
 			},
 		);
 		<T as Config>::BenchmarkHelper::set_time(Duration::from_secs(
@@ -1266,6 +1273,40 @@ mod benches {
 				reference,
 				allowance: T::NotificationAllowance::get().into(),
 			})
+		);
+	}
+
+	#[benchmark]
+	fn migrate_consumer_allowances_step() {
+		let credibility = Credibility::Person { alias: [1u8; 32], last_update: 0, demoted: false };
+		for i in 0..2u8 {
+			migration::v2::v1::Consumers::<T>::insert(
+				account::<T::AccountId>("consumer", i.into(), 0),
+				migration::v2::v1::ConsumerInfo {
+					identifier_key: [0u8; 65],
+					full_username: Some(Username::try_from([b'b'; 32].to_vec()).unwrap()),
+					lite_username: Username::try_from([b'a'; 32].to_vec()).unwrap(),
+					credibility: credibility.clone(),
+				},
+			);
+		}
+		StorageVersion::new(1).put::<Pallet<T>>();
+		let mut keys = migration::v2::v1::Consumers::<T>::iter_keys();
+		let first = keys.next().expect("two consumers are seeded");
+		let second = keys.next().expect("two consumers are seeded");
+		let mut meter =
+			WeightMeter::with_limit(<T as Config>::WeightInfo::migrate_consumer_allowances_step());
+		let cursor;
+
+		#[block]
+		{
+			cursor = RecordConsumerAllowances::<T>::step(Some(first), &mut meter).unwrap();
+		}
+
+		assert_eq!(cursor, Some(second.clone()));
+		assert_eq!(
+			Consumers::<T>::get(&second).map(|info| info.allowance),
+			Some(T::PersonStatementLimit::get().into())
 		);
 	}
 
