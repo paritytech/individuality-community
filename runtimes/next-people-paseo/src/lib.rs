@@ -162,7 +162,7 @@ pub mod async_backing {
 
 	/// The average expected block time that we are targeting.
 	pub const MILLISECS_PER_BLOCK: u64 = 2_000;
-	pub const SLOT_DURATION: u64 = 12_000;
+	pub const SLOT_DURATION: u64 = 24_000;
 
 	// Time is measured by number of blocks.
 	pub const MINUTES: BlockNumber = 60_000 / (MILLISECS_PER_BLOCK as BlockNumber);
