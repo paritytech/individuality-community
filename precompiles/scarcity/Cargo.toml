@@ -16,6 +16,7 @@ frame-support = { workspace = true }
 frame-system = { workspace = true }
 indiv-pallet-scarcity = { workspace = true }
 indiv-precompile-support = { workspace = true }
+log = { workspace = true }
 pallet-revive = { workspace = true }
 
 [dev-dependencies]
@@ -35,6 +36,7 @@ std = [
 	"frame-system/std",
 	"indiv-pallet-scarcity/std",
 	"indiv-precompile-support/std",
+	"log/std",
 	"pallet-balances/std",
 	"pallet-revive/std",
 	"scale-info/std",
