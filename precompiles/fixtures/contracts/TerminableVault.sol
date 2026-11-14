@@ -21,21 +21,21 @@ import "./TokenVault.sol";
 
 /// @notice The `pallet-revive` system precompile, reduced to the call this fixture makes.
 interface ISystem {
-    /// @notice Remove the calling contract's code at the end of the transaction and pay its
-    /// balance to `beneficiary`.
+    /// @notice Pay the calling contract's balance to `beneficiary`. Remove its code at the end of
+    /// the transaction only when that transaction created it.
     function terminate(address beneficiary) external;
 }
 
 /// @title TerminableVault
-/// @notice A `TokenVault` whose owner can remove its code.
-/// @dev A test fixture for the contract lifecycle. A custody contract must not expose this path,
-/// because a redeploy at the address takes over every token it holds.
+/// @notice A `TokenVault` whose owner can call `ISystem.terminate`.
+/// @dev A test fixture for the contract lifecycle. A call after the creating transaction leaves
+/// the code and the tokens in place.
 /// @custom:security-contact admin@parity.io
 contract TerminableVault is TokenVault {
     /// @notice The `pallet-revive` system precompile.
     ISystem private constant SYSTEM = ISystem(address(0x900));
 
-    /// @notice Remove this contract's code and pay its balance to `beneficiary`.
+    /// @notice Pay this contract's balance to `beneficiary` through `ISystem.terminate`.
     /// @param beneficiary The account that receives the balance.
     function terminate(address beneficiary) external {
         require(msg.sender == owner, NotOwner());

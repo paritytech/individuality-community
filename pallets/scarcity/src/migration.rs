@@ -187,44 +187,97 @@ pub mod v2 {
 /// A [`Location`] names the map that holds the instance and, for a contract, the collection that
 /// keys [`ContractNfts`](crate::ContractNfts). An entry written before the change holds only the
 /// holder, and it no longer decodes under the current type.
-pub type MigrateV2ToV3<T> = VersionedMigration<
-	2,
-	3,
-	v3::MigrateToLocations<T>,
-	Pallet<T>,
-	<T as frame_system::Config>::DbWeight,
->;
-
+///
+/// The migration runs in `pallet-migrations` and translates one entry per step, so it spans as
+/// many blocks as the instance count needs. Schedule it in the runtime's multi-block migrations,
+/// not in its single-block ones.
 pub mod v3 {
 	use super::*;
+	use crate::WeightInfo;
+	use frame_support::{
+		migrations::{MigrationId, SteppedMigration, SteppedMigrationError},
+		storage_alias,
+		weights::WeightMeter,
+	};
 
-	/// Use [`MigrateV2ToV3`] rather than this directly.
+	const PALLET_MIGRATIONS_ID: &[u8; 21] = b"indiv-pallet-scarcity";
+
+	/// Storage as it was before version 3.
+	pub mod old {
+		use super::*;
+
+		/// [`Instances`](crate::Instances) with the holder as the value.
+		///
+		/// The alias takes its storage name from its type name, so it keeps the name `Instances`.
+		#[storage_alias]
+		pub type Instances<T: Config> =
+			StorageMap<Pallet<T>, Twox64Concat, InstanceId, <T as frame_system::Config>::AccountId>;
+	}
+
+	/// The multi-block migration from version 2 to version 3.
 	///
-	/// Before this version no contract holds an instance, so every holder is a purse key. The
+	/// Before version 3 no contract holds an instance, so every holder is a purse key. The
 	/// migration removes an entry whose holder does not hold the instance in [`NftsByOwner`].
+	/// The cursor is the last instance that a step translated.
 	///
-	/// It translates every [`Instances`] entry in one block and reads two entries per instance.
-	/// Schedule it only on a chain whose instance count fits one block's weight. A chain with more
-	/// instances needs a multi-block migration.
+	/// Until the migration completes, an entry that it has not reached does not decode. Executive
+	/// admits no extrinsic while a multi-block migration runs, so only a runtime API reads it.
 	pub struct MigrateToLocations<T>(PhantomData<T>);
 
-	impl<T: Config> UncheckedOnRuntimeUpgrade for MigrateToLocations<T> {
-		fn on_runtime_upgrade() -> Weight {
-			let mut translated = 0u64;
-			Instances::<T>::translate(|instance, holder: T::AccountId| {
-				translated.saturating_inc();
-				if !NftsByOwner::<T>::get(&holder).is_some_and(|nft| nft.instance == instance) {
-					log::error!(
-						target: LOG_TARGET,
-						"Instances entry {instance} has no matching NftsByOwner entry; removed"
-					);
-					return None;
+	impl<T: Config> MigrateToLocations<T> {
+		/// Translate the first entry after `cursor` and return its instance.
+		///
+		/// Returns `None` and sets the storage version to 3 when no entry is left.
+		pub(crate) fn translate_next(cursor: Option<InstanceId>) -> Option<InstanceId> {
+			let mut entries = match cursor {
+				Some(last) => old::Instances::<T>::iter_from(old::Instances::<T>::hashed_key_for(last)),
+				None => old::Instances::<T>::iter(),
+			};
+			let Some((instance, holder)) = entries.next() else {
+				StorageVersion::new(Self::id().version_to as u16).put::<Pallet<T>>();
+				log::info!(target: LOG_TARGET, "translated every instance location");
+				return None;
+			};
+			if NftsByOwner::<T>::get(&holder).is_some_and(|nft| nft.instance == instance) {
+				Instances::<T>::insert(instance, Location::Purse(holder));
+			} else {
+				log::error!(
+					target: LOG_TARGET,
+					"Instances entry {instance} has no matching NftsByOwner entry; removed"
+				);
+				Instances::<T>::remove(instance);
+			}
+			Some(instance)
+		}
+	}
+
+	impl<T: Config> SteppedMigration for MigrateToLocations<T> {
+		type Cursor = InstanceId;
+		type Identifier = MigrationId<21>;
+
+		fn id() -> Self::Identifier {
+			MigrationId { pallet_id: *PALLET_MIGRATIONS_ID, version_from: 2, version_to: 3 }
+		}
+
+		fn step(
+			mut cursor: Option<Self::Cursor>,
+			meter: &mut WeightMeter,
+		) -> Result<Option<Self::Cursor>, SteppedMigrationError> {
+			// A chain built from this code starts at version 3 and has nothing to translate.
+			if Pallet::<T>::on_chain_storage_version() != Self::id().version_from as u16 {
+				return Ok(None);
+			}
+			let required = T::WeightInfo::migrate_location();
+			if meter.remaining().any_lt(required) {
+				return Err(SteppedMigrationError::InsufficientWeight { required });
+			}
+			while meter.try_consume(required).is_ok() {
+				cursor = Self::translate_next(cursor);
+				if cursor.is_none() {
+					return Ok(None);
 				}
-				Some(Location::Purse(holder))
-			});
-			log::info!(target: LOG_TARGET, "translated {translated} instance locations");
-			T::DbWeight::get()
-				.reads_writes(translated.saturating_mul(2).saturating_add(1), translated)
+			}
+			Ok(cursor)
 		}
 
 		#[cfg(feature = "try-runtime")]

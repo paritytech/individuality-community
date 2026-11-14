@@ -417,4 +417,17 @@ impl<T: frame_system::Config> indiv_pallet_scarcity::WeightInfo for WeightInfo<T
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
+	/// Storage: `Scarcity::Instances` (r:1 w:1)
+	/// Proof: `Scarcity::Instances` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:0)
+	/// Proof: `Scarcity::NftsByOwner` (`max_values`: None, `max_size`: Some(90), added: 2565, mode: `MaxEncodedLen`)
+	fn migrate_location() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `400`
+		//  Estimated: `3555`
+		// Minimum execution time: 15_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 3555)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
 }

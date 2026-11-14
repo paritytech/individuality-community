@@ -3159,7 +3159,6 @@ pub mod migrations {
 		ForceCreatePgasAsset,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_scarcity::migration::MigrateV1ToV2<Runtime>,
-		indiv_pallet_scarcity::migration::MigrateV2ToV3<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_members_subscriber::migration::MigrateV0ToV1<Runtime>,
@@ -3175,6 +3174,7 @@ pub mod migrations {
 	pub type MbmMigrations = (
 		pallet_revive::migrations::v3::Migration<Runtime>,
 		pallet_revive::migrations::v4::Migration<Runtime>,
+		indiv_pallet_scarcity::migration::v3::MigrateToLocations<Runtime>,
 	);
 }
 

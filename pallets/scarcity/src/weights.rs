@@ -70,6 +70,7 @@ pub trait WeightInfo {
 	fn delete_collection() -> Weight;
 	fn claim_collection_ownership() -> Weight;
 	fn as_scarcity_pipeline() -> Weight;
+	fn migrate_location() -> Weight;
 }
 
 /// Weights for `indiv_pallet_scarcity` using the Substrate node and recommended hardware.
@@ -423,6 +424,19 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(6_u64))
 			.saturating_add(T::DbWeight::get().writes(2_u64))
 	}
+	/// Storage: `Scarcity::Instances` (r:1 w:1)
+	/// Proof: `Scarcity::Instances` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:0)
+	/// Proof: `Scarcity::NftsByOwner` (`max_values`: None, `max_size`: Some(90), added: 2565, mode: `MaxEncodedLen`)
+	fn migrate_location() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `400`
+		//  Estimated: `3555`
+		// Minimum execution time: 15_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 3555)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -774,5 +788,18 @@ impl WeightInfo for () {
 		Weight::from_parts(41_883_000, 6120)
 			.saturating_add(RocksDbWeight::get().reads(6_u64))
 			.saturating_add(RocksDbWeight::get().writes(2_u64))
+	}
+	/// Storage: `Scarcity::Instances` (r:1 w:1)
+	/// Proof: `Scarcity::Instances` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:0)
+	/// Proof: `Scarcity::NftsByOwner` (`max_values`: None, `max_size`: Some(90), added: 2565, mode: `MaxEncodedLen`)
+	fn migrate_location() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `400`
+		//  Estimated: `3555`
+		// Minimum execution time: 15_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 3555)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 }

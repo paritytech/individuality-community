@@ -3230,13 +3230,15 @@ mod migration {
 	use super::*;
 	use crate::migration::{
 		v1::MigrateToTransferability, v2::MigrateToMoves, v3::MigrateToLocations, MigrateV0ToV1,
-		MigrateV1ToV2, MigrateV2ToV3,
+		MigrateV1ToV2,
 	};
 	#[cfg(feature = "try-runtime")]
 	use codec::Decode;
 	use frame_support::{
+		migrations::{SteppedMigration, SteppedMigrationError},
 		storage::unhashed,
 		traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion, UncheckedOnRuntimeUpgrade},
+		weights::WeightMeter,
 	};
 
 	/// Write an item definition in the shape stored before transferability existed.
@@ -3642,27 +3644,40 @@ mod migration {
 		assert_ok!(Scarcity::mint(RuntimeOrigin::signed(OWNER), 1, 0, RECIPIENT, metadata(&[])));
 		let instance =
 			NftsByOwner::<Test>::get(RECIPIENT).expect("the instance was minted").instance;
-		unhashed::put_raw(&Instances::<Test>::hashed_key_for(instance), &RECIPIENT.encode());
+		put_old_location(instance, RECIPIENT);
 		assert_eq!(Instances::<Test>::get(instance), None, "the downgrade must be unreadable");
 		instance
 	}
 
-	/// The gate runs the translation on a chain still at version 2, and closes behind it.
+	/// Write a bare holder as the [`Instances`] entry of `instance`, as stored before version 3.
+	fn put_old_location(instance: u64, holder: u64) {
+		unhashed::put_raw(&Instances::<Test>::hashed_key_for(instance), &holder.encode());
+	}
+
+	/// Step the location migration with an unlimited meter until it completes.
+	fn migrate_locations() {
+		let mut cursor = None;
+		loop {
+			cursor = MigrateToLocations::<Test>::step(cursor, &mut WeightMeter::new())
+				.expect("an unlimited meter covers a step");
+			if cursor.is_none() {
+				break;
+			}
+		}
+	}
+
+	/// The migration wraps each holder as a purse and sets the version to 3 when it completes.
 	#[test]
 	fn the_location_migration_wraps_each_holder_as_a_purse() {
 		new_test_ext().execute_with(|| {
 			let instance = downgrade_a_real_location();
 			StorageVersion::new(2).put::<Scarcity>();
 
-			let weight = <MigrateV2ToV3<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			migrate_locations();
 
 			assert_eq!(Instances::<Test>::get(instance), Some(crate::Location::Purse(RECIPIENT)));
 			assert_eq!(Scarcity::on_chain_storage_version(), 3, "the gate must close behind it");
 			assert_ok!(Scarcity::do_try_state());
-			// A read of the entry and of its purse, a write of the entry, one more read for the
-			// end of the iteration, and a read and write for the version.
-			let db = <Test as frame_system::Config>::DbWeight::get();
-			assert_eq!(weight, db.reads_writes(4, 2), "the translation must charge what it did");
 		});
 	}
 
@@ -3673,15 +3688,16 @@ mod migration {
 		new_test_ext().execute_with(|| {
 			let instance = downgrade_a_real_location();
 			assert_eq!(instance, 0);
-			unhashed::put_raw(&Instances::<Test>::hashed_key_for(7), &OTHER.encode());
-			unhashed::put_raw(&Instances::<Test>::hashed_key_for(8), &RECIPIENT.encode());
+			put_old_location(7, OTHER);
+			put_old_location(8, RECIPIENT);
+			StorageVersion::new(2).put::<Scarcity>();
 			let purses = NftsByOwner::<Test>::iter().collect::<Vec<_>>();
 			#[cfg(feature = "try-runtime")]
 			let state = MigrateToLocations::<Test>::pre_upgrade().expect("counts the keys");
 			#[cfg(feature = "try-runtime")]
 			assert_eq!(u32::decode(&mut &state[..]).unwrap(), 3);
 
-			MigrateToLocations::<Test>::on_runtime_upgrade();
+			migrate_locations();
 
 			assert_eq!(
 				Instances::<Test>::iter().collect::<Vec<_>>(),
@@ -3693,17 +3709,78 @@ mod migration {
 		});
 	}
 
-	/// A chain built from this code is already at version 3, so the gate holds shut.
+	/// A meter with room for one step translates one entry, and the version stays at 2 until the
+	/// step that finds no entry left.
+	#[test]
+	fn the_location_migration_translates_one_entry_per_step_weight() {
+		new_test_ext().execute_with(|| {
+			let instance = downgrade_a_real_location();
+			put_old_location(7, OTHER);
+			StorageVersion::new(2).put::<Scarcity>();
+			let required = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::migrate_location();
+			let step = |cursor| {
+				let mut meter = WeightMeter::with_limit(required);
+				let next = MigrateToLocations::<Test>::step(cursor, &mut meter);
+				assert_eq!(meter.consumed(), required, "each step must charge its weight");
+				next.expect("the meter covers one step")
+			};
+
+			// The map iterates in hash order, so either entry can come first.
+			let handled = || {
+				usize::from(Instances::<Test>::get(instance).is_some()) +
+					usize::from(!unhashed::exists(&Instances::<Test>::hashed_key_for(7)))
+			};
+
+			let cursor = step(None);
+			assert!(cursor.is_some());
+			assert_eq!(handled(), 1, "one entry per step");
+			assert_eq!(Scarcity::on_chain_storage_version(), 2);
+
+			let cursor = step(cursor);
+			assert!(cursor.is_some());
+			assert_eq!(handled(), 2);
+			assert_eq!(Scarcity::on_chain_storage_version(), 2);
+
+			assert_eq!(step(cursor), None);
+			assert_eq!(Scarcity::on_chain_storage_version(), 3);
+			assert_eq!(
+				Instances::<Test>::iter().collect::<Vec<_>>(),
+				vec![(instance, crate::Location::Purse(RECIPIENT))]
+			);
+		});
+	}
+
+	/// A meter without room for one step reports the weight it needs and changes nothing.
+	#[test]
+	fn the_location_migration_reports_insufficient_weight() {
+		new_test_ext().execute_with(|| {
+			let instance = downgrade_a_real_location();
+			StorageVersion::new(2).put::<Scarcity>();
+			let required = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::migrate_location();
+			let mut meter = WeightMeter::with_limit(required.saturating_sub(Weight::from_parts(1, 0)));
+
+			assert_eq!(
+				MigrateToLocations::<Test>::step(None, &mut meter),
+				Err(SteppedMigrationError::InsufficientWeight { required })
+			);
+			assert_eq!(Instances::<Test>::get(instance), None);
+			assert_eq!(Scarcity::on_chain_storage_version(), 2);
+		});
+	}
+
+	/// A chain built from this code is already at version 3, so the migration does nothing.
 	#[test]
 	fn a_fresh_chain_skips_the_location_migration() {
 		new_test_ext().execute_with(|| {
 			setup_item();
 			mint(0, RECIPIENT);
+			put_old_location(7, OTHER);
+			let mut meter = WeightMeter::new();
 
-			let weight = <MigrateV2ToV3<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			assert_eq!(MigrateToLocations::<Test>::step(None, &mut meter), Ok(None));
 
-			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));
-			assert_ok!(Scarcity::do_try_state());
+			assert_eq!(meter.consumed(), Weight::zero());
+			assert!(unhashed::exists(&Instances::<Test>::hashed_key_for(7)), "nothing is touched");
 		});
 	}
 
@@ -3714,15 +3791,17 @@ mod migration {
 	fn the_try_runtime_checks_span_the_location_translation() {
 		new_test_ext().execute_with(|| {
 			downgrade_a_real_location();
+			StorageVersion::new(2).put::<Scarcity>();
 			let state = MigrateToLocations::<Test>::pre_upgrade().expect("counts the keys");
 			assert_eq!(u32::decode(&mut &state[..]).unwrap(), 1, "keys are counted, not entries");
 
-			MigrateToLocations::<Test>::on_runtime_upgrade();
+			migrate_locations();
 			assert_ok!(MigrateToLocations::<Test>::post_upgrade(state));
 
-			unhashed::put_raw(&Instances::<Test>::hashed_key_for(7), &OTHER.encode());
+			put_old_location(7, OTHER);
+			StorageVersion::new(2).put::<Scarcity>();
 			let state = MigrateToLocations::<Test>::pre_upgrade().expect("counts the keys");
-			MigrateToLocations::<Test>::on_runtime_upgrade();
+			migrate_locations();
 			assert!(MigrateToLocations::<Test>::post_upgrade(state).is_err());
 		});
 	}

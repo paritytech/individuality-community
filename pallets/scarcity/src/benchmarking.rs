@@ -23,7 +23,7 @@ use alloc::{vec, vec::Vec};
 use frame_benchmarking::v2::*;
 use frame_support::{
 	dispatch::{DispatchInfo, GetDispatchInfo, PostDispatchInfo},
-	traits::{Consideration, Get},
+	traits::{Consideration, Get, StorageVersion},
 };
 use frame_system::RawOrigin;
 use sp_runtime::{
@@ -33,7 +33,10 @@ use sp_runtime::{
 };
 
 use super::*;
-use crate::extension::{AsScarcity, AsScarcityInfo};
+use crate::{
+	extension::{AsScarcity, AsScarcityInfo},
+	migration::v3::{old, MigrateToLocations},
+};
 
 fn metadata_key<T: Config>(seed: u32) -> MetadataKeyOf<T> {
 	let mut bytes = vec![0; T::MaxKeyLen::get() as usize];
@@ -427,6 +430,26 @@ mod benchmarks {
 
 		assert!(NftsByOwner::<T>::contains_key(&owner));
 		assert_eq!(Locked::<T>::get(&owner).map(|lock| lock.retries), Some(u8::MAX));
+		Ok(())
+	}
+
+	/// The step that rewrites a valid entry: it reads the entry and its purse and writes the entry.
+	#[benchmark]
+	fn migrate_location() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = whitelisted_caller();
+		let holder: T::AccountId = account("holder", 0, 0);
+		let (collection, item) = create_definition::<T>(&owner)?;
+		Pallet::<T>::do_mint(owner, collection, item, holder.clone(), Vec::new())?;
+		let instance = NftsByOwner::<T>::get(&holder).expect("holder has the minted NFT").instance;
+		old::Instances::<T>::insert(instance, &holder);
+		StorageVersion::new(2).put::<Pallet<T>>();
+
+		#[block]
+		{
+			MigrateToLocations::<T>::translate_next(None);
+		}
+
+		assert_eq!(Instances::<T>::get(instance), Some(Location::Purse(holder)));
 		Ok(())
 	}
 
