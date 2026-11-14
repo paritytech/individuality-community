@@ -1945,11 +1945,14 @@ impl<T: Config> Pallet<T> {
 			NftClaimCreditAward<T::AccountId>,
 			ConstU32<AWARDS_PER_CHUNK>,
 		>::max_encoded_len() as u64;
-		let min_proof_size = u64::from(CHUNKS_PER_TREE).saturating_mul(chunk_size);
-		let proof_size = build_worst_case.proof_size();
+		let min_growth = u64::from(CHUNKS_PER_TREE - 1).saturating_mul(chunk_size);
+		let growth = build_worst_case
+			.proof_size()
+			.saturating_sub(<T as Config>::WeightInfo::build_credit_tree(1).proof_size());
 		assert!(
-			proof_size == 0 || proof_size >= min_proof_size,
-			"`build_credit_tree` proof size {proof_size} is below {min_proof_size}, regenerate the weights",
+			build_worst_case.proof_size() == 0 || growth >= min_growth,
+			"`build_credit_tree` proof size grows by {growth} from 1 to {CHUNKS_PER_TREE} chunks, below \
+		{min_growth}, regenerate the weights",
 		);
 
 		// A message must be fillable from a full queue, otherwise the queue's tail could
