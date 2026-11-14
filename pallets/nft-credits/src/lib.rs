@@ -1110,7 +1110,7 @@ impl<T: Config> Pallet<T> {
 			return <T as Config>::WeightInfo::build_credit_tree_empty();
 		};
 
-		// The weight is charged per chunk read, which is what `block_awards` reads.
+		// Charged per chunk, since `block_awards` reads one chunk per `AWARDS_PER_CHUNK` awards.
 		let chunks = buffered.div_ceil(AWARDS_PER_CHUNK);
 		let awards = Self::block_awards(block, buffered);
 		let leaf_count = awards.len() as u32;
