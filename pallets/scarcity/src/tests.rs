@@ -3717,7 +3717,8 @@ mod migration {
 			let instance = downgrade_a_real_location();
 			put_old_location(7, OTHER);
 			StorageVersion::new(2).put::<Scarcity>();
-			let required = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::migrate_location();
+			let required =
+				<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::migrate_location();
 			let step = |cursor| {
 				let mut meter = WeightMeter::with_limit(required);
 				let next = MigrateToLocations::<Test>::step(cursor, &mut meter);
@@ -3756,8 +3757,10 @@ mod migration {
 		new_test_ext().execute_with(|| {
 			let instance = downgrade_a_real_location();
 			StorageVersion::new(2).put::<Scarcity>();
-			let required = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::migrate_location();
-			let mut meter = WeightMeter::with_limit(required.saturating_sub(Weight::from_parts(1, 0)));
+			let required =
+				<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::migrate_location();
+			let mut meter =
+				WeightMeter::with_limit(required.saturating_sub(Weight::from_parts(1, 0)));
 
 			assert_eq!(
 				MigrateToLocations::<Test>::step(None, &mut meter),

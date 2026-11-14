@@ -230,7 +230,8 @@ pub mod v3 {
 		/// Returns `None` and sets the storage version to 3 when no entry is left.
 		pub(crate) fn translate_next(cursor: Option<InstanceId>) -> Option<InstanceId> {
 			let mut entries = match cursor {
-				Some(last) => old::Instances::<T>::iter_from(old::Instances::<T>::hashed_key_for(last)),
+				Some(last) =>
+					old::Instances::<T>::iter_from(old::Instances::<T>::hashed_key_for(last)),
 				None => old::Instances::<T>::iter(),
 			};
 			let Some((instance, holder)) = entries.next() else {
