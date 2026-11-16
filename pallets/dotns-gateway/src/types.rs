@@ -52,8 +52,7 @@ pub struct BaseLabel(pub BoundedVec<u8, ConstU32<32>>);
 
 impl BaseLabel {
 	/// Returns whether the label matches the lite-person PoP format
-	/// `<dns-stem>.<2+ digits>` (e.g. `alice.42`), per `StringUtils.isLitePersonLabel`
-	/// on the contract side.
+	/// `<dns-stem>.<2+ digits>` (e.g. `alice.42`).
 	pub fn is_valid_lite(&self) -> bool {
 		is_lite_person_label(self.0.as_slice())
 	}
