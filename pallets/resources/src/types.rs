@@ -99,6 +99,11 @@ pub struct ConsumerInfo {
 	pub lite_username: Username,
 	/// The credibility of a consumer.
 	pub credibility: Credibility,
+	/// The personhood statement allowance that the pallet granted to the consumer.
+	///
+	/// A change of credibility revokes this amount, not the current limit, because
+	/// `LitePersonStatementLimit` and `PersonStatementLimit` can change in between.
+	pub allowance: BoundedStatementAllowance,
 }
 
 /// The credibility of a consumer.
