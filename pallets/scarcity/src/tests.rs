@@ -3355,7 +3355,7 @@ mod pledges {
 			assert_eq!(after.pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
 			assert_eq!(after.moves, before.moves + 1);
 			assert_eq!(after.state_nonce, before.state_nonce + 1);
-			assert_eq!(after.last_moved, before.last_moved, "a pledge does not move the instance");
+			assert_eq!(after.last_moved, 10, "a pledge restarts the rest time");
 			assert_eq!(holder_of(0), Some(RECIPIENT));
 			System::assert_has_event(
 				Event::<Test>::Pledged {
@@ -3743,6 +3743,27 @@ mod pledges {
 			assert_eq!(nft_of(RECIPIENT).pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
 			assert_eq!(Locked::<Test>::get(RECIPIENT), None);
 			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// A pledge restarts the rest time, so a run of short pledges does not keep the priority
+	/// of a rested instance.
+	#[test]
+	fn a_pledge_restarts_the_rest_time() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			mint(0, OTHER);
+			MockNow::set(1_000);
+
+			feeless_pledge(RECIPIENT, PLEDGEE, 1_001);
+			assert_ok!(Scarcity::do_pledge_by_holder(&OTHER, 1, PLEDGEE, 1_001));
+			assert_eq!(nft_of(RECIPIENT).last_moved, 1_000);
+			assert_eq!(nft_of(OTHER).last_moved, 1_000, "a paid pledge restarts it too");
+
+			MockNow::set(1_005);
+			let (valid, _, _) = validate_pledge(RECIPIENT, PLEDGEE, 1_100).unwrap();
+			assert_eq!(valid.priority, 5, "the priority counts from the pledge, not the mint");
 		});
 	}
 

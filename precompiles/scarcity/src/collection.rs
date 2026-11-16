@@ -623,16 +623,15 @@ where
 			return Err(revert(ERR_WRONG_HOLDER));
 		}
 		let caller = caller_account::<T>(env)?;
-		let pledge = Scarcity::<T>::live_pledge(&nft, now::<T>());
 		if caller != holder {
-			let reason = if pledge.is_some_and(|pledge| pledge.pledgee == caller) {
+			let reason = if Self::pledgee_account(&nft, &caller).is_some() {
 				ERR_PLEDGEE_TRANSFER
 			} else {
 				ERR_NOT_HOLDER
 			};
 			return Err(revert(reason));
 		}
-		if pledge.is_some() {
+		if Scarcity::<T>::live_pledge(&nft, now::<T>()).is_some() {
 			return Err(revert(ERR_PLEDGED));
 		}
 		Self::move_by_holder(&holder, nft.instance, &transfer, env)?;
@@ -733,8 +732,7 @@ where
 		// the clock.
 		charge_reads(env, 4)?;
 		let (holder, nft) = live_instance::<T>(collection, &call.tokenId)?;
-		let caller = caller_account::<T>(env)?;
-		Self::ensure_pledgee(&nft, &caller)?;
+		let pledgee = Self::ensure_pledgee(&nft, env)?;
 		let holder_address = address_of::<T>(&holder);
 		// See `force_transfer` on why the address is compared as well as the account.
 		if call.to == holder_address && account_of::<T>(&call.to) != holder {
@@ -747,7 +745,7 @@ where
 		let to = account_of::<T>(&call.to);
 		let hook = env.charge(Self::registration_weight())?;
 		env.adjust_gas(hook, Scarcity::<T>::purse_hook_weight(&to));
-		Scarcity::<T>::do_seize(&caller, nft.instance, to).map_err(revert_scarcity::<T>)?;
+		Scarcity::<T>::do_seize(&pledgee, nft.instance, to).map_err(revert_scarcity::<T>)?;
 		deposit_event(env, IScarcityCollection::Unlocked { tokenId: call.tokenId })?;
 		deposit_event(
 			env,
@@ -769,23 +767,35 @@ where
 		// Collection-membership validation reads and the clock.
 		charge_reads(env, 3)?;
 		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
-		let caller = caller_account::<T>(env)?;
-		Self::ensure_pledgee(&nft, &caller)?;
+		let pledgee = Self::ensure_pledgee(&nft, env)?;
 		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::release())?;
-		Scarcity::<T>::do_release(&caller, nft.instance).map_err(revert_scarcity::<T>)?;
+		Scarcity::<T>::do_release(&pledgee, nft.instance).map_err(revert_scarcity::<T>)?;
 		deposit_event(env, IScarcityCollection::Unlocked { tokenId: call.tokenId })?;
 		Ok(Vec::new())
 	}
 
-	/// Refuse a caller that holds no pledge with effect on `nft`, ahead of the pallet's charge.
-	fn ensure_pledgee(nft: &NftOf<T>, caller: &T::AccountId) -> Result<(), Error> {
-		if Scarcity::<T>::live_pledge(nft, now::<T>())
-			.is_some_and(|pledge| pledge.pledgee == *caller)
-		{
-			Ok(())
-		} else {
-			Err(revert(ERR_NOT_PLEDGEE))
-		}
+	/// The pledgee account of the pledge with effect on `nft`, if the caller holds it.
+	///
+	/// Refuses a caller that holds no such pledge with [`ERR_NOT_PLEDGEE`], ahead of the pallet's
+	/// charge. See [`Self::pledgee_account`] on why the caller can differ from the account.
+	fn ensure_pledgee(nft: &NftOf<T>, env: &mut impl Ext<T = T>) -> Result<T::AccountId, Error> {
+		let caller = caller_account::<T>(env)?;
+		Self::pledgee_account(nft, &caller).ok_or_else(|| revert(ERR_NOT_PLEDGEE))
+	}
+
+	/// The account the pledge with effect on `nft` names, if it has the address of `caller`.
+	///
+	/// The match is on the address, not the account. `pledge` stores the account its pledgee
+	/// address resolves to. For an unmapped address that is the fallback account. After the owner
+	/// maps its account, the address resolves to the original account, which differs from the
+	/// stored one. Both accounts have the same address, so the owner still acts as the pledgee.
+	fn pledgee_account(nft: &NftOf<T>, caller: &T::AccountId) -> Option<T::AccountId> {
+		Scarcity::<T>::live_pledge(nft, now::<T>())
+			.filter(|pledge| {
+				pledge.pledgee == *caller ||
+					address_of::<T>(&pledge.pledgee) == address_of::<T>(caller)
+			})
+			.map(|pledge| pledge.pledgee.clone())
 	}
 
 	/// Ask the destination of a `safeTransferFrom` to acknowledge the token it now holds.
@@ -814,9 +824,9 @@ where
 		call: &IScarcityCollection::forceTransferCall,
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
-		// Collection-membership validation reads, the destination's reverse address mapping and
-		// the pallet call.
-		charge_reads(env, 3)?;
+		// Collection-membership validation reads, the destination's reverse address mapping, the
+		// clock and the pallet call.
+		charge_reads(env, 4)?;
 		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::force_transfer())?;
 		// See `mint` on why the zero address is rejected.
 		if call.to == Address::ZERO {
@@ -839,8 +849,14 @@ where
 		// registration that never happens.
 		let hook = env.charge(Self::registration_weight())?;
 		env.adjust_gas(hook, Scarcity::<T>::purse_hook_weight(&to));
+		// The move clears a pledge with effect, which `locked()` reported, so it announces
+		// `Unlocked` as `seize` and `release` do.
+		let pledged = Scarcity::<T>::live_pledge(&nft, now::<T>()).is_some();
 		Scarcity::<T>::force_transfer(RawOrigin::Signed(who).into(), nft.instance, to)
 			.map_err(|e| revert_scarcity::<T>(e.error))?;
+		if pledged {
+			deposit_event(env, IScarcityCollection::Unlocked { tokenId: call.tokenId })?;
+		}
 		deposit_event(
 			env,
 			IScarcityCollection::Transfer {

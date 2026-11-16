@@ -61,14 +61,14 @@
 //! and must decode and validate those bytes themselves.
 //!
 //! Transfers are feeless when authorized through the [`AsScarcity`](extension::AsScarcity)
-//! transaction extension. Their transaction priority is the time since the NFT last moved,
-//! capped by the runtime. Moving an NFT consumes it from the old purse key and places it at the
-//! new one. Each authorization names the permanent instance and its current state nonce. The state
-//! nonce invalidates an authorization whenever that instance moves, including collection-owner
-//! force-transfers away from and back to the same purse. Following Coinage's purse model,
-//! [`AsScarcity`](extension::AsScarcity) replaces the signed origin before ordinary account checks,
-//! so an NFT-only purse does not need a System account. Failed dispatch restores the NFT at the
-//! next state nonce and locks the purse key, which retires the transaction that failed; see the
+//! transaction extension. Their transaction priority is the time since the NFT last moved or was
+//! pledged, capped by the runtime. Moving an NFT consumes it from the old purse key and places it
+//! at the new one. Each authorization names the permanent instance and its current state nonce. The
+//! state nonce invalidates an authorization whenever that instance moves, including
+//! collection-owner force-transfers away from and back to the same purse. Following Coinage's purse
+//! model, [`AsScarcity`](extension::AsScarcity) replaces the signed origin before ordinary account
+//! checks, so an NFT-only purse does not need a System account. Failed dispatch restores the NFT at
+//! the next state nonce and locks the purse key, which retires the transaction that failed; see the
 //! [replay rules](extension#replay).
 //!
 //! Each instance carries [`Config::MaximumMoves`] feeless moves, spends one per transfer, and any
@@ -464,7 +464,10 @@ pub mod pallet {
 		pub item: ItemIndex,
 		/// Unix seconds at mint.
 		pub minted_at: u64,
-		/// Unix seconds; equal to `minted_at` until the first transfer.
+		/// Unix seconds of the last move or pledge, and `minted_at` before the first.
+		///
+		/// The [`AsScarcity`](crate::extension::AsScarcity) extension derives rest-time priority
+		/// from it.
 		pub last_moved: u64,
 		/// Monotonic ownership-state revision, incremented by every dispatch made under it.
 		///
@@ -2068,7 +2071,9 @@ pub mod pallet {
 		/// store it under the holder's key.
 		///
 		/// The state nonce advances, so an authorization signed before the pledge does not apply
-		/// after it. The move budget is the caller's to spend before the call.
+		/// after it. `last_moved` restarts the rest time as a move does, so a run of pledges does
+		/// not keep the priority of a rested instance. The move budget is the caller's to spend
+		/// before the call.
 		fn do_pledge(
 			holder: T::AccountId,
 			nft: NftOf<T>,
@@ -2088,7 +2093,7 @@ pub mod pallet {
 
 			let (instance, collection) = (nft.instance, nft.collection);
 			let pledge = Some(Pledge { pledgee: pledgee.clone(), until });
-			NftsByOwner::<T>::insert(&holder, Nft { state_nonce, pledge, ..nft });
+			NftsByOwner::<T>::insert(&holder, Nft { last_moved: now, state_nonce, pledge, ..nft });
 			Self::deposit_event(Event::Pledged { instance, collection, holder, pledgee, until });
 			Ok(())
 		}
@@ -2281,7 +2286,9 @@ pub mod pallet {
 				// and hash-prefix overhead. The deposit does not follow the instance when it
 				// moves, so every entry is priced at its larger shape: the NFT at its largest,
 				// because the holder can grow it with a pledge, the holder entry as a
-				// `ContractNfts` key, and the `Instances` value as a contract location.
+				// `ContractNfts` key, and the `Instances` value as a contract location. A
+				// deposit taken before version 4 does not cover the pledge; see
+				// `migration::v4`.
 				let location = Location::Contract { holder: to.clone(), collection };
 				let contract_key = (&to, collection, instance);
 				let record_size = NftOf::<T>::max_encoded_len()

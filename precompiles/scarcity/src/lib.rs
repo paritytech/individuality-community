@@ -70,14 +70,20 @@
 //! `release` gives the pledge up. A contract pledgee takes the token into its own custody with
 //! `seize(tokenId, address(this))`. A token that a contract holds cannot be pledged, because the
 //! contract can enforce the same terms in its own code. The pledgee moves the token through
-//! `seize` alone: `transferFrom` and
-//! `safeTransferFrom` refuse it, as ERC-5192 requires of the EIP-721 transfer functions while
-//! `locked()` answers true. A pledge is not an approval: the holder cannot revoke it and it binds
-//! the holder, so `getApproved` stays the zero address and `approve` keeps reverting, and
-//! `pledgeOf` is the read that reports it.
-//! `pledge` emits `Locked`, and `seize` and `release` emit `Unlocked`. A native pledge emits no
-//! log, as a native transfer emits no `Transfer`, and an expiry emits nothing, so a consumer
-//! reads `locked()` or `pledgeOf()` rather than following the lock events.
+//! `seize` alone: `transferFrom` and `safeTransferFrom` refuse it, as ERC-5192 requires of the
+//! EIP-721 transfer functions while `locked()` answers true. A pledge is not an approval: the
+//! holder cannot revoke it and it binds the holder, so `getApproved` stays the zero address and
+//! `approve` keeps reverting, and `pledgeOf` is the read that reports it.
+//!
+//! The precompile identifies the pledgee by its address. `pledge` stores the account the pledgee
+//! address resolves to, which is the fallback account while the address is unmapped. An owner
+//! that maps its account afterwards resolves to its original account, and still seizes and
+//! releases because both accounts have the same address.
+//!
+//! `pledge` emits `Locked`. `seize`, `release` and a `forceTransfer` that clears a pledge with
+//! effect emit `Unlocked`. A native pledge emits no log, as a native transfer emits no
+//! `Transfer`, and an expiry emits nothing, so a consumer reads `locked()` or `pledgeOf()` rather
+//! than following the lock events.
 //!
 //! `name()`, `symbol()`, `tokenURI()`, ERC-7572 `contractURI()` and ERC-2981 `royaltyInfo()`
 //! read reserved metadata keys rather than dedicated pallet fields, so a collection opts into

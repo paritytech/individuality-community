@@ -104,15 +104,16 @@ interface IScarcityCollection {
 
     /// @notice ERC-5192 lock event. Emitted by @custom:function mint when it creates a token whose item is
     /// soulbound, and by @custom:function pledge.
-    /// @dev A soulbound token stays locked. A pledged token unlocks when its pledgee ends the
-    /// pledge, which emits @custom:emits Unlocked, or when the pledge expires, which emits
-    /// nothing. A native pledge emits nothing either, so @custom:function locked is the reliable
+    /// @dev A soulbound token stays locked. A pledged token unlocks when its pledgee or the
+    /// collection owner ends the pledge, which emits @custom:emits Unlocked, or when the pledge
+    /// expires, which emits nothing. A native pledge emits nothing either, so @custom:function locked is the reliable
     /// read.
     /// @param tokenId The soulbound or pledged instance.
     event Locked(uint256 tokenId);
 
     /// @notice ERC-5192 lock event. Emitted by @custom:function mint when it creates a token whose item is
-    /// transferable, and by @custom:function seize and @custom:function release when they end a pledge.
+    /// transferable, and by @custom:function seize, @custom:function release and
+    /// @custom:function forceTransfer when they end a pledge with effect.
     /// @param tokenId The transferable instance.
     event Unlocked(uint256 tokenId);
 
@@ -358,7 +359,8 @@ interface IScarcityCollection {
     /// current holder and pays for the call; the fee-less path is the native pledge the purse key
     /// signs. Until `until` the holder cannot move or burn the token and cannot revoke the pledge.
     /// `until` must lie in the future and within the runtime's maximum pledge duration. A contract
-    /// cannot pledge a token it holds.
+    /// cannot pledge a token it holds. The pledgee acts by its address, so an account that is
+    /// unmapped at the pledge and mapped later still holds it.
     /// @param tokenId The instance to pledge.
     /// @param pledgee The account that may seize or release the instance.
     /// @param until The Unix second at which the pledge stops having effect.
@@ -452,7 +454,8 @@ interface IScarcityCollection {
     /// @notice Move a live instance of this collection to the empty purse key or contract `to`.
     /// @dev This precompile's own function, not part of any ERC standard. Only the collection owner
     /// may call this. It ignores whether the instance is soulbound or pledged, and it clears a
-    /// pledge.
+    /// pledge. Clearing a pledge with effect emits @custom:emits Unlocked ahead of
+    /// @custom:emits Transfer.
     /// @param tokenId The instance to move.
     /// @param to The empty purse key or the contract to move the instance to.
     /// @custom:reverts "destination is the zero address"
@@ -461,6 +464,7 @@ interface IScarcityCollection {
     /// @custom:reverts "destination already holds this instance"
     /// @custom:reverts "destination purse already holds an instance"
     /// @custom:reverts "instance state nonce exhausted"
+    /// @custom:emits Unlocked
     /// @custom:emits Transfer
     function forceTransfer(uint256 tokenId, address to) external;
 
@@ -659,7 +663,8 @@ interface IScarcityCollection {
     /// @param tokenId The instance to query.
     /// @return item The item definition the instance was minted from.
     /// @return mintedAt Unix seconds at mint.
-    /// @return lastMoved Unix seconds of the last move, equal to `mintedAt` until the first move.
+    /// @return lastMoved Unix seconds of the last move or pledge, equal to `mintedAt` until
+    /// the first.
     /// @return stateNonce The monotonic ownership-state revision.
     /// @return feelessMovesLeft The feeless purse-signed moves left before a move must pay. A
     /// paid move, such as `transferFrom`, refills it. A non-zero value does not guarantee that

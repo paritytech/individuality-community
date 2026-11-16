@@ -4118,6 +4118,100 @@ fn seize_charges_the_move_only_past_its_refusals() {
 	});
 }
 
+/// How a pledgee ends a pledge.
+enum PledgeEnd {
+	Seize,
+	Release,
+}
+
+/// A pledge to the address of an unmapped account stores the fallback account. The owner then
+/// maps its account and resolves to the original account. That account still acts as the
+/// pledgee, because both accounts have the same address.
+#[test]
+fn a_pledgee_that_maps_its_account_after_the_pledge_keeps_it() {
+	for end in [PledgeEnd::Seize, PledgeEnd::Release] {
+		new_test_ext().execute_with(|| {
+			let world = PledgeWorld::new();
+			let late = id_to_account(7);
+			let late_address = address_of::<Test>(&late);
+			call_ok(
+				&world.holder,
+				world.target,
+				IScarcityCollection::pledgeCall {
+					tokenId: world.token,
+					pledgee: late_address,
+					until: PLEDGE_UNTIL,
+				}
+				.abi_encode(),
+			);
+			let stored = NftsByOwner::<Test>::get(&world.holder).unwrap().pledge.unwrap();
+			assert_ne!(stored.pledgee, late, "the pledge names the fallback account");
+
+			map_account(&late);
+			assert_eq!(world.pledge_of(), (late_address, PLEDGE_UNTIL));
+			let (to_address, to) = purse(0xCC);
+			let to_address: Address = to_address.0.into();
+			call_reverted_with(
+				&late,
+				world.target,
+				world.transfer_from(to_address),
+				ERR_PLEDGEE_TRANSFER,
+			);
+			match end {
+				PledgeEnd::Seize => {
+					call_ok(&late, world.target, world.seize(to_address));
+					assert_eq!(NftsByOwner::<Test>::get(&to).unwrap().instance, world.instance);
+				},
+				PledgeEnd::Release => {
+					call_ok(
+						&late,
+						world.target,
+						IScarcityCollection::releaseCall { tokenId: world.token }.abi_encode(),
+					);
+					assert_eq!(NftsByOwner::<Test>::get(&world.holder).unwrap().pledge, None);
+				},
+			}
+		});
+	}
+}
+
+/// `forceTransfer` announces `Unlocked` when it clears a pledge with effect, and only then.
+#[test]
+fn force_transfer_unlocks_a_token_whose_pledge_has_effect() {
+	for (now, unlocks) in [(PLEDGE_NOW, true), (PLEDGE_UNTIL, false)] {
+		new_test_ext().execute_with(|| {
+			let world = PledgeWorld::new();
+			world.pledge_natively();
+			MockNow::set(now);
+			let (to, _) = purse(0xCC);
+			let to: Address = to.0.into();
+
+			call_ok(
+				&world.alice,
+				world.target,
+				IScarcityCollection::forceTransferCall { tokenId: world.token, to }.abi_encode(),
+			);
+
+			assert_contract_event(
+				world.target,
+				IScarcityCollection::Transfer {
+					from: world.holder_address,
+					to,
+					tokenId: world.token,
+				},
+			);
+			if unlocks {
+				assert_contract_event(
+					world.target,
+					IScarcityCollection::Unlocked { tokenId: world.token },
+				);
+			}
+			assert_eq!(contract_event_count(), 1 + usize::from(unlocks));
+			assert!(!world.locked());
+		});
+	}
+}
+
 /// Frame-flag guards, driven through `pallet_revive::precompiles::run`, which executes a
 /// precompile inside a frame with controlled read-only and delegate-call flags.
 ///

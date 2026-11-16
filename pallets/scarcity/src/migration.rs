@@ -324,6 +324,11 @@ pub mod v3 {
 /// current type. A purse key then reads as empty and a contract loses the instance from its
 /// balance, which takes every move, burn and authorization of the instance with it.
 ///
+/// The migration leaves instance deposits unchanged. A deposit taken before version 4 is sized
+/// without the pledge, so a pledge on such an instance stores bytes that its deposit does not
+/// cover. The shortfall is one encoded `Pledge` per instance, at most the number of instances
+/// minted before the upgrade, and it ends when the instance burns.
+///
 /// The migration runs in `pallet-migrations` and translates one NFT per step. Schedule it after
 /// [`v3::MigrateToLocations`] in the runtime's multi-block migrations, so a chain at version 2
 /// reaches version 4 in one upgrade.
