@@ -39,8 +39,7 @@ use indiv_support::traits::{
 use scale_info::TypeInfo;
 use sp_core::{ConstU32, ConstU64, H160};
 use sp_runtime::{
-	testing::UintAuthorityId,
-	traits::DispatchTransaction,
+	traits::{DispatchTransaction, IdentifyAccount, Lazy, Verify},
 	transaction_validity::{TransactionValidityError, ValidTransaction},
 	BoundedVec, BuildStorage, DispatchError,
 };
@@ -449,8 +448,13 @@ impl crate::benchmarking::BenchmarkHelper<Test> for () {
 		0
 	}
 
-	fn sign(_message: &[u8]) -> UintAuthorityId {
-		UintAuthorityId(0)
+	fn sign(message: &[u8]) -> MockSignature {
+		let form = if message.starts_with(&signing_context()) {
+			SignedForm::InContext
+		} else {
+			SignedForm::Raw
+		};
+		MockSignature(0, form)
 	}
 
 	fn set_time(seconds: u64) {
@@ -481,7 +485,7 @@ impl crate::Config for Test {
 	type UnixTime = MockUnixTime;
 	type AttestationAllowanceManager = EnsureRoot<u64>;
 	type DispatcherAddressManager = EnsureRoot<u64>;
-	type AttestationSignature = UintAuthorityId;
+	type AttestationSignature = MockSignature;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();
 }
@@ -526,12 +530,58 @@ pub fn invalid_proof() -> MockProof {
 	MockProof { alias: [0u8; 32], valid: false, message: BoundedVec::new() }
 }
 
-pub fn valid_candidate_signature(candidate: u64) -> UintAuthorityId {
-	UintAuthorityId(candidate)
+/// The form of the message that a [`MockSignature`] signs.
+#[derive(
+	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, Clone, PartialEq, Eq, Debug, TypeInfo,
+)]
+pub enum SignedForm {
+	/// The message as the pallet builds it.
+	Raw,
+	/// The message in the personhood signing context.
+	InContext,
 }
 
-pub fn invalid_candidate_signature() -> UintAuthorityId {
-	UintAuthorityId(u64::MAX)
+fn signing_context() -> indiv_support::traits::Context {
+	indiv_support::context::build_product_context(
+		indiv_support::context::personhood::PRODUCT_NAME,
+		&NetworkSuffix::get(),
+		indiv_support::context::SIGNING,
+	)
+}
+
+/// An account signature that is valid for its own account over a message in its form.
+#[derive(
+	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, Clone, PartialEq, Eq, Debug, TypeInfo,
+)]
+pub struct MockSignature(pub u64, pub SignedForm);
+
+impl IdentifyAccount for MockSignature {
+	type AccountId = u64;
+	fn into_account(self) -> u64 {
+		self.0
+	}
+}
+
+impl Verify for MockSignature {
+	type Signer = Self;
+
+	fn verify<L: Lazy<[u8]>>(&self, mut msg: L, signer: &u64) -> bool {
+		let msg = msg.get();
+		let in_context = msg.starts_with(&signing_context());
+		let form_matches = match self.1 {
+			SignedForm::Raw => !in_context,
+			SignedForm::InContext => in_context,
+		};
+		self.0 == *signer && form_matches
+	}
+}
+
+pub fn valid_candidate_signature(candidate: u64) -> MockSignature {
+	MockSignature(candidate, SignedForm::InContext)
+}
+
+pub fn invalid_candidate_signature() -> MockSignature {
+	MockSignature(u64::MAX, SignedForm::InContext)
 }
 
 pub fn set_attestation_allowance(attester: u64, count: u32) {
@@ -544,13 +594,13 @@ pub fn person_registration_origin(alias: Alias) -> RuntimeOrigin {
 }
 
 /// Mock signature from `signer`
-pub fn offchain_signature(signer: u64) -> UintAuthorityId {
-	UintAuthorityId(signer)
+pub fn offchain_signature(signer: u64) -> MockSignature {
+	MockSignature(signer, SignedForm::Raw)
 }
 
 /// Invalid signature
-pub fn invalid_offchain_signature() -> UintAuthorityId {
-	UintAuthorityId(u64::MAX)
+pub fn invalid_offchain_signature() -> MockSignature {
+	MockSignature(u64::MAX, SignedForm::Raw)
 }
 
 /// Drives the pallet extension `validate_only` against the `register_name` call. Returns the
@@ -559,7 +609,7 @@ pub fn validate_register(
 	proof: ProofOf<Test>,
 	ring_index: RingIndex,
 	revision: RevisionIndex,
-	signature: UintAuthorityId,
+	signature: MockSignature,
 	who: u64,
 	label: BaseLabel,
 	link: Link,

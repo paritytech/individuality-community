@@ -23,6 +23,9 @@
 //! period. A notification allowance authorizes a statement account to publish a notification
 //! without revealing the member's identity.
 //!
+//! `Call::replace_statement_store_account` pays no transaction fee. A runtime must rate-limit
+//! `Origin::StmtStoreHolder`, for example with the origin restriction pallet.
+//!
 //! # Deprecated: username management
 //!
 //! Only the username-related state and extrinsics in this pallet
@@ -36,10 +39,12 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
+use alloc::vec::Vec;
 
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
+pub mod migration;
 pub mod types;
 pub mod weights;
 
@@ -53,6 +58,7 @@ pub use weights::WeightInfo;
 
 use frame_support::{
 	dispatch::DispatchResultWithPostInfo,
+	migrations::MultiStepMigrator,
 	traits::{DefensiveOption, EnsureOriginWithArg, IsSubType, OriginTrait, UnixTime},
 };
 use frame_system::offchain::{CreateAuthorizedTransaction, SubmitTransaction};
@@ -75,6 +81,18 @@ use types::{
 };
 use verifiable::GenerateVerifiable;
 
+/// Notified when the cleanup removes a statement store slot entry.
+pub trait OnStmtStoreSlotCleared {
+	/// Called inside `clear_expired_stmt_store_allowances` for each drained entry, with the
+	/// alias the entry was keyed by. The cost must stay constant per call, since that
+	/// benchmark covers it.
+	fn on_cleared(alias: &Alias);
+}
+
+impl OnStmtStoreSlotCleared for () {
+	fn on_cleared(_alias: &Alias) {}
+}
+
 #[frame_support::pallet]
 pub mod pallet {
 	use super::*;
@@ -86,7 +104,13 @@ pub mod pallet {
 	const LOG_TARGET: &str = "runtime::indiv-pallet-resources";
 	pub(crate) const SECONDS_PER_DAY: u64 = 86_400;
 
+	/// The prefix of the message a lite consumer account signs in [`Call::register_person`].
+	pub const REGISTER_PERSON_MSG_PREFIX: &[u8] = b"pop:resources:register_person";
+
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::config]
@@ -148,8 +172,7 @@ pub mod pallet {
 
 		/// The Statement Store allowance for the accounts API.
 		///
-		/// Changing this value requires a migration that updates the existing state.
-		#[pallet::constant]
+		/// This parameter can be changed at any time.
 		type AccountsApiAllowance: Get<StatementAllowance>;
 
 		/// Maximum number of statement store slots a person can claim within one period.
@@ -170,12 +193,6 @@ pub mod pallet {
 		/// This parameter can be changed at any time.
 		type StmtStoreCleanupLimit: Get<u32>;
 
-		/// Minimum time, in seconds, that must pass before an alias can replace its own
-		/// statement store allowance entry within the same period.
-		///
-		/// This parameter can be changed at any time.
-		type StmtStoreReplacementCooldown: Get<u32>;
-
 		/// Extra time, in seconds, during which statement-store allowances from an ended period
 		/// remain active before cleanup may revoke them.
 		///
@@ -186,8 +203,7 @@ pub mod pallet {
 
 		/// The Statement Store allowance for notification statement registration.
 		///
-		/// Changing this value requires a migration that updates the existing state.
-		#[pallet::constant]
+		/// This parameter can be changed at any time.
 		type NotificationAllowance: Get<StatementAllowance>;
 
 		/// Highest valid notification slot identifier for a person within one period.
@@ -240,10 +256,15 @@ pub mod pallet {
 		/// The source of time.
 		type Clock: UnixTime;
 
-		/// Signature type for ensuring ownership of provided accounts in case of registrations
-		/// through alias.
+		/// Signature type that proves ownership of a statement account, on registration through
+		/// an alias and on replacement of a statement store slot by its holder.
 		type OffchainSignature: Verify<Signer: IdentifyAccount<AccountId = Self::AccountId>>
-			+ Parameter;
+			+ Parameter
+			+ Send
+			+ Sync;
+
+		/// Hook run by the statement store slot cleanup, see [`OnStmtStoreSlotCleared`].
+		type OnStmtStoreSlotCleared: OnStmtStoreSlotCleared;
 
 		/// The limit for the statement store usage for lite people.
 		type LitePersonStatementLimit: Get<StatementAllowance>;
@@ -316,6 +337,10 @@ pub mod pallet {
 		/// A long-term storage claim origin, produced by the `AsResources` transaction extension.
 		/// Carries the anonymous alias and the collection used for proof verification.
 		LongTermStorageClaim(Alias, MembershipCollection),
+		/// A statement store slot holder origin, produced by the `AsResources` transaction
+		/// extension after validating the signature of the account that holds the slot of the
+		/// alias. It carries no proof of personhood.
+		StmtStoreHolder(Alias),
 	}
 
 	/// Accounts used to identify consumers mapped to their consumer information.
@@ -462,6 +487,14 @@ pub mod pallet {
 		},
 		/// Expired long-term storage aliases have been cleared for a period.
 		LongTermStorageAliasesCleared { period: u32, count: u32 },
+		/// The statement account holding a statement store slot was replaced.
+		StmtStoreAccountReplaced {
+			alias: Alias,
+			period: u32,
+			seq: u32,
+			previous_account: T::AccountId,
+			new_account: T::AccountId,
+		},
 	}
 
 	#[pallet::error]
@@ -510,16 +543,29 @@ pub mod pallet {
 		NotificationRegistrationNotExpired,
 		/// Notification registration already exists for the alias/context.
 		NotificationRegistrationAlreadyExists,
-		/// The replacement cooldown has not elapsed since the entry was last set.
+		/// The statement store slot entry was written at the current timestamp.
 		StmtStoreReplacementTooEarly,
 		/// The provided `limit` exceeds `LongTermStorageCleanupLimit`.
 		LongTermStorageCleanupLimitExceeded,
+		/// The statement store slot already has an entry for this period.
+		StmtStoreSlotAlreadyClaimed,
+		/// No statement store allowance entry exists for the alias in this period.
+		StmtStoreEntryNotFound,
+		/// The statement account already holds the statement store slot.
+		StmtStoreReplacementSameAccount,
+		/// The `since` witness differs from the timestamp recorded in the slot entry.
+		StmtStoreReplacementSinceMismatch,
 	}
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		fn offchain_worker(block_number: BlockNumberFor<T>) {
 			if !(block_number % T::OffchainWorkerInterval::get()).is_zero() {
+				return;
+			}
+			// Blocks hold only inherents while a multi-block migration runs. Entries that the
+			// migration has not reached yet do not decode.
+			if <T as frame_system::Config>::MultiBlockMigrator::ongoing() {
 				return;
 			}
 
@@ -613,14 +659,6 @@ pub mod pallet {
 				"LiteStmtStoreSlotsPerPeriod must be <= StmtStoreSlotsPerPeriod",
 			);
 			assert!(T::StmtStoreCleanupLimit::get() > 0, "StmtStoreCleanupLimit must be non-zero",);
-			assert!(
-				T::StmtStoreReplacementCooldown::get() > 0,
-				"StmtStoreReplacementCooldown must be non-zero",
-			);
-			assert!(
-				(T::StmtStoreReplacementCooldown::get() as u64) <= SECONDS_PER_DAY,
-				"StmtStoreReplacementCooldown must be at most one day (the period length)",
-			);
 			assert!(T::StmtStoreGraceWindow::get() > 0, "StmtStoreGraceWindow must be non-zero",);
 			assert!(
 				T::LongTermStoragePeriodDuration::get() > 0,
@@ -697,8 +735,8 @@ pub mod pallet {
 		///
 		/// The person must link a previously recognized lite identity, which will be upgraded to a
 		/// full person consumer. In order to prove they hold the lite identity they want to link,
-		/// users must provide a `lite_identity_proof` signature, created by signing the alias bytes
-		/// using their lite consumer account.
+		/// users must provide a `lite_identity_proof` signature. The lite consumer account signs
+		/// [`Pallet::account_signing_payload`] of [`Pallet::register_person_message`].
 		///
 		/// The consumer can choose if they want to have a new username or use an existing
 		/// reservation made in the name of the lite consumer who will be linked.
@@ -900,10 +938,15 @@ pub mod pallet {
 
 			Self::validate_notification_registration(alias, &account_id)?;
 
-			increase_allowance_by(account_id.clone().into(), T::NotificationAllowance::get());
+			let allowance = T::NotificationAllowance::get();
+			increase_allowance_by(account_id.clone().into(), allowance.clone());
 			NotificationRegistrationByAlias::<T>::insert(
 				alias,
-				types::NotificationRegistration { account_id: account_id.clone(), reference },
+				types::NotificationRegistration {
+					account_id: account_id.clone(),
+					reference,
+					allowance: allowance.into(),
+				},
 			);
 			NotificationAliasByAccount::<T>::insert(&account_id, alias);
 
@@ -939,9 +982,15 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			ensure_authorized(origin)?;
 			let alias = Self::notification_alias_for_account(&account)?;
-			NotificationRegistrationByAlias::<T>::remove(alias);
+			let Some(registration) = NotificationRegistrationByAlias::<T>::take(alias) else {
+				log::error!(
+					target: LOG_TARGET,
+					"notification storage corruption: missing registration for alias {alias:?} mapped from account {account:?}",
+				);
+				return Err(Error::<T>::InvalidNotificationSequence.into());
+			};
 			NotificationAliasByAccount::<T>::remove(&account);
-			decrease_allowance_by(account.clone().into(), T::NotificationAllowance::get());
+			decrease_allowance_by(account.clone().into(), registration.allowance.into());
 
 			Self::deposit_event(Event::NotificationStmtUsageRemoved { account });
 			Ok(Pays::No.into())
@@ -952,7 +1001,8 @@ pub mod pallet {
 		/// The origin must be `Origin::StmtStoreAlias`, produced by the `AsResources`
 		/// (`RegisterStatementStoreAllowance(..)`) transaction extension after proof validation.
 		/// On success, increases the statement allowance for `target_account` and stores the
-		/// mapping in `StatementStoreAllowances`.
+		/// mapping in `StatementStoreAllowances`. Fails if the slot already has an entry in this
+		/// period. [`Call::replace_statement_store_account`] moves a slot to another account.
 		///
 		/// Parameters:
 		/// * `period`: day number since Unix epoch. Must be in the accepted period window.
@@ -968,41 +1018,73 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			let alias = Self::ensure_stmt_store_alias(origin)?;
 			let period_key = BigEndianU32::from(period);
-			let now = T::Clock::now().as_secs();
-
-			// If an entry already exists for this alias in this period, the cooldown
-			// since `existing.since` must have elapsed before it can be replaced.
-			if let Some(existing) = StatementStoreAllowances::<T>::get(period_key, alias) {
-				ensure!(
-					now > existing
-						.since
-						.saturating_add(T::StmtStoreReplacementCooldown::get() as u64),
-					Error::<T>::StmtStoreReplacementTooEarly
-				);
-				// Revoke the old allowance and clear the reverse lookup.
-				decrease_allowance_by(
-					existing.account_id.clone().into(),
-					T::AccountsApiAllowance::get(),
-				);
-				StmtStoreAllowanceByAccount::<T>::remove(
-					&existing.account_id,
-					(period_key, existing.seq, alias),
-				);
-			}
-
-			// Grant the statement store allowance to the target account.
-			increase_allowance_by(target_account.clone().into(), T::AccountsApiAllowance::get());
-			StatementStoreAllowances::<T>::insert(
-				period_key,
-				alias,
-				StmtStoreAllowanceEntry { account_id: target_account.clone(), seq, since: now },
+			// Sanity check, should be covered already by the extension granting the origin.
+			ensure!(
+				!StatementStoreAllowances::<T>::contains_key(period_key, alias),
+				Error::<T>::StmtStoreSlotAlreadyClaimed
 			);
-			StmtStoreAllowanceByAccount::<T>::insert(&target_account, (period_key, seq, alias), ());
+
+			Self::grant_stmt_store_slot(period_key, alias, seq, target_account.clone());
 			Self::deposit_event(Event::StmtStoreAllowanceSet {
 				alias,
 				period,
 				seq,
 				account: target_account,
+			});
+			Ok(().into())
+		}
+
+		/// Move a claimed statement store slot to another statement account.
+		///
+		/// The origin must be `Origin::StmtStoreHolder`, produced by the `AsResources`
+		/// (`ReplaceStatementStoreAccount(..)`) transaction extension after it verifies the
+		/// signature of the account that holds the slot. Revokes that account's allowance and
+		/// grants the current allowance to `new_account`.
+		///
+		/// The entry timestamp must be earlier than the current timestamp, so submit after a
+		/// block whose timestamp is later than the one in the entry.
+		///
+		/// Parameters:
+		/// * `period`: day number since Unix epoch. Must be the current period.
+		/// * `alias`: the alias the slot was claimed under. Must match the origin.
+		/// * `new_account`: statement account that takes over the slot.
+		/// * `since`: the timestamp recorded in the slot's entry. Must match the entry.
+		#[pallet::call_index(14)]
+		#[pallet::weight(<T as Config>::WeightInfo::replace_statement_store_account())]
+		pub fn replace_statement_store_account(
+			origin: OriginFor<T>,
+			period: u32,
+			alias: Alias,
+			new_account: T::AccountId,
+			since: u64,
+		) -> DispatchResultWithPostInfo {
+			ensure!(Self::ensure_stmt_store_holder(origin)? == alias, DispatchError::BadOrigin);
+			let period_key = BigEndianU32::from(period);
+			let existing = StatementStoreAllowances::<T>::get(period_key, alias)
+				.ok_or(Error::<T>::StmtStoreEntryNotFound)?;
+			// Sanity checks, should be covered already by the extension granting the origin.
+			ensure!(
+				existing.account_id != new_account,
+				Error::<T>::StmtStoreReplacementSameAccount
+			);
+			ensure!(existing.since == since, Error::<T>::StmtStoreReplacementSinceMismatch);
+			ensure!(
+				T::Clock::now().as_secs() > existing.since,
+				Error::<T>::StmtStoreReplacementTooEarly
+			);
+
+			decrease_allowance_by(existing.account_id.clone().into(), existing.allowance.into());
+			StmtStoreAllowanceByAccount::<T>::remove(
+				&existing.account_id,
+				(period_key, existing.seq, alias),
+			);
+			Self::grant_stmt_store_slot(period_key, alias, existing.seq, new_account.clone());
+			Self::deposit_event(Event::StmtStoreAccountReplaced {
+				alias,
+				period,
+				seq: existing.seq,
+				previous_account: existing.account_id,
+				new_account,
 			});
 			Ok(().into())
 		}
@@ -1032,14 +1114,12 @@ pub mod pallet {
 			for (alias, entry) in
 				StatementStoreAllowances::<T>::drain_prefix(period_key).take(limit as usize)
 			{
-				decrease_allowance_by(
-					entry.account_id.clone().into(),
-					T::AccountsApiAllowance::get(),
-				);
+				decrease_allowance_by(entry.account_id.clone().into(), entry.allowance.into());
 				StmtStoreAllowanceByAccount::<T>::remove(
 					entry.account_id,
 					(period_key, entry.seq, alias),
 				);
+				T::OnStmtStoreSlotCleared::on_cleared(&alias);
 				count = count.saturating_add(1);
 			}
 
@@ -1180,11 +1260,6 @@ pub mod pallet {
 		/// Returns the current value of [`Config::StmtStoreCleanupLimit`].
 		pub fn get_stmt_store_cleanup_limit() -> u32 {
 			T::StmtStoreCleanupLimit::get()
-		}
-
-		/// Returns the current value of [`Config::StmtStoreReplacementCooldown`].
-		pub fn get_stmt_store_replacement_cooldown() -> u32 {
-			T::StmtStoreReplacementCooldown::get()
 		}
 
 		/// Returns the current value of [`Config::StmtStoreGraceWindow`].
@@ -1438,7 +1513,10 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			// Verify proof of ownership of the linked lite person.
 			ensure!(
-				lite_identity_proof.verify(&alias[..], linked_lite_identity),
+				lite_identity_proof.verify(
+					&Self::account_signing_payload(&Self::register_person_message(&alias))[..],
+					linked_lite_identity
+				),
 				Error::<T>::InvalidProofOfOwnership,
 			);
 			// Ensure the linked lite person was not already linked to another full person.
@@ -1499,6 +1577,31 @@ pub mod pallet {
 		pub fn resources_context() -> Context {
 			Self::build_context(personhood::RESOURCES)
 		}
+	}
+
+	#[pallet::extra_constants]
+	impl<T: Config> Pallet<T> {
+		/// The personhood signing context on this network. An account signs this context
+		/// followed by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> Context {
+			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			[&Self::signing_context()[..], msg].concat()
+		}
+
+		/// Returns the message a lite consumer account signs to link itself to `alias` in
+		/// [`Call::register_person`].
+		pub fn register_person_message(alias: &Alias) -> Vec<u8> {
+			[REGISTER_PERSON_MSG_PREFIX, &alias[..]].concat()
+		}
 
 		pub fn notification_context(reference: NotificationReference) -> Context {
 			Self::build_context(personhood::resources_notification(reference.period, reference.seq))
@@ -1509,6 +1612,29 @@ pub mod pallet {
 		/// The raw suffix contains the allocated family followed by the period and sequence.
 		pub fn stmt_store_slot_context(period: u32, seq: u32) -> Context {
 			Self::build_context(personhood::statement_store_slot(period, seq))
+		}
+
+		/// Grant the current accounts API allowance to `target_account` for a statement store
+		/// slot and record the entry and its reverse lookup.
+		fn grant_stmt_store_slot(
+			period_key: BigEndianU32,
+			alias: Alias,
+			seq: u32,
+			target_account: T::AccountId,
+		) {
+			let allowance = T::AccountsApiAllowance::get();
+			increase_allowance_by(target_account.clone().into(), allowance.clone());
+			StatementStoreAllowances::<T>::insert(
+				period_key,
+				alias,
+				StmtStoreAllowanceEntry {
+					account_id: target_account.clone(),
+					seq,
+					since: T::Clock::now().as_secs(),
+					allowance: allowance.into(),
+				},
+			);
+			StmtStoreAllowanceByAccount::<T>::insert(&target_account, (period_key, seq, alias), ());
 		}
 
 		/// Compute the statement store period from a timestamp.
@@ -1539,6 +1665,13 @@ pub mod pallet {
 		fn ensure_stmt_store_alias(origin: OriginFor<T>) -> Result<Alias, DispatchError> {
 			match origin.into_caller().try_into() {
 				Ok(Origin::StmtStoreAlias(alias)) => Ok(alias),
+				_ => Err(DispatchError::BadOrigin),
+			}
+		}
+
+		fn ensure_stmt_store_holder(origin: OriginFor<T>) -> Result<Alias, DispatchError> {
+			match origin.into_caller().try_into() {
+				Ok(Origin::StmtStoreHolder(alias)) => Ok(alias),
 				_ => Err(DispatchError::BadOrigin),
 			}
 		}

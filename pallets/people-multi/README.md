@@ -23,6 +23,7 @@ when used.
 - **Verifies Proofs**: Checks personhood proofs attached to transactions
 - **Links Accounts**: Allows connecting blockchain accounts to contextual aliases
 - **Manages Registry**: Adds proven persons and supports removing them
+- **Tracks Tenure**: Records the periods during which each person was recognized
 
 ## Interface
 

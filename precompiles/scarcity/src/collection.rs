@@ -20,8 +20,8 @@ use super::*;
 use frame_support::traits::UnixTime;
 use frame_system::RawOrigin;
 use indiv_pallet_scarcity::{
-	weights::WeightInfo as _, ItemDefs, ItemIndex, OnCollectionDeleted, OnPurseOccupied,
-	Pallet as Scarcity, ValidateMetadata,
+	weights::WeightInfo as _, ContractNftCount, ItemDefs, ItemIndex, OnCollectionDeleted,
+	OnPurseOccupied, Pallet as Scarcity, ValidateMetadata,
 };
 use pallet_revive::{codec::DecodeAll, sp_runtime::traits::UniqueSaturatedInto};
 use IScarcityCollection::IScarcityCollectionCalls;
@@ -295,15 +295,13 @@ where
 		call: &IScarcityCollection::balanceOfCall,
 		env: &mut impl Ext<T = T>,
 	) -> Result<Vec<u8>, Error> {
-		// Reverse address mapping plus the purse read.
-		charge_reads(env, 2)?;
+		// Reverse address mapping, the purse read and the contract count.
+		charge_reads(env, 3)?;
 		if call.owner == Address::ZERO {
 			return Err(revert(ERR_ZERO_OWNER));
 		}
-		let holds = NftsByOwner::<T>::get(account_of::<T>(&call.owner))
-			.is_some_and(|nft| nft.collection == collection);
-		let balance = if holds { U256::ONE } else { U256::ZERO };
-		Ok(IScarcityCollection::balanceOfCall::abi_encode_returns(&balance))
+		let balance = Scarcity::<T>::balance_of(&account_of::<T>(&call.owner), collection);
+		Ok(IScarcityCollection::balanceOfCall::abi_encode_returns(&U256::from(balance)))
 	}
 
 	fn owner_of(
@@ -316,11 +314,13 @@ where
 		Ok(IScarcityCollection::ownerOfCall::abi_encode_returns(&address_of::<T>(&purse)))
 	}
 
-	/// The single token a purse holds, at index 0.
+	/// The token of this collection at position `index` among those `owner` holds.
 	///
-	/// A purse holds at most one instance, so this is `balanceOf` with the answer in place of the
-	/// count, and every index above 0 is out of range. It does not make the collection ERC-721
-	/// Enumerable, which also needs `totalSupply` and `tokenByIndex`.
+	/// A purse holds at most one instance, at index 0. A contract's tokens in `ContractNfts`
+	/// follow, in storage order, which is stable while the contract's holdings do not change.
+	/// Reaching index `i` reads `i + 1` of the contract's tokens of this collection, and a token
+	/// of another collection adds no read. It does not make the collection ERC-721 Enumerable,
+	/// which also needs `totalSupply` and `tokenByIndex`.
 	fn token_of_owner_by_index(
 		collection: CollectionId,
 		call: &IScarcityCollection::tokenOfOwnerByIndexCall,
@@ -331,17 +331,37 @@ where
 		if call.owner == Address::ZERO {
 			return Err(revert(ERR_ZERO_OWNER));
 		}
-		// EIP-721 requires a throw for any index at or above the holder's balance, which is 1 for
-		// a holder of this collection and 0 for everyone else.
-		let nft = NftsByOwner::<T>::get(account_of::<T>(&call.owner))
-			.filter(|nft| nft.collection == collection)
-			.ok_or_else(|| revert(ERR_INDEX_OUT_OF_RANGE))?;
-		if !call.index.is_zero() {
+		let owner = account_of::<T>(&call.owner);
+		// EIP-721 requires a throw for any index at or above the holder's balance.
+		let mut remaining =
+			u32::try_from(call.index).map_err(|_| revert(ERR_INDEX_OUT_OF_RANGE))?;
+		if let Some(nft) = NftsByOwner::<T>::get(&owner).filter(|nft| nft.collection == collection)
+		{
+			if remaining == 0 {
+				return Self::encode_token(nft.instance);
+			}
+			remaining -= 1;
+		}
+		// The count bounds the walk before it starts: an index past it reverts for one read.
+		charge_reads(env, 1)?;
+		if remaining >= ContractNftCount::<T>::get(&owner, collection) {
 			return Err(revert(ERR_INDEX_OUT_OF_RANGE));
 		}
-		Ok(IScarcityCollection::tokenOfOwnerByIndexCall::abi_encode_returns(&U256::from(
-			nft.instance,
-		)))
+		charge_reads(env, u64::from(remaining) + 1)?;
+		let Some(nft) =
+			ContractNfts::<T>::iter_prefix_values((&owner, collection)).nth(remaining as usize)
+		else {
+			log::error!(
+				target: LOG_TARGET,
+				"ContractNftCount of {owner:?} for collection {collection} exceeds its ContractNfts entries"
+			);
+			return Err(revert(ERR_INDEX_OUT_OF_RANGE));
+		};
+		Self::encode_token(nft.instance)
+	}
+
+	fn encode_token(instance: InstanceId) -> Result<Vec<u8>, Error> {
+		Ok(IScarcityCollection::tokenOfOwnerByIndexCall::abi_encode_returns(&U256::from(instance)))
 	}
 
 	fn get_approved(
@@ -545,9 +565,11 @@ where
 					),
 				),
 		)?;
-		env.charge(<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
-			T::AccountId,
-		>>::on_purse_occupied_weight())?;
+		let hook = env.charge(
+			<<T as indiv_pallet_scarcity::Config>::OnPurseOccupied as OnPurseOccupied<
+				T::AccountId,
+			>>::on_purse_occupied_weight(),
+		)?;
 		// The zero address maps to a real fallback purse; minting there would strand the
 		// instance behind a burn-shaped `Transfer` log.
 		if call.to == Address::ZERO {
@@ -556,6 +578,7 @@ where
 		let metadata = bounded_metadata::<T>(&call.keys, &call.values)?;
 		let who = caller_account::<T>(env)?;
 		let to = account_of::<T>(&call.to);
+		env.adjust_gas(hook, Scarcity::<T>::purse_hook_weight(&to));
 		let instance = Scarcity::<T>::do_mint(who, collection, call.item, to, metadata)
 			.map_err(revert_scarcity::<T>)?;
 		let token = U256::from(instance);
@@ -624,9 +647,10 @@ where
 
 	/// Move a token on its holder's authority and log the move.
 	///
-	/// Charges the pallet entry and the registration of the destination.
+	/// Charges the pallet entry and the registration of a purse-key destination.
 	/// `WeightInfo::transfer_by_holder` does not cover the registration: the extrinsic adds the
-	/// same term to its own annotation, and the benchmark runtime wires no handler.
+	/// same term to its own annotation, and the benchmark runtime wires no handler. A contract
+	/// destination gets the registration charge back.
 	fn move_by_holder(
 		holder: &T::AccountId,
 		instance: InstanceId,
@@ -634,9 +658,10 @@ where
 		env: &mut impl Ext<T = T>,
 	) -> Result<(), Error> {
 		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::transfer_by_holder())?;
-		env.charge(Self::registration_weight())?;
-		Scarcity::<T>::do_transfer_by_holder(holder, instance, account_of::<T>(transfer.to))
-			.map_err(revert_scarcity::<T>)?;
+		let to = account_of::<T>(transfer.to);
+		let hook = env.charge(Self::registration_weight())?;
+		env.adjust_gas(hook, Scarcity::<T>::purse_hook_weight(&to));
+		Scarcity::<T>::do_transfer_by_holder(holder, instance, to).map_err(revert_scarcity::<T>)?;
 		deposit_event(
 			env,
 			IScarcityCollection::Transfer {
@@ -692,7 +717,9 @@ where
 		Ok(Vec::new())
 	}
 
-	/// Move a pledged token on its pledgee's authority.
+	/// Move a pledged token on its pledgee's authority, to an empty purse key or a contract.
+	///
+	/// A contract pledgee seizes into its own custody with `seize(tokenId, address(this))`.
 	fn seize(
 		collection: CollectionId,
 		call: &IScarcityCollection::seizeCall,
@@ -713,13 +740,14 @@ where
 		if call.to == holder_address && account_of::<T>(&call.to) != holder {
 			return Err(revert(ERR_SELF_TRANSFER));
 		}
-		// The pallet entry and the registration of the destination, which `WeightInfo::seize`
-		// does not cover. Charged past the refusals above; a refusal the pallet makes, such as an
-		// occupied destination, is charged in full.
+		// The pallet entry and the registration of a purse-key destination, which
+		// `WeightInfo::seize` does not cover. Charged past the refusals above; a refusal the
+		// pallet makes, such as an occupied destination, is charged in full.
 		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::seize())?;
-		env.charge(Self::registration_weight())?;
-		Scarcity::<T>::do_seize(&caller, nft.instance, account_of::<T>(&call.to))
-			.map_err(revert_scarcity::<T>)?;
+		let to = account_of::<T>(&call.to);
+		let hook = env.charge(Self::registration_weight())?;
+		env.adjust_gas(hook, Scarcity::<T>::purse_hook_weight(&to));
+		Scarcity::<T>::do_seize(&caller, nft.instance, to).map_err(revert_scarcity::<T>)?;
 		deposit_event(env, IScarcityCollection::Unlocked { tokenId: call.tokenId })?;
 		deposit_event(
 			env,
@@ -809,9 +837,10 @@ where
 		// The move registers its destination, which the benchmark does not cover. See
 		// `move_by_holder`. Charged past the rejections above so a revert does not pay for a
 		// registration that never happens.
-		env.charge(Self::registration_weight())?;
+		let hook = env.charge(Self::registration_weight())?;
+		env.adjust_gas(hook, Scarcity::<T>::purse_hook_weight(&to));
 		Scarcity::<T>::force_transfer(RawOrigin::Signed(who).into(), nft.instance, to)
-			.map_err(revert_scarcity::<T>)?;
+			.map_err(|e| revert_scarcity::<T>(e.error))?;
 		deposit_event(
 			env,
 			IScarcityCollection::Transfer {

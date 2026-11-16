@@ -270,6 +270,7 @@ impl indiv_pallet_people::Config for Test {
 	type WeightInfo = ();
 	type AccountContexts = TestAccountContexts;
 	type MemberService = Members;
+	type Clock = TestClock;
 	type CollectionOwner = PeopleCollectionOwner;
 	type OnboardingQueuePageSize = ConstU32<512>;
 	type RingExponent = FlexibleRingExp;

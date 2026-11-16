@@ -231,6 +231,8 @@ parameter_types! {
 	pub EjectGraceRatio: Perbill = Perbill::from_percent(100);
 	/// 5 DOT as the reward for the best signed submission.
 	pub RewardBase: Balance = UNITS * 5;
+	/// The DAP buffer account, used as the signed-phase reward pot.
+	pub SignedRewardPot: Option<AccountId> = Some(Dap::buffer_account());
 }
 
 impl multi_block::signed::Config for Runtime {
@@ -241,8 +243,11 @@ impl multi_block::signed::Config for Runtime {
 	type DepositPerPage = SignedDepositPerPage;
 	type InvulnerableDeposit = InvulnerableFixedDeposit;
 	type RewardBase = RewardBase;
+	type MaxFeeRefund = multi_block::signed::FullSubmissionFee<Runtime, TransactionPayment>;
 	type MaxSubmissions = MaxSignedSubmissions;
 	type EstimateCallFee = TransactionPayment;
+	type Slash = Dap;
+	type RewardSource = multi_block::signed::ReactivatingPot<SignedRewardPot, Balances>;
 	type WeightInfo = weights::pallet_election_provider_multi_block_signed::WeightInfo<Runtime>;
 }
 
@@ -473,6 +478,7 @@ impl pallet_staking_async::Config for Runtime {
 	type StakerRewardCalculator = pallet_staking_async::reward::DefaultStakerRewardCalculator<Self>;
 	type MaxPruningItems = MaxPruningItems;
 	type WeightInfo = weights::pallet_staking_async::WeightInfo<Runtime>;
+	type IsValidatorInactive = ();
 }
 
 sp_runtime::impl_opaque_keys! {

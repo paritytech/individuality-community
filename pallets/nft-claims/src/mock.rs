@@ -264,7 +264,7 @@ pub fn last_sent_deletions() -> Vec<CreditTreeBlock> {
 		.0
 		.into_iter()
 		.find_map(|instruction| match instruction {
-			Instruction::Transact { call, .. } => Some(call.into_encoded()),
+			Instruction::Transact { call, .. } => Some(call.encoded().to_vec()),
 			_ => None,
 		})
 		.expect("the XCM carries a Transact");
@@ -322,6 +322,9 @@ impl MintWithoutDeposit<u64> for MockNfts {
 	fn mint_hook_weight(pairs: u32) -> Weight {
 		MINT_HOOK_WEIGHT.saturating_add(Weight::from_parts(pairs as u64, 0))
 	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn set_worst_case_destination(_to: &u64) {}
 }
 
 /// Weight the mock reports for the mint's runtime hooks, distinct from zero so that the

@@ -21,15 +21,18 @@ import "../../scarcity/sol/IScarcityCollection.sol";
 /// @title PledgeGame
 /// @notice A winner-takes-all round staked with pledges. Each player pledges a token to this
 /// contract, anyone reports the pledge with `join`, and the operator settles: the winner's stake
-/// is released and every other stake moves to a key the winner named.
+/// is released and every other stake moves to the winner.
 /// @dev The tokens never leave their holders' keys before settlement, so the contract keeps no
-/// custody and strands nothing. A round that is never settled ends when the pledges expire, and the
-/// players keep their stakes. The contract follows the rules `IScarcityCollection` sets for
-/// contracts that take pledges:
+/// custody until then. A round that is never settled ends when the pledges expire, and the players
+/// keep their stakes. The operator settles in one of two ways:
+/// - `settle` seizes each other stake into an empty key the winner named, one key per prize,
+///   because a purse key holds one token.
+/// - `settleIntoCustody` seizes each other stake into this contract, which holds any number, and
+///   the winner takes each prize out with `claimPrize`. The winner names no keys in advance.
+/// The contract follows the rules `IScarcityCollection` sets for contracts that take pledges:
 /// - `join` counts a token only when the pledge names this contract and outlives `deadline`.
 /// - `join` credits `ownerOf`, never `msg.sender`, so a front-run `join` credits the holder.
-/// - `settle` collects one empty key per prize, because a key holds one token.
-/// - `settle` runs while every pledge still has effect, or it reverts as a whole.
+/// - Settlement runs while every pledge still has effect, or it reverts as a whole.
 /// A fixture: it accepts one collection, fixed at deployment, and keeps no other record.
 /// @custom:security-contact admin@parity.io
 contract PledgeGame {
@@ -49,6 +52,8 @@ contract PledgeGame {
     mapping(uint256 => address) public stakerOf;
     /// @notice True once the round has settled.
     bool public settled;
+    /// @notice The holder credited with the winning stake of a round settled into custody.
+    address public winner;
 
     /// @notice The token's pledge does not name this contract.
     error NotPledgedHere();
@@ -66,6 +71,8 @@ contract PledgeGame {
     error UnknownStake();
     /// @notice `settle` needs one prize key per stake other than the winner's.
     error WrongPrizeKeyCount();
+    /// @notice Only the winner of a round settled into custody may claim a prize.
+    error NotWinner();
 
     /// @param collection_ The collection whose tokens this round takes.
     /// @param deadline_ The Unix second by which the round settles.
@@ -110,6 +117,37 @@ contract PledgeGame {
                 ++next;
             }
         }
+    }
+
+    /// @notice Release the winner's stake and seize every other stake into this contract.
+    /// @dev Each loser's stake moves through `seize` with this contract as the destination, so it
+    /// lands in the contract's custody next to the others.
+    /// @param winningToken The stake whose holder wins.
+    function settleIntoCustody(uint256 winningToken) external {
+        if (msg.sender != operator) revert NotOperator();
+        if (settled) revert Settled();
+        address staker = stakerOf[winningToken];
+        if (staker == address(0)) revert UnknownStake();
+        settled = true;
+        winner = staker;
+        for (uint256 i; i < stakes.length; ++i) {
+            uint256 token = stakes[i];
+            if (token == winningToken) {
+                collection.release(token);
+            } else {
+                collection.seize(token, address(this));
+            }
+        }
+    }
+
+    /// @notice Move a prize this contract holds to `to`, as the winner of a round settled into
+    /// custody.
+    /// @dev The contract moves the token as its holder, through `transferFrom`.
+    /// @param tokenId The prize to move.
+    /// @param to The empty key or contract to move the prize to.
+    function claimPrize(uint256 tokenId, address to) external {
+        if (msg.sender != winner) revert NotWinner();
+        collection.transferFrom(address(this), to, tokenId);
     }
 
     /// @notice How many stakes the round holds.

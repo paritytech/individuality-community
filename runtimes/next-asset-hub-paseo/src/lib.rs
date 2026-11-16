@@ -107,8 +107,6 @@ use xcm_runtime_apis::{
 	fees::Error as XcmPaymentApiError,
 };
 
-#[cfg(feature = "std")]
-use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
@@ -198,12 +196,6 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	transaction_version: 22,
 	system_version: 1,
 };
-
-/// The version information used to identify this runtime when compiled natively.
-#[cfg(feature = "std")]
-pub fn native_version() -> NativeVersion {
-	NativeVersion { runtime_version: VERSION, can_author_with: Default::default() }
-}
 
 parameter_types! {
 	pub const Version: RuntimeVersion = VERSION;
@@ -1181,6 +1173,10 @@ impl indiv_pallet_scarcity::Config for Runtime {
 	// The collections are exposed as ERC-721 contracts, whose `name`, `symbol` and `tokenURI`
 	// are `string`. Held here so the rule covers the extrinsics too, not only the precompile.
 	type MetadataPolicy = indiv_precompile_scarcity::Erc721MetadataPolicy<Runtime>;
+	// A deployed contract holds any number of instances, so a game can keep several players'
+	// stakes. Every other key receives one while it holds none, and an address whose code is
+	// gone keeps what it held.
+	type ContractAccounts = indiv_precompile_scarcity::ReviveContracts<Runtime>;
 }
 
 /// XCM router instance to BridgeHub with bridging capabilities for `Kusama` global
@@ -1263,6 +1259,8 @@ parameter_types! {
 	pub const AssetConversionPalletId: PalletId = PalletId(*b"py/ascon");
 	pub const LiquidityWithdrawalFee: Permill = Permill::from_percent(0);
 	pub LpFee: Permill = Permill::from_rational(3u32, 1_000u32); // 0.3%
+	/// The highest swap fee `AdminOrigin` can set on a single pool.
+	pub MaxSwapFee: Permill = Permill::from_percent(2);
 	// Storage deposit for pool setup within asset conversion pallet
 	// and pool's lp token creation within assets pallet.
 	pub const PoolSetupFee: Balance = system_para_deposit(1, 4) + AssetDeposit::get();
@@ -1297,6 +1295,8 @@ impl pallet_asset_conversion::Config for Runtime {
 	type PoolSetupFeeTarget = ResolveAssetTo<xcm_config::TreasuryAccount, Self::Assets>;
 	type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
 	type LPFee = LpFee;
+	type AdminOrigin = AssetsForceOrigin;
+	type MaxSwapFee = MaxSwapFee;
 	type PalletId = AssetConversionPalletId;
 	type MaxSwapPathLength = ConstU32<3>;
 	type MintMinLiquidity = ConstU128<100>;
@@ -3158,10 +3158,10 @@ pub mod migrations {
 		cumulus_pallet_xcmp_queue::migration::v7::MigrateV6ToV7<Runtime>,
 		staking::InitiateStakingAsync,
 		pallet_staking_async::migrations::SetWeightedPointsFormulaStartEra<Runtime>,
+		pallet_election_provider_multi_block::signed::migrations::v1::MigrateV0ToV1<Runtime>,
 		ForceCreatePgasAsset,
 		indiv_pallet_scarcity::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_scarcity::migration::MigrateV1ToV2<Runtime>,
-		indiv_pallet_scarcity::migration::MigrateV2ToV3<Runtime>,
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_members_subscriber::migration::MigrateV0ToV1<Runtime>,
@@ -3177,6 +3177,9 @@ pub mod migrations {
 	pub type MbmMigrations = (
 		pallet_revive::migrations::v3::Migration<Runtime>,
 		pallet_revive::migrations::v4::Migration<Runtime>,
+		indiv_pallet_scarcity::migration::v3::MigrateToLocations<Runtime>,
+		// After the location migration, which reads only the instance of a purse NFT.
+		indiv_pallet_scarcity::migration::v4::MigrateToPledges<Runtime>,
 	);
 }
 
@@ -3504,6 +3507,39 @@ mod benches {
 			let asset_location =
 				Location::new(0, [PalletInstance(50), GeneralIndex(asset_id.into())]);
 			Asset { id: AssetId(asset_location), fun: Fungible(amount) }
+		}
+
+		fn get_assets(n: u32) -> XcmAssets {
+			use frame_support::traits::tokens::fungible;
+			let account: AccountId = frame_benchmarking::whitelisted_caller();
+			assert_ok!(<Balances as fungible::Mutate<_>>::mint_into(
+				&account,
+				<Balances as fungible::Inspect<_>>::minimum_balance(),
+			));
+			let amount = 1_000_000u128;
+			// Worst case: `n` distinct `ForeignAssets`. A full `Location` key books more proof
+			// than a trust-backed asset id, and `AssetTransactors` matches them last.
+			let assets = (0..n)
+				.map(|i| {
+					let asset_location = Location::new(
+						1,
+						[Parachain(3000), PalletInstance(53), GeneralIndex((1984 + i).into())],
+					);
+					assert_ok!(ForeignAssets::force_create(
+						RuntimeOrigin::root(),
+						asset_location.clone(),
+						account.clone().into(),
+						true,
+						1u128,
+					));
+					Asset { id: AssetId(asset_location), fun: Fungible(amount) }
+				})
+				.collect::<Vec<_>>();
+			assets.into()
+		}
+
+		fn batch_call(calls: Vec<RuntimeCall>) -> Option<RuntimeCall> {
+			Some(RuntimeCall::Utility(pallet_utility::Call::batch { calls }))
 		}
 	}
 
