@@ -332,8 +332,8 @@ pub mod pallet {
 		///   `<dns-stem>` portion enters the signed message; the digits ride along as an unsigned
 		///   extrinsic argument used for the contract calldata and storage key.
 		/// - `chat_key`: 65-byte public key used for ECDH chat.
-		/// - `reserved_base_label`: optional base label reserved for the candidate to later claim
-		///   as a Full Person. Must be a single DNS label (e.g. `alice`).
+		/// - `reserved_base_label`: optional personhood label queued for the candidate, to issue
+		///   later as their personhood name. Must be lowercase ASCII letters only (e.g. `alice`).
 		/// - `signed_at`: Unix-time second at which the candidate signed the reservation message.
 		///   The signature is accepted only if `signed_at <= now + MaxFutureSkewSeconds` and `now
 		///   <= signed_at + MaxValiditySeconds`, where `now` comes from [`Config::UnixTime`].
@@ -446,8 +446,8 @@ pub mod pallet {
 		/// - `who`: the account that owns the full-person label; its EVM-mapped address is the
 		///   recipient on the `DotnsPopController` contract. Must match the `who` already
 		///   authenticated by [`AsDotnsGateway`].
-		/// - `label`: the full-person label. Must be a single DNS label (e.g. `alice`), matching
-		///   `StringUtils.isSingleLabel` in the contracts.
+		/// - `label`: the personhood label. Must be lowercase ASCII letters only (e.g. `alice`),
+		///   matching `StringUtils.isPersonhoodLabel` in the contracts.
 		/// - `link`: how the full-person label relates to a pre-existing lite-person label:
 		///   - `Link::LiteUsername(lite_label)` — links to an existing lite-person label (must
 		///     match the lite format `<dns-stem>.<2+ digits>`); the chat key is inherited from the

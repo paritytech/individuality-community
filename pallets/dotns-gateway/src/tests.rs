@@ -16,6 +16,7 @@
 
 //! Tests for the dotNS gateway pallet.
 
+use alloy_core::sol_types::SolCall;
 use frame_support::{
 	assert_noop, assert_ok,
 	traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion},
@@ -28,7 +29,10 @@ use crate::{
 		AccountAlias, AccountNames, AliasRegistration, AttestationAllowance, DispatcherAddress,
 		Error, LiteLabelOwner,
 	},
-	types::{AccountNameRecord, BaseLabel, ChatKey, Collection, DispatcherRevert, Link, NameEntry},
+	types::{
+		issueDeviceNameCall, issueDeviceNameWithReservationCall, issuePersonhoodNameCall,
+		AccountNameRecord, BaseLabel, ChatKey, Collection, DispatcherRevert, Link, NameEntry,
+	},
 	weights::WeightInfo,
 };
 use sp_core::H160;
@@ -50,7 +54,7 @@ fn base_name(s: &[u8]) -> BaseLabel {
 	BaseLabel::try_from(s.to_vec()).unwrap()
 }
 
-// Canonical fixtures matching `StringUtils.isLitePersonLabel` / `isSingleLabel`.
+// Device and personhood labels valid under both the pallet's and the contracts' label checks.
 const ALICE_LITE: &[u8] = b"alice.42";
 const BOB_LITE: &[u8] = b"bob.42";
 const ALICE_BASE: &[u8] = b"alice";
@@ -286,6 +290,7 @@ mod reservation {
 			let calls = get_contract_calls();
 			assert_eq!(calls.len(), 1);
 			assert_eq!(calls[0].0, DispatcherAddr::get());
+			assert_eq!(calls[0].1[..4], issueDeviceNameCall::SELECTOR);
 			assert_eq!(calls[0].2, 0);
 
 			assert_eq!(
@@ -715,9 +720,10 @@ mod reservation {
 
 			assert_ok!(&result);
 
-			// Single contract call dispatched.
+			// Single contract call dispatched, which also queues the reservation.
 			let calls = get_contract_calls();
 			assert_eq!(calls.len(), 1);
+			assert_eq!(calls[0].1[..4], issueDeviceNameWithReservationCall::SELECTOR);
 
 			System::assert_last_event(
 				crate::Event::<Test>::NameReserved {
@@ -804,6 +810,7 @@ mod registration {
 			let calls = get_contract_calls();
 			assert_eq!(calls.len(), 1);
 			assert_eq!(calls[0].0, DispatcherAddr::get());
+			assert_eq!(calls[0].1[..4], issuePersonhoodNameCall::SELECTOR);
 
 			System::assert_last_event(
 				crate::Event::<Test>::NameRegistered {
@@ -868,9 +875,9 @@ mod registration {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			LiteLabelOwner::<Test>::insert(base_name(ALICE_LITE), ALICE);
-			// The account owns two lite labels and the record holds the most recent one. The
-			// registration links the other label, whose key the pallet never recorded, so the
-			// key the contracts copy to the full label is not known here.
+			// The account owns two device names and the record holds one of them. The
+			// registration links the other name, whose key the pallet never recorded, so the
+			// key the contracts copy to the personhood name is not known here.
 			AccountNames::<Test>::insert(
 				ALICE,
 				AccountNameRecord { lite: entry(BOB_LITE, Some(lite_chat_key())), full: None },

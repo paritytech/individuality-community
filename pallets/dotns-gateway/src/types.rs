@@ -141,9 +141,10 @@ pub struct NameEntry {
 
 /// The dotNS labels an account acquired through this gateway.
 ///
-/// `lite` is the most recently registered lite-person label. `full` is the
-/// registered full-person label; the [`crate::AsDotnsGateway`] extension
-/// admits at most one full registration per account.
+/// `lite` is the device name. [`crate::Pallet::reserve_name`] rejects a candidate
+/// that already has one. `full` is the personhood name; the
+/// [`crate::AsDotnsGateway`] extension admits at most one personhood registration
+/// per account.
 #[derive(
 	Clone,
 	PartialEq,
@@ -297,10 +298,10 @@ sol! {
 
 impl issueDeviceNameCall {
 	/// Encodes `DotnsPopController.issueDeviceName((string,address,bytes))`.
-	pub fn new_abi_encoded(lite_label: &[u8], user: H160, chat_key: &[u8]) -> Vec<u8> {
+	pub fn new_abi_encoded(device_label: &[u8], user: H160, chat_key: &[u8]) -> Vec<u8> {
 		Self {
 			params: DeviceNameIssuance {
-				label: string_from_bytes(lite_label),
+				label: string_from_bytes(device_label),
 				user: Address::from(user.0),
 				chatKey: Bytes::copy_from_slice(chat_key),
 			},
@@ -313,19 +314,19 @@ impl issueDeviceNameWithReservationCall {
 	/// Encodes
 	/// `DotnsPopController.issueDeviceNameWithReservation(((string,address,bytes),string))`.
 	pub fn new_abi_encoded(
-		lite_label: &[u8],
+		device_label: &[u8],
 		user: H160,
 		chat_key: &[u8],
-		reserved_base_label: &[u8],
+		reserved_label: &[u8],
 	) -> Vec<u8> {
 		Self {
 			params: DeviceNameIssuanceWithReservation {
 				issuance: DeviceNameIssuance {
-					label: string_from_bytes(lite_label),
+					label: string_from_bytes(device_label),
 					user: Address::from(user.0),
 					chatKey: Bytes::copy_from_slice(chat_key),
 				},
-				reservedLabel: string_from_bytes(reserved_base_label),
+				reservedLabel: string_from_bytes(reserved_label),
 			},
 		}
 		.abi_encode()
@@ -378,9 +379,9 @@ impl issuePersonhoodNameCall {
 pub enum DispatcherRevert {
 	/// Dispatcher rejected the call because the substrate origin was not `Root`.
 	NotRoot,
-	/// Device label did not match `<stem>.<digits>`.
+	/// Device label did not match `<stem>.<digits>`, or its stem is reserved for governance.
 	InvalidDeviceLabel,
-	/// Personhood label was not a valid single DNS label.
+	/// Personhood label was not lowercase ASCII letters, or is reserved for governance.
 	InvalidPersonhoodLabel,
 	/// Caller has no active reservation to operate on.
 	NoActiveReservation,
@@ -436,7 +437,7 @@ mod abi_tests {
 	use super::*;
 
 	#[test]
-	fn encode_reserve_lite_name_structure() {
+	fn encode_issue_device_name_structure() {
 		let addr = H160::from_low_u64_be(0x1234);
 		let data = issueDeviceNameCall::new_abi_encoded(b"alice42", addr, b"key");
 
@@ -447,7 +448,7 @@ mod abi_tests {
 	}
 
 	#[test]
-	fn encode_reserve_base_name_structure() {
+	fn encode_issue_device_name_with_reservation_structure() {
 		let addr = H160::from_low_u64_be(0x1234);
 		let data =
 			issueDeviceNameWithReservationCall::new_abi_encoded(b"alice42", addr, b"key", b"alice");
@@ -457,18 +458,18 @@ mod abi_tests {
 	}
 
 	#[test]
-	fn reserve_lite_and_base_have_distinct_selectors() {
+	fn device_name_issuances_have_distinct_selectors() {
 		let addr = H160::from_low_u64_be(0x1234);
-		let lite = issueDeviceNameCall::new_abi_encoded(b"alice42", addr, b"key");
-		let base =
+		let device = issueDeviceNameCall::new_abi_encoded(b"alice42", addr, b"key");
+		let with_reservation =
 			issueDeviceNameWithReservationCall::new_abi_encoded(b"alice42", addr, b"key", b"alice");
 
 		// Different functions, different selectors.
-		assert_ne!(&lite[..4], &base[..4]);
+		assert_ne!(&device[..4], &with_reservation[..4]);
 	}
 
 	#[test]
-	fn encode_register_base_name_with_lite_username_link() {
+	fn encode_issue_personhood_name_with_device_name_link() {
 		let addr = H160::from_low_u64_be(0x5678);
 		let link = Link::LiteUsername(BaseLabel::try_from(b"alice42".to_vec()).unwrap());
 		let data = issuePersonhoodNameCall::new_abi_encoded(b"alice", addr, &link);
@@ -478,7 +479,7 @@ mod abi_tests {
 	}
 
 	#[test]
-	fn encode_register_base_name_with_none_link() {
+	fn encode_issue_personhood_name_with_none_link() {
 		let addr = H160::from_low_u64_be(0x5678);
 		let link = Link::None(ChatKey::from([0xAB; 65]));
 		let data = issuePersonhoodNameCall::new_abi_encoded(b"alice", addr, &link);
@@ -488,7 +489,7 @@ mod abi_tests {
 	}
 
 	#[test]
-	fn register_link_variants_share_selector() {
+	fn personhood_link_variants_share_selector() {
 		let addr = H160::from_low_u64_be(0x5678);
 		let link_a = Link::LiteUsername(BaseLabel::try_from(b"alice42".to_vec()).unwrap());
 		let link_b = Link::None(ChatKey::from([0x01; 65]));
@@ -503,19 +504,19 @@ mod abi_tests {
 	#[test]
 	fn selectors_are_distinct() {
 		let link = Link::None(ChatKey::from([0x01; 65]));
-		let lite = issueDeviceNameCall::new_abi_encoded(b"x42", H160::zero(), b"");
-		let base =
+		let device = issueDeviceNameCall::new_abi_encoded(b"x42", H160::zero(), b"");
+		let with_reservation =
 			issueDeviceNameWithReservationCall::new_abi_encoded(b"x42", H160::zero(), b"", b"x");
-		let register = issuePersonhoodNameCall::new_abi_encoded(b"x", H160::zero(), &link);
+		let personhood = issuePersonhoodNameCall::new_abi_encoded(b"x", H160::zero(), &link);
 
 		// All three selectors are pairwise different.
-		assert_ne!(&lite[..4], &base[..4]);
-		assert_ne!(&lite[..4], &register[..4]);
-		assert_ne!(&base[..4], &register[..4]);
+		assert_ne!(&device[..4], &with_reservation[..4]);
+		assert_ne!(&device[..4], &personhood[..4]);
+		assert_ne!(&with_reservation[..4], &personhood[..4]);
 	}
 
 	#[test]
-	fn reserve_lite_round_trip() {
+	fn issue_device_name_round_trip() {
 		let addr = H160::from_low_u64_be(0x1234);
 		let data = issueDeviceNameCall::new_abi_encoded(b"alice42", addr, b"key-bytes");
 
@@ -526,7 +527,7 @@ mod abi_tests {
 	}
 
 	#[test]
-	fn reserve_base_round_trip() {
+	fn issue_device_name_with_reservation_round_trip() {
 		let addr = H160::from_low_u64_be(0x1234);
 		let data =
 			issueDeviceNameWithReservationCall::new_abi_encoded(b"alice42", addr, b"key", b"alice");
@@ -539,7 +540,7 @@ mod abi_tests {
 	}
 
 	#[test]
-	fn register_round_trip_lite_link() {
+	fn issue_personhood_name_round_trip_device_name_link() {
 		let addr = H160::from_low_u64_be(0x5678);
 		let link = Link::LiteUsername(BaseLabel::try_from(b"alice42".to_vec()).unwrap());
 		let data = issuePersonhoodNameCall::new_abi_encoded(b"alice", addr, &link);
@@ -553,7 +554,7 @@ mod abi_tests {
 	}
 
 	#[test]
-	fn register_round_trip_none_link() {
+	fn issue_personhood_name_round_trip_none_link() {
 		let addr = H160::from_low_u64_be(0x5678);
 		let key = [0xABu8; 65];
 		let link = Link::None(ChatKey::from(key));
