@@ -120,6 +120,11 @@ fn extension_for_val(val: &Val<Test>) -> AsScarcity<Test> {
 		Val::NotUsing => AsScarcity::new(None),
 		Val::UsingNft { instance, state_nonce, .. } =>
 			scarcity_extension(authorization(*instance, *state_nonce)),
+		Val::Seizing { instance, state_nonce, .. } =>
+			scarcity_extension(AsScarcityInfo::AsDelegate {
+				instance: *instance,
+				state_nonce: *state_nonce,
+			}),
 	}
 }
 
@@ -2833,7 +2838,8 @@ fn try_state_rejects_nft_without_item_definition() {
 /// Write a pledge straight into the record, past every check a call would make.
 fn put_pledge(holder: u64, pledgee: u64, until: u64) {
 	NftsByOwner::<Test>::mutate(holder, |maybe_nft| {
-		maybe_nft.as_mut().expect("the holder has an NFT").pledge = Some(Pledge { pledgee, until });
+		maybe_nft.as_mut().expect("the holder has an NFT").pledge =
+			Some(Pledge { pledgee, until, delegate: None });
 	});
 }
 
@@ -3216,7 +3222,7 @@ mod pledges {
 
 			assert_eq!(post.pays_fee, Pays::No);
 			let after = nft_of(RECIPIENT);
-			assert_eq!(after.pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
+			assert_eq!(after.pledge, Some(Pledge { pledgee: PLEDGEE, until: 100, delegate: None }));
 			assert_eq!(after.moves, before.moves + 1);
 			assert_eq!(after.state_nonce, before.state_nonce + 1);
 			assert_eq!(after.last_moved, before.last_moved, "a pledge does not move the instance");
@@ -3292,7 +3298,10 @@ mod pledges {
 
 			MockNow::set(100);
 			assert_ok!(pledge_from(RECIPIENT, OTHER, 200));
-			assert_eq!(nft_of(RECIPIENT).pledge, Some(Pledge { pledgee: OTHER, until: 200 }));
+			assert_eq!(
+				nft_of(RECIPIENT).pledge,
+				Some(Pledge { pledgee: OTHER, until: 200, delegate: None })
+			);
 		});
 	}
 
@@ -3474,7 +3483,7 @@ mod pledges {
 			assert_ok!(Scarcity::do_pledge_by_holder(&RECIPIENT, 0, PLEDGEE, 100));
 
 			let after = nft_of(RECIPIENT);
-			assert_eq!(after.pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
+			assert_eq!(after.pledge, Some(Pledge { pledgee: PLEDGEE, until: 100, delegate: None }));
 			assert_eq!(after.moves, before.moves, "the caller pays, so no feeless move is spent");
 			assert_eq!(after.state_nonce, before.state_nonce + 1);
 			assert_noop!(
@@ -3533,7 +3542,10 @@ mod pledges {
 			assert_ok!(Scarcity::pledge(origin, PLEDGEE, 100));
 			post_dispatch(pre, Ok(()));
 
-			assert_eq!(nft_of(RECIPIENT).pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
+			assert_eq!(
+				nft_of(RECIPIENT).pledge,
+				Some(Pledge { pledgee: PLEDGEE, until: 100, delegate: None })
+			);
 			assert_eq!(Locked::<Test>::get(RECIPIENT), None);
 			assert_ok!(Scarcity::do_try_state());
 		});
@@ -3706,6 +3718,311 @@ mod pledges {
 
 			assert_eq!(nft_of(RECIPIENT).pledge, None);
 			assert_eq!(Locked::<Test>::get(RECIPIENT), Some(LockInfo { retries: 1, until: 60 }));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	const DELEGATE: u64 = 6;
+
+	fn seize_call(to: u64) -> RuntimeCall {
+		RuntimeCall::Scarcity(crate::Call::seize_feeless { to })
+	}
+
+	/// An authorization for the delegate's seize of the instance `holder` holds now.
+	fn seize_authorization(holder: u64) -> AsScarcityInfo {
+		let nft = nft_of(holder);
+		AsScarcityInfo::AsDelegate { instance: nft.instance, state_nonce: nft.state_nonce }
+	}
+
+	fn validate_seize_as(
+		signer: u64,
+		to: u64,
+		info: AsScarcityInfo,
+	) -> Result<(ValidTransaction, Val<Test>, RuntimeOrigin), TransactionValidityError> {
+		scarcity_extension(info).validate(
+			RuntimeOrigin::signed(signer),
+			&seize_call(to),
+			&Default::default(),
+			0,
+			(),
+			&TxBaseImplication(()),
+			TransactionSource::External,
+		)
+	}
+
+	fn validate_seize(
+		signer: u64,
+		to: u64,
+	) -> Result<(ValidTransaction, Val<Test>, RuntimeOrigin), TransactionValidityError> {
+		validate_seize_as(signer, to, seize_authorization(RECIPIENT))
+	}
+
+	fn prepare_seize(val: Val<Test>, origin: &RuntimeOrigin, to: u64) -> Pre<Test> {
+		extension_for_val(&val)
+			.prepare(val, origin, &seize_call(to), &Default::default(), 0)
+			.unwrap()
+	}
+
+	/// Pledge instance 0 of `RECIPIENT` to `PLEDGEE` until 100, with `DELEGATE` as delegate.
+	fn delegated_instance() {
+		pledged_instance();
+		assert_ok!(Scarcity::do_set_delegate(&PLEDGEE, 0, Some(DELEGATE)));
+	}
+
+	#[test]
+	fn the_pledgee_names_and_removes_a_delegate() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			let before = nft_of(RECIPIENT);
+
+			assert_ok!(Scarcity::do_set_delegate(&PLEDGEE, 0, Some(DELEGATE)));
+
+			let after = nft_of(RECIPIENT);
+			assert_eq!(
+				after.pledge,
+				Some(Pledge { pledgee: PLEDGEE, until: 100, delegate: Some(DELEGATE) })
+			);
+			assert_eq!(after.state_nonce, before.state_nonce);
+			assert_eq!(after.moves, before.moves);
+			System::assert_has_event(
+				Event::<Test>::PledgeDelegated {
+					instance: 0,
+					collection: 0,
+					pledgee: PLEDGEE,
+					delegate: Some(DELEGATE),
+				}
+				.into(),
+			);
+
+			assert_ok!(Scarcity::do_set_delegate(&PLEDGEE, 0, None));
+			assert_eq!(nft_of(RECIPIENT).pledge.and_then(|pledge| pledge.delegate), None);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn only_the_pledgee_names_a_delegate_while_the_pledge_lasts() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+
+			assert_noop!(
+				Scarcity::do_set_delegate(&OTHER, 0, Some(DELEGATE)),
+				Error::<Test>::NotPledgee
+			);
+			assert_noop!(
+				Scarcity::do_set_delegate(&RECIPIENT, 0, Some(DELEGATE)),
+				Error::<Test>::NotPledgee
+			);
+			assert_noop!(
+				Scarcity::do_set_delegate(&PLEDGEE, 99, Some(DELEGATE)),
+				Error::<Test>::UnknownInstance
+			);
+
+			MockNow::set(100);
+			assert_noop!(
+				Scarcity::do_set_delegate(&PLEDGEE, 0, Some(DELEGATE)),
+				Error::<Test>::NotPledgee
+			);
+		});
+	}
+
+	#[test]
+	fn the_delegate_seizes_fee_less_through_the_whole_pipeline() {
+		new_test_ext().execute_with(|| {
+			delegated_instance();
+			MockNow::set(50);
+			Locked::<Test>::insert(RECIPIENT, LockInfo { retries: 1, until: 0 });
+			let before = nft_of(RECIPIENT);
+
+			let (valid, val, origin) = validate_seize(DELEGATE, 4).expect("the seize is valid");
+			assert_eq!(valid.priority, 50, "a seize is ordered by rest time like a transfer");
+			let pre = prepare_seize(val, &origin, 4);
+			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT), "prepare takes the NFT");
+			let post = Scarcity::seize_feeless(origin, 4).expect("the seize dispatches");
+			post_dispatch(pre, Ok(()));
+
+			assert_eq!(post.pays_fee, Pays::No);
+			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT));
+			assert_eq!(Locked::<Test>::get(RECIPIENT), None, "the lock leaves with the NFT");
+			assert_eq!(Instances::<Test>::get(0), Some(4));
+			let after = nft_of(4);
+			assert_eq!(after.pledge, None);
+			assert_eq!(after.moves, before.moves + 1, "a fee-less seize spends a move");
+			assert_eq!(after.state_nonce, before.state_nonce + 1);
+			assert_eq!(after.last_moved, 50);
+			assert_eq!(OccupiedPurses::get().last(), Some(&4));
+			System::assert_has_event(
+				Event::<Test>::SeizedByDelegate {
+					instance: 0,
+					collection: 0,
+					from: RECIPIENT,
+					to: 4,
+					delegate: DELEGATE,
+				}
+				.into(),
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn the_delegate_key_can_hold_a_token_of_its_own() {
+		new_test_ext().execute_with(|| {
+			delegated_instance();
+			mint(0, DELEGATE);
+
+			let (_, val, origin) = validate_seize(DELEGATE, 4).expect("the seize is valid");
+			let pre = prepare_seize(val, &origin, 4);
+			assert_ok!(Scarcity::seize_feeless(origin, 4));
+			post_dispatch(pre, Ok(()));
+
+			assert_eq!(nft_of(4).instance, 0);
+			assert_eq!(nft_of(DELEGATE).instance, 1, "the delegate keeps its own token");
+		});
+	}
+
+	/// Every condition dispatch checks is checked at the pool first.
+	#[test]
+	fn the_pool_refuses_each_invalid_seize_without_a_lock() {
+		new_test_ext().execute_with(|| {
+			delegated_instance();
+			mint(0, OTHER);
+			let stale = AsScarcityInfo::AsDelegate { instance: 0, state_nonce: 0 };
+			let unknown = AsScarcityInfo::AsDelegate { instance: 99, state_nonce: 0 };
+
+			let cases = [
+				(OTHER, 4, seize_authorization(RECIPIENT), CustomInvalidity::NotDelegate),
+				(PLEDGEE, 4, seize_authorization(RECIPIENT), CustomInvalidity::NotDelegate),
+				(RECIPIENT, 4, seize_authorization(RECIPIENT), CustomInvalidity::NotDelegate),
+				(
+					DELEGATE,
+					RECIPIENT,
+					seize_authorization(RECIPIENT),
+					CustomInvalidity::TransferToSelf,
+				),
+				(
+					DELEGATE,
+					OTHER,
+					seize_authorization(RECIPIENT),
+					CustomInvalidity::DestinationOccupied,
+				),
+				(DELEGATE, 4, stale, CustomInvalidity::NftStateMismatch),
+				(DELEGATE, 4, unknown, CustomInvalidity::NoNft),
+				(DELEGATE, 4, seize_authorization(OTHER), CustomInvalidity::NotDelegate),
+			];
+			for (signer, to, info, expected) in cases {
+				assert_invalidity(
+					validate_seize_as(signer, to, info).err().expect("refused"),
+					expected,
+				);
+			}
+
+			NftsByOwner::<Test>::mutate(RECIPIENT, |nft| {
+				nft.as_mut().expect("pledged").moves = MaximumMoves::get();
+			});
+			assert_invalidity(
+				validate_seize(DELEGATE, 4).err().expect("refused"),
+				CustomInvalidity::MovesExhausted,
+			);
+			assert_eq!(Locked::<Test>::iter().count(), 0, "a pool refusal writes no lock");
+		});
+	}
+
+	#[test]
+	fn the_delegate_loses_its_authority_with_the_pledge() {
+		new_test_ext().execute_with(|| {
+			delegated_instance();
+			assert_ok!(Scarcity::do_set_delegate(&PLEDGEE, 0, Some(OTHER)));
+			assert_invalidity(
+				validate_seize(DELEGATE, 4).err().expect("replaced"),
+				CustomInvalidity::NotDelegate,
+			);
+			assert!(validate_seize(OTHER, 4).is_ok());
+
+			MockNow::set(100);
+			assert_invalidity(
+				validate_seize(OTHER, 4).err().expect("expired"),
+				CustomInvalidity::NotDelegate,
+			);
+
+			MockNow::set(0);
+			assert_ok!(Scarcity::do_release(&PLEDGEE, 0));
+			assert_invalidity(
+				validate_seize(OTHER, 4).err().expect("released"),
+				CustomInvalidity::NotDelegate,
+			);
+		});
+	}
+
+	#[test]
+	fn a_fee_less_seize_needs_the_delegate_origin() {
+		new_test_ext().execute_with(|| {
+			delegated_instance();
+
+			let error = Scarcity::seize_feeless(RuntimeOrigin::signed(DELEGATE), 4)
+				.expect_err("a signed origin");
+			assert_eq!(error.error, sp_runtime::DispatchError::BadOrigin);
+			assert_eq!(error.post_info.pays_fee, Pays::Yes);
+			assert_noop!(
+				Scarcity::seize_feeless(nft_origin(RECIPIENT, nft_of(RECIPIENT)), 4),
+				sp_runtime::DispatchError::BadOrigin
+			);
+			let origin = RuntimeOrigin::from(Origin::<Test>::Delegate {
+				delegate: OTHER,
+				holder: RECIPIENT,
+				nft: nft_of(RECIPIENT),
+			});
+			assert_noop!(Scarcity::seize_feeless(origin, 4), Error::<Test>::NotDelegate);
+		});
+	}
+
+	/// Each authorization applies only to its own call, and the other pairings pass through.
+	#[test]
+	fn the_extension_charges_its_delegate_pipeline_for_a_seize_only() {
+		new_test_ext().execute_with(|| {
+			delegated_instance();
+			let as_delegate = scarcity_extension(seize_authorization(RECIPIENT));
+			let as_nft = scarcity_extension(current_authorization(RECIPIENT));
+
+			assert_eq!(
+				as_delegate.weight(&seize_call(4)),
+				<() as crate::WeightInfo>::as_scarcity_delegate_pipeline()
+			);
+			assert_ne!(
+				<() as crate::WeightInfo>::as_scarcity_delegate_pipeline(),
+				frame_support::weights::Weight::zero()
+			);
+			assert_eq!(
+				as_delegate.weight(&transfer_call(4)),
+				frame_support::weights::Weight::zero()
+			);
+			assert_eq!(as_nft.weight(&seize_call(4)), frame_support::weights::Weight::zero());
+
+			let (_, val, _) = validate_transfer_as(DELEGATE, 4, seize_authorization(RECIPIENT))
+				.expect("passes through");
+			assert!(matches!(val, Val::NotUsing));
+			let (_, val, _) = validate_seize_as(RECIPIENT, 4, current_authorization(RECIPIENT))
+				.expect("passes through");
+			assert!(matches!(val, Val::NotUsing));
+		});
+	}
+
+	#[test]
+	fn a_failed_seize_dispatch_restores_the_nft_without_a_lock() {
+		new_test_ext().execute_with(|| {
+			delegated_instance();
+			NftsByOwner::<Test>::mutate(RECIPIENT, |nft| {
+				nft.as_mut().expect("pledged").state_nonce = u64::MAX;
+			});
+
+			let (_, val, origin) = validate_seize(DELEGATE, 4).unwrap();
+			let pre = prepare_seize(val, &origin, 4);
+			assert_noop!(Scarcity::seize_feeless(origin, 4), Error::<Test>::StateNonceOverflow);
+			post_dispatch(pre, Err(Error::<Test>::StateNonceOverflow.into()));
+
+			assert_eq!(nft_of(RECIPIENT).instance, 0);
+			assert!(!NftsByOwner::<Test>::contains_key(4));
+			assert_eq!(Locked::<Test>::iter().count(), 0);
 			assert_ok!(Scarcity::do_try_state());
 		});
 	}
@@ -4235,7 +4552,7 @@ mod migration {
 
 			assert_eq!(
 				NftsByOwner::<Test>::get(RECIPIENT).expect("the NFT exists").pledge,
-				Some(Pledge { pledgee: OTHER, until: 200 }),
+				Some(Pledge { pledgee: OTHER, until: 200, delegate: None }),
 				"the gate must leave a pledge alone"
 			);
 			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));

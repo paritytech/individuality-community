@@ -58,6 +58,16 @@
 //! [`CustomInvalidity::Pledged`]. The pool drops such a transaction rather than keep it: the
 //! pledge can end by a seize or a release, which advance the state nonce the transaction names,
 //! or by expiry, after which the holder submits again.
+//!
+//! # Delegates
+//!
+//! [`AsScarcityInfo::AsDelegate`] authorizes [`Call::seize_feeless`] for the delegate of a pledge
+//! with effect. The delegate signs with its own key, which need not hold an NFT, and names the
+//! pledged instance and its state nonce like a holder does. The NFT leaves the holder's key during
+//! preparation, as for a holder's transfer. Validation runs every check dispatch makes against the
+//! same state, so only an exhausted state nonce fails dispatch. A failed dispatch restores the NFT
+//! under the next state nonce and locks no key: the holder did not sign, and the delegate's key is
+//! not the one that holds the NFT.
 
 use crate::{pallet::*, weights::WeightInfo, Config, Nft, NftOf, Transferability};
 use codec::{Decode, DecodeWithMemTracking, Encode};
@@ -96,6 +106,13 @@ pub enum AsScarcityInfo {
 		/// The ownership-state revision expected for that instance.
 		state_nonce: u64,
 	},
+	/// Authorize a fee-less seize of a pledged instance by the pledge's delegate.
+	AsDelegate {
+		/// The pledged instance to seize.
+		instance: InstanceId,
+		/// The ownership-state revision expected for that instance.
+		state_nonce: u64,
+	},
 }
 
 /// An error reported while validating [`AsScarcity`].
@@ -130,6 +147,8 @@ pub enum CustomInvalidity {
 	PledgeExpiry = 11,
 	/// The pledge names the holder's own purse key.
 	PledgeToSelf = 12,
+	/// The signer is not the delegate of a pledge with effect on the instance.
+	NotDelegate = 13,
 }
 
 impl From<CustomInvalidity> for TransactionValidityError {
@@ -149,15 +168,17 @@ enum Action<'a, AccountId> {
 pub enum Val<T: Config + Send + Sync> {
 	NotUsing,
 	UsingNft { owner: T::AccountId, instance: InstanceId, state_nonce: u64 },
+	Seizing { holder: T::AccountId, instance: InstanceId, state_nonce: u64 },
 }
 
 /// Information carried from preparation to post-dispatch.
 pub enum Pre<T: Config + Send + Sync> {
 	NotUsing,
 	UsingNft { owner: T::AccountId, nft: NftOf<T> },
+	Seizing { holder: T::AccountId, nft: NftOf<T> },
 }
 
-/// Purse-key authorization for Scarcity transfers, burns and pledges.
+/// Purse-key authorization for Scarcity transfers, burns and pledges, and for a delegate's seize.
 ///
 /// An authorization names the permanent instance and its ownership-state nonce. The instance
 /// identifier prevents an authorization from acting on a different NFT if a purse key is reused,
@@ -212,6 +233,69 @@ impl<T: Config + Send + Sync> AsScarcity<T> {
 		Ok(())
 	}
 
+	/// Order a purse-key transaction by how long its instance has rested, and let one
+	/// transaction act on each state of the instance.
+	fn validity(nft: &NftOf<T>, now: u64) -> ValidTransaction {
+		let priority = now.saturating_sub(nft.last_moved).min(T::MaxTransferPriority::get());
+		ValidTransaction::with_tag_prefix("Scarcity")
+			.and_provides((nft.instance, nft.state_nonce))
+			.priority(priority)
+			.into()
+	}
+
+	/// Authorize the delegate's fee-less seize of `instance` into `to`.
+	fn validate_seize(
+		mut origin: <T as frame_system::Config>::RuntimeOrigin,
+		to: &T::AccountId,
+		instance: InstanceId,
+		state_nonce: u64,
+	) -> ValidateResult<Val<T>, <T as frame_system::Config>::RuntimeCall> {
+		let Some(frame_system::Origin::<T>::Signed(delegate)) = origin.as_system_ref() else {
+			return Err(CustomInvalidity::OriginToAsNftMustBeSigned.into());
+		};
+		let delegate = delegate.clone();
+		let now = T::UnixTime::now().as_secs();
+		let holder = Instances::<T>::get(instance).ok_or(CustomInvalidity::NoNft)?;
+		let nft = NftsByOwner::<T>::get(&holder).ok_or(CustomInvalidity::NoNft)?;
+		if nft.instance != instance || nft.state_nonce != state_nonce {
+			return Err(CustomInvalidity::NftStateMismatch.into());
+		}
+		if !Pallet::<T>::live_pledge(&nft, now)
+			.is_some_and(|pledge| pledge.delegate.as_ref() == Some(&delegate))
+		{
+			return Err(CustomInvalidity::NotDelegate.into());
+		}
+		if to == &holder {
+			return Err(CustomInvalidity::TransferToSelf.into());
+		}
+		if NftsByOwner::<T>::contains_key(to) {
+			return Err(CustomInvalidity::DestinationOccupied.into());
+		}
+		Self::check_transferable(&nft)?;
+		Self::check_moves(&nft)?;
+		let validity = Self::validity(&nft, now);
+		origin.set_caller_from(Origin::Delegate { delegate, holder: holder.clone(), nft });
+		Ok((validity, Val::Seizing { holder, instance, state_nonce }, origin))
+	}
+
+	/// Take the NFT at `owner`'s key if it is still `instance` at `state_nonce`.
+	///
+	/// Dispatch assumes the source key is empty. Taking the NFT here prevents same-block double
+	/// use and lets post-dispatch restore the exact pre-state if dispatch fails.
+	fn take_nft(
+		owner: &T::AccountId,
+		instance: InstanceId,
+		state_nonce: u64,
+	) -> Result<NftOf<T>, TransactionValidityError> {
+		NftsByOwner::<T>::try_mutate_exists(owner, |maybe_nft| {
+			let nft = maybe_nft.as_ref().ok_or(CustomInvalidity::NoNft)?;
+			if nft.instance != instance || nft.state_nonce != state_nonce {
+				return Err(CustomInvalidity::NftStateMismatch.into());
+			}
+			Ok(maybe_nft.take().expect("NFT existence checked above; qed"))
+		})
+	}
+
 	fn failed_dispatch_lock(previous: Option<LockInfo>) -> LockInfo {
 		let retries = previous.map(|lock| lock.retries.saturating_add(1)).unwrap_or(1);
 		let exponent = retries.saturating_sub(1);
@@ -234,16 +318,16 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 	type Pre = Pre<T>;
 
 	fn weight(&self, call: &<T as frame_system::Config>::RuntimeCall) -> Weight {
-		if matches!(self.0.as_ref(), Some(AsScarcityInfo::AsNft { .. })) &&
-			matches!(
-				call.is_sub_type(),
+		match (self.0.as_ref(), call.is_sub_type()) {
+			(
+				Some(AsScarcityInfo::AsNft { .. }),
 				Some(Call::<T>::transfer { .. }) |
-					Some(Call::<T>::burn {}) |
-					Some(Call::<T>::pledge { .. })
-			) {
-			T::WeightInfo::as_scarcity_pipeline()
-		} else {
-			Weight::zero()
+				Some(Call::<T>::burn {}) |
+				Some(Call::<T>::pledge { .. }),
+			) => T::WeightInfo::as_scarcity_pipeline(),
+			(Some(AsScarcityInfo::AsDelegate { .. }), Some(Call::<T>::seize_feeless { .. })) =>
+				T::WeightInfo::as_scarcity_delegate_pipeline(),
+			_ => Weight::zero(),
 		}
 	}
 
@@ -257,6 +341,13 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 		_inherited_implication: &impl Implication,
 		_source: TransactionSource,
 	) -> ValidateResult<Self::Val, <T as frame_system::Config>::RuntimeCall> {
+		if let Some(AsScarcityInfo::AsDelegate { instance, state_nonce }) = self.0.as_ref() {
+			return match call.is_sub_type() {
+				Some(Call::<T>::seize_feeless { to }) =>
+					Self::validate_seize(origin, to, *instance, *state_nonce),
+				_ => Ok((ValidTransaction::default(), Val::NotUsing, origin)),
+			};
+		}
 		let action = match call.is_sub_type() {
 			Some(Call::<T>::transfer { to }) => Action::Transfer { to },
 			Some(Call::<T>::burn {}) => Action::Burn,
@@ -320,11 +411,7 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 				Self::check_moves(&nft)?;
 			},
 		}
-		let priority = now.saturating_sub(nft.last_moved).min(T::MaxTransferPriority::get());
-		let validity = ValidTransaction::with_tag_prefix("Scarcity")
-			.and_provides((nft.instance, nft.state_nonce))
-			.priority(priority)
-			.into();
+		let validity = Self::validity(&nft, now);
 		origin.set_caller_from(Origin::Nft { owner: owner.clone(), nft });
 		Ok((
 			validity,
@@ -344,20 +431,12 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 		match val {
 			Val::NotUsing => Ok(Pre::NotUsing),
 			Val::UsingNft { owner, instance, state_nonce } => {
-				let nft = NftsByOwner::<T>::try_mutate_exists(
-					&owner,
-					|maybe_nft| -> Result<NftOf<T>, TransactionValidityError> {
-						let nft = maybe_nft.as_ref().ok_or(CustomInvalidity::NoNft)?;
-						if nft.instance != instance || nft.state_nonce != state_nonce {
-							return Err(CustomInvalidity::NftStateMismatch.into());
-						}
-						// Dispatch assumes the source purse is empty. Taking the NFT here
-						// prevents same-block double use and lets post-dispatch restore the exact
-						// pre-state if dispatch fails.
-						Ok(maybe_nft.take().expect("NFT existence checked above; qed"))
-					},
-				)?;
+				let nft = Self::take_nft(&owner, instance, state_nonce)?;
 				Ok(Pre::UsingNft { owner, nft })
+			},
+			Val::Seizing { holder, instance, state_nonce } => {
+				let nft = Self::take_nft(&holder, instance, state_nonce)?;
+				Ok(Pre::Seizing { holder, nft })
 			},
 		}
 	}
@@ -369,16 +448,30 @@ impl<T: Config + Send + Sync> TransactionExtension<<T as frame_system::Config>::
 		_len: usize,
 		result: &DispatchResult,
 	) -> Result<Weight, TransactionValidityError> {
-		if let Pre::UsingNft { owner, nft } = pre {
-			if result.is_err() {
-				// The next state nonce retires the failed transaction, so nobody resubmits it when
-				// the lock expires. A nonce at the maximum stays put, where dispatch fails anyway.
-				let state_nonce = nft.state_nonce.saturating_add(1);
-				NftsByOwner::<T>::insert(&owner, Nft { state_nonce, ..nft });
-				Locked::<T>::insert(&owner, Self::failed_dispatch_lock(Locked::<T>::get(&owner)));
-			} else {
-				Locked::<T>::remove(&owner);
-			}
+		match pre {
+			Pre::NotUsing => {},
+			Pre::UsingNft { owner, nft } =>
+				if result.is_err() {
+					// The next state nonce retires the failed transaction, so nobody resubmits it
+					// when the lock expires. A nonce at the maximum stays put, where dispatch fails
+					// anyway.
+					let state_nonce = nft.state_nonce.saturating_add(1);
+					NftsByOwner::<T>::insert(&owner, Nft { state_nonce, ..nft });
+					Locked::<T>::insert(
+						&owner,
+						Self::failed_dispatch_lock(Locked::<T>::get(&owner)),
+					);
+				} else {
+					Locked::<T>::remove(&owner);
+				},
+			// See the module documentation on why a failed seize locks no key.
+			Pre::Seizing { holder, nft } =>
+				if result.is_err() {
+					let state_nonce = nft.state_nonce.saturating_add(1);
+					NftsByOwner::<T>::insert(&holder, Nft { state_nonce, ..nft });
+				} else {
+					Locked::<T>::remove(&holder);
+				},
 		}
 		Ok(Weight::zero())
 	}

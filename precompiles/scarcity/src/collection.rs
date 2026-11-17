@@ -107,6 +107,8 @@ where
 			IScarcityCollectionCalls::pledge(call) => Self::pledge(collection, call, env),
 			IScarcityCollectionCalls::seize(call) => Self::seize(collection, call, env),
 			IScarcityCollectionCalls::release(call) => Self::release(collection, call, env),
+			IScarcityCollectionCalls::setDelegate(call) =>
+				Self::set_delegate(collection, call, env),
 			// Approvals: unsupported by the purse model, see the crate documentation.
 			IScarcityCollectionCalls::approve(_) |
 			IScarcityCollectionCalls::setApprovalForAll(_) => {
@@ -221,6 +223,7 @@ pub(crate) fn is_mutating(input: &IScarcityCollectionCalls) -> bool {
 		IScarcityCollectionCalls::pledge(_) |
 		IScarcityCollectionCalls::seize(_) |
 		IScarcityCollectionCalls::release(_) |
+		IScarcityCollectionCalls::setDelegate(_) |
 		IScarcityCollectionCalls::approve(_) |
 		IScarcityCollectionCalls::setApprovalForAll(_) |
 		IScarcityCollectionCalls::defineItem(_) |
@@ -746,6 +749,25 @@ where
 		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::release())?;
 		Scarcity::<T>::do_release(&caller, nft.instance).map_err(revert_scarcity::<T>)?;
 		deposit_event(env, IScarcityCollection::Unlocked { tokenId: call.tokenId })?;
+		Ok(Vec::new())
+	}
+
+	/// Name the account that may seize a pledged token fee-less, on its pledgee's authority.
+	fn set_delegate(
+		collection: CollectionId,
+		call: &IScarcityCollection::setDelegateCall,
+		env: &mut impl Ext<T = T>,
+	) -> Result<Vec<u8>, Error> {
+		// Collection-membership validation reads, the delegate's reverse address mapping and the
+		// clock.
+		charge_reads(env, 4)?;
+		let (_, nft) = live_instance::<T>(collection, &call.tokenId)?;
+		let caller = caller_account::<T>(env)?;
+		Self::ensure_pledgee(&nft, &caller)?;
+		env.charge(<T as indiv_pallet_scarcity::Config>::WeightInfo::set_delegate())?;
+		let delegate = (call.delegate != Address::ZERO).then(|| account_of::<T>(&call.delegate));
+		Scarcity::<T>::do_set_delegate(&caller, nft.instance, delegate)
+			.map_err(revert_scarcity::<T>)?;
 		Ok(Vec::new())
 	}
 

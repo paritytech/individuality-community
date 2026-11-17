@@ -73,6 +73,9 @@ pub trait WeightInfo {
 	fn pledge() -> Weight;
 	fn seize() -> Weight;
 	fn release() -> Weight;
+	fn set_delegate() -> Weight;
+	fn seize_feeless() -> Weight;
+	fn as_scarcity_delegate_pipeline() -> Weight;
 }
 
 /// Weights for `indiv_pallet_scarcity` using the Substrate node and recommended hardware.
@@ -432,6 +435,37 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(4_u64))
 			.saturating_add(T::DbWeight::get().writes(4_u64))
 	}
+	/// Not yet benchmarked: the values of `release`, which reads and writes as much.
+	/// Storage: `Scarcity::Instances` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	fn set_delegate() -> Weight {
+		Weight::from_parts(29_445_000, 6157)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(4_u64))
+	}
+	/// Not yet benchmarked: the values of `seize`, which reads and writes more.
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::Instances` (r:0 w:1)
+	fn seize_feeless() -> Weight {
+		Weight::from_parts(43_175_000, 6198)
+			.saturating_add(T::DbWeight::get().reads(5_u64))
+			.saturating_add(T::DbWeight::get().writes(4_u64))
+	}
+	/// Not yet benchmarked: the values of `as_scarcity_pipeline`, with one more read for the
+	/// instance's holder.
+	/// Storage: `Scarcity::Instances` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:2 w:1)
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::Locked` (r:0 w:1)
+	fn as_scarcity_delegate_pipeline() -> Weight {
+		Weight::from_parts(33_754_000, 8679)
+			.saturating_add(T::DbWeight::get().reads(6_u64))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -789,5 +823,36 @@ impl WeightInfo for () {
 		Weight::from_parts(29_445_000, 6157)
 			.saturating_add(RocksDbWeight::get().reads(4_u64))
 			.saturating_add(RocksDbWeight::get().writes(4_u64))
+	}
+	/// Not yet benchmarked: the values of `release`, which reads and writes as much.
+	/// Storage: `Scarcity::Instances` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	fn set_delegate() -> Weight {
+		Weight::from_parts(29_445_000, 6157)
+			.saturating_add(RocksDbWeight::get().reads(4_u64))
+			.saturating_add(RocksDbWeight::get().writes(4_u64))
+	}
+	/// Not yet benchmarked: the values of `seize`, which reads and writes more.
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::Instances` (r:0 w:1)
+	fn seize_feeless() -> Weight {
+		Weight::from_parts(43_175_000, 6198)
+			.saturating_add(RocksDbWeight::get().reads(5_u64))
+			.saturating_add(RocksDbWeight::get().writes(4_u64))
+	}
+	/// Not yet benchmarked: the values of `as_scarcity_pipeline`, with one more read for the
+	/// instance's holder.
+	/// Storage: `Scarcity::Instances` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:2 w:1)
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::Locked` (r:0 w:1)
+	fn as_scarcity_delegate_pipeline() -> Weight {
+		Weight::from_parts(33_754_000, 8679)
+			.saturating_add(RocksDbWeight::get().reads(6_u64))
+			.saturating_add(RocksDbWeight::get().writes(2_u64))
 	}
 }

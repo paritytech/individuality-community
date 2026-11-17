@@ -352,7 +352,7 @@ fn nft_only_purse_pledges_feeless_and_cannot_move_the_pledged_instance() {
 			.expect("the pledged instance stays at its holder's key");
 		assert_eq!(
 			nft.pledge,
-			Some(indiv_pallet_scarcity::Pledge { pledgee, until }),
+			Some(indiv_pallet_scarcity::Pledge { pledgee, until, delegate: None }),
 			"the pledge is on the record",
 		);
 		assert_eq!((nft.state_nonce, nft.moves), (1, 1), "a pledge spends one feeless move");
@@ -375,5 +375,64 @@ fn nft_only_purse_pledges_feeless_and_cannot_move_the_pledged_instance() {
 			)),
 		);
 		assert!(!indiv_pallet_scarcity::Locked::<Runtime>::contains_key(&from));
+	});
+}
+
+/// The delegate of a pledge, a key with no balance, no System account and no NFT, seizes the
+/// pledged instance fee-less through the full extension pipeline.
+#[test]
+fn a_delegate_without_a_balance_seizes_a_pledged_instance_feeless() {
+	let (mut ext, holder) = scarcity_purse_test_state(0);
+	ext.execute_with(|| {
+		let pledgee = AccountId::from([3u8; 32]);
+		let delegate = AccountId::from([4u8; 32]);
+		let to = AccountId::from([5u8; 32]);
+		let now = <Runtime as indiv_pallet_scarcity::Config>::UnixTime::now().as_secs();
+		let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::pledge {
+			to: pledgee.clone(),
+			until: now + 1,
+		});
+		let info = call.get_dispatch_info();
+		let result = scarcity_tx_extension(0, 0).dispatch_transaction(
+			RuntimeOrigin::signed(holder.clone()),
+			call,
+			&info,
+			0,
+			INDIVIDUALITY_EXTENSION_VERSION,
+		);
+		assert!(matches!(result, Ok(Ok(_))), "pledge failed: {result:?}");
+		assert_ok!(indiv_pallet_scarcity::Pallet::<Runtime>::do_set_delegate(
+			&pledgee,
+			0,
+			Some(delegate.clone())
+		));
+
+		let call = RuntimeCall::Scarcity(indiv_pallet_scarcity::Call::<Runtime>::seize_feeless {
+			to: to.clone(),
+		});
+		let info = call.get_dispatch_info();
+		let result = purse_tx_extension(
+			0,
+			Some(indiv_pallet_scarcity::extension::AsScarcityInfo::AsDelegate {
+				instance: 0,
+				state_nonce: 1,
+			}),
+		)
+		.dispatch_transaction(
+			RuntimeOrigin::signed(delegate.clone()),
+			call,
+			&info,
+			0,
+			INDIVIDUALITY_EXTENSION_VERSION,
+		);
+		assert!(matches!(result, Ok(Ok(_))), "seize failed: {result:?}");
+
+		assert!(Balances::free_balance(&delegate).is_zero(), "a fee-less seize charges nothing");
+		assert!(!frame_system::Account::<Runtime>::contains_key(&delegate));
+		assert!(!indiv_pallet_scarcity::NftsByOwner::<Runtime>::contains_key(&holder));
+		let nft = indiv_pallet_scarcity::NftsByOwner::<Runtime>::get(&to)
+			.expect("the destination holds the seized instance");
+		assert_eq!(nft.pledge, None);
+		assert_eq!((nft.state_nonce, nft.moves), (2, 2), "the seize spends a feeless move");
 	});
 }

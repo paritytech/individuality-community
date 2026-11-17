@@ -75,6 +75,11 @@
 //! log, as a native transfer emits no `Transfer`, and an expiry emits nothing, so a consumer
 //! reads `locked()` or `pledgeOf()` rather than following the lock events.
 //!
+//! The pledgee can name a delegate with `setDelegate`. The delegate seizes the token natively and
+//! fee-less, with its own key, into an empty key it picks. That seize emits no log either. The
+//! delegate is resolved to an account when it is named, so a holder address read from `ownerOf`
+//! names the holder's own purse key.
+//!
 //! `name()`, `symbol()`, `tokenURI()`, ERC-7572 `contractURI()` and ERC-2981 `royaltyInfo()`
 //! read reserved metadata keys rather than dedicated pallet fields, so a collection opts into
 //! each by writing the key. A key that is unset, or set to something the method cannot use,

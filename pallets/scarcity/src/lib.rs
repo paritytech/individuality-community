@@ -85,6 +85,12 @@
 //! [`Pallet::do_release`]. The holder has no revoke. A fee-less pledge spends a feeless move, and a
 //! seize refills the budget like any paid move. The collection owner's force powers ignore
 //! pledges, and every move clears one.
+//!
+//! The pledgee can also name a delegate with [`Pallet::do_set_delegate`]. The delegate signs
+//! [`seize_feeless`](Pallet::seize_feeless) with its own key to move the instance into an empty
+//! key, with no fee. Like a holder's transfer, that seize spends a feeless move and refills
+//! nothing. A game names the winner's stake key the delegate of each loser's stake. The stake key
+//! already holds a token, so the winner seizes each stake into a fresh key.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -458,6 +464,8 @@ pub mod pallet {
 		/// Unix seconds at which the pledge stops having effect. The pledge has effect while the
 		/// current time is below this value.
 		pub until: u64,
+		/// The account the pledgee named to seize the instance fee-less, if any.
+		pub delegate: Option<AccountId>,
 	}
 
 	/// Post-failure backoff lock for an NFT purse key.
@@ -656,6 +664,22 @@ pub mod pallet {
 			to: T::AccountId,
 			pledgee: T::AccountId,
 		},
+		/// A pledgee named the delegate of its pledge, or removed it with `None`.
+		PledgeDelegated {
+			instance: InstanceId,
+			collection: CollectionId,
+			pledgee: T::AccountId,
+			delegate: Option<T::AccountId>,
+		},
+		/// The delegate of a pledge moved the pledged instance from its holder to another purse
+		/// key.
+		SeizedByDelegate {
+			instance: InstanceId,
+			collection: CollectionId,
+			from: T::AccountId,
+			to: T::AccountId,
+			delegate: T::AccountId,
+		},
 	}
 
 	#[pallet::error]
@@ -714,6 +738,8 @@ pub mod pallet {
 		PledgeExpiry,
 		/// An instance cannot be pledged to its own holder.
 		PledgeToSelf,
+		/// The caller is not the delegate of a pledge with effect on the instance.
+		NotDelegate,
 	}
 
 	/// Hold reason available to runtimes which back [`Config::Consideration`] with fungible holds.
@@ -792,6 +818,9 @@ pub mod pallet {
 		/// The NFT is removed from storage by `AsScarcity` before dispatch and held by this
 		/// origin.
 		Nft { owner: T::AccountId, nft: NftOf<T> },
+		/// The pledged NFT is removed from `holder`'s key by `AsScarcity` before dispatch and held
+		/// by this origin for the pledge's `delegate`.
+		Delegate { delegate: T::AccountId, holder: T::AccountId, nft: NftOf<T> },
 	}
 
 	#[pallet::config]
@@ -974,23 +1003,9 @@ pub mod pallet {
 			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
 			Self::ensure_transferable(&nft)?;
 
-			let from = owner;
-			let state_nonce =
-				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
-			// The extension checked the budget against this state. Only another move of this
-			// instance could spend it since, and that changes the state nonce the authorization
-			// names.
-			let moves = nft.moves.saturating_add(1);
-			let nft = Nft { last_moved: now, state_nonce, moves, pledge: None, ..nft };
-			NftsByOwner::<T>::insert(&to, nft.clone());
-			Instances::<T>::insert(nft.instance, &to);
-			T::OnPurseOccupied::on_purse_occupied(&to);
-			Self::deposit_event(Event::Transferred {
-				instance: nft.instance,
-				collection: nft.collection,
-				from,
-				to,
-			});
+			let (instance, collection) = (nft.instance, nft.collection);
+			Self::make_feeless_move(&to, nft, now)?;
+			Self::deposit_event(Event::Transferred { instance, collection, from: owner, to });
 			Ok(Pays::No.into())
 		}
 
@@ -1225,9 +1240,10 @@ pub mod pallet {
 
 		/// Pledge the NFT held by the `Origin::Nft` purse-key origin to `to` until `until`.
 		///
-		/// Until `until`, in Unix seconds, the holder cannot move or burn the instance, and only
-		/// `to` can end the pledge, through [`Pallet::do_seize`] or [`Pallet::do_release`]. The
-		/// holder cannot revoke it. The pledge spends a feeless move.
+		/// Until `until`, in Unix seconds, the holder cannot move or burn the instance. Only `to`
+		/// can end the pledge, through [`Pallet::do_seize`] or [`Pallet::do_release`], or the
+		/// delegate `to` names, through [`Pallet::seize_feeless`]. The holder cannot revoke it. The
+		/// pledge spends a feeless move.
 		#[pallet::call_index(15)]
 		#[pallet::weight(T::WeightInfo::pledge())]
 		pub fn pledge(
@@ -1241,6 +1257,41 @@ pub mod pallet {
 			// The extension checked the budget against this state, as for `transfer`.
 			let moves = nft.moves.saturating_add(1);
 			Self::do_pledge(owner, Nft { moves, ..nft }, to, until)?;
+			Ok(Pays::No.into())
+		}
+
+		/// Move a pledged instance held by the `Origin::Delegate` origin to the empty key `to`.
+		///
+		/// The origin's account must be the delegate of a pledge with effect. The move spends a
+		/// feeless move and clears the pledge.
+		#[pallet::call_index(16)]
+		#[pallet::weight(
+			T::WeightInfo::seize_feeless()
+				.saturating_add(T::OnPurseOccupied::on_purse_occupied_weight())
+		)]
+		pub fn seize_feeless(origin: OriginFor<T>, to: T::AccountId) -> DispatchResultWithPostInfo {
+			let Ok(Origin::Delegate { delegate, holder, nft }) = origin.into() else {
+				return Err(DispatchError::BadOrigin.into());
+			};
+			let now = T::UnixTime::now().as_secs();
+			ensure!(
+				Self::live_pledge(&nft, now)
+					.is_some_and(|pledge| pledge.delegate.as_ref() == Some(&delegate)),
+				Error::<T>::NotDelegate
+			);
+			ensure!(to != holder, Error::<T>::SelfTransfer);
+			ensure!(!NftsByOwner::<T>::contains_key(&to), Error::<T>::AddressOccupied);
+			Self::ensure_transferable(&nft)?;
+
+			let (instance, collection) = (nft.instance, nft.collection);
+			Self::make_feeless_move(&to, nft, now)?;
+			Self::deposit_event(Event::SeizedByDelegate {
+				instance,
+				collection,
+				from: holder,
+				to,
+				delegate,
+			});
 			Ok(Pays::No.into())
 		}
 	}
@@ -1768,6 +1819,22 @@ pub mod pallet {
 			Ok(())
 		}
 
+		/// Store `nft`, already taken from its source key, at the empty key `to` as a feeless move.
+		///
+		/// The state nonce advances, the move spends one feeless move and any pledge clears. The
+		/// extension checked the budget against this state. Only another move of this instance
+		/// could spend it since, and that changes the state nonce the authorization names.
+		fn make_feeless_move(to: &T::AccountId, nft: NftOf<T>, now: u64) -> DispatchResult {
+			let state_nonce =
+				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
+			let moves = nft.moves.saturating_add(1);
+			let nft = Nft { last_moved: now, state_nonce, moves, pledge: None, ..nft };
+			Instances::<T>::insert(nft.instance, to);
+			NftsByOwner::<T>::insert(to, nft);
+			T::OnPurseOccupied::on_purse_occupied(to);
+			Ok(())
+		}
+
 		/// Move `nft` from `from` to the empty key `to` as a paid move.
 		///
 		/// The state nonce advances, the feeless move budget refills, and any pledge clears.
@@ -1873,7 +1940,7 @@ pub mod pallet {
 				nft.state_nonce.checked_add(1).ok_or(Error::<T>::StateNonceOverflow)?;
 
 			let (instance, collection) = (nft.instance, nft.collection);
-			let pledge = Some(Pledge { pledgee: pledgee.clone(), until });
+			let pledge = Some(Pledge { pledgee: pledgee.clone(), until, delegate: None });
 			NftsByOwner::<T>::insert(&holder, Nft { state_nonce, pledge, ..nft });
 			Self::deposit_event(Event::Pledged { instance, collection, holder, pledgee, until });
 			Ok(())
@@ -1956,6 +2023,29 @@ pub mod pallet {
 				collection,
 				holder,
 				pledgee: pledgee.clone(),
+			});
+			Ok(())
+		}
+
+		/// Name `delegate` as the account that can seize a pledged instance fee-less, on the
+		/// pledgee's authority. `None` removes the delegate.
+		///
+		/// Only the account the pledge names can call it, and only while the pledge has effect.
+		/// No runtime call reaches it; a contract environment calls it.
+		pub fn do_set_delegate(
+			pledgee: &T::AccountId,
+			instance: InstanceId,
+			delegate: Option<T::AccountId>,
+		) -> DispatchResult {
+			let (holder, nft) = Self::pledged_to(pledgee, instance)?;
+			let collection = nft.collection;
+			let pledge = nft.pledge.map(|pledge| Pledge { delegate: delegate.clone(), ..pledge });
+			NftsByOwner::<T>::insert(&holder, Nft { pledge, ..nft });
+			Self::deposit_event(Event::PledgeDelegated {
+				instance,
+				collection,
+				pledgee: pledgee.clone(),
+				delegate,
 			});
 			Ok(())
 		}

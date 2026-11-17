@@ -39,6 +39,8 @@ pragma solidity ^0.8.30;
 /// @custom:function pledge or the fee-less native call. Until then the holder cannot move or burn
 /// it, and only the pledgee can end the pledge: @custom:function seize moves the token to a key
 /// the pledgee names, and @custom:function release gives it up. The holder cannot revoke a pledge.
+/// The pledgee can also name a delegate with @custom:function setDelegate, which then seizes the
+/// token fee-less with its own key until the pledge ends.
 /// A pledge is not an approval: @custom:function getApproved does not report it and the pledgee
 /// cannot call @custom:function transferFrom; read it with @custom:function pledgeOf.
 ///
@@ -46,8 +48,8 @@ pragma solidity ^0.8.30;
 /// @custom:function pledgeOf names the contract, that `until` covers the whole flow including
 /// any claim window, and that the token is a stake it accepts. It credits
 /// @custom:function ownerOf, never `msg.sender`, because anyone can report a pledge. It seizes
-/// before `until`, and it collects one empty key per token it will hand out, because a key holds
-/// one token.
+/// before `until` into one empty key per token, because a key holds one token, or it names the
+/// recipient as delegate and leaves the seize to it within the same window.
 /// @custom:reverts "unknown collection"
 /// @custom:reverts "this precompile does not accept value"
 /// @custom:reverts "illegal to call this pre-compile via delegate call"
@@ -382,6 +384,19 @@ interface IScarcityCollection {
     /// @custom:reverts "instance state nonce exhausted"
     /// @custom:emits Unlocked
     function release(uint256 tokenId) external;
+
+    /// @notice Name `delegate` as the account that may seize `tokenId` fee-less, as its pledgee.
+    /// @dev This precompile's own function, not part of any ERC standard. The caller must hold a
+    /// pledge on the token with effect now. The delegate seizes with the native fee-less call its
+    /// own key signs, into an empty key it picks, until the pledge ends. That seize spends one of
+    /// the token's feeless moves and refills none. The zero address removes the delegate. A game
+    /// names the winner's stake key, so the winner's wallet takes each prize into a fresh key
+    /// without a fee.
+    /// @param tokenId The pledged instance.
+    /// @param delegate The account that may seize the instance, or the zero address for none.
+    /// @custom:reverts "unknown token"
+    /// @custom:reverts "caller holds no pledge on this token"
+    function setDelegate(uint256 tokenId, address delegate) external;
 
     /// @notice Define a new immutable item in this collection with shared metadata defaults.
     /// @dev This precompile's own function, not part of any ERC standard. Only the collection owner

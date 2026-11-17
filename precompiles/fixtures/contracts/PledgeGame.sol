@@ -21,15 +21,18 @@ import "../../scarcity/sol/IScarcityCollection.sol";
 /// @title PledgeGame
 /// @notice A winner-takes-all round staked with pledges. Each player pledges a token to this
 /// contract, anyone reports the pledge with `join`, and the operator settles: the winner's stake
-/// is released and every other stake moves to a key the winner named.
+/// is released and the winner's stake key becomes the delegate of every other stake, which the
+/// winner then seizes fee-less into fresh keys.
 /// @dev The tokens never leave their holders' keys before settlement, so the contract keeps no
 /// custody and strands nothing. A round that is never settled ends when the pledges expire, and the
 /// players keep their stakes. The contract follows the rules `IScarcityCollection` sets for
 /// contracts that take pledges:
 /// - `join` counts a token only when the pledge names this contract and outlives `deadline`.
 /// - `join` credits `ownerOf`, never `msg.sender`, so a front-run `join` credits the holder.
-/// - `settle` collects one empty key per prize, because a key holds one token.
-/// - `settle` runs while every pledge still has effect, or it reverts as a whole.
+/// - `settle` needs no key from the winner: the winner's wallet picks an empty key per prize when
+///   it seizes.
+/// - `settle` runs while every pledge still has effect, or it reverts as a whole. The winner seizes
+///   before the pledges expire, or the losers keep their stakes.
 /// A fixture: it accepts one collection, fixed at deployment, and keeps no other record.
 /// @custom:security-contact admin@parity.io
 contract PledgeGame {
@@ -64,8 +67,6 @@ contract PledgeGame {
     error NotOperator();
     /// @notice The winning token is not a stake of this round.
     error UnknownStake();
-    /// @notice `settle` needs one prize key per stake other than the winner's.
-    error WrongPrizeKeyCount();
 
     /// @param collection_ The collection whose tokens this round takes.
     /// @param deadline_ The Unix second by which the round settles.
@@ -90,24 +91,23 @@ contract PledgeGame {
         stakes.push(tokenId);
     }
 
-    /// @notice Release the winner's stake and move every other stake to the winner's prize keys.
-    /// @dev Each loser's stake moves through `seize`, the pledgee's move.
+    /// @notice Release the winner's stake and name the winner's stake key the delegate of every
+    /// other stake.
+    /// @dev The winner's key holds its own stake, so it cannot receive a prize. As delegate it
+    /// seizes each prize into a fresh key with the native fee-less call, while the pledges last.
     /// @param winningToken The stake whose holder wins.
-    /// @param prizeKeys Empty keys of the winner, one per other stake, in join order.
-    function settle(uint256 winningToken, address[] calldata prizeKeys) external {
+    function settle(uint256 winningToken) external {
         if (msg.sender != operator) revert NotOperator();
         if (settled) revert Settled();
-        if (stakerOf[winningToken] == address(0)) revert UnknownStake();
-        if (prizeKeys.length != stakes.length - 1) revert WrongPrizeKeyCount();
+        address winner = stakerOf[winningToken];
+        if (winner == address(0)) revert UnknownStake();
         settled = true;
-        uint256 next;
         for (uint256 i; i < stakes.length; ++i) {
             uint256 token = stakes[i];
             if (token == winningToken) {
                 collection.release(token);
             } else {
-                collection.seize(token, prizeKeys[next]);
-                ++next;
+                collection.setDelegate(token, winner);
             }
         }
     }

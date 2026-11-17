@@ -357,7 +357,7 @@ mod benchmarks {
 
 		assert_eq!(
 			NftsByOwner::<T>::get(&owner).and_then(|nft| nft.pledge),
-			Some(Pledge { pledgee, until })
+			Some(Pledge { pledgee, until, delegate: None })
 		);
 		Ok(())
 	}
@@ -404,6 +404,49 @@ mod benchmarks {
 		let nft = NftsByOwner::<T>::get(&holder).expect("the holder keeps the NFT");
 		assert_eq!(nft.instance, instance);
 		assert_eq!(nft.pledge, None);
+		Ok(())
+	}
+
+	/// Contract environments charge this weight for `do_set_delegate`, which no extrinsic reaches.
+	#[benchmark]
+	fn set_delegate() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = account("owner", 0, 0);
+		let holder: T::AccountId = whitelisted_caller();
+		let pledgee: T::AccountId = account("pledgee", 0, 0);
+		let delegate: T::AccountId = account("delegate", 0, 0);
+		let instance = mint_pledged::<T>(&owner, &holder, &pledgee)?;
+
+		#[block]
+		{
+			Pallet::<T>::do_set_delegate(&pledgee, instance, Some(delegate.clone()))?;
+		}
+
+		let stored = NftsByOwner::<T>::get(&holder).and_then(|nft| nft.pledge);
+		assert_eq!(stored.and_then(|stored| stored.delegate), Some(delegate));
+		Ok(())
+	}
+
+	#[benchmark]
+	fn seize_feeless() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = account("owner", 0, 0);
+		let holder: T::AccountId = account("holder", 0, 0);
+		let pledgee: T::AccountId = account("pledgee", 0, 0);
+		let delegate: T::AccountId = whitelisted_caller();
+		let to: T::AccountId = account("to", 0, 0);
+		NftsByOwner::<T>::remove(&to);
+		let instance = mint_pledged::<T>(&owner, &holder, &pledgee)?;
+		Pallet::<T>::do_set_delegate(&pledgee, instance, Some(delegate.clone()))?;
+		let nft = NftsByOwner::<T>::take(&holder).expect("holder has the pledged NFT");
+		let origin: T::RuntimeOrigin =
+			Origin::<T>::Delegate { delegate, holder: holder.clone(), nft }.into();
+
+		#[extrinsic_call]
+		_(origin, to.clone());
+
+		let nft = NftsByOwner::<T>::get(&to).expect("destination holds the seized NFT");
+		assert_eq!(nft.instance, instance);
+		assert_eq!(nft.pledge, None);
+		assert_eq!(Instances::<T>::get(instance), Some(to));
 		Ok(())
 	}
 
@@ -504,6 +547,59 @@ mod benchmarks {
 
 		assert!(NftsByOwner::<T>::contains_key(&owner));
 		assert_eq!(Locked::<T>::get(&owner).map(|lock| lock.retries), Some(u8::MAX));
+		Ok(())
+	}
+
+	/// Measured on a failed dispatch, whose restore writes the whole record back.
+	#[benchmark]
+	fn as_scarcity_delegate_pipeline() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = account("owner", 0, 0);
+		let holder: T::AccountId = account("holder", 0, 0);
+		let pledgee: T::AccountId = account("pledgee", 0, 0);
+		let delegate: T::AccountId = whitelisted_caller();
+		let destination: T::AccountId = account("destination", 0, 0);
+		NftsByOwner::<T>::remove(&destination);
+		let instance = mint_pledged::<T>(&owner, &holder, &pledgee)?;
+		Pallet::<T>::do_set_delegate(&pledgee, instance, Some(delegate.clone()))?;
+		let nft = NftsByOwner::<T>::get(&holder).expect("holder has the pledged NFT");
+
+		let call: T::RuntimeCall = Call::<T>::seize_feeless { to: destination }.into();
+		let info = call.get_dispatch_info();
+		let extension = AsScarcity::<T>::new(Some(AsScarcityInfo::AsDelegate {
+			instance,
+			state_nonce: nft.state_nonce,
+		}));
+		let origin: T::RuntimeOrigin = RawOrigin::Signed(delegate).into();
+		let failed_dispatch = Err(DispatchError::Other("benchmark failure"));
+
+		#[block]
+		{
+			let (_, val, origin) = extension
+				.validate(
+					origin,
+					&call,
+					&info,
+					0,
+					(),
+					&TxBaseImplication(()),
+					TransactionSource::External,
+				)
+				.expect("the delegate's seize validates");
+			let pre = extension
+				.prepare(val, &origin, &call, &info, 0)
+				.expect("validated NFT is prepared");
+			AsScarcity::<T>::post_dispatch_details(
+				pre,
+				&info,
+				&Default::default(),
+				0,
+				&failed_dispatch,
+			)
+			.expect("failed dispatch is restored");
+		}
+
+		let restored = NftsByOwner::<T>::get(&holder).expect("the holder keeps the NFT");
+		assert_eq!(restored.state_nonce, nft.state_nonce + 1);
 		Ok(())
 	}
 

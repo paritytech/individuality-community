@@ -2340,6 +2340,10 @@ fn all_collection_calls(
 			to: empty
 		}),
 		IScarcityCollectionCalls::release(IScarcityCollection::releaseCall { tokenId: token }),
+		IScarcityCollectionCalls::setDelegate(IScarcityCollection::setDelegateCall {
+			tokenId: token,
+			delegate: empty
+		}),
 		IScarcityCollectionCalls::defineItem(IScarcityCollection::defineItemCall {
 			soulbound: false,
 			keys: alloc::vec![],
@@ -3206,9 +3210,9 @@ fn collection_owner_deposit_reports_aggregate() {
 /// metadata and fails on any that starts trapping instead of reverting.
 #[test]
 fn mapped_scarcity_errors_are_exhaustive() {
-	// The ABI covers the pallet's whole owner, holder and pledgee surface, so every error variant
-	// is reachable.
-	const UNREACHABLE: [&str; 0] = [];
+	// The ABI covers the pallet's whole owner, holder and pledgee surface. Only the delegate's
+	// fee-less seize is native, so its refusal never reaches this precompile.
+	const UNREACHABLE: [&str; 1] = ["NotDelegate"];
 
 	let pallet_index = match DispatchError::from(indiv_pallet_scarcity::Error::<Test>::NoPermission)
 	{
@@ -3821,7 +3825,8 @@ fn the_holder_pledges_through_the_precompile() {
 			after.pledge,
 			Some(indiv_pallet_scarcity::Pledge {
 				pledgee: world.pledgee.clone(),
-				until: PLEDGE_UNTIL
+				until: PLEDGE_UNTIL,
+				delegate: None
 			})
 		);
 		assert_eq!(after.moves, before.moves, "a paid pledge spends no feeless move");
@@ -3944,6 +3949,40 @@ fn the_pledgee_releases_and_the_token_stays() {
 	});
 }
 
+#[test]
+fn the_pledgee_names_and_removes_a_delegate() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let (delegate_address, delegate) = purse(0xCD);
+		let name = |delegate: Address| {
+			IScarcityCollection::setDelegateCall { tokenId: world.token, delegate }.abi_encode()
+		};
+		let delegate_of = || {
+			NftsByOwner::<Test>::get(&world.holder)
+				.unwrap()
+				.pledge
+				.and_then(|pledge| pledge.delegate)
+		};
+
+		let named = name(delegate_address.0.into());
+		call_reverted_with(&world.alice, world.target, named.clone(), ERR_NOT_PLEDGEE);
+		call_reverted_with(&world.holder, world.target, named.clone(), ERR_NOT_PLEDGEE);
+		call_ok(&world.pledgee, world.target, named.clone());
+
+		assert_no_contract_event();
+		assert_eq!(delegate_of(), Some(delegate));
+		assert_eq!(world.pledge_of(), (world.pledgee_address, PLEDGE_UNTIL));
+		assert!(world.locked(), "a delegate leaves the token locked to its holder");
+
+		call_ok(&world.pledgee, world.target, name(Address::ZERO));
+		assert_eq!(delegate_of(), None, "the zero address removes the delegate");
+
+		MockNow::set(PLEDGE_UNTIL);
+		call_reverted_with(&world.pledgee, world.target, named, ERR_NOT_PLEDGEE);
+	});
+}
+
 /// No ERC-721 transfer function moves a pledged token: the holder, the pledgee and every other
 /// caller are refused, each with its own reason, and `seize` is the pledgee's move.
 #[test]
@@ -3970,7 +4009,12 @@ fn transfer_from_refuses_every_caller_while_a_pledge_has_effect() {
 			.abi_encode(),
 		];
 
-		call_reverted_with(&world.holder, world.target, world.transfer_from(to_address), ERR_PLEDGED);
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			world.transfer_from(to_address),
+			ERR_PLEDGED,
+		);
 		call_reverted_with(
 			&world.alice,
 			world.target,
@@ -4214,7 +4258,7 @@ mod guards {
 			// A tripwire, not a safety net: `all_collection_calls` already pins that every selector
 			// is driven, and a new mutator classified as a read leaves this count untouched. That
 			// one is caught by review or not at all.
-			assert_eq!(mutating, 23, "mutating arm count changed; update this test deliberately");
+			assert_eq!(mutating, 24, "mutating arm count changed; update this test deliberately");
 
 			let factory = run_precompile::<ScarcityFactory<Test, FACTORY_INDEX>, _>(
 				&mut ext,
@@ -4752,7 +4796,7 @@ mod evm_fixture {
 	alloy::sol! {
 		interface IPledgeGame {
 			function join(uint256 tokenId) external;
-			function settle(uint256 winningToken, address[] calldata prizeKeys) external;
+			function settle(uint256 winningToken) external;
 			function stakerOf(uint256 tokenId) external view returns (address staker);
 			function stakeCount() external view returns (uint256 count);
 			error NotPledgedHere();
@@ -4831,21 +4875,29 @@ mod evm_fixture {
 			)
 		}
 
-		fn settle(
-			&self,
-			caller: &AccountId32,
-			winner: U256,
-			prize_keys: &[H160],
-		) -> pallet_revive::ExecReturnValue {
+		fn settle(&self, caller: &AccountId32, winner: U256) -> pallet_revive::ExecReturnValue {
 			call_precompile(
 				caller,
 				self.game,
-				IPledgeGame::settleCall {
-					winningToken: winner,
-					prizeKeys: prize_keys.iter().map(|key| alloy_address(*key)).collect(),
-				}
-				.abi_encode(),
+				IPledgeGame::settleCall { winningToken: winner }.abi_encode(),
 			)
+		}
+
+		/// Seize `loser`'s stake into `to` as `delegate`, as `AsScarcity` dispatches the fee-less
+		/// call: the record leaves the holder's key before the call and the call writes it to `to`.
+		fn seize_as_delegate(
+			&self,
+			delegate: &AccountId32,
+			loser: &Player,
+			to: AccountId32,
+		) -> frame_support::dispatch::DispatchResultWithPostInfo {
+			let nft = NftsByOwner::<Test>::take(&loser.account).unwrap();
+			let origin = RuntimeOrigin::from(indiv_pallet_scarcity::Origin::<Test>::Delegate {
+				delegate: delegate.clone(),
+				holder: loser.account.clone(),
+				nft,
+			});
+			Scarcity::seize_feeless(origin, to)
 		}
 
 		fn staker_of(&self, token: U256) -> Address {
@@ -4864,8 +4916,8 @@ mod evm_fixture {
 		assert_eq!(output.data.get(..4), Some(&selector[..]), "{case}: wrong revert {output:?}");
 	}
 
-	/// Two players pledge and join, and settling releases the winner's stake and moves the
-	/// loser's to the key the winner named.
+	/// Two players pledge and join, settling releases the winner's stake and names the winner's
+	/// stake key the delegate of the loser's, and the winner seizes it fee-less into a fresh key.
 	#[test]
 	fn a_round_settles_on_pledges() {
 		for (compiler, code) in pledge_game_codes() {
@@ -4876,27 +4928,38 @@ mod evm_fixture {
 					game.pledge_to_game(player);
 					assert!(!game.join(&game.alice, player.token).did_revert(), "{compiler}");
 				}
-				let (prize_address, prize) = purse(0xC1);
+				let (_, prize) = purse(0xC1);
 
 				assert_custom_error(
-					&game.settle(&winner.account, winner.token, &[prize_address]),
+					&game.settle(&winner.account, winner.token),
 					IPledgeGame::NotOperator::SELECTOR,
 					compiler,
 				);
-				let settled = game.settle(&game.alice, winner.token, &[prize_address]);
+				let settled = game.settle(&game.alice, winner.token);
 				assert!(!settled.did_revert(), "{compiler}: {settled:?}");
+
+				let kept = NftsByOwner::<Test>::get(&winner.account).expect("the winner keeps");
+				assert_eq!(U256::from(kept.instance), winner.token, "{compiler}");
+				assert_eq!(kept.pledge, None, "{compiler}: the winner's stake is released");
+				let staked = NftsByOwner::<Test>::get(&loser.account).expect("the loser holds");
+				let pledge = staked.pledge.clone().expect("the loser's pledge stands");
+				assert_eq!(pledge.pledgee, game.game_account, "{compiler}");
+				assert_eq!(
+					pledge.delegate.as_ref(),
+					Some(&winner.account),
+					"{compiler}: the winner's stake key is the delegate"
+				);
+
+				assert_ok!(game.seize_as_delegate(&winner.account, loser, prize.clone()));
 
 				let moved = NftsByOwner::<Test>::get(&prize).expect("the prize key holds a token");
 				assert_eq!(U256::from(moved.instance), loser.token, "{compiler}");
 				assert_eq!(moved.pledge, None, "{compiler}");
-				assert_eq!(moved.moves, 0, "{compiler}: a seize refills the budget");
+				assert_eq!(moved.moves, staked.moves + 1, "{compiler}: the seize spends a move");
 				assert!(NftsByOwner::<Test>::get(&loser.account).is_none(), "{compiler}");
-				let kept = NftsByOwner::<Test>::get(&winner.account).expect("the winner keeps");
-				assert_eq!(U256::from(kept.instance), winner.token, "{compiler}");
-				assert_eq!(kept.pledge, None, "{compiler}: the winner's stake is released");
 
 				assert_custom_error(
-					&game.settle(&game.alice, winner.token, &[prize_address]),
+					&game.settle(&game.alice, winner.token),
 					IPledgeGame::Settled::SELECTOR,
 					compiler,
 				);
@@ -4971,9 +5034,7 @@ mod evm_fixture {
 					assert!(!game.join(&game.alice, player.token).did_revert(), "{compiler}");
 				}
 				MockNow::set(GAME_PLEDGE_UNTIL);
-				let (prize_address, _) = purse(0xC1);
-
-				let late = game.settle(&game.alice, first.token, &[prize_address]);
+				let late = game.settle(&game.alice, first.token);
 				assert!(late.did_revert(), "{compiler}: a settle after expiry must revert");
 				assert_eq!(
 					NftsByOwner::<Test>::get(&second.account).map(|nft| U256::from(nft.instance)),
