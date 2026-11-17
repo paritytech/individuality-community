@@ -9,6 +9,7 @@ export ENV
 # Keep only one entry here if you want to run a single script.
 SCRIPT_NAMES=(
   "00-requirements.sh"
+  "00-check-chains-finalize.sh"
   "01a-fund-accounts-relay-people.sh"
   "01b-setup-hrmp-channel-people-ah.sh"
   "01c-setup-hrmp-channel-people-bulletin.sh"

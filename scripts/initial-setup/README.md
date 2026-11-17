@@ -37,7 +37,7 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 
 | Script | What it does |
 |--------|-------------|
-| **00** | Installs `dot` CLI, `jq` and `bc`, imports signer accounts and checks them against the config |
+| **00** | Installs `dot` CLI, `jq` and `bc`, imports signer accounts and checks them against the config; checks that Relay, People and AssetHub finalize new blocks |
 | **01a** | Funds sudo proxy, attestation, attestation writer and inviter, faucet, and asset owner accounts on People; bootstraps the People sovereign on the Relay |
 | **01b-c** | HRMP channel setup (People<->AssetHub, People<->Bulletin) |
 | **01d** | Funds sudo, attestation, attestation writer, faucet, and asset owner accounts on AssetHub by teleporting native PAS from People |
@@ -101,6 +101,8 @@ gh workflow run initial-setup.yml -f environment=preview
 ```
 
 The job runs in the GitHub Environment `previewnet` for `preview` and `paseo-next-v2` for `next`. Each environment holds the four signer mnemonics as secrets: `PEOPLE_SUDO_MNEMONIC`, `AH_SUDO_MNEMONIC`, `ATTESTATION_MNEMONIC` and `ASSET_OWNER_MNEMONIC`. The workflow passes them as inputs to the composite action `.github/actions/initial-setup`, which installs Node.js and then runs `start.sh`. Its first script, `00-requirements.sh`, installs the `dot` CLI, `jq` and `bc`.
+
+Another repository can run the action with `uses: paritytech/individuality-community/.github/actions/initial-setup@<ref>`, passing the environment and the four mnemonics as inputs.
 
 ## Adding a New Script
 
