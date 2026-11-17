@@ -80,7 +80,7 @@ pub struct StmtStoreAllowanceEntry<T: Config> {
 	/// The slot sequence number within the period.
 	pub seq: u32,
 	/// Timestamp (seconds since Unix epoch) when this entry was last set.
-	/// Used to enforce a cooldown before the same alias can replace it within the same period.
+	/// A replacement needs a later timestamp and signs over this value.
 	pub since: u64,
 	/// The allowance granted to `account_id`.
 	pub allowance: BoundedStatementAllowance,

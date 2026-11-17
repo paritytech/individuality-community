@@ -159,23 +159,6 @@ fn governance_cannot_break_statement_storage_invariants() {
 			10
 		);
 
-		// The replacement cooldown stays non-zero and never exceeds the one day period.
-		set_statement_parameter(statement_storage::StmtStoreReplacementCooldown, 0);
-		assert_eq!(
-			<Runtime as indiv_pallet_resources::Config>::StmtStoreReplacementCooldown::get(),
-			1
-		);
-		set_statement_parameter(statement_storage::StmtStoreReplacementCooldown, u32::MAX);
-		assert_eq!(
-			<Runtime as indiv_pallet_resources::Config>::StmtStoreReplacementCooldown::get(),
-			24 * 60 * 60
-		);
-		set_statement_parameter(statement_storage::StmtStoreReplacementCooldown, 60);
-		assert_eq!(
-			<Runtime as indiv_pallet_resources::Config>::StmtStoreReplacementCooldown::get(),
-			60
-		);
-
 		// The grace window stays non-zero.
 		set_statement_parameter(statement_storage::StmtStoreGraceWindow, 0);
 		assert_eq!(<Runtime as indiv_pallet_resources::Config>::StmtStoreGraceWindow::get(), 1);

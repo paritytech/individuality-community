@@ -596,7 +596,7 @@ mod tests {
 	#[test]
 	fn supported_cache_is_sorted_unique_and_every_entry_is_retrievable() {
 		assert!(!CACHE_ENTRIES_R2E10.is_empty());
-		assert!(CACHE_ENTRIES_R2E10.windows(2).all(|pair| pair[0].0 < pair[1].0));
+		assert!(CACHE_ENTRIES_R2E10.is_sorted_by(|a, b| a.0 < b.0));
 		for (key, proof, alias) in CACHE_ENTRIES_R2E10 {
 			assert_eq!(get_cache_entry(RingExponent::R2e10, key), Some((*proof, *alias)));
 		}

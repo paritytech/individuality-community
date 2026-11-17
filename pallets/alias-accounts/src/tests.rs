@@ -1012,7 +1012,7 @@ mod stale_alias_sweeps {
 			};
 			assert_eq!(accounts.len() as u32, bound);
 			// Ascending, which is what `authorize` holds a batch to.
-			assert!(accounts.windows(2).all(|pair| pair[0] < pair[1]));
+			assert!(accounts.is_sorted_by(|a, b| a < b));
 			assert_ok!(authorize(StaleAliasAction::Report, accounts));
 		});
 	}
