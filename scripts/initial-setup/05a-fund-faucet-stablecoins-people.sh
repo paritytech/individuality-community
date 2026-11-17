@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Transfers dotUSD, USDT, USDC from the asset owner on AssetHub to the faucet account on People.
+# Must run after 03e and 04b (set the dotUSD, USDT and USDC conversion rates).
 set -euo pipefail
 source ./load-config.sh
 source ./utils.sh
@@ -43,16 +44,17 @@ transfer_asset_to_people_faucet() {
     echo "$symbol already funded - skipping"
     return
   fi
-  local shortfall=$(( fund_units - on_people ))
-  if ! int_ge "$on_ah" "$shortfall"; then
-    echo "ERROR: Source short of $symbol on AssetHub: need $shortfall, have $on_ah" >&2
+  # The XCM fee comes out of the transfer, so add one whole token on top of the shortfall.
+  local amount=$(( fund_units - on_people + 10**decimals ))
+  if ! int_ge "$on_ah" "$amount"; then
+    echo "ERROR: Source short of $symbol on AssetHub: need $amount, have $on_ah" >&2
     exit 1
   fi
 
   local asset_local dest assets remote_fees_id custom_xcm
   asset_local=$(ah_local_location "$asset_id")
   dest='{"type":"V4","value":{"parents":1,"interior":{"type":"X1","value":[{"type":"Parachain","value":'"$PARACHAIN_ID_PEOPLE"'}]}}}'
-  assets='{"type":"V4","value":[{"id":'"$asset_local"',"fun":{"type":"Fungible","value":"'"$shortfall"'"}}]}'
+  assets='{"type":"V4","value":[{"id":'"$asset_local"',"fun":{"type":"Fungible","value":"'"$amount"'"}}]}'
   remote_fees_id='{"type":"V4","value":'"$asset_local"'}'
   custom_xcm='{"type":"V4","value":[{"type":"DepositAsset","value":{"assets":{"type":"Wild","value":{"type":"All"}},"beneficiary":{"parents":0,"interior":{"type":"X1","value":{"type":"AccountId32","value":{"network":null,"id":"'"$target_id32"'"}}}}}}]}'
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Creates PAS/dotUSD liquidity pool on People and adds liquidity.
 # Coinage converts its fees through this pool, so it cannot charge a fee in dotUSD without it.
-# Must run after 03d (creates dotUSD as foreign asset on People).
+# Must run after 03d (creates dotUSD as a foreign asset on People).
 set -euo pipefail
 source ./load-config.sh
 source ./utils.sh

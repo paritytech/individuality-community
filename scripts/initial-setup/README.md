@@ -37,13 +37,13 @@ Scripts are numbered by execution order. Related scripts share a number prefix w
 
 | Script | What it does |
 |--------|-------------|
-| **00** | Installs `dot` CLI, `jq` and `bc`, imports signer accounts |
+| **00** | Installs `dot` CLI, `jq` and `bc`, imports signer accounts and checks them against the config |
 | **01a** | Funds sudo proxy, attestation, attestation writer and inviter, faucet, and asset owner accounts on People; bootstraps the People sovereign on the Relay |
 | **01b-c** | HRMP channel setup (People<->AssetHub, People<->Bulletin) |
 | **01d** | Funds sudo, attestation, attestation writer, faucet, and asset owner accounts on AssetHub by teleporting native PAS from People |
 | **02** | Adds sudo proxy delegation on People |
 | **03a-g** | dotUSD: create, AssetHub pool, AssetHub metadata, People metadata, conversion rate, Coinage instance, People pool |
-| **04a-b** | USDT/USDC: create on AssetHub with metadata, pool, and liquidity; create as foreign assets on People with metadata |
+| **04a-b** | USDT/USDC: create on AssetHub with metadata, pool, and liquidity; create as foreign assets on People with metadata and conversion rates |
 | **05a-b** | Stablecoin faucet: fund the People and AssetHub faucets with dotUSD/USDT/USDC from the asset owner |
 | **06a-b** | PGAS: create, alias fee |
 | **07** | Adds ZK chunks on People |
