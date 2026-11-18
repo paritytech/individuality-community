@@ -22,8 +22,6 @@ import { sr25519CreateDerive } from "@polkadot-labs/hdkd";
 import { DEV_PHRASE, entropyToMiniSecret, mnemonicToEntropy } from "@polkadot-labs/hdkd-helpers";
 import { ASSET_HUB_RPC, customSignedExtensions, PEOPLE_RPC } from "../../../packages/shared/src/client.ts";
 
-export { ASSET_HUB_RPC, PEOPLE_RPC };
-
 /** Opens the People chain connection. The untyped API needs no PAPI descriptors. */
 export function connect() {
   const client = createClient(getWsProvider(PEOPLE_RPC));
@@ -76,7 +74,7 @@ export interface DecodedCall {
 }
 
 /** The sign options of a People chain transaction. */
-export const PEOPLE_SIGN_OPTIONS = { customSignedExtensions };
+const PEOPLE_SIGN_OPTIONS = { customSignedExtensions };
 
 /** The sign options of an Asset Hub transaction. Asset Hub has no `VerifyMultiSignature`. */
 export const ASSET_HUB_SIGN_OPTIONS = {};
@@ -99,15 +97,25 @@ export function addressOf(signer: PolkadotSigner): SS58String {
   return AccountId().dec(signer.publicKey);
 }
 
-/** Serialises a value to JSON. `JSON.stringify` refuses the bigints chain values carry. */
+/** Serializes a value to JSON. `JSON.stringify` refuses the bigints chain values carry. */
 export function toJson(value: unknown): string {
   return JSON.stringify(value, (_key, v) => (typeof v === "bigint" ? v.toString() : v));
 }
 
 /**
+ * Reads the payloads of `event` in a transaction result.
+ *
+ * The unsafe API returns matches as `{ original, payload }`. The typed API returns the payload alone.
+ * This accepts either.
+ */
+export function eventsOf(result: Untyped, event: Untyped): Untyped[] {
+  return event.filter(result.events).map((match: Untyped) => match?.payload ?? match);
+}
+
+/**
  * Transaction submitters bound to `signer`.
  *
- * Both resolve at finalization. Both throw a labelled error on failure. `sudo` also reports a
+ * Both resolve at finalization. Both throw a labeled error on failure. `sudo` also reports a
  * failure of the wrapped call. The outer transaction reports that failure as success.
  * `signOptions` defaults to the People chain's. Asset Hub needs `ASSET_HUB_SIGN_OPTIONS`.
  */
@@ -130,10 +138,9 @@ export function submitters(
     if (!result.ok) {
       throw new Error(`${label}: outer sudo transaction failed: ${toJson(result.dispatchError)}`);
     }
-    // The unsafe API returns matches as `{ original, payload }`. The typed API returns the payload
-    // alone. Accepting either. A missing field would report every failed inner call as a success.
-    const [sudid] = api.event.Sudo.Sudid.filter(result.events);
-    const outcome = (sudid?.payload ?? sudid)?.sudo_result;
+    // A missing `sudo_result` would report every failed inner call as a success.
+    const [sudid] = eventsOf(result, api.event.Sudo.Sudid);
+    const outcome = sudid?.sudo_result;
     if (outcome === undefined) {
       throw new Error(`${label}: no Sudo.Sudid event in ${toJson(result.events)}`);
     }

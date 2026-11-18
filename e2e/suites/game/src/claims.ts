@@ -21,6 +21,7 @@ import {
   type AssetHubApi,
   addressOf,
   devSigner,
+  eventsOf,
   type PeopleApi,
   type Submit,
   toJson,
@@ -105,11 +106,6 @@ export async function creditProofs(api: PeopleApi, claimant: Untyped, block: num
     leaf_index: Number(proof.leaf_index),
     proof: proof.proof,
   }));
-}
-
-/** Reads the payloads of `event` in a transaction result. The unsafe API wraps them as `{ original, payload }`. */
-export function eventsOf(result: Untyped, event: Untyped): Untyped[] {
-  return event.filter(result.events).map((match: Untyped) => match?.payload ?? match);
 }
 
 /**

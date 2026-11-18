@@ -25,6 +25,7 @@ import {
   connect,
   connectAssetHub,
   devSigner,
+  eventsOf,
   type Submit,
   type Sudo,
   submitters,
@@ -37,7 +38,6 @@ import {
   createClaimCollection,
   creditProofs,
   creditTreeBlocks,
-  eventsOf,
   expectClaimError,
   freshPurseKey,
   pollUntil,
@@ -74,6 +74,9 @@ const ONE_GAME_TIMEOUT = GAME_MS + PHASE_SLACK_MS;
  * which takes a few relay blocks.
  */
 const DELIVERY_TIMEOUT = 300 * SECOND;
+
+/** How long the credit root may take after the game ends. The root lands a block after the award. */
+const ROOT_TIMEOUT = 120 * SECOND;
 
 /** Every player earns one tenure credit, whatever their tenure. */
 const TENURE_THRESHOLDS = [0];
@@ -145,14 +148,27 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("a credit earned in a game mints an NFT on
       const claimed = await claimTenureCredits(people.api, submit);
       const [tenureClaim] = eventsOf(claimed, people.api.event.Game.TenureCreditsClaimed);
       expect(tenureClaim?.credits, "one threshold of zero earns one credit").toBe(TENURE_THRESHOLDS.length);
+      expect(
+        eventsOf(claimed, people.api.event.NftCredits.NftClaimCreditAwarded),
+        "an account is paid only once it attends",
+      ).toHaveLength(0);
 
       const notCancelled = { predicate: inPhase("Cancelling"), reason: `game ${gameIndex} was cancelled` };
-      // `report` opens at `game_date`, which the game enters after the shuffle.
+      // `report` needs the Reporting state, which the game enters after the shuffle, and opens at
+      // `game_date`. The monitor sees only finalized blocks, so the play time is read from the best
+      // block. Finality lag then does not shorten the reporting window.
       await monitor.waitFor(
-        entry => inPhase("Reporting")(entry) && entry.chainTime >= playTime,
-        `game ${gameIndex} to reach its play time in Reporting`,
+        entry => inPhase("Reporting")(entry),
+        `game ${gameIndex} to enter Reporting`,
         ONE_GAME_TIMEOUT,
         notCancelled,
+      );
+      await pollUntil(
+        () => chainNow(people.api),
+        now => now >= playTime,
+        `game ${gameIndex} to reach its play time`,
+        ONE_GAME_TIMEOUT,
+        SECOND,
       );
       await reportAlone(people.api, submit);
 
@@ -170,7 +186,7 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("a credit earned in a game mints an NFT on
         () => creditTreeBlocks(people.api, claimant, gameIndex),
         found => found.length > 0,
         `a credit root of game ${gameIndex} for Alice`,
-        ONE_GAME_TIMEOUT,
+        ROOT_TIMEOUT,
       );
       const proofs: CreditProof[] = [];
       for (const block of blocks) {
@@ -212,6 +228,8 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("a credit earned in a game mints an NFT on
         expect(Number(minted.block)).toBe(proof.block);
         expect(Number(minted.collection)).toBe(collection);
         expect(sameAccount(minted.owner, mintTo), "the NFT is minted to the named purse key").toBe(true);
+        const nft = await assetHub.api.query.Scarcity.NftsByOwner.getValue(mintTo);
+        expect(Number(nft?.instance), "the purse key holds the minted NFT").toBe(Number(minted.instance));
         for (const removed of eventsOf(result, assetHub.api.event.NftClaims.TreeFullyClaimed)) {
           fullyClaimedTrees.add(Number(removed.block));
         }
@@ -228,6 +246,6 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("a credit earned in a game mints an NFT on
         fullyClaimed ? "UnknownCreditTree" : "AlreadyClaimed",
       );
     },
-    3 * ONE_GAME_TIMEOUT + DELIVERY_TIMEOUT,
+    4 * ONE_GAME_TIMEOUT + ROOT_TIMEOUT + DELIVERY_TIMEOUT,
   );
 });

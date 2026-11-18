@@ -93,7 +93,7 @@ worker of block N must submit before block N+1 is built.
   is tagged `(step, game_index)`, so once a submission sits in the pool every later block's
   resubmission is rejected as a duplicate. Only a phase that stops advancing is a failure, and the
   state-transition timeouts catch that.
-- **Steps emit no events.** `advance_shuffle` and `process_players` are recognised by the change in
+- **Steps emit no events.** `advance_shuffle` and `process_players` are recognized by the change in
   `Game.Game`, not by an event, which is why the monitor fills in the blocks that finalization
   skips.
 - **One player is enough.** The People runtime sets `TESTNET`, so a single registered player is an
