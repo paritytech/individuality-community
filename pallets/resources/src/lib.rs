@@ -1277,9 +1277,41 @@ pub mod pallet {
 			T::LiteNotificationSlotsPerPeriod::get()
 		}
 
+		/// Returns the current value of [`Config::AccountsApiAllowance`].
+		pub fn get_accounts_api_allowance() -> StatementAllowance {
+			T::AccountsApiAllowance::get()
+		}
+
+		/// Returns the current value of [`Config::NotificationAllowance`].
+		pub fn get_notification_allowance() -> StatementAllowance {
+			T::NotificationAllowance::get()
+		}
+
+		/// Returns the current value of [`Config::LitePersonStatementLimit`].
+		pub fn get_lite_person_statement_limit() -> StatementAllowance {
+			T::LitePersonStatementLimit::get()
+		}
+
+		/// Returns the current value of [`Config::PersonStatementLimit`].
+		///
+		/// The value is the whole limit of a person. It includes the lite person limit.
+		pub fn get_person_statement_limit() -> StatementAllowance {
+			T::PersonStatementLimit::get()
+		}
+
 		/// Returns the current value of [`Config::LongTermStorageClaimsPerPeriod`].
 		pub fn get_long_term_storage_claims_per_period() -> u8 {
 			T::LongTermStorageClaimsPerPeriod::get()
+		}
+
+		/// Returns the current value of [`Config::LongTermStorageAllowanceForPeople`].
+		pub fn get_long_term_storage_allowance_for_people() -> LongTermStorageAllocation {
+			T::LongTermStorageAllowanceForPeople::get()
+		}
+
+		/// Returns the current value of [`Config::LongTermStorageAllowanceForLitePeople`].
+		pub fn get_long_term_storage_allowance_for_lite_people() -> LongTermStorageAllocation {
+			T::LongTermStorageAllowanceForLitePeople::get()
 		}
 
 		/// Returns the current value of [`Config::LongTermStorageCleanupLimit`].

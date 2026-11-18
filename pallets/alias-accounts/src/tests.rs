@@ -1676,3 +1676,22 @@ mod integrity {
 		});
 	}
 }
+
+// ========== View function tests ==========
+
+mod view_functions {
+	use super::*;
+
+	#[test]
+	fn parameter_view_functions_follow_their_parameters() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(crate::Pallet::<Test>::get_alias_fee(), None);
+
+			AliasFee::set(&Some(7));
+			OffchainWorkerInterval::set(&9);
+
+			assert_eq!(crate::Pallet::<Test>::get_alias_fee(), Some(7));
+			assert_eq!(crate::Pallet::<Test>::get_offchain_worker_interval(), 9);
+		});
+	}
+}
