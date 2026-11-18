@@ -41,7 +41,13 @@
 //! The pallet holds a keyless account derived from [`Config::PalletId`]. The dotNS contracts
 //! accept this account's EVM address as their maintainer, which may tune bounded operational
 //! values. [`Config::MaintenanceOrigin`] acts through the account with
-//! [`Pallet::call_as_maintainer`]. The runtime funds the account for storage deposits.
+//! [`Pallet::call_as_maintainer`].
+//!
+//! `pallet-revive` accepts a signed caller only when its account is mapped to an EVM address.
+//! Before the first call, the pallet gives the account a provider reference, so the account exists
+//! without a balance. The runtime must map new accounts automatically (`pallet_revive::AutoMapper`
+//! as `OnNewAccount` with `AutoMap` set), or map the account itself. The account needs a balance
+//! only for calls that pay a storage deposit.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -585,14 +591,14 @@ pub mod pallet {
 				.and_then(|bytes| bytes.try_into().ok())
 				.ok_or(Error::<T>::MissingSelector)?;
 
-			let (_, contract_weight) = T::ContractCaller::call_as(
-				&Self::maintainer_account(),
-				dest,
-				data,
-				weight_limit,
-				deposit_limit,
-			)
-			.map_err(Error::<T>::from)?;
+			let maintainer = Self::maintainer_account();
+			if frame_system::Pallet::<T>::providers(&maintainer) == 0 {
+				frame_system::Pallet::<T>::inc_providers(&maintainer);
+			}
+
+			let (_, contract_weight) =
+				T::ContractCaller::call_as(&maintainer, dest, data, weight_limit, deposit_limit)
+					.map_err(Error::<T>::from)?;
 
 			Self::deposit_event(Event::MaintainerCallExecuted { dest, selector });
 			Ok(Some(

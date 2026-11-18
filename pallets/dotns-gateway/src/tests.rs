@@ -1677,6 +1677,25 @@ mod maintainer {
 	}
 
 	#[test]
+	fn gives_the_maintainer_account_one_provider_reference() {
+		new_test_ext().execute_with(|| {
+			let account = DotnsGateway::maintainer_account();
+			assert_eq!(System::providers(&account), 0);
+
+			for _ in 0..2 {
+				assert_ok!(DotnsGateway::call_as_maintainer(
+					RuntimeOrigin::root(),
+					DEST,
+					setter_call(),
+					LIMIT,
+					0
+				));
+				assert_eq!(System::providers(&account), 1);
+			}
+		});
+	}
+
+	#[test]
 	fn requires_the_maintenance_origin() {
 		new_test_ext().execute_with(|| {
 			assert_noop!(
