@@ -70,16 +70,6 @@ assets_account_balance() {
   [ "$result" = "undefined" ] && echo 0 || echo "$result" | jq -r '.balance // 0'
 }
 
-# Echoes the native units needed to buy a given amount of an asset; returns non-zero on failure.
-quote_native_for_exact() {
-  local asset_id="$1" amount_out="$2" quote
-  quote=$(dot asset-hub.apis.AssetConversionApi.quote_price_tokens_for_exact_tokens \
-    "$NATIVE_TOKEN" "$(ah_local_location "$asset_id")" "$amount_out" true --json 2>/dev/null || true)
-  quote=$(echo "$quote" | tr -d '"')
-  [ -z "$quote" ] || [ "$quote" = "null" ] || [ "$quote" = "undefined" ] && return 1
-  echo "$quote"
-}
-
 # Runs a command with a portable timeout. Returns 124 on timeout.
 run_with_timeout() {
   local timeout_seconds="$1"
@@ -108,27 +98,4 @@ run_with_timeout() {
 
   wait "$pid" || status=$?
   return "$status"
-}
-
-print_chain_progress() {
-  local chain best_header finalized_hash finalized_header
-
-  for chain in relay people asset-hub; do
-    echo "== $chain progress =="
-    best_header=$(dot "$chain.rpc.chain_getHeader" 2>&1 || true)
-    finalized_hash=$(dot "$chain.rpc.chain_getFinalizedHead" 2>&1 || true)
-    finalized_hash=$(echo "$finalized_hash" | tr -d '"')
-
-    echo "best header:"
-    echo "$best_header"
-    echo "finalized hash:"
-    echo "$finalized_hash"
-
-    if [[ "$finalized_hash" == 0x* ]]; then
-      finalized_header=$(dot "$chain.rpc.chain_getHeader" "$finalized_hash" 2>&1 || true)
-      echo "finalized header:"
-      echo "$finalized_header"
-    fi
-    echo
-  done
 }
