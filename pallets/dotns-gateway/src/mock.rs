@@ -78,6 +78,7 @@ parameter_types! {
 	pub const ReplayAbandonThreshold: u32 = 10;
 	pub const MaxRecentRootsPerRing: u32 = 2;
 	pub const DispatcherAddr: H160 = H160([0xd0; 20]);
+	pub const DotnsGatewayPalletId: frame_support::PalletId = frame_support::PalletId(*b"py/dotns");
 }
 
 // ========== Mock XCM Sender ==========
@@ -141,6 +142,21 @@ thread_local! {
 	pub static CONTRACT_CALLS: RefCell<Vec<(H160, Vec<u8>, u128)>> = const { RefCell::new(Vec::new()) };
 	pub static CONTRACT_CALL_RESULT: RefCell<Result<Vec<u8>, crate::ContractCallError>> = const { RefCell::new(Ok(Vec::new())) };
 	pub static CONTRACT_CALL_WEIGHT: RefCell<frame_support::weights::Weight> = const { RefCell::new(frame_support::weights::Weight::zero()) };
+	pub static SIGNED_CONTRACT_CALLS: RefCell<Vec<SignedContractCall>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A contract call made through [`crate::SignedContractCaller`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SignedContractCall {
+	pub account: u64,
+	pub dest: H160,
+	pub data: Vec<u8>,
+	pub weight_limit: frame_support::weights::Weight,
+	pub deposit_limit: u128,
+}
+
+pub fn get_signed_contract_calls() -> Vec<SignedContractCall> {
+	SIGNED_CONTRACT_CALLS.with(|c| c.borrow().clone())
 }
 
 pub fn set_contract_call_result(result: Result<Vec<u8>, crate::ContractCallError>) {
@@ -171,6 +187,7 @@ pub fn get_contract_calls() -> Vec<(H160, Vec<u8>, u128)> {
 
 pub fn clear_contract_calls() {
 	CONTRACT_CALLS.with(|c| c.borrow_mut().clear());
+	SIGNED_CONTRACT_CALLS.with(|c| c.borrow_mut().clear());
 }
 
 pub struct MockContractCaller;
@@ -182,6 +199,28 @@ impl crate::ContractCaller for MockContractCaller {
 		value: u128,
 	) -> Result<(Vec<u8>, frame_support::weights::Weight), crate::ContractCallError> {
 		CONTRACT_CALLS.with(|c| c.borrow_mut().push((dest, data, value)));
+		let weight = CONTRACT_CALL_WEIGHT.with(|w| *w.borrow());
+		CONTRACT_CALL_RESULT.with(|r| r.borrow().clone()).map(|data| (data, weight))
+	}
+}
+
+impl crate::SignedContractCaller<u64> for MockContractCaller {
+	fn call_as(
+		account: &u64,
+		dest: H160,
+		data: Vec<u8>,
+		weight_limit: frame_support::weights::Weight,
+		deposit_limit: u128,
+	) -> Result<(Vec<u8>, frame_support::weights::Weight), crate::ContractCallError> {
+		SIGNED_CONTRACT_CALLS.with(|c| {
+			c.borrow_mut().push(SignedContractCall {
+				account: *account,
+				dest,
+				data,
+				weight_limit,
+				deposit_limit,
+			})
+		});
 		let weight = CONTRACT_CALL_WEIGHT.with(|w| *w.borrow());
 		CONTRACT_CALL_RESULT.with(|r| r.borrow().clone()).map(|data| (data, weight))
 	}
@@ -485,6 +524,8 @@ impl crate::Config for Test {
 	type UnixTime = MockUnixTime;
 	type AttestationAllowanceManager = EnsureRoot<u64>;
 	type DispatcherAddressManager = EnsureRoot<u64>;
+	type PalletId = DotnsGatewayPalletId;
+	type MaintenanceOrigin = EnsureRoot<u64>;
 	type AttestationSignature = MockSignature;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();

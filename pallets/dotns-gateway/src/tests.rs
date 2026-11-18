@@ -1627,6 +1627,155 @@ mod migration {
 	}
 }
 
+mod maintainer {
+	use super::*;
+	use alloy_core::sol_types::SolError;
+	use frame_support::{dispatch::GetDispatchInfo, weights::Weight, PalletId};
+	use sp_runtime::traits::AccountIdConversion;
+
+	const DEST: H160 = H160([0xe5; 20]);
+	const LIMIT: Weight = Weight::from_parts(1_000_000, 10_000);
+
+	fn setter_call() -> Vec<u8> {
+		[[0x12, 0x34, 0x56, 0x78].as_slice(), &[0u8; 32]].concat()
+	}
+
+	#[test]
+	fn calls_the_contract_as_the_maintainer_account() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+
+			assert_ok!(DotnsGateway::call_as_maintainer(
+				RuntimeOrigin::root(),
+				DEST,
+				setter_call(),
+				LIMIT,
+				7
+			));
+
+			let account: u64 = PalletId(*b"py/dotns").into_account_truncating();
+			assert_eq!(DotnsGateway::maintainer_account(), account);
+			assert_eq!(
+				get_signed_contract_calls(),
+				vec![SignedContractCall {
+					account,
+					dest: DEST,
+					data: setter_call(),
+					weight_limit: LIMIT,
+					deposit_limit: 7,
+				}]
+			);
+			assert!(get_contract_calls().is_empty());
+			System::assert_last_event(
+				crate::Event::<Test>::MaintainerCallExecuted {
+					dest: DEST,
+					selector: [0x12, 0x34, 0x56, 0x78],
+				}
+				.into(),
+			);
+		});
+	}
+
+	#[test]
+	fn requires_the_maintenance_origin() {
+		new_test_ext().execute_with(|| {
+			assert_noop!(
+				DotnsGateway::call_as_maintainer(
+					RuntimeOrigin::signed(ALICE),
+					DEST,
+					setter_call(),
+					LIMIT,
+					0
+				),
+				DispatchError::BadOrigin
+			);
+			assert!(get_signed_contract_calls().is_empty());
+		});
+	}
+
+	#[test]
+	fn rejects_call_data_without_a_selector() {
+		new_test_ext().execute_with(|| {
+			assert_noop!(
+				DotnsGateway::call_as_maintainer(
+					RuntimeOrigin::root(),
+					DEST,
+					vec![0x12, 0x34, 0x56],
+					LIMIT,
+					0
+				),
+				Error::<Test>::MissingSelector
+			);
+			assert!(get_signed_contract_calls().is_empty());
+		});
+	}
+
+	#[test]
+	fn reports_a_contract_revert() {
+		new_test_ext().execute_with(|| {
+			set_contract_call_revert(crate::types::NotRoot::SELECTOR.to_vec());
+
+			assert_noop!(
+				DotnsGateway::call_as_maintainer(
+					RuntimeOrigin::root(),
+					DEST,
+					setter_call(),
+					LIMIT,
+					0
+				),
+				Error::<Test>::ContractRevert(DispatcherRevert::NotRoot)
+			);
+		});
+	}
+
+	#[test]
+	fn reports_an_unknown_revert_as_a_failed_call() {
+		new_test_ext().execute_with(|| {
+			set_contract_call_revert(vec![0xde, 0xad, 0xbe, 0xef]);
+
+			assert_noop!(
+				DotnsGateway::call_as_maintainer(
+					RuntimeOrigin::root(),
+					DEST,
+					setter_call(),
+					LIMIT,
+					0
+				),
+				Error::<Test>::ContractCallFailed
+			);
+		});
+	}
+
+	#[test]
+	fn refunds_the_unused_contract_weight() {
+		new_test_ext().execute_with(|| {
+			let used = Weight::from_parts(200_000, 5_000);
+			set_contract_call_weight(used);
+			let call = crate::Call::<Test>::call_as_maintainer {
+				dest: DEST,
+				data: setter_call(),
+				weight_limit: LIMIT,
+				deposit_limit: 0,
+			};
+			let charged = call.get_dispatch_info().call_weight;
+
+			let info = DotnsGateway::call_as_maintainer(
+				RuntimeOrigin::root(),
+				DEST,
+				setter_call(),
+				LIMIT,
+				0,
+			)
+			.unwrap();
+
+			let overhead = <Test as crate::Config>::WeightInfo::call_as_maintainer();
+			assert_eq!(charged, overhead.saturating_add(LIMIT));
+			assert_eq!(info.actual_weight, Some(overhead.saturating_add(used)));
+			assert!(info.actual_weight.unwrap().all_lt(charged));
+		});
+	}
+}
+
 #[test]
 fn signing_context_constant_is_the_context_the_pallet_verifies() {
 	// The mock's network suffix is `paseo`.

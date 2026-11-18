@@ -158,4 +158,15 @@ impl<T: frame_system::Config> indiv_pallet_dotns_gateway::WeightInfo for WeightI
 			.saturating_add(Weight::from_parts(0, 0))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
+	/// Storage: `Revive::OriginalAccount` (r:1 w:0)
+	/// Proof: `Revive::OriginalAccount` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `Revive::AccountInfoOf` (r:1 w:0)
+	/// Proof: `Revive::AccountInfoOf` (`max_values`: None, `max_size`: Some(247), added: 2722, mode: `MaxEncodedLen`)
+	fn call_as_maintainer() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3712`
+		Weight::from_parts(50_000_000, 3712)
+			.saturating_add(T::DbWeight::get().reads(2))
+	}
 }

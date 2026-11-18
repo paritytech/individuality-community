@@ -35,6 +35,13 @@
 //! implementation must invoke the dispatcher as `RuntimeOrigin::root()`; non-Root calls
 //! revert with `NotRoot`, surfaced here as
 //! `Error::ContractRevert(DispatcherRevert::NotRoot)`.
+//!
+//! ## Maintainer account
+//!
+//! The pallet holds a keyless account derived from [`Config::PalletId`]. The dotNS contracts
+//! accept this account's EVM address as their maintainer, which may tune bounded operational
+//! values. [`Config::MaintenanceOrigin`] acts through the account with
+//! [`Pallet::call_as_maintainer`]. The runtime funds the account for storage deposits.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -58,12 +65,15 @@ pub use pallet::*;
 pub use types::*;
 pub use weights::WeightInfo;
 
-use frame_support::traits::{OriginTrait, UnixTime};
+use frame_support::{
+	traits::{OriginTrait, UnixTime},
+	PalletId,
+};
 use indiv_support::{
 	context::{build_product_context, personhood},
 	traits::{Alias, MembershipProver, RevisionIndex, RingExponent, RingIndex},
 };
-use sp_runtime::traits::{IdentifyAccount, Verify};
+use sp_runtime::traits::{AccountIdConversion, IdentifyAccount, Verify};
 use verifiable::GenerateVerifiable;
 
 #[frame_support::pallet]
@@ -119,7 +129,7 @@ pub mod pallet {
 		>;
 
 		/// Contract call abstraction (backed by pallet_revive in production).
-		type ContractCaller: ContractCaller;
+		type ContractCaller: ContractCaller + SignedContractCaller<Self::AccountId>;
 
 		/// Converts AccountId to EVM H160 address.
 		///
@@ -150,6 +160,13 @@ pub mod pallet {
 
 		/// The origin that can set the `RootGatewayDispatcher` contract address.
 		type DispatcherAddressManager: EnsureOrigin<Self::RuntimeOrigin>;
+
+		/// Identifier from which the maintainer account derives.
+		#[pallet::constant]
+		type PalletId: Get<PalletId>;
+
+		/// The origin that can call contracts as the maintainer account.
+		type MaintenanceOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
 		/// Signature type used by candidates to consent to name reservations.
 		type AttestationSignature: Verify<Signer: IdentifyAccount<AccountId = Self::AccountId>>
@@ -270,6 +287,13 @@ pub mod pallet {
 			/// The new contract address.
 			address: H160,
 		},
+		/// The maintainer account called a contract.
+		MaintainerCallExecuted {
+			/// The called contract.
+			dest: H160,
+			/// The function selector of the call.
+			selector: [u8; 4],
+		},
 	}
 
 	// ========== Errors ==========
@@ -301,6 +325,8 @@ pub mod pallet {
 		NotLiteLabelOwner,
 		/// The `RootGatewayDispatcher` contract address has not been set.
 		DispatcherAddressNotSet,
+		/// The call data is shorter than a 4-byte function selector.
+		MissingSelector,
 	}
 
 	// ========== Extrinsics ==========
@@ -537,6 +563,43 @@ pub mod pallet {
 			Self::deposit_event(Event::DispatcherAddressSet { address });
 			Ok(())
 		}
+
+		/// Calls the contract at `dest` with the ABI-encoded `data` as the maintainer account.
+		///
+		/// The origin must be `MaintenanceOrigin`. The call transfers no value. The maintainer
+		/// account pays the storage deposit, up to `deposit_limit`.
+		#[pallet::call_index(5)]
+		#[pallet::weight(
+			<T as Config>::WeightInfo::call_as_maintainer().saturating_add(*weight_limit)
+		)]
+		pub fn call_as_maintainer(
+			origin: OriginFor<T>,
+			dest: H160,
+			data: Vec<u8>,
+			weight_limit: Weight,
+			#[pallet::compact] deposit_limit: u128,
+		) -> DispatchResultWithPostInfo {
+			T::MaintenanceOrigin::ensure_origin(origin)?;
+			let selector: [u8; 4] = data
+				.get(..4)
+				.and_then(|bytes| bytes.try_into().ok())
+				.ok_or(Error::<T>::MissingSelector)?;
+
+			let (_, contract_weight) = T::ContractCaller::call_as(
+				&Self::maintainer_account(),
+				dest,
+				data,
+				weight_limit,
+				deposit_limit,
+			)
+			.map_err(Error::<T>::from)?;
+
+			Self::deposit_event(Event::MaintainerCallExecuted { dest, selector });
+			Ok(Some(
+				<T as Config>::WeightInfo::call_as_maintainer().saturating_add(contract_weight),
+			)
+			.into())
+		}
 	}
 
 	// ========== Internal Functions ==========
@@ -610,6 +673,13 @@ pub mod pallet {
 		#[pallet::constant_name(SigningContext)]
 		pub fn signing_context() -> indiv_support::traits::Context {
 			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
+		}
+
+		/// The keyless account that calls contracts in [`Pallet::call_as_maintainer`]. The dotNS
+		/// contracts know it by its EVM address.
+		#[pallet::constant_name(MaintainerAccount)]
+		pub fn maintainer_account() -> T::AccountId {
+			T::PalletId::get().into_account_truncating()
 		}
 	}
 

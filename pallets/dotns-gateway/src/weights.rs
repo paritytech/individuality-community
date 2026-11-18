@@ -60,6 +60,7 @@ pub trait WeightInfo {
 	fn increase_attestation_allowance() -> Weight;
 	fn clear_attestation_allowance() -> Weight;
 	fn set_dispatcher_address() -> Weight;
+	fn call_as_maintainer() -> Weight;
 }
 
 /// Weights for `indiv_pallet_dotns_gateway` using the Substrate node and recommended hardware.
@@ -164,6 +165,17 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(7_087_000, 0)
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
+	/// Storage: `Revive::OriginalAccount` (r:1 w:0)
+	/// Proof: `Revive::OriginalAccount` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `Revive::AccountInfoOf` (r:1 w:0)
+	/// Proof: `Revive::AccountInfoOf` (`max_values`: None, `max_size`: Some(247), added: 2722, mode: `MaxEncodedLen`)
+	fn call_as_maintainer() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3712`
+		Weight::from_parts(50_000_000, 3712)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -266,5 +278,16 @@ impl WeightInfo for () {
 		// Minimum execution time: 6_414_000 picoseconds.
 		Weight::from_parts(7_087_000, 0)
 			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// Storage: `Revive::OriginalAccount` (r:1 w:0)
+	/// Proof: `Revive::OriginalAccount` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `Revive::AccountInfoOf` (r:1 w:0)
+	/// Proof: `Revive::AccountInfoOf` (`max_values`: None, `max_size`: Some(247), added: 2722, mode: `MaxEncodedLen`)
+	fn call_as_maintainer() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `3712`
+		Weight::from_parts(50_000_000, 3712)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
 	}
 }

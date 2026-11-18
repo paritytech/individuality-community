@@ -255,6 +255,33 @@ impl ContractCaller for () {
 	}
 }
 
+/// Abstraction for calling smart contracts as a signed account via pallet_revive.
+pub trait SignedContractCaller<AccountId> {
+	/// Calls the contract at `dest` with the ABI-encoded `data`, signed by `account`.
+	///
+	/// `account` pays the storage deposit, up to `deposit_limit`. Returns
+	/// `(raw_return_data, weight_consumed)` on success.
+	fn call_as(
+		account: &AccountId,
+		dest: H160,
+		data: Vec<u8>,
+		weight_limit: Weight,
+		deposit_limit: u128,
+	) -> Result<(Vec<u8>, Weight), ContractCallError>;
+}
+
+impl<AccountId> SignedContractCaller<AccountId> for () {
+	fn call_as(
+		_account: &AccountId,
+		_dest: H160,
+		_data: Vec<u8>,
+		_weight_limit: Weight,
+		_deposit_limit: u128,
+	) -> Result<(Vec<u8>, Weight), ContractCallError> {
+		Ok((Vec::new(), Weight::zero()))
+	}
+}
+
 // ========== EVM ABI Encoding ==========
 
 sol! {

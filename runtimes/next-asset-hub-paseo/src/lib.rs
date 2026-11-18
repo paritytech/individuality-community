@@ -1485,12 +1485,41 @@ impl indiv_pallet_dotns_gateway::ContractCaller for ReviveContractCaller {
 	}
 }
 
+impl indiv_pallet_dotns_gateway::SignedContractCaller<AccountId> for ReviveContractCaller {
+	fn call_as(
+		account: &AccountId,
+		dest: sp_core::H160,
+		data: Vec<u8>,
+		weight_limit: Weight,
+		deposit_limit: u128,
+	) -> Result<(Vec<u8>, Weight), indiv_pallet_dotns_gateway::ContractCallError> {
+		use pallet_revive::{ExecConfig, TransactionLimits};
+		let cr = pallet_revive::Pallet::<Runtime>::bare_call(
+			RuntimeOrigin::signed(account.clone()),
+			dest,
+			0u32.into(),
+			TransactionLimits::WeightAndDeposit { weight_limit, deposit_limit },
+			data,
+			&ExecConfig::new_substrate_tx(),
+		);
+		match cr.result {
+			Ok(ret) if !ret.did_revert() => Ok((ret.data, cr.weight_consumed)),
+			Ok(ret) => Err(indiv_pallet_dotns_gateway::ContractCallError {
+				dispatch: sp_runtime::DispatchError::Other("contract reverted"),
+				revert_data: Some(ret.data),
+			}),
+			Err(e) => Err(indiv_pallet_dotns_gateway::ContractCallError::from(e)),
+		}
+	}
+}
+
 parameter_types! {
 	// On-chain measured weight is below these limits so this is to have some margin.
 	pub const DotnsMaxContractCallWeight: Weight =
 		Weight::from_parts(100_000_000_000, 2 * 1024 * 1024);
 	pub const DotnsMaxValiditySeconds: u64 = 3 * 24 * 60 * 60; // 3 days
 	pub const DotnsMaxFutureSkewSeconds: u64 = 30;
+	pub const DotnsGatewayPalletId: PalletId = PalletId(*b"py/dotns");
 }
 
 parameter_types! {
@@ -1524,6 +1553,8 @@ impl indiv_pallet_dotns_gateway::Config for Runtime {
 	type UnixTime = Timestamp;
 	type AttestationAllowanceManager = EnsureRoot<AccountId>;
 	type DispatcherAddressManager = EnsureRoot<AccountId>;
+	type PalletId = DotnsGatewayPalletId;
+	type MaintenanceOrigin = EnsureRoot<AccountId>;
 	type AttestationSignature = Signature;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = DotnsGatewayBenchHelper;
