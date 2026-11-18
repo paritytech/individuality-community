@@ -169,4 +169,11 @@ impl<T: frame_system::Config> indiv_pallet_dotns_gateway::WeightInfo for WeightI
 		Weight::from_parts(50_000_000, 3712)
 			.saturating_add(T::DbWeight::get().reads(2))
 	}
+	fn set_limits() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		Weight::from_parts(7_194_000, 0)
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
 }

@@ -142,6 +142,7 @@ thread_local! {
 	pub static CONTRACT_CALLS: RefCell<Vec<(H160, Vec<u8>, u128)>> = const { RefCell::new(Vec::new()) };
 	pub static CONTRACT_CALL_RESULT: RefCell<Result<Vec<u8>, crate::ContractCallError>> = const { RefCell::new(Ok(Vec::new())) };
 	pub static CONTRACT_CALL_WEIGHT: RefCell<frame_support::weights::Weight> = const { RefCell::new(frame_support::weights::Weight::zero()) };
+	pub static CONTRACT_CALL_WEIGHT_LIMITS: RefCell<Vec<frame_support::weights::Weight>> = const { RefCell::new(Vec::new()) };
 	pub static SIGNED_CONTRACT_CALLS: RefCell<Vec<SignedContractCall>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -185,8 +186,14 @@ pub fn get_contract_calls() -> Vec<(H160, Vec<u8>, u128)> {
 	CONTRACT_CALLS.with(|c| c.borrow().clone())
 }
 
+/// The weight limit of each call made through [`crate::ContractCaller`], in order.
+pub fn get_contract_call_weight_limits() -> Vec<frame_support::weights::Weight> {
+	CONTRACT_CALL_WEIGHT_LIMITS.with(|c| c.borrow().clone())
+}
+
 pub fn clear_contract_calls() {
 	CONTRACT_CALLS.with(|c| c.borrow_mut().clear());
+	CONTRACT_CALL_WEIGHT_LIMITS.with(|c| c.borrow_mut().clear());
 	SIGNED_CONTRACT_CALLS.with(|c| c.borrow_mut().clear());
 }
 
@@ -197,8 +204,10 @@ impl crate::ContractCaller for MockContractCaller {
 		dest: H160,
 		data: Vec<u8>,
 		value: u128,
+		weight_limit: frame_support::weights::Weight,
 	) -> Result<(Vec<u8>, frame_support::weights::Weight), crate::ContractCallError> {
 		CONTRACT_CALLS.with(|c| c.borrow_mut().push((dest, data, value)));
+		CONTRACT_CALL_WEIGHT_LIMITS.with(|c| c.borrow_mut().push(weight_limit));
 		let weight = CONTRACT_CALL_WEIGHT.with(|w| *w.borrow());
 		CONTRACT_CALL_RESULT.with(|r| r.borrow().clone()).map(|data| (data, weight))
 	}
@@ -506,10 +515,21 @@ impl crate::benchmarking::BenchmarkHelper<Test> for () {
 parameter_types! {
 	pub NetworkSuffix: indiv_support::context::ProductContextNetworkSuffix =
 		b"paseo".to_vec().try_into().expect("network suffix fits");
-	pub const MockMaxContractCallWeight: frame_support::weights::Weight =
-		frame_support::weights::Weight::from_parts(500_000_000, 50_000);
-	pub const MockMaxValiditySeconds: u64 = 600;
-	pub const MockMaxFutureSkewSeconds: u64 = 15;
+	pub MockDefaultLimits: crate::GatewayLimits = crate::GatewayLimits {
+		contract_call_weight: frame_support::weights::Weight::from_parts(500_000_000, 50_000),
+		signature_validity_seconds: 600,
+		future_skew_seconds: 15,
+	};
+	pub MockMinLimits: crate::GatewayLimits = crate::GatewayLimits {
+		contract_call_weight: frame_support::weights::Weight::from_parts(100_000_000, 10_000),
+		signature_validity_seconds: 60,
+		future_skew_seconds: 0,
+	};
+	pub storage MockMaxLimits: crate::GatewayLimits = crate::GatewayLimits {
+		contract_call_weight: frame_support::weights::Weight::from_parts(1_000_000_000, 100_000),
+		signature_validity_seconds: 3_600,
+		future_skew_seconds: 300,
+	};
 }
 
 impl crate::Config for Test {
@@ -518,9 +538,9 @@ impl crate::Config for Test {
 	type MemberService = MembersSubscriber;
 	type ContractCaller = MockContractCaller;
 	type AddressMapper = TestAddressMapper;
-	type MaxContractCallWeight = MockMaxContractCallWeight;
-	type MaxValiditySeconds = MockMaxValiditySeconds;
-	type MaxFutureSkewSeconds = MockMaxFutureSkewSeconds;
+	type DefaultLimits = MockDefaultLimits;
+	type MinLimits = MockMinLimits;
+	type MaxLimits = MockMaxLimits;
 	type UnixTime = MockUnixTime;
 	type AttestationAllowanceManager = EnsureRoot<u64>;
 	type DispatcherAddressManager = EnsureRoot<u64>;

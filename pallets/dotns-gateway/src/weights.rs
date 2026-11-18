@@ -61,6 +61,7 @@ pub trait WeightInfo {
 	fn clear_attestation_allowance() -> Weight;
 	fn set_dispatcher_address() -> Weight;
 	fn call_as_maintainer() -> Weight;
+	fn set_limits() -> Weight;
 }
 
 /// Weights for `indiv_pallet_dotns_gateway` using the Substrate node and recommended hardware.
@@ -176,6 +177,13 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(50_000_000, 3712)
 			.saturating_add(T::DbWeight::get().reads(2_u64))
 	}
+	fn set_limits() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		Weight::from_parts(7_304_000, 0)
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -289,5 +297,12 @@ impl WeightInfo for () {
 		//  Estimated: `3712`
 		Weight::from_parts(50_000_000, 3712)
 			.saturating_add(RocksDbWeight::get().reads(2_u64))
+	}
+	fn set_limits() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		Weight::from_parts(7_304_000, 0)
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 }

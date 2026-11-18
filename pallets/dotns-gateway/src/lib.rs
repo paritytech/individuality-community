@@ -48,6 +48,19 @@
 //! without a balance. The runtime must map new accounts automatically (`pallet_revive::AutoMapper`
 //! as `OnNewAccount` with `AutoMap` set), or map the account itself. The account needs a balance
 //! only for calls that pay a storage deposit.
+//!
+//! ## Limits
+//!
+//! [`Limits`] holds the contract call weight, the signature validity and the future clock skew.
+//! [`Config::MaintenanceOrigin`] sets them with [`Pallet::set_limits`], within bounds that the
+//! runtime fixes. The bounds stop one referendum from setting a value that disrupts the gateway:
+//!
+//! - A contract call weight below the cost of the heaviest gateway call makes that call fail. A
+//!   weight above one normal extrinsic makes every gateway call fail.
+//! - A signature validity shorter than the time from signing to inclusion makes reservations
+//!   expire. A long one lets an attester hold a reusable consent for longer.
+//! - A future skew below the clock drift of the signing devices rejects their signatures. Each
+//!   second of skew also extends how long a signature stays valid.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -142,21 +155,19 @@ pub mod pallet {
 		/// In production, wired to pallet_revive's `AccountId32Mapper`.
 		type AddressMapper: AddressMapper<Self::AccountId>;
 
-		/// Maximum weight budget for a single contract call. The extrinsic pre-charges
-		/// pallet overhead + this budget and refunds unused weight based on the actual
-		/// weight reported by the contract caller.
+		/// The limits that apply until [`Pallet::set_limits`] sets others.
 		#[pallet::constant]
-		type MaxContractCallWeight: Get<Weight>;
+		type DefaultLimits: Get<GatewayLimits>;
 
-		/// Signature validity window, in seconds.
-		/// A signature is accepted only if `now <= signed_at + MaxValiditySeconds`.
+		/// The lowest limits that [`Pallet::set_limits`] accepts.
 		#[pallet::constant]
-		type MaxValiditySeconds: Get<u64>;
+		type MinLimits: Get<GatewayLimits>;
 
-		/// Clock-skew tolerance for `signed_at`, in seconds.
-		/// A signature is accepted only if `signed_at <= now + MaxFutureSkewSeconds`.
+		/// The highest limits that [`Pallet::set_limits`] accepts.
+		///
+		/// The pallet overhead plus this contract call weight must fit one normal extrinsic.
 		#[pallet::constant]
-		type MaxFutureSkewSeconds: Get<u64>;
+		type MaxLimits: Get<GatewayLimits>;
 
 		/// Unix time source.
 		type UnixTime: UnixTime;
@@ -235,6 +246,17 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type DispatcherAddress<T: Config> = StorageValue<_, H160, OptionQuery>;
 
+	/// The default for [`Limits`].
+	#[pallet::type_value]
+	pub fn DefaultLimitsValue<T: Config>() -> GatewayLimits {
+		T::DefaultLimits::get()
+	}
+
+	/// The operational limits in force. Holds [`Config::DefaultLimits`] until
+	/// [`Pallet::set_limits`] writes it.
+	#[pallet::storage]
+	pub type Limits<T: Config> = StorageValue<_, GatewayLimits, ValueQuery, DefaultLimitsValue<T>>;
+
 	// ========== Origin ==========
 
 	/// Origin for person calls in this pallet.
@@ -300,6 +322,11 @@ pub mod pallet {
 			/// The function selector of the call.
 			selector: [u8; 4],
 		},
+		/// The operational limits were set.
+		LimitsSet {
+			/// The new limits.
+			limits: GatewayLimits,
+		},
 	}
 
 	// ========== Errors ==========
@@ -321,10 +348,10 @@ pub mod pallet {
 		NoAttestationAllowance,
 		/// The candidate's signature is invalid.
 		InvalidAttestationSignature,
-		/// The reservation signature is older than [`Config::MaxValiditySeconds`].
+		/// The reservation signature is older than the signature validity in [`Limits`].
 		ReservationSignatureExpired,
-		/// The reservation signature is dated more than [`Config::MaxFutureSkewSeconds`] ahead of
-		/// chain time.
+		/// The reservation signature is dated further ahead of chain time than the future skew in
+		/// [`Limits`] allows.
 		ReservationSignatureFromFuture,
 		/// The `Link::LiteUsername` target is not owned by the caller (or has
 		/// no on-chain ownership record).
@@ -335,6 +362,8 @@ pub mod pallet {
 		AccountAlreadyHasDeviceName,
 		/// The call data is shorter than a 4-byte function selector.
 		MissingSelector,
+		/// A limit is outside [`Config::MinLimits`] and [`Config::MaxLimits`].
+		LimitsOutOfBounds,
 	}
 
 	// ========== Extrinsics ==========
@@ -367,12 +396,13 @@ pub mod pallet {
 		/// - `reserved_base_label`: optional personhood label queued for the candidate, to issue
 		///   later as their personhood name. Must be lowercase ASCII letters only (e.g. `alice`).
 		/// - `signed_at`: Unix-time second at which the candidate signed the reservation message.
-		///   The signature is accepted only if `signed_at <= now + MaxFutureSkewSeconds` and `now
-		///   <= signed_at + MaxValiditySeconds`, where `now` comes from [`Config::UnixTime`].
+		///   The signature is accepted only if `signed_at <= now + future_skew_seconds` and `now <=
+		///   signed_at + signature_validity_seconds`, where the limits come from [`Limits`] and
+		///   `now` comes from [`Config::UnixTime`].
 		#[pallet::call_index(0)]
 		#[pallet::weight(
 			<T as Config>::WeightInfo::reserve_name()
-				.saturating_add(T::MaxContractCallWeight::get())
+				.saturating_add(Limits::<T>::get().contract_call_weight)
 		)]
 		pub fn reserve_name(
 			origin: OriginFor<T>,
@@ -394,13 +424,14 @@ pub mod pallet {
 				Error::<T>::AccountAlreadyHasDeviceName,
 			);
 
+			let limits = Limits::<T>::get();
 			let now = <T as Config>::UnixTime::now().as_secs();
 			ensure!(
-				signed_at <= now.saturating_add(T::MaxFutureSkewSeconds::get()),
+				signed_at <= now.saturating_add(limits.future_skew_seconds),
 				Error::<T>::ReservationSignatureFromFuture,
 			);
 			ensure!(
-				now <= signed_at.saturating_add(T::MaxValiditySeconds::get()),
+				now <= signed_at.saturating_add(limits.signature_validity_seconds),
 				Error::<T>::ReservationSignatureExpired,
 			);
 
@@ -488,7 +519,7 @@ pub mod pallet {
 		#[pallet::call_index(1)]
 		#[pallet::weight(
 			<T as Config>::WeightInfo::register_name()
-				.saturating_add(T::MaxContractCallWeight::get())
+				.saturating_add(Limits::<T>::get().contract_call_weight)
 		)]
 		pub fn register_name(
 			origin: OriginFor<T>,
@@ -613,6 +644,47 @@ pub mod pallet {
 			)
 			.into())
 		}
+
+		/// Sets the operational limits.
+		///
+		/// The origin must be `MaintenanceOrigin`. Each limit must be within
+		/// [`Config::MinLimits`] and [`Config::MaxLimits`].
+		#[pallet::call_index(6)]
+		#[pallet::weight(<T as Config>::WeightInfo::set_limits())]
+		pub fn set_limits(origin: OriginFor<T>, limits: GatewayLimits) -> DispatchResult {
+			T::MaintenanceOrigin::ensure_origin(origin)?;
+			ensure!(
+				limits.is_within(&T::MinLimits::get(), &T::MaxLimits::get()),
+				Error::<T>::LimitsOutOfBounds
+			);
+			Limits::<T>::put(&limits);
+			Self::deposit_event(Event::LimitsSet { limits });
+			Ok(())
+		}
+	}
+
+	// ========== Hooks ==========
+
+	#[pallet::hooks]
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		fn integrity_test() {
+			let max = T::MaxLimits::get();
+			assert!(
+				T::DefaultLimits::get().is_within(&T::MinLimits::get(), &max),
+				"`DefaultLimits` must be within `MinLimits` and `MaxLimits`",
+			);
+			let overhead = <T as Config>::WeightInfo::reserve_name().max(
+				<T as Config>::WeightInfo::register_name()
+					.saturating_add(<T as Config>::WeightInfo::as_register_full_name_tx_ext()),
+			);
+			let worst_case = overhead.saturating_add(max.contract_call_weight);
+			let max_extrinsic = indiv_support::weight_budget::normal_max_extrinsic::<T>();
+			assert!(
+				worst_case.all_lte(max_extrinsic),
+				"a gateway call with the maximum contract call weight takes {worst_case:?}, more \
+				 than one normal extrinsic allows ({max_extrinsic:?})",
+			);
+		}
 	}
 
 	// ========== Internal Functions ==========
@@ -656,7 +728,7 @@ pub mod pallet {
 		fn call_dispatcher(calldata: Vec<u8>) -> Result<Weight, Error<T>> {
 			let address =
 				DispatcherAddress::<T>::get().ok_or(Error::<T>::DispatcherAddressNotSet)?;
-			T::ContractCaller::call(address, calldata, 0)
+			T::ContractCaller::call(address, calldata, 0, Limits::<T>::get().contract_call_weight)
 				.map(|(_, weight)| weight)
 				.map_err(Error::<T>::from)
 		}

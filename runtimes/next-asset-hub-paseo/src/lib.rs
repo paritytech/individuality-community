@@ -1463,6 +1463,7 @@ impl indiv_pallet_dotns_gateway::ContractCaller for ReviveContractCaller {
 		dest: sp_core::H160,
 		data: Vec<u8>,
 		value: u128,
+		weight_limit: Weight,
 	) -> Result<(Vec<u8>, Weight), indiv_pallet_dotns_gateway::ContractCallError> {
 		use pallet_revive::{ExecConfig, TransactionLimits};
 		let cr = pallet_revive::Pallet::<Runtime>::bare_call(
@@ -1470,7 +1471,7 @@ impl indiv_pallet_dotns_gateway::ContractCaller for ReviveContractCaller {
 			dest,
 			value.into(),
 			TransactionLimits::WeightAndDeposit {
-				weight_limit: DotnsMaxContractCallWeight::get(),
+				weight_limit,
 				// Root origin does not pay the deposit cost; per-call storage growth
 				// is bounded by `weight_limit.proof_size`.
 				deposit_limit: u128::MAX,
@@ -1518,11 +1519,26 @@ impl indiv_pallet_dotns_gateway::SignedContractCaller<AccountId> for ReviveContr
 }
 
 parameter_types! {
-	// On-chain measured weight is below these limits so this is to have some margin.
-	pub const DotnsMaxContractCallWeight: Weight =
-		Weight::from_parts(100_000_000_000, 2 * 1024 * 1024);
-	pub const DotnsMaxValiditySeconds: u64 = 3 * 24 * 60 * 60; // 3 days
-	pub const DotnsMaxFutureSkewSeconds: u64 = 30;
+	// Governance moves the dotNS gateway limits between the minimum and the maximum with
+	// `DotnsGateway::set_limits`. The pallet's module doc says what each bound protects.
+	pub const DotnsDefaultLimits: indiv_pallet_dotns_gateway::GatewayLimits =
+		indiv_pallet_dotns_gateway::GatewayLimits {
+			contract_call_weight: Weight::from_parts(100_000_000_000, 2 * 1024 * 1024),
+			signature_validity_seconds: 24 * 60 * 60,
+			future_skew_seconds: 30,
+		};
+	pub const DotnsMinLimits: indiv_pallet_dotns_gateway::GatewayLimits =
+		indiv_pallet_dotns_gateway::GatewayLimits {
+			contract_call_weight: Weight::from_parts(32_000_000_000, 2 * 1024 * 1024),
+			signature_validity_seconds: 60,
+			future_skew_seconds: 0,
+		};
+	pub const DotnsMaxLimits: indiv_pallet_dotns_gateway::GatewayLimits =
+		indiv_pallet_dotns_gateway::GatewayLimits {
+			contract_call_weight: Weight::from_parts(128_000_000_000, 4 * 1024 * 1024),
+			signature_validity_seconds: 24 * 60 * 60,
+			future_skew_seconds: 5 * 60,
+		};
 	pub const DotnsGatewayPalletId: PalletId = PalletId(*b"py/dotns");
 }
 
@@ -1551,9 +1567,9 @@ impl indiv_pallet_dotns_gateway::Config for Runtime {
 	type MemberService = MembersSubscriber;
 	type ContractCaller = ReviveContractCaller;
 	type AddressMapper = ReviveAddressMapper;
-	type MaxContractCallWeight = DotnsMaxContractCallWeight;
-	type MaxValiditySeconds = DotnsMaxValiditySeconds;
-	type MaxFutureSkewSeconds = DotnsMaxFutureSkewSeconds;
+	type DefaultLimits = DotnsDefaultLimits;
+	type MinLimits = DotnsMinLimits;
+	type MaxLimits = DotnsMaxLimits;
 	type UnixTime = Timestamp;
 	type AttestationAllowanceManager = EnsureRoot<AccountId>;
 	type DispatcherAddressManager = EnsureRoot<AccountId>;

@@ -212,6 +212,33 @@ pub enum Link {
 	None(ChatKey),
 }
 
+/// The operational limits of the gateway.
+///
+/// [`crate::Config::MaintenanceOrigin`] sets them within [`crate::Config::MinLimits`] and
+/// [`crate::Config::MaxLimits`].
+#[frame_support::stored]
+pub struct GatewayLimits {
+	/// The weight budget for one contract call. The calls that reach the contracts charge it in
+	/// advance and refund what the contract does not use.
+	pub contract_call_weight: Weight,
+	/// The time, in seconds, during which a reservation signature stays valid after `signed_at`.
+	pub signature_validity_seconds: u64,
+	/// The time, in seconds, by which `signed_at` may be ahead of chain time.
+	pub future_skew_seconds: u64,
+}
+
+impl GatewayLimits {
+	/// Returns whether each limit is within `min` and `max`, both included.
+	pub fn is_within(&self, min: &Self, max: &Self) -> bool {
+		self.contract_call_weight.all_gte(min.contract_call_weight) &&
+			self.contract_call_weight.all_lte(max.contract_call_weight) &&
+			(min.signature_validity_seconds..=max.signature_validity_seconds)
+				.contains(&self.signature_validity_seconds) &&
+			(min.future_skew_seconds..=max.future_skew_seconds)
+				.contains(&self.future_skew_seconds)
+	}
+}
+
 /// Converts a runtime AccountId to an EVM H160 address.
 pub trait AddressMapper<AccountId> {
 	/// Converts an account id to an Ethereum address.
@@ -237,13 +264,17 @@ impl From<DispatchError> for ContractCallError {
 
 /// Abstraction for calling smart contracts via pallet_revive.
 pub trait ContractCaller {
-	/// Calls a contract at `dest` with the given ABI-encoded `data`.
+	/// Calls a contract at `dest` with the given ABI-encoded `data`, as Root.
 	///
-	/// `value` is the amount of native currency to transfer with the call.
-	/// Returns `(raw_return_data, weight_consumed)` on success, allowing the
-	/// caller to refund unused weight from the contract call budget.
-	fn call(dest: H160, data: Vec<u8>, value: u128)
-		-> Result<(Vec<u8>, Weight), ContractCallError>;
+	/// `value` is the amount of native currency to transfer with the call. The contract may use
+	/// up to `weight_limit`. Returns `(raw_return_data, weight_consumed)` on success, so the
+	/// caller can refund unused weight from the contract call budget.
+	fn call(
+		dest: H160,
+		data: Vec<u8>,
+		value: u128,
+		weight_limit: Weight,
+	) -> Result<(Vec<u8>, Weight), ContractCallError>;
 }
 
 impl ContractCaller for () {
@@ -251,6 +282,7 @@ impl ContractCaller for () {
 		_dest: H160,
 		_data: Vec<u8>,
 		_value: u128,
+		_weight_limit: Weight,
 	) -> Result<(Vec<u8>, Weight), ContractCallError> {
 		Ok((Vec::new(), Weight::zero()))
 	}

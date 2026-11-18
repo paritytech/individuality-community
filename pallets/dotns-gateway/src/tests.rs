@@ -629,7 +629,7 @@ mod reservation {
 
 	#[test]
 	fn rejects_expired_signature() {
-		// `signed_at` is `MaxValiditySeconds + 1` seconds before "now"
+		// `signed_at` is the signature validity plus one second before "now"
 		// (600+1=601s back), one second past the expiration boundary.
 		new_test_ext().execute_with(|| {
 			set_attestation_allowance(ATTESTER, 5);
@@ -650,7 +650,7 @@ mod reservation {
 
 	#[test]
 	fn accepts_signature_at_past_window_boundary() {
-		// `signed_at == now - MaxValiditySeconds` is still within window
+		// `signed_at == now - signature validity` is still within the window
 		new_test_ext().execute_with(|| {
 			set_attestation_allowance(ATTESTER, 1);
 			assert_ok!(DotnsGateway::reserve_name(
@@ -667,7 +667,7 @@ mod reservation {
 
 	#[test]
 	fn rejects_future_dated_signature() {
-		// `signed_at` is `MaxFutureSkewSeconds + 1` seconds ahead of "now"
+		// `signed_at` is the future skew plus one second ahead of "now"
 		new_test_ext().execute_with(|| {
 			set_attestation_allowance(ATTESTER, 5);
 			assert_noop!(
@@ -687,7 +687,7 @@ mod reservation {
 
 	#[test]
 	fn accepts_signature_at_future_window_boundary() {
-		// `signed_at == now + MaxFutureSkewSeconds`
+		// `signed_at == now + future skew`
 		new_test_ext().execute_with(|| {
 			set_attestation_allowance(ATTESTER, 1);
 			assert_ok!(DotnsGateway::reserve_name(
@@ -1803,6 +1803,208 @@ mod maintainer {
 			assert_eq!(charged, overhead.saturating_add(LIMIT));
 			assert_eq!(info.actual_weight, Some(overhead.saturating_add(used)));
 			assert!(info.actual_weight.unwrap().all_lt(charged));
+		});
+	}
+}
+
+mod limits {
+	use super::*;
+	use frame_support::{
+		dispatch::{DispatchResultWithPostInfo, GetDispatchInfo},
+		traits::Hooks,
+		weights::Weight,
+	};
+	use frame_system::pallet_prelude::BlockNumberFor;
+
+	use crate::{Call, GatewayLimits, Limits};
+
+	fn reserve_alice(signed_at: u64) -> DispatchResultWithPostInfo {
+		DotnsGateway::reserve_name(
+			RuntimeOrigin::signed(ATTESTER),
+			ALICE,
+			valid_candidate_signature(ALICE),
+			base_name(ALICE_LITE),
+			default_chat_key(),
+			None,
+			signed_at,
+		)
+	}
+
+	fn widest_limits() -> GatewayLimits {
+		GatewayLimits {
+			signature_validity_seconds: 3_600,
+			future_skew_seconds: 300,
+			..MockMaxLimits::get()
+		}
+	}
+
+	#[test]
+	fn holds_the_default_limits_until_set() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(Limits::<Test>::get(), MockDefaultLimits::get());
+		});
+	}
+
+	#[test]
+	fn sets_the_limits() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			let limits = widest_limits();
+
+			assert_ok!(DotnsGateway::set_limits(RuntimeOrigin::root(), limits.clone()));
+
+			assert_eq!(Limits::<Test>::get(), limits);
+			System::assert_last_event(crate::Event::<Test>::LimitsSet { limits }.into());
+		});
+	}
+
+	#[test]
+	fn accepts_the_bounds_themselves() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(DotnsGateway::set_limits(RuntimeOrigin::root(), MockMinLimits::get()));
+			assert_ok!(DotnsGateway::set_limits(RuntimeOrigin::root(), MockMaxLimits::get()));
+		});
+	}
+
+	#[test]
+	fn rejects_each_limit_outside_its_bounds() {
+		new_test_ext().execute_with(|| {
+			let (min, max) = (MockMinLimits::get(), MockMaxLimits::get());
+			let below = |w: Weight, ref_time: bool| {
+				if ref_time {
+					w.set_ref_time(w.ref_time() - 1)
+				} else {
+					w.set_proof_size(w.proof_size() - 1)
+				}
+			};
+			let above = |w: Weight, ref_time: bool| {
+				if ref_time {
+					w.set_ref_time(w.ref_time() + 1)
+				} else {
+					w.set_proof_size(w.proof_size() + 1)
+				}
+			};
+			let out_of_bounds = [
+				GatewayLimits {
+					contract_call_weight: below(min.contract_call_weight, true),
+					..min.clone()
+				},
+				GatewayLimits {
+					contract_call_weight: below(min.contract_call_weight, false),
+					..min.clone()
+				},
+				GatewayLimits {
+					contract_call_weight: above(max.contract_call_weight, true),
+					..max.clone()
+				},
+				GatewayLimits {
+					contract_call_weight: above(max.contract_call_weight, false),
+					..max.clone()
+				},
+				GatewayLimits {
+					signature_validity_seconds: min.signature_validity_seconds - 1,
+					..min.clone()
+				},
+				GatewayLimits {
+					signature_validity_seconds: max.signature_validity_seconds + 1,
+					..max.clone()
+				},
+				GatewayLimits { future_skew_seconds: max.future_skew_seconds + 1, ..max.clone() },
+			];
+			for limits in out_of_bounds {
+				assert_noop!(
+					DotnsGateway::set_limits(RuntimeOrigin::root(), limits),
+					Error::<Test>::LimitsOutOfBounds
+				);
+			}
+		});
+	}
+
+	#[test]
+	fn requires_the_maintenance_origin() {
+		new_test_ext().execute_with(|| {
+			assert_noop!(
+				DotnsGateway::set_limits(RuntimeOrigin::signed(ALICE), widest_limits()),
+				DispatchError::BadOrigin
+			);
+		});
+	}
+
+	#[test]
+	fn reserve_name_checks_signatures_against_the_set_limits() {
+		new_test_ext().execute_with(|| {
+			set_attestation_allowance(ATTESTER, 2);
+			// The default limits reject both.
+			assert_noop!(
+				reserve_alice(MOCK_NOW_BASE - 601),
+				Error::<Test>::ReservationSignatureExpired
+			);
+			assert_noop!(
+				reserve_alice(MOCK_NOW_BASE + 16),
+				Error::<Test>::ReservationSignatureFromFuture
+			);
+
+			assert_ok!(DotnsGateway::set_limits(RuntimeOrigin::root(), widest_limits()));
+
+			assert_ok!(reserve_alice(MOCK_NOW_BASE + 300));
+		});
+	}
+
+	#[test]
+	fn reserve_name_charges_and_passes_the_set_contract_call_weight() {
+		new_test_ext().execute_with(|| {
+			set_attestation_allowance(ATTESTER, 1);
+			let limits = widest_limits();
+			assert_ok!(DotnsGateway::set_limits(RuntimeOrigin::root(), limits.clone()));
+
+			let call = Call::<Test>::reserve_name {
+				candidate: ALICE,
+				candidate_signature: valid_candidate_signature(ALICE),
+				lite_label: base_name(ALICE_LITE),
+				chat_key: default_chat_key(),
+				reserved_base_label: None,
+				signed_at: SIGNED_AT_NOW,
+			};
+			assert_eq!(
+				call.get_dispatch_info().call_weight,
+				<() as crate::WeightInfo>::reserve_name()
+					.saturating_add(limits.contract_call_weight)
+			);
+
+			assert_ok!(reserve_alice(SIGNED_AT_NOW));
+			assert_eq!(get_contract_call_weight_limits(), vec![limits.contract_call_weight]);
+		});
+	}
+
+	#[test]
+	fn integrity_test_accepts_the_mock_bounds() {
+		new_test_ext().execute_with(|| {
+			<DotnsGateway as Hooks<BlockNumberFor<Test>>>::integrity_test();
+		});
+	}
+
+	#[test]
+	#[should_panic(expected = "`DefaultLimits` must be within `MinLimits` and `MaxLimits`")]
+	fn integrity_test_rejects_a_default_outside_the_bounds() {
+		new_test_ext().execute_with(|| {
+			MockMaxLimits::set(&GatewayLimits {
+				signature_validity_seconds: MockDefaultLimits::get().signature_validity_seconds - 1,
+				..MockMaxLimits::get()
+			});
+			<DotnsGateway as Hooks<BlockNumberFor<Test>>>::integrity_test();
+		});
+	}
+
+	#[test]
+	#[should_panic(expected = "more than one normal extrinsic allows")]
+	fn integrity_test_rejects_a_maximum_call_weight_above_one_extrinsic() {
+		new_test_ext().execute_with(|| {
+			let max_extrinsic = indiv_support::weight_budget::normal_max_extrinsic::<Test>();
+			MockMaxLimits::set(&GatewayLimits {
+				contract_call_weight: max_extrinsic,
+				..MockMaxLimits::get()
+			});
+			<DotnsGateway as Hooks<BlockNumberFor<Test>>>::integrity_test();
 		});
 	}
 }

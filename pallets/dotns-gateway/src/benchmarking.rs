@@ -256,7 +256,21 @@ mod benchmarks {
 		let data = [0u8; 36].to_vec();
 
 		#[extrinsic_call]
-		_(origin as T::RuntimeOrigin, dest, data, T::MaxContractCallWeight::get(), 0u128);
+		_(origin as T::RuntimeOrigin, dest, data, Limits::<T>::get().contract_call_weight, 0u128);
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn set_limits() -> Result<(), BenchmarkError> {
+		let origin = T::MaintenanceOrigin::try_successful_origin()
+			.map_err(|_| BenchmarkError::Weightless)?;
+		let limits = T::MaxLimits::get();
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, limits.clone());
+
+		assert_eq!(Limits::<T>::get(), limits);
 
 		Ok(())
 	}
