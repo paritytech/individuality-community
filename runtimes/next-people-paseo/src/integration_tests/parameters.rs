@@ -24,16 +24,17 @@ use crate::{
 };
 use codec::Decode;
 use frame_support::{assert_noop, assert_ok, traits::Get, view_functions::ViewFunction, PalletId};
+use indiv_pallet_people_airdrops::GetPrizeSourceViewFunction;
 use indiv_pallet_people_lite::{
 	GetMaxLitePeopleViewFunction, GetPaidRegistrationPeriodViewFunction,
 	GetPaidRegistrationThresholdViewFunction, GetPaidRegistrationsPerPeriodViewFunction,
 	GetRegistrationFeeViewFunction,
 };
 use indiv_pallet_resources::{
-	types::LongTermStorageAllocation, GetLitePersonStatementLimitViewFunction,
-	GetLongTermStorageAllowanceForLitePeopleViewFunction,
-	GetLongTermStorageAllowanceForPeopleViewFunction, GetPersonStatementLimitViewFunction,
-	WeightInfo as ResourcesWeightInfo,
+	types::LongTermStorageAllocation, GetAccountsApiAllowanceViewFunction,
+	GetLitePersonStatementLimitViewFunction, GetLongTermStorageAllowanceForLitePeopleViewFunction,
+	GetLongTermStorageAllowanceForPeopleViewFunction, GetNotificationAllowanceViewFunction,
+	GetPersonStatementLimitViewFunction, WeightInfo as ResourcesWeightInfo,
 };
 use indiv_support::{
 	statement_allowance::BoundedStatementAllowance, weight_budget::OcwWeightBudget,
@@ -163,12 +164,32 @@ fn root_parameter_updates_change_what_the_resources_pallet_reads() {
 }
 
 #[test]
-fn statement_limit_view_functions_return_the_updated_parameters() {
+fn prize_source_view_function_returns_the_updated_parameter() {
+	new_test_ext().execute_with(|| {
+		let updated = Sr25519Keyring::Alice.to_account_id();
+		set_people_airdrops_parameter(people_airdrops::PrizeSource, updated.clone());
+
+		assert_eq!(execute_view_function::<GetPrizeSourceViewFunction<Runtime>>(), updated);
+	});
+}
+
+#[test]
+fn statement_storage_view_functions_return_the_updated_parameters() {
 	new_test_ext().execute_with(|| {
 		let allowance = |max_size, max_count| BoundedStatementAllowance { max_size, max_count };
+		set_statement_parameter(statement_storage::AccountsApiAllowance, allowance(7, 1));
+		set_statement_parameter(statement_storage::NotificationAllowance, allowance(9, 3));
 		set_statement_parameter(statement_storage::LitePersonStatementLimit, allowance(11, 2));
 		set_statement_parameter(statement_storage::PersonStatementLimit, allowance(13, 4));
 
+		assert_eq!(
+			execute_view_function::<GetAccountsApiAllowanceViewFunction<Runtime>>(),
+			StatementAllowance { max_size: 7, max_count: 1 }
+		);
+		assert_eq!(
+			execute_view_function::<GetNotificationAllowanceViewFunction<Runtime>>(),
+			StatementAllowance { max_size: 9, max_count: 3 }
+		);
 		assert_eq!(
 			execute_view_function::<GetLitePersonStatementLimitViewFunction<Runtime>>(),
 			StatementAllowance { max_size: 11, max_count: 2 }

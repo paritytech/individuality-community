@@ -1277,6 +1277,16 @@ pub mod pallet {
 			T::LiteNotificationSlotsPerPeriod::get()
 		}
 
+		/// Returns the current value of [`Config::AccountsApiAllowance`].
+		pub fn get_accounts_api_allowance() -> StatementAllowance {
+			T::AccountsApiAllowance::get()
+		}
+
+		/// Returns the current value of [`Config::NotificationAllowance`].
+		pub fn get_notification_allowance() -> StatementAllowance {
+			T::NotificationAllowance::get()
+		}
+
 		/// Returns the current value of [`Config::LitePersonStatementLimit`].
 		pub fn get_lite_person_statement_limit() -> StatementAllowance {
 			T::LitePersonStatementLimit::get()

@@ -5411,6 +5411,19 @@ mod dynamic_parameters {
 	}
 
 	#[test]
+	fn allowance_view_functions_follow_their_parameters() {
+		new_test_ext().execute_with(|| {
+			let accounts_api = StatementAllowance { max_size: 2048, max_count: 3 };
+			let notification = StatementAllowance { max_size: 256, max_count: 5 };
+			AccountsApiAllowance::set(&accounts_api);
+			NotificationAllowance::set(&notification);
+
+			assert_eq!(Resources::get_accounts_api_allowance(), accounts_api);
+			assert_eq!(Resources::get_notification_allowance(), notification);
+		});
+	}
+
+	#[test]
 	fn statement_limit_and_long_term_storage_view_functions_return_their_parameters() {
 		new_test_ext().execute_with(|| {
 			assert_eq!(
