@@ -591,6 +591,37 @@ fn cannot_register_twice() {
 }
 
 #[test]
+fn reports_open_when_the_game_starts() {
+	new_test_ext().execute_with(|| {
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 20,
+			rounds: 1,
+			max_group_size: 2,
+			..Default::default()
+		};
+		assert_ok!(Game::new_game(&schedule));
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(ALICE),
+			DEFAULT_IDENTIFIER_KEY,
+			None,
+		));
+		advance_to_reporting_phase(&schedule);
+		let full_report: FullReport<Test> = vec![BoundedVec::default()].try_into().unwrap();
+
+		// The shuffle ends before the game starts.
+		let game_date = u64::from(crate::Game::<Test>::get().unwrap().game_date);
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_date - 1));
+		assert_noop!(
+			Game::report(RuntimeOrigin::signed(ALICE), full_report.clone()),
+			Error::<Test>::NoReporting
+		);
+
+		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_date));
+		assert_ok!(Game::report(RuntimeOrigin::signed(ALICE), full_report));
+	});
+}
+
+#[test]
 fn cannot_report_twice() {
 	new_test_ext().execute_with(|| {
 		// Create a new game.
@@ -609,15 +640,7 @@ fn cannot_report_twice() {
 			None,
 		));
 
-		// Fast-forward time beyond registration_ends, so we can transition.
-		let registration_ends = GameTimes::<Test>::registration_end(&schedule);
-		MOCK_UNIX_TIME
-			.with(|v| *v.borrow_mut() = Duration::from_secs(registration_ends as u64 + 1));
-
-		advance_process(); // Transition to shuffle.
-		advance_process(); // Shuffle to report.
-
-		// Now the game is in `Reporting` phase.
+		advance_to_reporting_phase(&schedule);
 
 		// Player sees exactly 0 other player.
 		let partial_report: BoundedVec<Report, _> = BoundedVec::default();
@@ -3025,6 +3048,7 @@ mod game_cancellation {
 				rounds: 2,
 				max_group_size: 4,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -3217,12 +3241,7 @@ fn candidate_and_people_vote_weights_applied() {
 			None,
 		));
 
-		// Fast-forward to **Reporting** phase
-		let reg_end = GameTimes::<Test>::registration_end(&schedule);
-		MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
-
-		advance_process(); // registration -> shuffle
-		advance_process(); // shuffle -> reporting
+		advance_to_reporting_phase(&schedule);
 
 		// Helper that builds a 1-round FullReport with the desired opinion on `target`.
 		let build_report = |reporter: &AccountOrPerson<AccountId32>, target_is_person: bool| {
@@ -3997,60 +4016,53 @@ fn vote_weight_tracks_current_recognition_and_drops_when_lost() {
 
 		// Small helper: start a 1-round, 2-per-group game, have `reporter_acc` report
 		// "Person" on `target_acc`, and assert that the `yes_person` tally equals `expected_w`.
-		let assert_vote_weight = |game_time: u32,
-		                          reporter_acc: AccountId32,
-		                          target_acc: AccountId32,
-		                          expected_w: u8| {
-			use core::time::Duration;
+		let assert_vote_weight =
+			|game_time: u32, reporter_acc: AccountId32, target_acc: AccountId32, expected_w: u8| {
+				let schedule = GameSchedule::<u32, u128> {
+					game_play_time: game_time,
+					rounds: 1,
+					max_group_size: 2, // reporter and target in the same group
+					..Default::default()
+				};
 
-			let schedule = GameSchedule::<u32, u128> {
-				game_play_time: game_time,
-				rounds: 1,
-				max_group_size: 2, // reporter and target in the same group
-				..Default::default()
+				// New game + sign-ups.
+				assert_ok!(Game::new_game(&schedule));
+				assert_ok!(Game::sign_up_with_account(
+					RuntimeOrigin::signed(reporter_acc.clone()),
+					DEFAULT_IDENTIFIER_KEY,
+					None,
+				));
+				assert_ok!(Game::sign_up_with_account(
+					RuntimeOrigin::signed(target_acc.clone()),
+					DEFAULT_IDENTIFIER_KEY,
+					None,
+				));
+
+				advance_to_reporting_phase(&schedule);
+
+				// Reporter submits a single opinion (there's exactly one peer in the group).
+				let partial: BoundedVec<Report, <Test as Config>::MaxGroupSize> =
+					vec![Report::Person].try_into().unwrap();
+				let full: FullReport<Test> = vec![partial].try_into().unwrap();
+				assert_ok!(Game::report(RuntimeOrigin::signed(reporter_acc.clone()), full));
+
+				// Check immediate tallies (before PlayerProcess resets them).
+				let info = Players::<Test>::get(AccountOrPerson::Account(target_acc.clone()))
+					.expect("target must be registered");
+				assert_eq!(
+					info.yes_person, expected_w,
+					"reporter should contribute exactly the expected vote weight"
+				);
+
+				// Finish the game so we can start another one.
+				let rep_end = GameTimes::<Test>::reporting_end(&schedule);
+				MOCK_UNIX_TIME
+					.with(|t| *t.borrow_mut() = Duration::from_secs((rep_end + 1) as u64));
+				advance_process(); // reporting -> player process
+				advance_process(); // step1 -> step2
+				advance_process(); // step2 -> step3
+				advance_process(); // step3 -> done
 			};
-
-			// New game + sign-ups.
-			assert_ok!(Game::new_game(&schedule));
-			assert_ok!(Game::sign_up_with_account(
-				RuntimeOrigin::signed(reporter_acc.clone()),
-				DEFAULT_IDENTIFIER_KEY,
-				None,
-			));
-			assert_ok!(Game::sign_up_with_account(
-				RuntimeOrigin::signed(target_acc.clone()),
-				DEFAULT_IDENTIFIER_KEY,
-				None,
-			));
-
-			// Fast-forward to Reporting.
-			let reg_end = GameTimes::<Test>::registration_end(&schedule);
-			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
-			advance_process(); // registration -> shuffle
-			advance_process(); // shuffle -> reporting
-
-			// Reporter submits a single opinion (there's exactly one peer in the group).
-			let partial: BoundedVec<Report, <Test as Config>::MaxGroupSize> =
-				vec![Report::Person].try_into().unwrap();
-			let full: FullReport<Test> = vec![partial].try_into().unwrap();
-			assert_ok!(Game::report(RuntimeOrigin::signed(reporter_acc.clone()), full));
-
-			// Check immediate tallies (before PlayerProcess resets them).
-			let info = Players::<Test>::get(AccountOrPerson::Account(target_acc.clone()))
-				.expect("target must be registered");
-			assert_eq!(
-				info.yes_person, expected_w,
-				"reporter should contribute exactly the expected vote weight"
-			);
-
-			// Finish the game so we can start another one.
-			let rep_end = GameTimes::<Test>::reporting_end(&schedule);
-			MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((rep_end + 1) as u64));
-			advance_process(); // reporting -> player process
-			advance_process(); // step1 -> step2
-			advance_process(); // step2 -> step3
-			advance_process(); // step3 -> done
-		};
 
 		// ─────────────────────────────────────────────────────────────────────────────
 		// Scenario 1: NOT recognized => candidate weight.
@@ -4216,12 +4228,7 @@ fn statement_allowance_for_account_players() {
 		));
 		assert_eq!(get_allowance(BOB), expected_allowance);
 
-		// Move to reporting phase
-		let registration_ends = GameTimes::<Test>::registration_end(&schedule1);
-		MOCK_UNIX_TIME
-			.with(|t| *t.borrow_mut() = Duration::from_secs((registration_ends + 1) as u64));
-		advance_process(); // registration -> shuffle
-		advance_process(); // shuffle -> reporting
+		advance_to_reporting_phase(&schedule1);
 
 		// ALICE does NOT report (will be absent)
 		// BOB reports (will attend)
@@ -4288,12 +4295,7 @@ fn statement_allowance_for_account_players() {
 			"BOB allowance should not double after signing up for game 2"
 		);
 
-		// Move to reporting phase
-		let registration_ends2 = GameTimes::<Test>::registration_end(&schedule2);
-		MOCK_UNIX_TIME
-			.with(|t| *t.borrow_mut() = Duration::from_secs((registration_ends2 + 1) as u64));
-		advance_process(); // registration -> shuffle
-		advance_process(); // shuffle -> reporting
+		advance_to_reporting_phase(&schedule2);
 
 		// BOB does NOT report this time (will be absent and eventually archived)
 		// Finish game 2
@@ -4357,15 +4359,6 @@ fn statement_allowance_for_alias_players() {
 				.try_into()
 				.unwrap();
 
-		let advance_to_reporting = |schedule: &GameSchedule<u32, u128>| {
-			let registration_ends = GameTimes::<Test>::registration_end(schedule);
-			MOCK_UNIX_TIME.with(|t| {
-				*t.borrow_mut() = Duration::from_secs((registration_ends + 1) as u64);
-			});
-			advance_process(); // registration -> shuffle
-			advance_process(); // shuffle -> reporting
-		};
-
 		let finish_game = |schedule: &GameSchedule<u32, u128>| {
 			let report_ends = GameTimes::<Test>::reporting_end(schedule);
 			MOCK_UNIX_TIME
@@ -4401,7 +4394,7 @@ fn statement_allowance_for_alias_players() {
 		assert_eq!(get_allowance(&stmt_account_1), expected_allowance);
 		assert_eq!(get_allowance(&stmt_account_2), zero_allowance);
 
-		advance_to_reporting(&schedule1);
+		advance_to_reporting_phase(&schedule1);
 		assert_ok!(Game::report(runtime_origin_for_alias(&alias), empty_report.clone()));
 		finish_game(&schedule1);
 
@@ -4428,7 +4421,7 @@ fn statement_allowance_for_alias_players() {
 		));
 		assert_eq!(get_allowance(&stmt_account_1), expected_allowance);
 
-		advance_to_reporting(&schedule2);
+		advance_to_reporting_phase(&schedule2);
 		assert_ok!(Game::report(runtime_origin_for_alias(&alias), empty_report.clone()));
 		finish_game(&schedule2);
 
@@ -4456,7 +4449,7 @@ fn statement_allowance_for_alias_players() {
 		assert_eq!(get_allowance(&stmt_account_1), zero_allowance);
 		assert_eq!(get_allowance(&stmt_account_2), expected_allowance);
 
-		advance_to_reporting(&schedule3);
+		advance_to_reporting_phase(&schedule3);
 		assert_ok!(Game::report(runtime_origin_for_alias(&alias), empty_report.clone()));
 		finish_game(&schedule3);
 
@@ -4483,7 +4476,7 @@ fn statement_allowance_for_alias_players() {
 		));
 		assert_eq!(get_allowance(&stmt_account_2), expected_allowance);
 
-		advance_to_reporting(&schedule4);
+		advance_to_reporting_phase(&schedule4);
 		// No report => absent.
 		finish_game(&schedule4);
 
@@ -4527,13 +4520,16 @@ fn build_report_with_opinion(
 	full.try_into().expect("fits MaxRounds")
 }
 
-/// Advance through registration and the full shuffle phase, stopping in Reporting.
+/// Advance through registration and the full shuffle phase to the start of the game.
 fn advance_to_reporting_phase(schedule: &GameSchedule<u32, u128>) {
 	let reg_end = GameTimes::<Test>::registration_end(schedule);
 	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs((reg_end + 1) as u64));
 	advance_process(); // registration -> shuffle
 	advance_process(); // shuffle -> reporting (steps 1-4)
 	assert!(matches!(crate::Game::<Test>::get().unwrap().state, GameState::Reporting { .. }));
+	// Reports are accepted from the start of the game.
+	let game_play_time = GameTimes::<Test>::game_play_time(schedule);
+	MOCK_UNIX_TIME.with(|t| *t.borrow_mut() = Duration::from_secs(game_play_time.into()));
 }
 
 #[test]
@@ -4804,6 +4800,7 @@ fn player_process_step2_uses_marginal_weight_for_follow_up_chunks() {
 			rounds,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		});
 
 		let first_chunk_weight = <MockWeightInfo as WeightInfo>::player_process_step2();
@@ -5238,6 +5235,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_ok!(Game::sign_up_with_account(
@@ -5277,6 +5275,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = crate::GameIndex::<Test>::get();
@@ -5322,6 +5321,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&current));
 			assert_ok!(Game::sign_up_with_account(
@@ -5340,6 +5340,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::schedule_games(RuntimeOrigin::root(), vec![next.clone()]));
 			assert_eq!(GameSchedules::<Test>::get().len(), 1);
@@ -5379,6 +5380,7 @@ mod cancel_game {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -5412,6 +5414,7 @@ mod cancel_game {
 			rounds: 2,
 			max_group_size: 3,
 			airdrops: Default::default(),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(Game::new_game(&schedule));
 		assert_ok!(Game::sign_up_with_account(
@@ -5559,6 +5562,7 @@ mod set_game_phases {
 			rounds: 1,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		});
 	}
 
@@ -5936,6 +5940,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			let now = <Test as crate::Config>::UnixTime::now().as_secs();
 			assert_ok!(Game::new_game(&schedule));
@@ -5963,6 +5968,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			// `now` is set strictly before the game's registration phase starts, so the two
 			// timestamps are distinct and the test can tell them apart.
@@ -5998,6 +6004,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert!(crate::Game::<Test>::exists());
@@ -6021,6 +6028,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6046,6 +6054,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_noop!(
@@ -6069,6 +6078,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6117,6 +6127,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6150,6 +6161,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_noop!(
@@ -6171,6 +6183,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			// Pre-recognized account player: in `Participants` as `Recognized(_)` and in
@@ -6203,6 +6216,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
@@ -6234,6 +6248,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -6280,6 +6295,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -6327,6 +6343,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6444,6 +6461,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6498,6 +6516,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6674,6 +6693,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 2,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6796,6 +6816,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6826,6 +6847,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				tenure_claim_window: 0,
 			};
 			let now = <Test as crate::Config>::UnixTime::now().as_secs();
 			assert_ok!(Game::new_game(&schedule));
@@ -6859,6 +6881,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: Default::default(),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game = GameStorage::<Test>::get().expect("game exists");
@@ -6911,6 +6934,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6957,6 +6981,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -6981,6 +7006,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7013,6 +7039,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7064,6 +7091,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(3),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7099,6 +7127,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7129,6 +7158,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7154,6 +7184,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			// Game 1: ALICE prepares a VRF for its airdrop event but never signs up; the game
 			// is cancelled and cleaned up.
@@ -7269,6 +7300,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_eq!(GameStorage::<Test>::get().expect("game exists").airdrops_scheduled, 0);
@@ -7304,6 +7336,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			assert_eq!(GameStorage::<Test>::get().expect("game exists").airdrops_scheduled, 0);
@@ -7341,6 +7374,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 
@@ -7372,6 +7406,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7413,6 +7448,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -7451,6 +7487,7 @@ mod airdrop {
 				rounds: 2,
 				max_group_size: 3,
 				airdrops: test_airdrops(2),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game_index = GameIndex::<Test>::get();
@@ -8355,6 +8392,7 @@ mod game_steps {
 			rounds: 1,
 			pending_attendance: 0,
 			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
 		});
 	}
 
@@ -8381,6 +8419,7 @@ mod game_steps {
 			rounds: 1,
 			max_group_size,
 			airdrops: Default::default(),
+			tenure_claim_window: 0,
 		};
 		assert_ok!(Game::new_game(&schedule));
 		assert_ok!(Game::sign_up_with_account(
@@ -8601,8 +8640,15 @@ mod game_steps {
 			set_time(200);
 			assert_eq!(end_reporting.authorize(TransactionSource::Local), Some(Err(not_due())));
 
-			// The last attendance settles.
+			// No attendance pending, but the game has not started.
 			crate::Game::<Test>::mutate(|game| game.as_mut().unwrap().pending_attendance = 0);
+			set_time(149);
+			assert_eq!(Game::next_step(), None);
+			assert_eq!(end_reporting.authorize(TransactionSource::Local), Some(Err(not_due())));
+
+			// The game has started.
+			set_time(150);
+			assert_eq!(Game::next_step(), Some(NextStep::EndReporting));
 			assert!(end_reporting.authorize(TransactionSource::Local).unwrap().is_ok());
 		});
 	}
@@ -8632,7 +8678,8 @@ mod game_steps {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			clear_pool();
-			// One player, whose worst case is two credits with a group of three and one round.
+			// One player, whose worst case with a group of three and one round is two attestation
+			// credits plus one credit per tenure threshold.
 			let game_index = one_player_game(
 				3,
 				GameState::PlayerProcess {
@@ -8642,7 +8689,9 @@ mod game_steps {
 					},
 				},
 			);
-			MockCreditCapacity::set(&1);
+			let max_credits = 2 + MaxTenureThresholds::get();
+			// The buffer is one credit short of the worst case.
+			MockCreditCapacity::set(&(max_credits - 1));
 
 			// The step stays due on chain. Only its submission is skipped.
 			<Game as OffchainWorker<u64>>::offchain_worker(1);
@@ -8663,7 +8712,7 @@ mod game_steps {
 			));
 
 			// A committed tree frees the buffer and the step is submitted.
-			MockCreditCapacity::set(&2);
+			MockCreditCapacity::set(&max_credits);
 			<Game as OffchainWorker<u64>>::offchain_worker(1);
 			assert_eq!(
 				submitted_calls(),
@@ -8765,6 +8814,7 @@ mod game_steps {
 				rounds: 1,
 				max_group_size: 2,
 				airdrops: test_airdrops(2),
+				tenure_claim_window: 0,
 			};
 			assert_ok!(Game::new_game(&schedule));
 			let game = crate::Game::<Test>::get().unwrap();
@@ -8798,6 +8848,115 @@ fn signing_context_constant_is_the_context_the_pallet_verifies() {
 		crate::Pallet::<Test>::account_signing_payload(b"msg"),
 		[&expected[..], b"msg"].concat()
 	);
+}
+
+mod migration_v1 {
+	use super::*;
+	use crate::migration::{v0, MigrateV0ToV1, MIGRATED_TENURE_CLAIM_WINDOW};
+	use frame_support::traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion};
+
+	fn v0_schedule(game_play_time: u32) -> v0::GameSchedule<u32, u128> {
+		v0::GameSchedule {
+			game_play_time,
+			rounds: 2,
+			max_group_size: 4,
+			airdrops: test_airdrops(1),
+		}
+	}
+
+	#[test]
+	fn migration_adds_the_tenure_claim_window() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<crate::Pallet<Test>>();
+			v0::GameSchedules::<Test>::put(BoundedVec::truncate_from(vec![
+				v0_schedule(10_000),
+				v0_schedule(20_000),
+			]));
+			v0::Game::<Test>::put(v0::GameInfo {
+				index: 3,
+				registration_ends: 4_000,
+				shuffle_deadline: 4_500,
+				game_date: 5_000,
+				report_ends: 6_000,
+				state: GameState::Registration { next_player_index: 2 },
+				max_group_size: 4,
+				rounds: 2,
+				pending_attendance: 0,
+				airdrops_scheduled: 1,
+			});
+
+			#[cfg(feature = "try-runtime")]
+			let state = MigrateV0ToV1::<Test>::pre_upgrade().expect("pre-upgrade passes");
+			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+			#[cfg(feature = "try-runtime")]
+			assert_ok!(MigrateV0ToV1::<Test>::post_upgrade(state));
+
+			let schedules = GameSchedules::<Test>::get();
+			assert_eq!(
+				schedules.iter().map(|schedule| schedule.game_play_time).collect::<Vec<_>>(),
+				vec![10_000, 20_000]
+			);
+			assert!(schedules.iter().all(|schedule| {
+				schedule.tenure_claim_window == MIGRATED_TENURE_CLAIM_WINDOW &&
+					schedule.rounds == 2 &&
+					schedule.max_group_size == 4 &&
+					schedule.airdrops == test_airdrops(1)
+			}));
+			let game = crate::Game::<Test>::get().expect("the game survives");
+			assert_eq!(game.index, 3);
+			assert_eq!(game.game_date, 5_000);
+			assert!(matches!(game.state, GameState::Registration { next_player_index: 2 }));
+			assert_eq!(game.airdrops_scheduled, 1);
+			assert_eq!(game.tenure_claim_opens, 5_000 - MIGRATED_TENURE_CLAIM_WINDOW);
+			assert_eq!(crate::Pallet::<Test>::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn migration_without_a_game_leaves_none() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<crate::Pallet<Test>>();
+
+			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+
+			assert!(crate::Game::<Test>::get().is_none());
+			assert!(GameSchedules::<Test>::get().is_empty());
+			assert_eq!(crate::Pallet::<Test>::on_chain_storage_version(), 1);
+		});
+	}
+
+	#[test]
+	fn migration_removes_a_game_that_does_not_decode() {
+		new_test_ext().execute_with(|| {
+			StorageVersion::new(0).put::<crate::Pallet<Test>>();
+			frame_support::storage::unhashed::put_raw(
+				&crate::Game::<Test>::hashed_key(),
+				&[0xff, 0xff],
+			);
+
+			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+
+			assert!(!crate::Game::<Test>::exists());
+		});
+	}
+
+	#[test]
+	fn migration_rerun_is_a_no_op() {
+		new_test_ext().execute_with(|| {
+			let schedule = GameSchedule::<u32, u128> {
+				game_play_time: 10_000,
+				rounds: 1,
+				max_group_size: 3,
+				tenure_claim_window: 60,
+				..Default::default()
+			};
+			GameSchedules::<Test>::put(BoundedVec::truncate_from(vec![schedule.clone()]));
+
+			MigrateV0ToV1::<Test>::on_runtime_upgrade();
+
+			assert_eq!(GameSchedules::<Test>::get().into_inner(), vec![schedule]);
+		});
+	}
 }
 
 #[test]

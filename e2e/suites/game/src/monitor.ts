@@ -17,7 +17,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PeopleApi, PeopleClient } from "./chain.ts";
+import type { DecodedCall, PeopleApi, PeopleClient, TxFromCallData } from "./chain.ts";
 import { toJson, type Untyped } from "./chain.ts";
 
 const SUITE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +37,79 @@ export interface BlockRecord {
   /** The game state as a string. A transition is a string change. `none` means no game. */
   state: string;
   events: string[];
+  /** The game steps the block includes. */
+  steps: StepLanding[];
+}
+
+/** A game step call included in a block. */
+export interface StepLanding {
+  name: string;
+  /** The `discriminator` argument: the block whose offchain worker submitted the step. */
+  submittedAt: number;
+}
+
+/**
+ * The length of each game step call: the pallet and call index, then `game_index: u32` for every
+ * step except `start_game`, then `discriminator: u32`.
+ */
+const STEP_CALL_LENGTHS: Record<string, number> = {
+  start_game: 6,
+  end_registration: 10,
+  advance_shuffle: 10,
+  end_reporting: 10,
+  process_players: 10,
+  advance_cancelling: 10,
+};
+
+/**
+ * The game steps in `extrinsics`, given as hex.
+ *
+ * The call is the last field of an extrinsic and a step call has a fixed length. Only the tail of
+ * each extrinsic is decoded, which avoids decoding the transaction extensions. A tail that is not a
+ * step call fails to decode or decodes to a call of another length.
+ */
+function findSteps(extrinsics: string[], txFromCallData: TxFromCallData): StepLanding[] {
+  const steps: StepLanding[] = [];
+  const lengths = [...new Set(Object.values(STEP_CALL_LENGTHS))];
+  for (const hex of extrinsics) {
+    const bytes = new Uint8Array(Buffer.from(hex.slice(2), "hex"));
+    for (const length of lengths) {
+      if (bytes.length < length) {
+        continue;
+      }
+      let call: DecodedCall;
+      try {
+        call = txFromCallData(bytes.slice(-length)).decodedCall;
+      } catch (error) {
+        // A tail that is not a call fails with `Invalid call data`. A `TypeError` is a defect here.
+        if (error instanceof TypeError) {
+          throw error;
+        }
+        continue;
+      }
+      const name = call.value.type;
+      if (call.type === "Game" && STEP_CALL_LENGTHS[name] === length) {
+        steps.push({ name, submittedAt: Number(call.value.value.discriminator) });
+        break;
+      }
+    }
+  }
+  return steps;
+}
+
+/**
+ * Whether a block whose parent ended in `state` always has a game step due.
+ *
+ * The shuffle, the player process and the cancellation run one step per block until they finish.
+ * Two waits are the exception. The shuffle waits for the score session in `Step4AwaitSession`.
+ * The player process waits for credit buffer space, which the state does not show. The tests run
+ * one player per game, so the player process does not fill the buffers.
+ */
+function stepDueAfter(state: string): boolean {
+  if (state === "Shuffle/Step4AwaitSession") {
+    return false;
+  }
+  return ["Shuffle/", "PlayerProcess/", "Cancelling/"].some(prefix => state.startsWith(prefix));
 }
 
 export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -81,6 +154,13 @@ function describeEvents(events: Untyped[]): string[] {
     }
   }
   return out;
+}
+
+/** The state, the landed steps and the events of a recorded block, as one line. */
+function describeRecord(entry: BlockRecord): string {
+  const steps = entry.steps.map(step => `${step.name}(submitted at #${step.submittedAt})`);
+  const tail = [...steps, ...entry.events];
+  return `${entry.state} [schedules=${entry.scheduled}]${tail.length > 0 ? `  ${tail.join(" | ")}` : ""}`;
 }
 
 /** The People collator's log file, or `undefined` when the network was spawned elsewhere. */
@@ -141,14 +221,20 @@ export function startMonitor(client: PeopleClient, api: PeopleApi) {
     console.log(`  monitor: tailing ${logPath}`);
   }
 
+  const staticApis = api.getStaticApis();
+
   const record = async (block: { number: number; hash: string }) => {
     const at = { at: block.hash };
-    const [game, gameIndex, schedules, events, millis] = await Promise.all([
+    // The legacy RPC serves any block. `getBlockBody` serves only the blocks the client pins, and
+    // the gap blocks `recordFrom` fills in are not pinned.
+    const [game, gameIndex, schedules, events, millis, body, { txFromCallData }] = await Promise.all([
       api.query.Game.Game.getValue(at),
       api.query.Game.GameIndex.getValue(at),
       api.query.Game.GameSchedules.getValue(at),
       api.query.System.Events.getValue(at),
       api.query.Timestamp.Now.getValue(at),
+      client._request<{ block: { extrinsics: string[] } }>("chain_getBlock", [block.hash]),
+      staticApis,
     ]);
 
     const entry: BlockRecord = {
@@ -160,13 +246,18 @@ export function startMonitor(client: PeopleClient, api: PeopleApi) {
       scheduled: (schedules as unknown[] | undefined)?.length ?? 0,
       state: describeState(game),
       events: describeEvents((events as Untyped[]) ?? []),
+      steps: findSteps(body.block.extrinsics, txFromCallData),
     };
     records.push(entry);
 
     const previous = records[records.length - 2];
-    if (previous === undefined || previous.state !== entry.state || entry.events.length > 0) {
-      const tail = entry.events.length > 0 ? `  ${entry.events.join(" | ")}` : "";
-      console.log(`  #${entry.number} ${entry.state} [schedules=${entry.scheduled}]${tail}`);
+    if (
+      previous === undefined ||
+      previous.state !== entry.state ||
+      entry.events.length > 0 ||
+      entry.steps.length > 0
+    ) {
+      console.log(`  #${entry.number} ${describeRecord(entry)}`);
     }
 
     const failed = entry.events.find(line => line.startsWith("System.ExtrinsicFailed"));
@@ -240,13 +331,44 @@ export function startMonitor(client: PeopleClient, api: PeopleApi) {
   };
 
   const timeline = (): string =>
-    records
-      .map(
-        entry =>
-          `  #${entry.number} t=${entry.chainTime} ${entry.state} [schedules=${entry.scheduled}]` +
-          (entry.events.length > 0 ? ` ${entry.events.join(" | ")}` : ""),
-      )
-      .join("\n");
+    records.map(entry => `  #${entry.number} t=${entry.chainTime} ${describeRecord(entry)}`).join("\n");
+
+  /**
+   * When the game steps landed, over every block recorded so far.
+   *
+   * The lag of a step is the number of blocks from the block whose offchain worker submitted it to
+   * the block that includes it. A lag of 1 is the next block. A due block is a block whose parent
+   * left the game in a state with a step due, see `stepDueAfter`.
+   */
+  const stepReport = (): string => {
+    const lags = new Map<number, number>();
+    let landed = 0;
+    let due = 0;
+    let dueWithStep = 0;
+    for (const [index, entry] of records.entries()) {
+      for (const step of entry.steps) {
+        const lag = entry.number - step.submittedAt;
+        lags.set(lag, (lags.get(lag) ?? 0) + 1);
+        landed += 1;
+      }
+      const parent = records[index - 1];
+      if (parent !== undefined && parent.number + 1 === entry.number && stepDueAfter(parent.state)) {
+        due += 1;
+        if (entry.steps.length > 0) {
+          dueWithStep += 1;
+        }
+      }
+    }
+    const lagCounts = [...lags.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([lag, count]) => `${lag}: ${count}`)
+      .join(", ");
+    const share = due > 0 ? ` (${Math.round((100 * dueWithStep) / due)}%)` : "";
+    return [
+      `  steps landed: ${landed}, by blocks after the submitting block: ${lagCounts || "none"}`,
+      `  blocks with a step due: ${due}, with a step landed: ${dueWithStep}${share}`,
+    ].join("\n");
+  };
 
   const fail = (message: string): never => {
     throw new Error(
@@ -265,6 +387,7 @@ export function startMonitor(client: PeopleClient, api: PeopleApi) {
   return {
     records,
     timeline,
+    stepReport,
     newLogLines,
 
     /**

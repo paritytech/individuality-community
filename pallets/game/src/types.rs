@@ -306,13 +306,16 @@ pub struct GameInfo<AccountId: Into<sp_statement_store::AccountId>> {
 	/// settled. Settlement happens *early* when an incoming `report` makes a
 	/// named player's tally decisive (via `try_early_attendance_enactment`),
 	/// or *late* when `player_process_step1` resolves the rest after `report_ends`.
-	/// When the counter reaches zero before `report_ends`, the `end_reporting` step
-	/// is due early instead of waiting for the deadline.
+	/// When the counter is zero between `game_date` and `report_ends`, the `end_reporting` step
+	/// leaves the reporting phase early instead of waiting for the deadline.
 	pub pending_attendance: u32,
 	/// The number of airdrop events successfully scheduled for this game; the events carry the
 	/// airdrop indices `0..airdrops_scheduled`. Scheduling stops at the first failure, so this
 	/// can be less than the schedule's airdrop count. Bounded by `MAX_GAME_AIRDROPS`.
 	pub airdrops_scheduled: u8,
+	/// The time from which a registered player can claim tenure credits, in seconds
+	/// since Unix epoch. Tenure claims close at `game_date`.
+	pub tenure_claim_opens: u32,
 }
 
 /// The state of a game.
@@ -510,6 +513,12 @@ pub struct GameSchedule<AssetId, Balance> {
 	/// The airdrop events to schedule for this game, each drawn at its own offset relative to
 	/// the game play time. Empty skips airdrop scheduling for this game.
 	pub airdrops: BoundedVec<GameAirdrop<AssetId, Balance>, ConstU32<{ MAX_GAME_AIRDROPS as u32 }>>,
+	/// The seconds before `game_play_time` from which a registered player can claim
+	/// tenure credits. Zero gives the game no tenure claim window.
+	///
+	/// A player must be signed up to claim, so tenure claims open no earlier than the game's
+	/// registration.
+	pub tenure_claim_window: u32,
 }
 
 /// `GameSchedule` for the runtime.
@@ -654,4 +663,16 @@ pub fn into_registration_entry<AccountId>(
 		AccountOrPerson::Account(account_id) => RegistrationEntry::Account { account_id },
 		AccountOrPerson::Person(alias) => RegistrationEntry::Alias { alias },
 	}
+}
+
+/// The number of games a player attended while recognised as a person.
+pub type GamesAttended = u32;
+
+/// Whether a player attended a game, as the game decides it once their attendance is final.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Attendance {
+	/// The player attended.
+	Attended,
+	/// The player did not attend.
+	Absent,
 }

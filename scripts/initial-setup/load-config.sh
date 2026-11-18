@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # load-config.sh - sources the right config for the target environment.
 # Usage: source ./load-config.sh (from any script in this directory)
-# Set ENV to "local" before sourcing.
+# Set ENV to "next", "preview", or "local" before sourcing.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV="${ENV:-local}"
 
-if [[ ! "$ENV" =~ ^local$ ]]; then
-  echo "ERROR: ENV must be 'local'. Got: '$ENV'" >&2
+if [[ ! "$ENV" =~ ^(next|preview|local)$ ]]; then
+  echo "ERROR: ENV must be 'next', 'preview', or 'local'. Got: '$ENV'" >&2
   exit 1
 fi
 
@@ -26,7 +26,8 @@ REQUIRED_PER_ENV_VARS=(
   PARACHAIN_ID_ASSET_HUB PARACHAIN_ID_BULLETIN PARACHAIN_ID_PEOPLE
   SIGNER_PEOPLE_SUDO SIGNER_AH_SUDO SIGNER_ATTESTATION SIGNER_ASSET_OWNER
   ACCOUNT_PEOPLE_SUDO ACCOUNT_PEOPLE_SUDO_PROXY ACCOUNT_AH_SUDO
-  ACCOUNT_ATTESTATION ACCOUNT_ATTESTATION_PROXY ACCOUNT_ASSET_OWNER ACCOUNT_FAUCET
+  ACCOUNT_ATTESTATION ACCOUNT_ATTESTATION_WRITER ACCOUNT_ATTESTATION_INVITER
+  ACCOUNT_ASSET_OWNER ACCOUNT_FAUCET
   DOTNSGATEWAY_DISPATCHER_ADDRESS
 )
 missing_vars=()

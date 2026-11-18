@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Transfers USDT, USDC from AssetHub to the faucet account on People via XCM.
+# Transfers dotUSD, USDT, USDC from the asset owner on AssetHub to the faucet account on People.
+# Must run after 03e and 04b (set the dotUSD, USDT and USDC conversion rates).
 set -euo pipefail
 source ./load-config.sh
 source ./utils.sh
@@ -9,8 +10,9 @@ reserve_topup=$((FAUCET_RESERVE_TOPUP_PAS * 10**NATIVE_DECIMALS))
 
 # (symbol, asset_id, decimals, whole_tokens, transfer_type)
 ASSETS=(
-  "USDT  $USDT_ASSET_ID  $USDT_DECIMALS  10000    LocalReserve"
-  "USDC  $USDC_ASSET_ID  $USDC_DECIMALS  10000    LocalReserve"
+  "dotUSD  $DOTUSD_ASSET_ID  $DOTUSD_DECIMALS  $FAUCET_FUND_STABLECOINS  Teleport"
+  "USDT    $USDT_ASSET_ID    $USDT_DECIMALS    $FAUCET_FUND_STABLECOINS  LocalReserve"
+  "USDC    $USDC_ASSET_ID    $USDC_DECIMALS    $FAUCET_FUND_STABLECOINS  LocalReserve"
 )
 
 ensure_sibling_reserve_funded() {
@@ -24,7 +26,7 @@ ensure_sibling_reserve_funded() {
   fi
 }
 
-xcm_transfer_asset_to_people() {
+transfer_asset_to_people_faucet() {
   local symbol="$1" asset_id="$2" decimals="$3" whole="$4" transfer_type="$5"
   local fund_units=$((whole * 10**decimals))
 
@@ -42,15 +44,17 @@ xcm_transfer_asset_to_people() {
     echo "$symbol already funded - skipping"
     return
   fi
-  if ! int_ge "$on_ah" "$fund_units"; then
-    echo "ERROR: Source short of $symbol on AssetHub: need $fund_units, have $on_ah" >&2
+  # The XCM fee comes out of the transfer, so add one whole token on top of the shortfall.
+  local amount=$(( fund_units - on_people + 10**decimals ))
+  if ! int_ge "$on_ah" "$amount"; then
+    echo "ERROR: Source short of $symbol on AssetHub: need $amount, have $on_ah" >&2
     exit 1
   fi
 
   local asset_local dest assets remote_fees_id custom_xcm
   asset_local=$(ah_local_location "$asset_id")
   dest='{"type":"V4","value":{"parents":1,"interior":{"type":"X1","value":[{"type":"Parachain","value":'"$PARACHAIN_ID_PEOPLE"'}]}}}'
-  assets='{"type":"V4","value":[{"id":'"$asset_local"',"fun":{"type":"Fungible","value":"'"$fund_units"'"}}]}'
+  assets='{"type":"V4","value":[{"id":'"$asset_local"',"fun":{"type":"Fungible","value":"'"$amount"'"}}]}'
   remote_fees_id='{"type":"V4","value":'"$asset_local"'}'
   custom_xcm='{"type":"V4","value":[{"type":"DepositAsset","value":{"assets":{"type":"Wild","value":{"type":"All"}},"beneficiary":{"parents":0,"interior":{"type":"X1","value":{"type":"AccountId32","value":{"network":null,"id":"'"$target_id32"'"}}}}}}]}'
 
@@ -59,10 +63,10 @@ xcm_transfer_asset_to_people() {
     --from "$SIGNER_ASSET_OWNER"
 }
 
-echo "Funding faucet $ACCOUNT_FAUCET (id32=$target_id32) via XCM from AssetHub"
+echo "Funding faucet $ACCOUNT_FAUCET on People from the asset owner on AssetHub"
 ensure_sibling_reserve_funded
 
 for row in "${ASSETS[@]}"; do
   read -r symbol asset_id decimals whole transfer_type <<<"$row"
-  xcm_transfer_asset_to_people "$symbol" "$asset_id" "$decimals" "$whole" "$transfer_type"
+  transfer_asset_to_people_faucet "$symbol" "$asset_id" "$decimals" "$whole" "$transfer_type"
 done

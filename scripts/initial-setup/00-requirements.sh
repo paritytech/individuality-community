@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs dot CLI and jq, imports signer accounts.
+# Installs dot CLI, jq and bc, imports signer accounts and checks them against the config.
 # Run this once before using other scripts. Chain aliases are registered by load-config.sh.
 set -euo pipefail
 
@@ -11,8 +11,10 @@ source "$SCRIPT_DIR/config-base.env"
 source "$SCRIPT_DIR/config-${ENV}.env"
 
 ensure_dot_installed() {
-  if ! command -v dot >/dev/null 2>&1; then
-    echo "dot not found. Installing polkadot-cli@$REQUIRED_DOT_VERSION globally..."
+  local version
+  version=$(dot --version 2>/dev/null | sed -E 's|^dot/([^ ]+).*|\1|' || true)
+  if [ "$(printf '%s\n' "$REQUIRED_DOT_VERSION" "$version" | sort -V | head -1)" != "$REQUIRED_DOT_VERSION" ]; then
+    echo "dot not found or older than $REQUIRED_DOT_VERSION. Installing polkadot-cli@$REQUIRED_DOT_VERSION globally..."
     npm install -g "polkadot-cli@$REQUIRED_DOT_VERSION"
   fi
 
@@ -56,9 +58,24 @@ ensure_bc_installed() {
     return
   fi
 
-  echo "ERROR: bc is not installed." >&2
-  echo "Install bc and rerun this script." >&2
-  exit 1
+  echo "bc not found. Attempting to install bc..."
+  if command -v brew >/dev/null 2>&1; then
+    brew install bc
+  elif command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y bc
+  else
+    echo "ERROR: bc is not installed and no supported package manager was found." >&2
+    echo "Install bc manually and rerun this script." >&2
+    exit 1
+  fi
+
+  if ! command -v bc >/dev/null 2>&1; then
+    echo "ERROR: bc is still not available after install." >&2
+    exit 1
+  fi
+
+  echo "bc is available: $(bc --version 2>/dev/null | head -1 || echo unknown version)"
 }
 
 ensure_npm_installed() {
@@ -72,6 +89,18 @@ ensure_npm_installed() {
   exit 1
 }
 
+ensure_signer_matches() {
+  local signer="$1" account="$2" signer_key account_key
+  signer_key=$(dot account inspect "$signer" --output json | jq -r .publicKey)
+  account_key=$(dot account inspect "$account" --output json | jq -r .publicKey)
+  if [ "$signer_key" != "$account_key" ]; then
+    echo "ERROR: signer '$signer' does not match the configured account $account" >&2
+    exit 1
+  fi
+
+  echo "Signer '$signer' matches $account"
+}
+
 ensure_people_sudo_account() {
   if ! dot account inspect $SIGNER_PEOPLE_SUDO >/dev/null 2>&1; then
     echo "'$SIGNER_PEOPLE_SUDO' account is not available, trying to add it..."
@@ -83,7 +112,7 @@ ensure_people_sudo_account() {
     echo "Added $SIGNER_PEOPLE_SUDO account using PEOPLE_SUDO_MNEMONIC"
   fi
 
-  echo "SIGNER_PEOPLE_SUDO is available"
+  ensure_signer_matches "$SIGNER_PEOPLE_SUDO" "$ACCOUNT_PEOPLE_SUDO"
 }
 
 ensure_ah_sudo_account() {
@@ -97,7 +126,7 @@ ensure_ah_sudo_account() {
     echo "Added $SIGNER_AH_SUDO account using AH_SUDO_MNEMONIC"
   fi
 
-  echo "SIGNER_AH_SUDO is available"
+  ensure_signer_matches "$SIGNER_AH_SUDO" "$ACCOUNT_AH_SUDO"
 }
 
 ensure_attestation_account() {
@@ -110,7 +139,8 @@ ensure_attestation_account() {
     dot account add $SIGNER_ATTESTATION --env ATTESTATION_MNEMONIC
     echo "Added $SIGNER_ATTESTATION account using ATTESTATION_MNEMONIC"
   fi
-  echo "SIGNER_ATTESTATION is available"
+
+  ensure_signer_matches "$SIGNER_ATTESTATION" "$ACCOUNT_ATTESTATION"
 }
 
 ensure_asset_owner_account() {
@@ -124,7 +154,7 @@ ensure_asset_owner_account() {
     echo "Added $SIGNER_ASSET_OWNER account using ASSET_OWNER_MNEMONIC"
   fi
 
-  echo "SIGNER_ASSET_OWNER is available"
+  ensure_signer_matches "$SIGNER_ASSET_OWNER" "$ACCOUNT_ASSET_OWNER"
 }
 
 ensure_npm_installed

@@ -55,6 +55,20 @@ One line per state change and per `Game.*` event, then the full timeline at the 
   ...
 ```
 
+A block that includes a game step names it with the block whose offchain worker submitted it, for
+example `advance_shuffle(submitted at #480)`. The run ends with a step landing summary:
+
+```
+--- game step landing ---
+  steps landed: <n>, by blocks after the submitting block: 1: <n>, 2: <n>
+  blocks with a step due: <n>, with a step landed: <n> (<share>%)
+```
+
+The first line counts the blocks from submission to inclusion. A lag of 1 is the next block. The
+second line counts the blocks after a shuffle, player process or cancellation state, where a step is
+always due. Its share is the fraction of blocks that run a step. Block time matters: the offchain
+worker of block N must submit before block N+1 is built.
+
 ## Notes
 
 - **Phase durations.** Defaults are 60/120/24/60/60 seconds against the runtime's 300/60/30/600/60.

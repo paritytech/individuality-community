@@ -30,6 +30,7 @@ pub mod members_notifier_subscriber;
 pub mod offchain;
 pub mod parameters;
 pub mod pgas;
+pub mod statement_allowance;
 pub mod traits;
 pub mod tx_priority;
 pub mod weight_budget;
