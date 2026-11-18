@@ -317,8 +317,8 @@ pub mod pallet {
 		InvalidAttestationSignature,
 		/// The reservation signature is older than [`Config::MaxValiditySeconds`].
 		ReservationSignatureExpired,
-		/// The reservation signature claims to have been created more than
-		/// [`Config::MaxValiditySeconds`] ahead of chain time.
+		/// The reservation signature is dated more than [`Config::MaxFutureSkewSeconds`] ahead of
+		/// chain time.
 		ReservationSignatureFromFuture,
 		/// The `Link::LiteUsername` target is not owned by the caller (or has
 		/// no on-chain ownership record).
