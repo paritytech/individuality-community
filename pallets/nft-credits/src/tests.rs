@@ -3518,8 +3518,8 @@ mod claim_tenure_credits {
 	// The tenure claim is the game's, so its calls, storage, errors, events and weights shadow this
 	// pallet's of the same name.
 	use indiv_pallet_game::{
-		Call, CancellingStep, Error, Event, GamesAttended, TenureClaims, TenureThresholds,
-		WeightInfo,
+		Call, CancellingStep, Error, Event, GamesAttended, PlayerRegistration, TenureClaims,
+		TenureThresholds, WeightInfo,
 	};
 	use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
 	use indiv_pallet_score::{Participants, Recognition};
@@ -4257,6 +4257,90 @@ mod claim_tenure_credits {
 	}
 
 	#[test]
+	fn a_cancelled_game_clears_the_slots_of_every_claimant() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			sign_up_recognised(&EVE);
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_ok!(claim_tenure_credits(&EVE));
+
+			// EVE unregisters with her awarded slot. ALICE stays registered with hers.
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(EVE)));
+			assert_eq!(slots(game, &ALICE).count(), 1);
+			assert_eq!(slots(game, &EVE).count(), 1);
+
+			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
+			while GameStore::<Test>::get().is_some() {
+				advance_process();
+			}
+
+			assert_eq!(AwardedNftClaimCredits::<Test>::iter().count(), 0);
+			assert_eq!(TenureClaims::<Test>::iter().count(), 0);
+		});
+	}
+
+	#[test]
+	fn a_player_that_unregisters_keeps_their_tenure_claim_and_is_paid_as_an_absent_player() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			sign_up(&EVE);
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 1);
+
+			// One of ALICE's credits fits the buffers now. EVE is not a person and is awarded
+			// nothing before the game.
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_ok!(claim_tenure_credits(&EVE));
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(EVE)));
+
+			assert_eq!(tenure_claim_of(&ALICE), Some(2));
+			assert_eq!(tenure_claim_of(&EVE), Some(1));
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+
+			play_to_end(&[BOB, CHARLIE, DAVE]);
+
+			// The attendance backfill pays a person the rest of a tenure claim, and pays an
+			// absent account that is not a person nothing.
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1]);
+			assert_eq!(awarded_tenure_credits(game, &EVE), Vec::<u32>::new());
+			assert_eq!(TenureClaims::<Test>::iter().count(), 0);
+		});
+	}
+
+	#[test]
+	fn a_player_that_unregisters_cannot_claim_tenure_credits_again() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 1);
+
+			// One credit fits the buffers now.
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			// A tenure claim takes a registered player, and ALICE cannot sign up again.
+			assert_err_ignore_postinfo!(claim_tenure_credits(&ALICE), Error::<Test>::NotRegistered);
+			assert_noop!(
+				Game::sign_up_with_account(
+					RuntimeOrigin::signed(ALICE),
+					DEFAULT_IDENTIFIER_KEY,
+					None
+				),
+				Error::<Test>::UnregisteredFromGame
+			);
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+		});
+	}
+
+	#[test]
 	fn a_tenure_claim_without_a_game_is_refused() {
 		new_test_ext().execute_with(|| {
 			assert_err_ignore_postinfo!(claim_tenure_credits(&ALICE), Error::<Test>::NoGame);
@@ -4278,7 +4362,7 @@ mod claim_tenure_credits {
 			// ALICE played the previous game, but did not sign up for this one.
 			let player = Players::<Test>::get(AccountOrPerson::Account(ALICE))
 				.expect("ALICE stays a player after the game");
-			assert!(!player.registered);
+			assert_eq!(player.registration, PlayerRegistration::NotRegistered);
 			let refused = claim_tenure_credits(&ALICE).expect_err("ALICE did not sign up");
 			assert_eq!(refused.error, Error::<Test>::NotRegistered.into());
 			assert_eq!(refused.post_info.pays_fee, Pays::Yes);

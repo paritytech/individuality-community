@@ -154,6 +154,43 @@ fn account_participant_checks_in() {
 	});
 }
 
+// An account participant has no fee allowance, so the call runs only as a one-time excess.
+#[test]
+fn account_participant_unregisters() {
+	new_test_ext().execute_with(|| {
+		let bob_pair = Sr25519Keyring::Bob.pair();
+		let bob = Sr25519Keyring::Bob.to_account_id();
+
+		reduce_game_phase_durations();
+		let now = (pallet_timestamp::Now::<Runtime>::get() / 1000) as u32;
+		let schedule = indiv_pallet_game::GameSchedule {
+			game_play_time: now + IN_BETWEEN_GAMES,
+			rounds: 1,
+			max_group_size: 2,
+			airdrops: Default::default(),
+			tenure_claim_window: 0,
+		};
+		Game::schedule_games(RuntimeOrigin::root(), vec![schedule]).unwrap();
+
+		let funding = PlayDepositDefault::get().saturating_add(Balances::minimum_balance());
+		Balances::mint_into(&bob, funding.saturating_mul(2)).unwrap();
+
+		advance_block();
+		let signup = indiv_pallet_game::Call::<Runtime>::sign_up_with_account {
+			identifier_key: [10u8; 65],
+			airdrops: None,
+		};
+		exec_signed(&bob_pair, signup.into());
+
+		let unregister = indiv_pallet_game::Call::<Runtime>::unregister {};
+		exec_signed_as_score_participant(&bob_pair, unregister.into());
+
+		let player = indiv_pallet_game::Players::<Runtime>::get(AccountOrPerson::Account(bob))
+			.expect("an unregistered player stays a player");
+		assert_eq!(player.registration, indiv_pallet_game::PlayerRegistration::Unregistered);
+	});
+}
+
 #[test]
 fn deposit_player_flow() {
 	new_test_ext().execute_with(|| {
