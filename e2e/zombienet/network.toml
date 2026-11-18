@@ -79,10 +79,6 @@ args = [
 	"--rpc-max-connections=500",
 	"--rpc-max-response-size=50",
 	"-lxcm=debug",
-	# Arguments after `--` configure the embedded relay node. It uses libp2p like the relay
-	# validators, because litep2p cannot read the DNS configuration on some macOS hosts.
-	"--",
-	"--network-backend=libp2p",
 ]
 
 # ----- Asset Hub (para 1500) -----
@@ -105,10 +101,6 @@ args = [
 	"--rpc-max-connections=500",
 	"--rpc-max-response-size=50",
 	"-lxcm=debug",
-	# Arguments after `--` configure the embedded relay node. It uses libp2p like the relay
-	# validators, because litep2p cannot read the DNS configuration on some macOS hosts.
-	"--",
-	"--network-backend=libp2p",
 ]
 
 # NOTE: HRMP channels are intentionally NOT declared here.
