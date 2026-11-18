@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Creates USDT and USDC as foreign assets on People with metadata.
+# Creates USDT and USDC as foreign assets on People with metadata and conversion rates.
+# Rates align with the 1:4 ratio used in AssetHub liquidity pools.
 set -euo pipefail
 source ./load-config.sh
 source ./utils.sh
@@ -36,6 +37,25 @@ setup_foreign_asset() {
   else
     echo "$symbol metadata already set on People:"
     echo "$metadata" | jq
+  fi
+
+  echo "-> Set $symbol conversion rate on People"
+  # 1 PAS = 4 USDT or USDC
+  local rate current_rate
+  rate=$(echo "10^18 * 10^$NATIVE_DECIMALS / (4 * 10^$decimals)" | bc)
+  current_rate=$(dot people.query.AssetRate.ConversionRateToNative "$asset_location" | tr -d '"')
+  if [ "$current_rate" == "undefined" ]; then
+    echo "No $symbol rate set, creating"
+    local create_rate_call
+    create_rate_call=$(dot --encode people.tx.AssetRate.create "$asset_location" "$rate")
+    dot people.tx.Sudo.sudo "$create_rate_call" --from "$SIGNER_PEOPLE_SUDO"
+  elif [ "$current_rate" != "$rate" ]; then
+    echo "$symbol rate mismatch (current=$current_rate, expected=$rate), updating"
+    local update_rate_call
+    update_rate_call=$(dot --encode people.tx.AssetRate.update "$asset_location" "$rate")
+    dot people.tx.Sudo.sudo "$update_rate_call" --from "$SIGNER_PEOPLE_SUDO"
+  else
+    echo "$symbol rate already correct: $current_rate"
   fi
 }
 

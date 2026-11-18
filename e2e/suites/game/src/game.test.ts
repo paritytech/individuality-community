@@ -150,6 +150,7 @@ describe.skipIf(!RUN_ZOMBIENET_TESTS)("game offchain worker drives the game stat
       // The filter was never raised.
     }
     console.log(`--- timeline ---\n${monitor?.timeline() ?? ""}`);
+    console.log(`--- game step landing ---\n${monitor?.stepReport() ?? ""}`);
     chain?.client.destroy();
   });
 

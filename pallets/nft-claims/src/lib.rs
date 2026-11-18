@@ -721,9 +721,9 @@ pub mod pallet {
 		/// - `collection`: The Scarcity collection the NFT is minted into, which has to be
 		///   registered through [`Pallet::set_collection_minter`]. Its [`ItemSelection`] decides
 		///   the item.
-		/// - `mint_to`: The Scarcity purse key the NFT is minted to. A purse key holds one NFT, so
-		///   this has to be an empty one, and holders are meant to use a fresh key they control
-		///   rather than an account that already holds something.
+		/// - `mint_to`: The Scarcity purse key or contract the NFT is minted to. A purse key must
+		///   be empty, and a holder should use a fresh key they control. A contract takes any
+		///   number.
 		///
 		/// The claim that spends the tree's last credit also removes the tree and queues its
 		/// deletion for the game chain, and the call is charged for that. The claims that came

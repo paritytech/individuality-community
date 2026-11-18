@@ -143,13 +143,18 @@ export function playTimes(from: number, count: number, phases = PHASES, slack = 
   return Array.from({ length: count }, (_value, index) => first + index * spacing);
 }
 
-/** Queues one game per play time. One player per group is enough on a `TESTNET` runtime. */
+/**
+ * Queues one game per play time. One player per group is enough on a `TESTNET` runtime.
+ *
+ * The suite claims no tenure credits, so `tenure_claim_window` is zero and the window is empty.
+ */
 export async function scheduleGames(api: PeopleApi, sudo: Sudo, times: number[]): Promise<void> {
   const games_schedules = times.map(game_play_time => ({
     game_play_time,
     rounds: 1,
     max_group_size: 3,
     airdrops: [],
+    tenure_claim_window: 0,
   }));
   await sudo(
     api.tx.Game.schedule_games({ games_schedules }).decodedCall,
