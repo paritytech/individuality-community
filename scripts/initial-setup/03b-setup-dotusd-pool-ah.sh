@@ -21,10 +21,10 @@ if [ "$dotusd_reserves" == "undefined" ] || [ "$dotusd_reserves" == "null" ]; th
 else
   native_reserve=$(echo "$dotusd_reserves" | jq -r '.[0] // "0"')
 fi
-native_max=$(( 1000 * 10**NATIVE_DECIMALS ))
-native_min=$(( 500 * 10**NATIVE_DECIMALS ))
-dotusd_max=$(( 4000 * 10**DOTUSD_DECIMALS ))
-dotusd_min=$(( 2000 * 10**DOTUSD_DECIMALS ))
+native_max=$(( 50000 * 10**NATIVE_DECIMALS ))
+native_min=$(( 25000 * 10**NATIVE_DECIMALS ))
+dotusd_max=$(( 200000 * 10**DOTUSD_DECIMALS ))
+dotusd_min=$(( 100000 * 10**DOTUSD_DECIMALS ))
 if [ "$native_reserve" == "null" ] || [ "$native_reserve" -lt "$native_max" ]; then
   echo "Pool liquidity insufficient (native=$native_reserve), adding liquidity (1:4 ratio)"
   dot asset-hub.tx.AssetConversion.add_liquidity "$NATIVE_TOKEN" "$dotusd_local" $native_max $dotusd_max $native_min $dotusd_min "$ACCOUNT_ASSET_OWNER" --from "$SIGNER_ASSET_OWNER"

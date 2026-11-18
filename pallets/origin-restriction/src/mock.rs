@@ -213,8 +213,19 @@ impl BlockNumberProvider for MockRelayBlockNumberProvider {
 	}
 }
 
+pub struct MockWeightInfo;
+impl crate::WeightInfo for MockWeightInfo {
+	fn clean_usage() -> Weight {
+		Weight::zero()
+	}
+
+	fn restrict_origin_tx_ext() -> Weight {
+		Weight::zero()
+	}
+}
+
 impl crate::Config for Test {
-	type WeightInfo = ();
+	type WeightInfo = MockWeightInfo;
 	type BlockNumberProvider = MockRelayBlockNumberProvider;
 	type RestrictedEntity = RuntimeRestrictedEntity;
 	type OperationAllowedOneTimeExcess = TestOperationAllowedOneTimeExcess;

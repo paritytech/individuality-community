@@ -190,7 +190,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 3_004_000,
+	spec_version: 3_005_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 22,
@@ -1170,6 +1170,10 @@ impl indiv_pallet_scarcity::Config for Runtime {
 	// The collections are exposed as ERC-721 contracts, whose `name`, `symbol` and `tokenURI`
 	// are `string`. Held here so the rule covers the extrinsics too, not only the precompile.
 	type MetadataPolicy = indiv_precompile_scarcity::Erc721MetadataPolicy<Runtime>;
+	// A deployed contract holds any number of instances, so a game can keep several players'
+	// stakes. Every other key receives one while it holds none, and an address whose code is
+	// gone keeps what it held.
+	type ContractAccounts = indiv_precompile_scarcity::ReviveContracts<Runtime>;
 }
 
 /// XCM router instance to BridgeHub with bridging capabilities for `Kusama` global
@@ -3201,6 +3205,7 @@ pub mod migrations {
 	pub type MbmMigrations = (
 		pallet_revive::migrations::v3::Migration<Runtime>,
 		pallet_revive::migrations::v4::Migration<Runtime>,
+		indiv_pallet_scarcity::migration::v3::MigrateToLocations<Runtime>,
 	);
 }
 
@@ -3360,9 +3365,9 @@ mod benches {
 		[pallet_bags_list, VoterList]
 		// DelegatedStaking has no calls
 		[pallet_election_provider_multi_block, MultiBlockElection]
-		[pallet_election_provider_multi_block_verifier, MultiBlockElectionVerifier]
-		[pallet_election_provider_multi_block_unsigned, MultiBlockElectionUnsigned]
-		[pallet_election_provider_multi_block_signed, MultiBlockElectionSigned]
+		[pallet_election_provider_multi_block::verifier, MultiBlockElectionVerifier]
+		[pallet_election_provider_multi_block::unsigned, MultiBlockElectionUnsigned]
+		[pallet_election_provider_multi_block::signed, MultiBlockElectionSigned]
 	);
 
 	use frame_benchmarking::BenchmarkError;
