@@ -31,10 +31,18 @@ runs:
           exit 1
         fi
 
+    # Make setup-node use the Node.js version from this repository, not from the caller's workspace.
+    - name: Read Node.js version
+      id: node
+      shell: bash
+      run: |
+        version=$(cat "$GITHUB_ACTION_PATH/../../../e2e/.nvmrc")
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
     - name: Setup Node.js
       uses: actions/setup-node@v6
       with:
-        node-version-file: e2e/.nvmrc
+        node-version: ${{ steps.node.outputs.version }}
 
     - name: Run initial setup
       shell: bash
@@ -47,4 +55,4 @@ runs:
         HOME: ${{ runner.temp }}/initial-setup-home
       run: |
         mkdir -p "$HOME"
-        scripts/initial-setup/start.sh "$TARGET_ENV"
+        "$GITHUB_ACTION_PATH/../../../scripts/initial-setup/start.sh" "$TARGET_ENV"

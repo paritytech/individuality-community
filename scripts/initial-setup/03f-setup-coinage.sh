@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Creates the Coinage instance wrapping dotUSD on People.
-# Must run after 03d (creates dotUSD as foreign asset on People).
+# Must run after 03d (creates dotUSD as a foreign asset on People).
 set -euo pipefail
 source ./load-config.sh
 source ./utils.sh
