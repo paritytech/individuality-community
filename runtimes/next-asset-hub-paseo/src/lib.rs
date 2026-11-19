@@ -140,7 +140,6 @@ use parachains_common::{
 };
 
 use pallet_revive::evm::runtime::EthExtra;
-pub use system_parachains_constants::async_backing::SLOT_DURATION;
 use system_parachains_constants::{
 	async_backing::{
 		AVERAGE_ON_INITIALIZE_RATIO, HOURS, MAXIMUM_BLOCK_WEIGHT, NORMAL_DISPATCH_RATIO,
@@ -196,6 +195,9 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	transaction_version: 22,
 	system_version: 1,
 };
+
+/// The Aura slot duration in milliseconds. One collator authors every block in a 24s slot.
+pub const SLOT_DURATION: u64 = 24_000;
 
 parameter_types! {
 	pub const Version: RuntimeVersion = VERSION;
