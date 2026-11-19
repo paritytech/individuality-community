@@ -70,7 +70,11 @@ pub trait WeightInfo {
 	fn delete_collection() -> Weight;
 	fn claim_collection_ownership() -> Weight;
 	fn as_scarcity_pipeline() -> Weight;
+	fn pledge() -> Weight;
+	fn seize() -> Weight;
+	fn release() -> Weight;
 	fn migrate_location() -> Weight;
+	fn migrate_pledge() -> Weight;
 }
 
 /// Weights for `indiv_pallet_scarcity` using the Substrate node and recommended hardware.
@@ -414,6 +418,38 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(6_u64))
 			.saturating_add(T::DbWeight::get().writes(2_u64))
 	}
+	/// Not yet benchmarked: the values of `transfer`, which reads as much and writes more, with
+	/// the proof widened by the pledge.
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	fn pledge() -> Weight {
+		Weight::from_parts(26_155_000, 3594)
+			.saturating_add(T::DbWeight::get().reads(3_u64))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+	}
+	/// Not yet benchmarked: the values of `force_transfer`, which reads as much and also the
+	/// collection, with the proof widened by the pledge on both keys.
+	/// Storage: `Scarcity::Instances` (r:1 w:1)
+	/// Storage: `Scarcity::NftsByOwner` (r:2 w:2)
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::Locked` (r:0 w:1)
+	fn seize() -> Weight {
+		Weight::from_parts(43_175_000, 6198)
+			.saturating_add(T::DbWeight::get().reads(5_u64))
+			.saturating_add(T::DbWeight::get().writes(4_u64))
+	}
+	/// Not yet benchmarked: the values of `transfer_by_holder`, which reads and writes more, with
+	/// the proof widened by the pledge.
+	/// Storage: `Scarcity::Instances` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	fn release() -> Weight {
+		Weight::from_parts(29_445_000, 6157)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(4_u64))
+	}
 	/// Storage: `Scarcity::Instances` (r:2 w:1)
 	/// Proof: `Scarcity::Instances` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
 	/// Storage: `Scarcity::NftsByOwner` (r:1 w:0)
@@ -425,6 +461,15 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		// Minimum execution time: 16_544_000 picoseconds.
 		Weight::from_parts(17_877_000, 6046)
 			.saturating_add(T::DbWeight::get().reads(3_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
+	/// Not yet benchmarked: the values of `migrate_location`, with the proof widened by a
+	/// `ContractNfts` entry. The worst step finds no purse key left and translates a contract NFT.
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:0)
+	/// Storage: `Scarcity::ContractNfts` (r:1 w:1)
+	fn migrate_pledge() -> Weight {
+		Weight::from_parts(17_389_000, 6230)
+			.saturating_add(T::DbWeight::get().reads(2_u64))
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
 }
@@ -769,6 +814,38 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads(6_u64))
 			.saturating_add(RocksDbWeight::get().writes(2_u64))
 	}
+	/// Not yet benchmarked: the values of `transfer`, which reads as much and writes more, with
+	/// the proof widened by the pledge.
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	fn pledge() -> Weight {
+		Weight::from_parts(26_155_000, 3594)
+			.saturating_add(RocksDbWeight::get().reads(3_u64))
+			.saturating_add(RocksDbWeight::get().writes(2_u64))
+	}
+	/// Not yet benchmarked: the values of `force_transfer`, which reads as much and also the
+	/// collection, with the proof widened by the pledge on both keys.
+	/// Storage: `Scarcity::Instances` (r:1 w:1)
+	/// Storage: `Scarcity::NftsByOwner` (r:2 w:2)
+	/// Storage: `Scarcity::ItemDefs` (r:1 w:0)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Scarcity::Locked` (r:0 w:1)
+	fn seize() -> Weight {
+		Weight::from_parts(43_175_000, 6198)
+			.saturating_add(RocksDbWeight::get().reads(5_u64))
+			.saturating_add(RocksDbWeight::get().writes(4_u64))
+	}
+	/// Not yet benchmarked: the values of `transfer_by_holder`, which reads and writes more, with
+	/// the proof widened by the pledge.
+	/// Storage: `Scarcity::Instances` (r:1 w:0)
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:1)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	fn release() -> Weight {
+		Weight::from_parts(29_445_000, 6157)
+			.saturating_add(RocksDbWeight::get().reads(4_u64))
+			.saturating_add(RocksDbWeight::get().writes(4_u64))
+	}
 	/// Storage: `Scarcity::Instances` (r:2 w:1)
 	/// Proof: `Scarcity::Instances` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
 	/// Storage: `Scarcity::NftsByOwner` (r:1 w:0)
@@ -780,6 +857,15 @@ impl WeightInfo for () {
 		// Minimum execution time: 16_544_000 picoseconds.
 		Weight::from_parts(17_877_000, 6046)
 			.saturating_add(RocksDbWeight::get().reads(3_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// Not yet benchmarked: the values of `migrate_location`, with the proof widened by a
+	/// `ContractNfts` entry. The worst step finds no purse key left and translates a contract NFT.
+	/// Storage: `Scarcity::NftsByOwner` (r:1 w:0)
+	/// Storage: `Scarcity::ContractNfts` (r:1 w:1)
+	fn migrate_pledge() -> Weight {
+		Weight::from_parts(17_389_000, 6230)
+			.saturating_add(RocksDbWeight::get().reads(2_u64))
 			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 }
