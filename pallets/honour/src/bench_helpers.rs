@@ -20,7 +20,7 @@
 //! members, verified in-process by the mock `MembershipMultiProver`.
 
 use alloc::vec::Vec;
-use indiv_support::traits::MembershipProver;
+use indiv_support::traits::{Context, MembershipProver};
 use verifiable::{
 	ring::{bandersnatch::BandersnatchVrfVerifiable, RingDomainSize},
 	GenerateVerifiable,
@@ -43,9 +43,22 @@ pub(crate) fn get_mock_ring_members<T: GenerateVerifiable>() -> impl Iterator<It
 	(0..255u8).map(|i| ith_pub_key::<T>(i))
 }
 
-/// Real Ring-VRF proof for benchmarking.
+/// Real Ring-VRF proof for the contexts of a vote.
 pub(crate) fn prove_vote<T: crate::Config>(
 	vote: &crate::VoteData,
+	member: u8,
+	message: &[u8],
+) -> crate::RingProofOf<T>
+where
+	<<T::MemberService as MembershipProver>::Crypto as GenerateVerifiable>::Proof:
+		From<<BandersnatchVrfVerifiable as GenerateVerifiable>::Proof>,
+{
+	prove_contexts::<T>(&vote.get_contexts(), member, message)
+}
+
+/// Real Ring-VRF proof for `contexts`.
+pub(crate) fn prove_contexts<T: crate::Config>(
+	contexts: &[Context],
 	member: u8,
 	message: &[u8],
 ) -> crate::RingProofOf<T>
@@ -60,7 +73,6 @@ where
 		.expect("Failed to create commitment");
 
 	let secret = ith_secret_key::<BandersnatchVrfVerifiable>(member);
-	let contexts = vote.get_contexts();
 	let contexts: Vec<_> = contexts.iter().map(|context| &context[..]).collect();
 	let (proof, _) =
 		BandersnatchVrfVerifiable::create_multi_context(commitment, &secret, &contexts, message)

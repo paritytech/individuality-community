@@ -71,6 +71,18 @@ impl<T: frame_system::Config> indiv_pallet_honour::WeightInfo for WeightInfo<T> 
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(5))
 	}
+	/// Hand-written estimate. The benchmark bot must regenerate this file.
+	///
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Honour::Points` (r:1 w:1)
+	/// Storage: `Honour::Votes` (r:0 w:1)
+	/// Storage: `Honour::Tally` (r:1 w:1)
+	fn clear() -> Weight {
+		Weight::from_parts(35_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3587))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
 	/// Storage: `Timestamp::Now` (r:1 w:0)
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `Members::Collections` (r:1 w:0)
@@ -89,5 +101,25 @@ impl<T: frame_system::Config> indiv_pallet_honour::WeightInfo for WeightInfo<T> 
 		Weight::from_parts(30_761_933_000, 0)
 			.saturating_add(Weight::from_parts(0, 4657))
 			.saturating_add(T::DbWeight::get().reads(5))
+	}
+	/// Hand-written estimate. The benchmark bot must regenerate this file.
+	///
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Members::Collections` (r:1 w:0)
+	/// Storage: `Members::Root` (r:1 w:0)
+	/// Storage: `Honour::Points` (r:1 w:0)
+	fn extension_validate_clear() -> Weight {
+		Weight::from_parts(30_700_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 4657))
+			.saturating_add(T::DbWeight::get().reads(4))
+	}
+	/// Hand-written estimate. The benchmark bot must regenerate this file.
+	///
+	/// Storage: `Honour::Points` (r:2 w:1)
+	fn migrate_v1_step() -> Weight {
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 6183))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 }

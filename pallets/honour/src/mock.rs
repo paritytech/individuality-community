@@ -109,8 +109,8 @@ impl crate::benchmarking::BenchmarkHelper<Test> for BenchmarkHelper {
 		set_time(now);
 	}
 
-	fn seed_and_create_proof(vote: &crate::VoteData, message: &[u8]) -> crate::RingProofOf<Test> {
-		crate::bench_helpers::prove_vote::<Test>(vote, 0, message)
+	fn seed_and_create_proof(contexts: &[Context], message: &[u8]) -> crate::RingProofOf<Test> {
+		crate::bench_helpers::prove_contexts::<Test>(contexts, 0, message)
 	}
 }
 
