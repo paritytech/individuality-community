@@ -841,7 +841,7 @@ impl indiv_pallet_honour::benchmarking::BenchmarkHelper<Runtime> for HonourBench
 	}
 
 	fn seed_and_create_proof(
-		vote: &indiv_pallet_honour::VoteData,
+		contexts: &[Context],
 		message: &[u8],
 	) -> indiv_pallet_honour::RingProofOf<Runtime> {
 		use alloc::{vec, vec::Vec};
@@ -887,7 +887,6 @@ impl indiv_pallet_honour::benchmarking::BenchmarkHelper<Runtime> for HonourBench
 		let commitment = BandersnatchVrfVerifiable::open(domain, &member, ring_members.into_iter())
 			.expect("benchmark: commitment must open");
 
-		let contexts = vote.get_contexts();
 		let contexts: Vec<&[u8]> = contexts.iter().map(|c| &c[..]).collect();
 		let (proof, _) = BandersnatchVrfVerifiable::create_multi_context(
 			commitment, &secret, &contexts, message,

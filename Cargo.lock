@@ -5198,6 +5198,7 @@ dependencies = [
  "frame-support 49.1.0",
  "frame-system 49.0.0",
  "indiv-support",
+ "log",
  "parity-scale-codec",
  "scale-info",
  "sp-core 43.0.0",

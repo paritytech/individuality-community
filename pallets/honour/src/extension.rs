@@ -38,9 +38,59 @@ use sp_runtime::{
 	},
 };
 
-const VALIDATION_TAG: &str = "pallet-honour:bestow";
+/// Tag prefix for every transaction that uses a point.
+///
+/// `bestow` and `clear` share it, so two transactions for the same point conflict in the pool.
+const POINT_TAG: &str = "pallet-honour:point";
 
 type RuntimeCallOf<T> = <T as frame_system::Config>::RuntimeCall;
+
+/// Check the state preconditions of a `bestow` call.
+fn ensure_can_bestow<T: Config>(
+	vote: &VoteData,
+	aliases: &VoteAliases,
+	now: Seconds,
+) -> Result<(), InvalidTransaction> {
+	let point = Points::<T>::get(aliases.point_alias);
+
+	match &point {
+		// The point already holds the vote of this voter for this subject. Only a change of
+		// direction is a new vote.
+		Some(PointInfo::Active { subject_alias, direction, .. })
+			if *subject_alias == aliases.subject_alias =>
+			if *direction == vote.direction {
+				return Err(InvalidTransaction::Stale);
+			},
+		// Another point of this voter holds the vote for this subject.
+		_ =>
+			if Votes::<T>::contains_key(aliases.subject_alias) {
+				return Err(InvalidTransaction::Stale);
+			},
+	}
+
+	// The end of the freeze does not make a stale vote valid, so the freeze check comes last.
+	if point.is_some_and(|point| Pallet::<T>::is_point_frozen(&point, now)) {
+		return Err(InvalidTransaction::Future);
+	}
+
+	Ok(())
+}
+
+/// Check the state preconditions of a `clear` call.
+fn ensure_can_clear<T: Config>(
+	point_alias: &PointAlias,
+	now: Seconds,
+) -> Result<(), InvalidTransaction> {
+	let Some(point @ PointInfo::Active { .. }) = Points::<T>::get(point_alias) else {
+		return Err(InvalidTransaction::Stale);
+	};
+
+	if Pallet::<T>::is_point_frozen(&point, now) {
+		return Err(InvalidTransaction::Future);
+	}
+
+	Ok(())
+}
 
 #[derive(Clone, Eq, PartialEq, Encode, Decode, TypeInfo, DecodeWithMemTracking, Debug)]
 #[scale_info(skip_type_params(T))]
@@ -90,10 +140,14 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for VoterAu
 	type Val = ();
 	type Pre = ();
 
-	fn weight(&self, _call: &RuntimeCallOf<T>) -> Weight {
-		match self.0 {
-			Some(_) => T::WeightInfo::extension_validate(),
-			None => Weight::zero(),
+	fn weight(&self, call: &RuntimeCallOf<T>) -> Weight {
+		if self.0.is_none() {
+			return Weight::zero();
+		}
+
+		match call.is_sub_type() {
+			Some(Call::<T>::clear { .. }) => T::WeightInfo::extension_validate_clear(),
+			_ => T::WeightInfo::extension_validate(),
 		}
 	}
 
@@ -119,8 +173,13 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for VoterAu
 			InvalidTransaction::BadSigner
 		);
 
-		let Some(Call::<T>::bestow { vote, call_valid_from }) = call.is_sub_type() else {
+		let Some(call) = call.is_sub_type() else {
 			return Err(InvalidTransaction::Call.into());
+		};
+		let call_valid_from = match call {
+			Call::<T>::bestow { call_valid_from, .. } |
+			Call::<T>::clear { call_valid_from, .. } => call_valid_from,
+			_ => return Err(InvalidTransaction::Call.into()),
 		};
 
 		let now = T::Clock::now().as_secs();
@@ -135,24 +194,36 @@ impl<T: Config + Send + Sync> TransactionExtension<RuntimeCallOf<T>> for VoterAu
 
 		let message = inherited_implication.using_encoded(sp_crypto_hashing::blake2_256);
 
-		let aliases =
-			Pallet::<T>::validate_vote_proof(vote, &message, proof, *ring_index, *revision)
+		let (point_alias, local_origin) = match call {
+			Call::<T>::bestow { vote, .. } => {
+				let aliases =
+					Pallet::<T>::validate_vote_proof(vote, &message, proof, *ring_index, *revision)
+						.map_err(|_| InvalidTransaction::BadProof)?;
+				ensure_can_bestow::<T>(vote, &aliases, now)?;
+
+				(aliases.point_alias, Origin::Voter { aliases })
+			},
+			Call::<T>::clear { point, .. } => {
+				let point_alias = Pallet::<T>::validate_point_proof(
+					*point,
+					&message,
+					proof,
+					*ring_index,
+					*revision,
+				)
 				.map_err(|_| InvalidTransaction::BadProof)?;
+				ensure_can_clear::<T>(&point_alias, now)?;
 
-		if Pallet::<T>::is_point_frozen(&aliases.point_alias, now) {
-			return Err(InvalidTransaction::Future.into())
-		}
+				(point_alias, Origin::PointHolder { point_alias })
+			},
+			_ => return Err(InvalidTransaction::Call.into()),
+		};
 
-		if Votes::<T>::contains_key(aliases.subject_alias) {
-			return Err(InvalidTransaction::Stale.into());
-		}
-
-		let validity = ValidTransaction::with_tag_prefix(VALIDATION_TAG)
-			.and_provides(aliases.point_alias)
+		let validity = ValidTransaction::with_tag_prefix(POINT_TAG)
+			.and_provides(point_alias)
 			.priority(tx_priority::USER_HIGH)
 			.into();
 
-		let local_origin = Origin::Voter { aliases };
 		let mut origin = origin;
 		origin.set_caller_from(local_origin);
 
