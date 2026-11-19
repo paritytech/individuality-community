@@ -51,6 +51,12 @@ signatures, parameters, and behavior, read the pallet docs (see [Reference](#ref
 - `set_dispatcher_address` — sets the dotNS dispatcher contract address
 - `increase_attestation_allowance` / `clear_attestation_allowance` — manages an
   attester's reservation quota
+- `call_as_maintainer` — calls a dotNS contract as the pallet's maintainer
+  account, which tunes the contracts' bounded operational values. Its origin is
+  `MaintenanceOrigin`, set per runtime
+- `set_limits` — sets the gateway's contract call weight, signature validity and
+  future clock skew, each within the bounds the runtime fixes. Its origin is
+  `MaintenanceOrigin`
 
 ## Common sequences
 
