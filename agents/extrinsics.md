@@ -2,7 +2,7 @@
 
 - [Pays::Yes vs Pays::No](pays-yes-vs-pays-no.md) — fee refunds, weight refunds on error, and how to handle error paths
 - Avoid `ValidateUnsigned`: use authorized calls (`#[pallet::authorize]`) for unsigned validation, or a `TransactionExtension` for custom validation logic
-- For `authorize` error reporting, prefer a `CustomInvalidity` enum (`#[repr(u8)]`) to give callers accurate diagnostics. The exception is `Stale` and `Future`: these have distinct tx-pool semantics, keeping the transaction in the pool to be revalidated later, whereas `Custom` (and the other generic variants) drop it. Use `Stale`/`Future` when the transaction may become valid in a later view and should be retained, and a `CustomInvalidity` variant otherwise.
+- For `authorize` error reporting, prefer a `CustomInvalidity` enum (`#[repr(u8)]`) to give callers accurate diagnostics. The exception is `Stale` and `Future` for a transaction already in the pool: if the block builder fails to apply it, these keep it in the pool, whereas other variants drop it. Use `Future` if it may become valid later, `Stale` if it is outdated (finalized-block revalidation drops it) and a `CustomInvalidity` variant otherwise.
 - `authorize` returns *unspent* weight, subtracted from `weight_of_authorize`, not the weight consumed. Return `Weight::zero()` unless a success exited early having done less than the declared weight covers: returning `WeightInfo::authorize_foo(..)` refunds the whole check.
 - Consider that malicious node operators can craft arbitrary OCW transactions or spoof `TransactionSource::Local`/`InBlock`
   - Use `TransactionSource` only as a tx-pool filter, not a security gate
