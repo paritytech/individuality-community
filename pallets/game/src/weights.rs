@@ -96,6 +96,7 @@ pub trait WeightInfo {
 	fn claim_airdrop() -> Weight;
 	fn set_tenure_thresholds() -> Weight;
 	fn claim_tenure_credits(n: u32, ) -> Weight;
+	fn unregister() -> Weight;
 }
 
 /// Weights for `indiv_pallet_game` using the Substrate node and recommended hardware.
@@ -1109,6 +1110,23 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(13_u64))
 			.saturating_add(T::DbWeight::get().writes(8_u64))
 	}
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Game::Game` (r:1 w:1)
+	/// Proof: `Game::Game` (`max_values`: Some(1), `max_size`: Some(78), added: 573, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `Game::Players` (r:1 w:1)
+	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
+	fn unregister() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `400`
+		//  Estimated: `3545`
+		// Minimum execution time: 25_000_000 picoseconds.
+		Weight::from_parts(26_000_000, 3545)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+			.saturating_add(T::DbWeight::get().writes(2_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -2120,5 +2138,22 @@ impl WeightInfo for () {
 			.saturating_add(Weight::from_parts(14_244_343, 0).saturating_mul(n.into()))
 			.saturating_add(RocksDbWeight::get().reads(13_u64))
 			.saturating_add(RocksDbWeight::get().writes(8_u64))
+	}
+	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
+	/// Proof: `NetworkSuffix::NetworkSuffix` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Game::Game` (r:1 w:1)
+	/// Proof: `Game::Game` (`max_values`: Some(1), `max_size`: Some(78), added: 573, mode: `MaxEncodedLen`)
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
+	/// Storage: `Game::Players` (r:1 w:1)
+	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
+	fn unregister() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `400`
+		//  Estimated: `3545`
+		// Minimum execution time: 25_000_000 picoseconds.
+		Weight::from_parts(26_000_000, 3545)
+			.saturating_add(RocksDbWeight::get().reads(4_u64))
+			.saturating_add(RocksDbWeight::get().writes(2_u64))
 	}
 }
