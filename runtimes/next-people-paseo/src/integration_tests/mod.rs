@@ -86,6 +86,7 @@ mod network_suffix;
 mod nft_credits_integrity;
 mod parameters;
 mod people_airdrops_flow;
+mod poc_8936_step_crowding;
 mod score_game_deposit_flow;
 mod score_game_invitation_flow;
 mod score_game_person_flow;
