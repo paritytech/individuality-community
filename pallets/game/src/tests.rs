@@ -4817,6 +4817,61 @@ fn player_process_step2_uses_marginal_weight_for_follow_up_chunks() {
 	});
 }
 
+/// Step 2 clears one chunk of each index map in every loop iteration that it pays for.
+///
+/// The test commits the entries before the step. A `clear` with a limit removes every uncommitted
+/// entry in one pass, so the limit only applies to committed entries.
+#[test]
+fn player_process_step2_clears_every_chunk_its_weight_covers() {
+	// Matches `mock::Test`'s `Config::MaxRounds = ConstUint<10>`.
+	let rounds = 10u8;
+	let chunks = 3;
+	let mut ext = new_test_ext();
+	ext.execute_with(|| {
+		for i in 0..(chunks * PLAYER_PROCESS_STEP2_CHUNK) {
+			let mut alias = [0u8; 32];
+			let i_bytes = i.to_le_bytes();
+			alias[..i_bytes.len()].copy_from_slice(&i_bytes);
+			let account_or_person = AccountOrPerson::Person(alias);
+
+			let indices =
+				BoundedVec::try_from(vec![i; rounds as usize]).expect("rounds within bound");
+			PlayerToIndex::<Test>::insert(&account_or_person, indices);
+			IndexToPlayer::<Test>::insert((0u8, i), &account_or_person);
+		}
+
+		crate::Game::<Test>::put(GameInfo {
+			index: 0,
+			registration_ends: 0,
+			shuffle_deadline: 0,
+			game_date: 0,
+			report_ends: 0,
+			state: GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices },
+			max_group_size: <Test as Config>::MaxGroupSize::get(),
+			rounds,
+			pending_attendance: 0,
+			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
+		});
+	});
+	// A block reads the entries that an earlier block wrote from committed storage.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let step_weight = <MockWeightInfo as WeightInfo>::player_process_step2();
+		let chunk_weight = <MockWeightInfo as WeightInfo>::player_process_step2_inner_loop();
+		// The meter covers 10 loop iterations. The entries need 3.
+		let mut meter =
+			WeightMeter::with_limit(step_weight.saturating_add(chunk_weight.saturating_mul(10)));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0, "`IndexToPlayer` entries left");
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0, "`PlayerToIndex` entries left");
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
 #[test]
 fn vote_weight_snapshotted_during_shuffle() {
 	new_test_ext().execute_with(|| {
