@@ -66,7 +66,7 @@ pub const USER_HIGH: TransactionPriority = 1_000_000_000;
 /// onboarding), plus the one-time bootstrap of core resources the rest of the system depends on
 /// (the people collection that all membership work needs, the PGAS asset that all PGAS claims
 /// need). Highest tier.
-pub const PROTOCOL_LIVENESS: TransactionPriority = 1_000_000_000_000;
+pub const PROTOCOL_LIVENESS: TransactionPriority = 10u64.pow(18);
 
 const _: () = {
 	assert!(CLEANUP < USER_DEFAULT);
