@@ -62,6 +62,8 @@ pub trait WeightInfo {
 	fn set_dispatcher_address() -> Weight;
 	fn call_as_maintainer() -> Weight;
 	fn set_limits() -> Weight;
+	fn allow_maintainer_call() -> Weight;
+	fn disallow_maintainer_call() -> Weight;
 }
 
 /// Weights for `indiv_pallet_dotns_gateway` using the Substrate node and recommended hardware.
@@ -195,6 +197,26 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(6_871_000, 0)
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
+	/// Storage: `DotnsGateway::AllowedMaintainerCalls` (r:0 w:1)
+	/// Proof: `DotnsGateway::AllowedMaintainerCalls` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	fn allow_maintainer_call() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		// Minimum execution time: 6_215_000 picoseconds.
+		Weight::from_parts(6_871_000, 0)
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
+	/// Storage: `DotnsGateway::AllowedMaintainerCalls` (r:0 w:1)
+	/// Proof: `DotnsGateway::AllowedMaintainerCalls` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	fn disallow_maintainer_call() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		// Minimum execution time: 6_215_000 picoseconds.
+		Weight::from_parts(6_871_000, 0)
+			.saturating_add(T::DbWeight::get().writes(1_u64))
+	}
 }
 
 // For backwards compatibility and tests.
@@ -320,6 +342,26 @@ impl WeightInfo for () {
 	/// Storage: `DotnsGateway::Limits` (r:0 w:1)
 	/// Proof: `DotnsGateway::Limits` (`max_values`: Some(1), `max_size`: Some(32), added: 527, mode: `MaxEncodedLen`)
 	fn set_limits() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		// Minimum execution time: 6_215_000 picoseconds.
+		Weight::from_parts(6_871_000, 0)
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// Storage: `DotnsGateway::AllowedMaintainerCalls` (r:0 w:1)
+	/// Proof: `DotnsGateway::AllowedMaintainerCalls` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	fn allow_maintainer_call() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		// Minimum execution time: 6_215_000 picoseconds.
+		Weight::from_parts(6_871_000, 0)
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
+	}
+	/// Storage: `DotnsGateway::AllowedMaintainerCalls` (r:0 w:1)
+	/// Proof: `DotnsGateway::AllowedMaintainerCalls` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	fn disallow_maintainer_call() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `0`
 		//  Estimated: `0`

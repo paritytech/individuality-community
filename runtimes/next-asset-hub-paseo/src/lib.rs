@@ -1575,6 +1575,7 @@ impl indiv_pallet_dotns_gateway::Config for Runtime {
 	type DispatcherAddressManager = EnsureRoot<AccountId>;
 	type PalletId = DotnsGatewayPalletId;
 	type MaintenanceOrigin = EnsureRoot<AccountId>;
+	type MaintainerCallsManager = EnsureRoot<AccountId>;
 	type AttestationSignature = Signature;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = DotnsGatewayBenchHelper;

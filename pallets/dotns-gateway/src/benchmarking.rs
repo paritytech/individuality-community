@@ -51,7 +51,9 @@ pub trait BenchmarkHelper<T: Config> {
 )]
 mod benchmarks {
 	use super::*;
-	use crate::{AliasRegistration, AttestationAllowance, DispatcherAddress};
+	use crate::{
+		AliasRegistration, AllowedMaintainerCalls, AttestationAllowance, DispatcherAddress,
+	};
 	use frame_support::traits::{EnsureOrigin, Get, UnixTime};
 	use frame_system::RawOrigin;
 	use indiv_support::traits::PEOPLE_IDENTIFIER;
@@ -254,6 +256,7 @@ mod benchmarks {
 		let dest = H160([0xd0; 20]);
 		// A 4-byte selector and one 32-byte word, the shape of a single-value setter.
 		let data = [0u8; 36].to_vec();
+		AllowedMaintainerCalls::<T>::insert(dest, [0u8; 4], ());
 
 		#[extrinsic_call]
 		_(origin as T::RuntimeOrigin, dest, data, Limits::<T>::get().contract_call_weight, 0u128);
@@ -271,6 +274,35 @@ mod benchmarks {
 		_(origin as T::RuntimeOrigin, limits.clone());
 
 		assert_eq!(Limits::<T>::get(), limits);
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn allow_maintainer_call() -> Result<(), BenchmarkError> {
+		let origin = T::MaintainerCallsManager::try_successful_origin()
+			.map_err(|_| BenchmarkError::Weightless)?;
+		let dest = H160([0xd0; 20]);
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, dest, [0x12; 4]);
+
+		assert!(AllowedMaintainerCalls::<T>::contains_key(dest, [0x12; 4]));
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn disallow_maintainer_call() -> Result<(), BenchmarkError> {
+		let origin = T::MaintainerCallsManager::try_successful_origin()
+			.map_err(|_| BenchmarkError::Weightless)?;
+		let dest = H160([0xd0; 20]);
+		AllowedMaintainerCalls::<T>::insert(dest, [0x12; 4], ());
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, dest, [0x12; 4]);
+
+		assert!(!AllowedMaintainerCalls::<T>::contains_key(dest, [0x12; 4]));
 
 		Ok(())
 	}

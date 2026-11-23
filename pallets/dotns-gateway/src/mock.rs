@@ -546,6 +546,7 @@ impl crate::Config for Test {
 	type DispatcherAddressManager = EnsureRoot<u64>;
 	type PalletId = DotnsGatewayPalletId;
 	type MaintenanceOrigin = EnsureRoot<u64>;
+	type MaintainerCallsManager = EnsureRoot<u64>;
 	type AttestationSignature = MockSignature;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = ();

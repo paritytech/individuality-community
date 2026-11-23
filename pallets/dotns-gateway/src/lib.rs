@@ -43,6 +43,10 @@
 //! values. [`Config::MaintenanceOrigin`] acts through the account with
 //! [`Pallet::call_as_maintainer`].
 //!
+//! The account calls only the contract functions in [`AllowedMaintainerCalls`], each identified by
+//! the contract address and the function selector. [`Config::MaintainerCallsManager`] sets this
+//! list, so `MaintenanceOrigin` reaches only the functions that this stricter origin allows.
+//!
 //! `pallet-revive` accepts a signed caller only when its account is mapped to an EVM address.
 //! Before the first call, the pallet gives the account a provider reference, so the account exists
 //! without a balance. The runtime must map new accounts automatically (`pallet_revive::AutoMapper`
@@ -185,6 +189,11 @@ pub mod pallet {
 		/// The origin that can call contracts as the maintainer account.
 		type MaintenanceOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
+		/// The origin that sets which contract functions the maintainer account can call.
+		///
+		/// Use an origin at least as strict as `MaintenanceOrigin`.
+		type MaintainerCallsManager: EnsureOrigin<Self::RuntimeOrigin>;
+
 		/// Signature type used by candidates to consent to name reservations.
 		type AttestationSignature: Verify<Signer: IdentifyAccount<AccountId = Self::AccountId>>
 			+ Parameter
@@ -257,6 +266,12 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type Limits<T: Config> = StorageValue<_, GatewayLimits, ValueQuery, DefaultLimitsValue<T>>;
 
+	/// The contract functions that [`Pallet::call_as_maintainer`] can call, keyed by contract
+	/// address and function selector.
+	#[pallet::storage]
+	pub type AllowedMaintainerCalls<T: Config> =
+		StorageDoubleMap<_, Blake2_128Concat, H160, Blake2_128Concat, [u8; 4], (), OptionQuery>;
+
 	// ========== Origin ==========
 
 	/// Origin for person calls in this pallet.
@@ -322,6 +337,20 @@ pub mod pallet {
 			/// The function selector of the call.
 			selector: [u8; 4],
 		},
+		/// The maintainer account can call a contract function.
+		MaintainerCallAllowed {
+			/// The contract.
+			dest: H160,
+			/// The function selector.
+			selector: [u8; 4],
+		},
+		/// The maintainer account can no longer call a contract function.
+		MaintainerCallDisallowed {
+			/// The contract.
+			dest: H160,
+			/// The function selector.
+			selector: [u8; 4],
+		},
 		/// The operational limits were set.
 		LimitsSet {
 			/// The new limits.
@@ -364,6 +393,8 @@ pub mod pallet {
 		MissingSelector,
 		/// A limit is outside [`Config::MinLimits`] and [`Config::MaxLimits`].
 		LimitsOutOfBounds,
+		/// The contract function is not in [`AllowedMaintainerCalls`].
+		MaintainerCallNotAllowed,
 	}
 
 	// ========== Extrinsics ==========
@@ -610,8 +641,9 @@ pub mod pallet {
 
 		/// Calls the contract at `dest` with the ABI-encoded `data` as the maintainer account.
 		///
-		/// The origin must be `MaintenanceOrigin`. The call transfers no value. The maintainer
-		/// account pays the storage deposit, up to `deposit_limit`.
+		/// The origin must be `MaintenanceOrigin`, and [`AllowedMaintainerCalls`] must hold `dest`
+		/// with the selector of `data`. The call transfers no value. The maintainer account pays
+		/// the storage deposit, up to `deposit_limit`.
 		#[pallet::call_index(5)]
 		#[pallet::weight(
 			<T as Config>::WeightInfo::call_as_maintainer().saturating_add(*weight_limit)
@@ -628,6 +660,10 @@ pub mod pallet {
 				.get(..4)
 				.and_then(|bytes| bytes.try_into().ok())
 				.ok_or(Error::<T>::MissingSelector)?;
+			ensure!(
+				AllowedMaintainerCalls::<T>::contains_key(dest, selector),
+				Error::<T>::MaintainerCallNotAllowed
+			);
 
 			let maintainer = Self::maintainer_account();
 			if frame_system::Pallet::<T>::providers(&maintainer) == 0 {
@@ -659,6 +695,40 @@ pub mod pallet {
 			);
 			Limits::<T>::put(&limits);
 			Self::deposit_event(Event::LimitsSet { limits });
+			Ok(())
+		}
+
+		/// Lets [`Pallet::call_as_maintainer`] call the function `selector` of the contract at
+		/// `dest`.
+		///
+		/// The origin must be `MaintainerCallsManager`.
+		#[pallet::call_index(7)]
+		#[pallet::weight(<T as Config>::WeightInfo::allow_maintainer_call())]
+		pub fn allow_maintainer_call(
+			origin: OriginFor<T>,
+			dest: H160,
+			selector: [u8; 4],
+		) -> DispatchResult {
+			T::MaintainerCallsManager::ensure_origin(origin)?;
+			AllowedMaintainerCalls::<T>::insert(dest, selector, ());
+			Self::deposit_event(Event::MaintainerCallAllowed { dest, selector });
+			Ok(())
+		}
+
+		/// Stops [`Pallet::call_as_maintainer`] from calling the function `selector` of the
+		/// contract at `dest`.
+		///
+		/// The origin must be `MaintainerCallsManager`.
+		#[pallet::call_index(8)]
+		#[pallet::weight(<T as Config>::WeightInfo::disallow_maintainer_call())]
+		pub fn disallow_maintainer_call(
+			origin: OriginFor<T>,
+			dest: H160,
+			selector: [u8; 4],
+		) -> DispatchResult {
+			T::MaintainerCallsManager::ensure_origin(origin)?;
+			AllowedMaintainerCalls::<T>::remove(dest, selector);
+			Self::deposit_event(Event::MaintainerCallDisallowed { dest, selector });
 			Ok(())
 		}
 	}

@@ -1648,13 +1648,20 @@ mod maintainer {
 	const DEST: H160 = H160([0xe5; 20]);
 	const LIMIT: Weight = Weight::from_parts(1_000_000, 10_000);
 
+	const SELECTOR: [u8; 4] = [0x12, 0x34, 0x56, 0x78];
+
 	fn setter_call() -> Vec<u8> {
-		[[0x12, 0x34, 0x56, 0x78].as_slice(), &[0u8; 32]].concat()
+		[SELECTOR.as_slice(), &[0u8; 32]].concat()
+	}
+
+	fn allow_setter() {
+		assert_ok!(DotnsGateway::allow_maintainer_call(RuntimeOrigin::root(), DEST, SELECTOR));
 	}
 
 	#[test]
 	fn calls_the_contract_as_the_maintainer_account() {
 		new_test_ext().execute_with(|| {
+			allow_setter();
 			System::set_block_number(1);
 
 			assert_ok!(DotnsGateway::call_as_maintainer(
@@ -1679,11 +1686,8 @@ mod maintainer {
 			);
 			assert!(get_contract_calls().is_empty());
 			System::assert_last_event(
-				crate::Event::<Test>::MaintainerCallExecuted {
-					dest: DEST,
-					selector: [0x12, 0x34, 0x56, 0x78],
-				}
-				.into(),
+				crate::Event::<Test>::MaintainerCallExecuted { dest: DEST, selector: SELECTOR }
+					.into(),
 			);
 		});
 	}
@@ -1691,6 +1695,7 @@ mod maintainer {
 	#[test]
 	fn gives_the_maintainer_account_one_provider_reference() {
 		new_test_ext().execute_with(|| {
+			allow_setter();
 			let account = DotnsGateway::maintainer_account();
 			assert_eq!(System::providers(&account), 0);
 
@@ -1744,6 +1749,7 @@ mod maintainer {
 	#[test]
 	fn reports_a_contract_revert() {
 		new_test_ext().execute_with(|| {
+			allow_setter();
 			set_contract_call_revert(crate::types::NotRoot::SELECTOR.to_vec());
 
 			assert_noop!(
@@ -1762,6 +1768,7 @@ mod maintainer {
 	#[test]
 	fn reports_an_unknown_revert_as_a_failed_call() {
 		new_test_ext().execute_with(|| {
+			allow_setter();
 			set_contract_call_revert(vec![0xde, 0xad, 0xbe, 0xef]);
 
 			assert_noop!(
@@ -1780,6 +1787,7 @@ mod maintainer {
 	#[test]
 	fn refunds_the_unused_contract_weight() {
 		new_test_ext().execute_with(|| {
+			allow_setter();
 			let used = Weight::from_parts(200_000, 5_000);
 			set_contract_call_weight(used);
 			let call = crate::Call::<Test>::call_as_maintainer {
@@ -1803,6 +1811,76 @@ mod maintainer {
 			assert_eq!(charged, overhead.saturating_add(LIMIT));
 			assert_eq!(info.actual_weight, Some(overhead.saturating_add(used)));
 			assert!(info.actual_weight.unwrap().all_lt(charged));
+		});
+	}
+
+	#[test]
+	fn rejects_a_function_that_is_not_allowed() {
+		new_test_ext().execute_with(|| {
+			allow_setter();
+			let other_selector = [[0x87, 0x65, 0x43, 0x21].as_slice(), &[0u8; 32]].concat();
+
+			for (dest, data) in [(DEST, other_selector), (H160([0xe6; 20]), setter_call())] {
+				assert_noop!(
+					DotnsGateway::call_as_maintainer(RuntimeOrigin::root(), dest, data, LIMIT, 0),
+					Error::<Test>::MaintainerCallNotAllowed
+				);
+			}
+			assert!(get_signed_contract_calls().is_empty());
+			assert_eq!(System::providers(&DotnsGateway::maintainer_account()), 0);
+		});
+	}
+
+	#[test]
+	fn disallowing_a_function_stops_the_maintainer_calling_it() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			allow_setter();
+			System::assert_last_event(
+				crate::Event::<Test>::MaintainerCallAllowed { dest: DEST, selector: SELECTOR }
+					.into(),
+			);
+
+			assert_ok!(DotnsGateway::disallow_maintainer_call(
+				RuntimeOrigin::root(),
+				DEST,
+				SELECTOR
+			));
+
+			System::assert_last_event(
+				crate::Event::<Test>::MaintainerCallDisallowed { dest: DEST, selector: SELECTOR }
+					.into(),
+			);
+			assert!(!crate::AllowedMaintainerCalls::<Test>::contains_key(DEST, SELECTOR));
+			assert_noop!(
+				DotnsGateway::call_as_maintainer(
+					RuntimeOrigin::root(),
+					DEST,
+					setter_call(),
+					LIMIT,
+					0
+				),
+				Error::<Test>::MaintainerCallNotAllowed
+			);
+		});
+	}
+
+	#[test]
+	fn setting_the_allowed_functions_requires_the_manager_origin() {
+		new_test_ext().execute_with(|| {
+			assert_noop!(
+				DotnsGateway::allow_maintainer_call(RuntimeOrigin::signed(ALICE), DEST, SELECTOR),
+				DispatchError::BadOrigin
+			);
+			allow_setter();
+			assert_noop!(
+				DotnsGateway::disallow_maintainer_call(
+					RuntimeOrigin::signed(ALICE),
+					DEST,
+					SELECTOR
+				),
+				DispatchError::BadOrigin
+			);
 		});
 	}
 }

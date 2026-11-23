@@ -53,7 +53,11 @@ signatures, parameters, and behavior, read the pallet docs (see [Reference](#ref
   attester's reservation quota
 - `call_as_maintainer` — calls a dotNS contract as the pallet's maintainer
   account, which tunes the contracts' bounded operational values. Its origin is
-  `MaintenanceOrigin`, set per runtime
+  `MaintenanceOrigin`, set per runtime. It calls only the contract functions
+  that `allow_maintainer_call` allowed
+- `allow_maintainer_call` / `disallow_maintainer_call` — sets which contract
+  functions `call_as_maintainer` can call, by contract address and selector.
+  Their origin is `MaintainerCallsManager`, set per runtime
 - `set_limits` — sets the gateway's contract call weight, signature validity and
   future clock skew, each within the bounds the runtime fixes. Its origin is
   `MaintenanceOrigin`
