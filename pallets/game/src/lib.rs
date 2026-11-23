@@ -3965,13 +3965,15 @@ pub mod pallet {
 			let limit = chunks.saturating_mul(PLAYER_PROCESS_STEP2_CHUNK);
 			let mut cleared = ChunkedClear::from_removals(
 				&[IndexToPlayer::<T>::clear(limit, None), PlayerToIndex::<T>::clear(limit, None)],
+			ChunkedClear::from_removals(
+				&[
+					IndexToPlayer::<T>::clear(limit, None),
+					PlayerToIndex::<T>::clear(limit, None),
+					T::NftClaimCredits::clear_game_credits(game_index, limit),
+				],
 				PLAYER_PROCESS_STEP2_CHUNK,
 				chunks,
-			);
-			if T::NftClaimCredits::clear_game_credits(game_index, limit, None).is_some() {
-				cleared.result = StepResult::Continue;
-			}
-			cleared
+			)
 		}
 
 		pub(crate) fn player_process_step2(weight_meter: &mut WeightMeter) {
