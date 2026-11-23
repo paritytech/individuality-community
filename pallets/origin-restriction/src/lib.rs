@@ -18,26 +18,44 @@
 //!
 //! This pallet tracks certain origin and limits how much total "fee usage" they can accumulate.
 //! Usage gradually recovers as the blocks of [`Config::BlockNumberProvider`] pass. A parachain
-//! configures the relay chain block number there, so the recovery rate does not depend on the
-//! local block production.
+//! configures the relay chain block number there, so the recovery rate does not depend on the local
+//! block production.
 //!
 //! First the entity is extracted from the restricted origin, the entity represents the granularity
 //! of usage tracking.
 //!
-//! For example, an origin like `DaoOrigin { name: [u8; 8], tally: Percent }`
-//! can have its usage tracked and restricted at the DAO level, so the tracked entity would be
-//! `DaoEntity { name: [u8; 8] }`. This ensures that usage restrictions apply to the DAO as a whole,
-//! independent of any particular voter percentage.
+//! For example, an origin like `DaoOrigin { name: [u8; 8], tally: Percent }` can have its usage
+//! tracked and restricted at the DAO level, so the tracked entity would be `DaoEntity { name: [u8;
+//! 8] }`. This ensures that usage restrictions apply to the DAO as a whole, independent of any
+//! particular voter percentage.
 //!
 //! Then when dispatching a transaction, if the entity’s new usage would exceed its max allowance,
 //! the transaction is invalid, except if the call is in the set of calls permitted to exceed that
 //! limit (`OperationAllowedOneTimeExcess`). In that case, as long as the entity's usage prior to
-//! dispatch was zero, the transaction is valid (with respect to usage). If the entity's
-//! usage is already above the limit, the transaction is always invalid. After dispatch, any call
-//! flagged as `Pays::No` fully restores the consumed usage.
+//! dispatch was zero, the transaction is valid (with respect to usage). If the entity's usage is
+//! already above the limit, the transaction is always invalid. After dispatch, any call flagged as
+//! `Pays::No` fully restores the consumed usage.
 //!
 //! To expand on `OperationAllowedOneTimeExcess`, user have to wait for the usage to completely
 //! recover to zero before being able to do an operation that exceed max allowance.
+//!
+//! Clients read the allowance status of an entity with the view function
+//! [`Pallet::get_allowance_status`]. The [`Usages`] storage holds the usage at the last transaction
+//! of the entity, without the recovery since then.
+//!
+//! Before dispatch, the extension adds to the usage the `WeightToFee` of the total weight of the
+//! transaction plus the `LengthToFee` of its encoded length. After dispatch, it reduces this amount
+//! to the actual weight. This amount is not the transaction fee as it has no base fee, no fee
+//! multiplier and no tip. A client computes it with the `TransactionPaymentApi` runtime API
+//! `query_weight_to_fee` of the weight that `query_info` returns, plus `query_length_to_fee` of the
+//! encoded length. The total weight includes the weight of the transaction extensions. The client
+//! must give the whole extrinsic to `query_info` because `query_call_info` in
+//! `TransactionPaymentCallApi` takes only the call, so its weight omits the weight of the
+//! transaction extensions. To check that a transaction is valid in terms of "payment", a client
+//! calls `validate_transaction` of the `TaggedTransactionQueue` runtime API. The extension rejects
+//! a transaction above the allowance with `InvalidTransaction::Payment`. Beware that `dry_run_call`
+//! of the `DryRunApi` runtime API does not run the transaction extensions, so it does not apply the
+//! restriction.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -65,8 +83,9 @@ use pallet_transaction_payment::OnChargeTransaction;
 use scale_info::TypeInfo;
 use sp_runtime::{
 	traits::{
-		AsTransactionAuthorizedOrigin, BlockNumberProvider, DispatchInfoOf, DispatchOriginOf,
-		Dispatchable, Implication, PostDispatchInfoOf, TransactionExtension, ValidateResult,
+		AsTransactionAuthorizedOrigin, BlockNumberProvider, CheckedDiv, DispatchInfoOf,
+		DispatchOriginOf, Dispatchable, Implication, One, PostDispatchInfoOf, TransactionExtension,
+		ValidateResult,
 	},
 	transaction_validity::{
 		InvalidTransaction, TransactionSource, TransactionValidityError, ValidTransaction,
@@ -83,6 +102,27 @@ pub struct Allowance<Balance> {
 	pub max: Balance,
 	/// The amount of usage recovered per block of [`Config::BlockNumberProvider`].
 	pub recovery_per_block: Balance,
+}
+
+/// The allowance status of an entity at a block of [`Config::BlockNumberProvider`].
+#[derive(Encode, Decode, Clone, Eq, PartialEq, Debug, TypeInfo)]
+pub struct AllowanceStatus<Balance, BlockNumber> {
+	/// The maximum usage allowed before transactions are restricted.
+	pub max: Balance,
+	/// The usage at block `now`, with the recovery since the last transaction applied. An
+	/// operation in [`Config::OperationAllowedOneTimeExcess`] can exceed `max` only when it is
+	/// zero. It can be above `max` after such an operation.
+	pub used: Balance,
+	/// The amount of usage recovered per block of [`Config::BlockNumberProvider`].
+	pub recovery_per_block: Balance,
+	/// The block number of [`Config::BlockNumberProvider`] at which this status holds. With the
+	/// relay chain block number provider of a parachain, it is the relay parent number of the
+	/// queried block, which can be lower than the relay chain head.
+	pub now: BlockNumber,
+	/// The block number of [`Config::BlockNumberProvider`] at which `used` is zero, when the
+	/// entity sends no transaction. It is `now` when `used` is zero. `None` means that the block
+	/// of the full recovery is undefined.
+	pub fully_recovered_at: Option<BlockNumber>,
 }
 
 /// The restriction of an entity.
@@ -133,7 +173,7 @@ pub mod pallet {
 	#[pallet::pallet]
 	pub struct Pallet<T>(_);
 
-	/// The current usage for each entity.
+	/// The usage of each entity at its last transaction.
 	#[pallet::storage]
 	pub type Usages<T: Config> = StorageMap<
 		_,
@@ -214,22 +254,82 @@ pub mod pallet {
 				return Err(BadOrigin.into())
 			}
 
-			let Some(mut usage) = Usages::<T>::take(&entity) else {
+			let Some(usage) = Usages::<T>::take(&entity) else {
 				return Err(Error::<T>::NoUsage.into())
 			};
 
 			let now = T::BlockNumberProvider::current_block_number();
-			let elapsed = now.saturating_sub(usage.at_block).saturated_into::<u32>();
-
-			let allowance = entity.allowance();
-			let receive_back = allowance.recovery_per_block.saturating_mul(elapsed.into());
-			usage.used = usage.used.saturating_sub(receive_back);
+			let usage = Self::recover_usage(usage, &entity.allowance(), now);
 
 			ensure!(usage.used.is_zero(), Error::<T>::NotZero);
 
 			Self::deposit_event(Event::UsageCleaned { entity });
 
 			Ok(Pays::No.into())
+		}
+	}
+
+	#[pallet::view_functions]
+	impl<T: Config> Pallet<T> {
+		/// Get the allowance status of an entity at the current block of
+		/// [`Config::BlockNumberProvider`].
+		///
+		/// It reports the allowance of any entity value. It does not check that the entity exists.
+		pub fn get_allowance_status(
+			entity: T::RestrictedEntity,
+		) -> AllowanceStatus<BalanceOf<T>, ProviderBlockNumberFor<T>> {
+			let allowance = entity.allowance();
+			let now = T::BlockNumberProvider::current_block_number();
+			let used = Self::get_usage_at(&entity, &allowance, now).used;
+
+			let fully_recovered_at = if used.is_zero() {
+				Some(now)
+			} else {
+				// The division rounds up. It gives `None` when the recovery is zero.
+				used.saturating_sub(One::one()).checked_div(&allowance.recovery_per_block).map(
+					|blocks| {
+						let blocks = blocks.saturating_add(One::one()).saturated_into::<u128>();
+						now.saturating_add(blocks.saturated_into())
+					},
+				)
+			};
+
+			AllowanceStatus {
+				max: allowance.max,
+				used,
+				recovery_per_block: allowance.recovery_per_block,
+				now,
+				fully_recovered_at,
+			}
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// Applies to `usage` the recovery of `allowance` up to block `now` of
+		/// [`Config::BlockNumberProvider`].
+		pub(crate) fn recover_usage(
+			mut usage: Usage<BalanceOf<T>, ProviderBlockNumberFor<T>>,
+			allowance: &Allowance<BalanceOf<T>>,
+			now: ProviderBlockNumberFor<T>,
+		) -> Usage<BalanceOf<T>, ProviderBlockNumberFor<T>> {
+			let elapsed = now.saturating_sub(usage.at_block).saturated_into::<u32>();
+			let receive_back = allowance.recovery_per_block.saturating_mul(elapsed.into());
+			usage.used = usage.used.saturating_sub(receive_back);
+			usage.at_block = now;
+			usage
+		}
+
+		/// The usage of `entity` at block `now` of [`Config::BlockNumberProvider`]. It is zero
+		/// when the entity has no usage recorded.
+		pub(crate) fn get_usage_at(
+			entity: &T::RestrictedEntity,
+			allowance: &Allowance<BalanceOf<T>>,
+			now: ProviderBlockNumberFor<T>,
+		) -> Usage<BalanceOf<T>, ProviderBlockNumberFor<T>> {
+			match Usages::<T>::get(entity) {
+				Some(usage) => Self::recover_usage(usage, allowance, now),
+				None => Usage { used: Zero::zero(), at_block: now },
+			}
 		}
 	}
 }
@@ -319,16 +419,7 @@ impl<T: Config> TransactionExtension<T::RuntimeCall> for RestrictOrigin<T> {
 		}
 
 		let now = T::BlockNumberProvider::current_block_number();
-		let mut usage = match Usages::<T>::get(&entity) {
-			Some(mut usage) => {
-				let elapsed = now.saturating_sub(usage.at_block).saturated_into::<u32>();
-				let receive_back = allowance.recovery_per_block.saturating_mul(elapsed.into());
-				usage.used = usage.used.saturating_sub(receive_back);
-				usage.at_block = now;
-				usage
-			},
-			None => Usage { used: 0u32.into(), at_block: now },
-		};
+		let mut usage = Pallet::<T>::get_usage_at(&entity, &allowance, now);
 
 		// The usage before taking into account this extrinsic.
 		let usage_without_new_xt = usage.used;
