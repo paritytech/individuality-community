@@ -23,6 +23,7 @@ use frame_support::{
 	assert_noop, assert_ok,
 	dispatch::Pays,
 	traits::{Get, Hooks, OffchainWorker},
+	weights::Weight,
 	BoundedVec,
 };
 use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
@@ -4773,49 +4774,417 @@ fn reporting_ends_early_when_all_attendance_determined() {
 	});
 }
 
+/// Runs `setup` and commits its storage, as the blocks before a step do.
+///
+/// A `clear` with a limit removes every uncommitted entry in one pass. The limit therefore only
+/// applies to committed entries.
+fn committed_ext(setup: impl FnOnce()) -> sp_io::TestExternalities {
+	let mut ext = new_test_ext();
+	ext.execute_with(setup);
+	ext.commit_all().expect("the test storage commits");
+	ext
+}
+
+/// Puts game 0 in step 2 of the player process, with `index_entries` entries in `IndexToPlayer`
+/// and `player_entries` entries in `PlayerToIndex`.
+fn put_step2_game(index_entries: u32, player_entries: u32) {
+	// Matches `mock::Test`'s `Config::MaxRounds = ConstUint<10>`.
+	let rounds = 10u8;
+	let player = |i: u32| {
+		let mut alias = [0u8; 32];
+		let i_bytes = i.to_le_bytes();
+		alias[..i_bytes.len()].copy_from_slice(&i_bytes);
+		AccountOrPerson::<AccountId32>::Person(alias)
+	};
+	for i in 0..index_entries {
+		IndexToPlayer::<Test>::insert((0u8, i), player(i));
+	}
+	for i in 0..player_entries {
+		let indices = BoundedVec::try_from(vec![i; rounds as usize]).expect("rounds within bound");
+		PlayerToIndex::<Test>::insert(player(i), indices);
+	}
+
+	crate::Game::<Test>::put(GameInfo {
+		index: 0,
+		registration_ends: 0,
+		shuffle_deadline: 0,
+		game_date: 0,
+		report_ends: 0,
+		state: GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices },
+		max_group_size: <Test as Config>::MaxGroupSize::get(),
+		rounds,
+		pending_attendance: 0,
+		airdrops_scheduled: 0,
+		tenure_claim_opens: 0,
+	});
+}
+
+/// The weight of a step 2 call that clears `chunks` chunks.
+fn step2_weight(chunks: u64) -> Weight {
+	<MockWeightInfo as WeightInfo>::player_process_step2().saturating_add(
+		<MockWeightInfo as WeightInfo>::player_process_step2_inner_loop().saturating_mul(chunks),
+	)
+}
+
+/// Step 2 charges its base weight once. A chunk after the first costs the chunk weight only.
 #[test]
 fn player_process_step2_uses_marginal_weight_for_follow_up_chunks() {
-	new_test_ext().execute_with(|| {
-		// Matches `mock::Test`'s `Config::MaxRounds = ConstUint<10>`.
-		let rounds = 10u8;
-		for i in 0..(PLAYER_PROCESS_STEP2_CHUNK + 1) {
-			let mut alias = [0u8; 32];
-			let i_bytes = i.to_le_bytes();
-			alias[..i_bytes.len()].copy_from_slice(&i_bytes);
-			let account_or_person = AccountOrPerson::Person(alias);
-
-			let indices =
-				BoundedVec::try_from(vec![i; rounds as usize]).expect("rounds within bound");
-			PlayerToIndex::<Test>::insert(&account_or_person, indices);
-			IndexToPlayer::<Test>::insert((0u8, i), &account_or_person);
-		}
-
-		crate::Game::<Test>::put(GameInfo {
-			index: 0,
-			registration_ends: 0,
-			shuffle_deadline: 0,
-			game_date: 0,
-			report_ends: 0,
-			state: GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices },
-			max_group_size: <Test as Config>::MaxGroupSize::get(),
-			rounds,
-			pending_attendance: 0,
-			airdrops_scheduled: 0,
-			tenure_claim_opens: 0,
-		});
-
-		let first_chunk_weight = <MockWeightInfo as WeightInfo>::player_process_step2();
-		let marginal_chunk_weight =
-			<MockWeightInfo as WeightInfo>::player_process_step2_inner_loop();
-		let mut meter =
-			WeightMeter::with_limit(first_chunk_weight.saturating_add(marginal_chunk_weight));
+	// One entry more than a chunk holds needs a second chunk.
+	let entries = PLAYER_PROCESS_STEP2_CHUNK + 1;
+	committed_ext(|| put_step2_game(entries, entries)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(2));
 
 		Game::player_process_step2(&mut meter);
 
 		assert!(crate::Game::<Test>::get().is_none());
 		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
 		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert_eq!(meter.consumed(), step2_weight(2));
 	});
+}
+
+/// Step 2 clears every chunk of each index map that its weight covers.
+///
+/// The test commits the entries before the step. A `clear` with a limit removes every uncommitted
+/// entry in one pass, so the limit only applies to committed entries.
+#[test]
+fn player_process_step2_clears_every_chunk_its_weight_covers() {
+	let entries = 3 * PLAYER_PROCESS_STEP2_CHUNK;
+	committed_ext(|| put_step2_game(entries, entries)).execute_with(|| {
+		// The meter covers 10 chunks. The entries need 3.
+		let mut meter = WeightMeter::with_limit(step2_weight(10));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0, "`IndexToPlayer` entries left");
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0, "`PlayerToIndex` entries left");
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// Step 2 charges the chunks of the longest map and refunds the rest of its budget.
+#[test]
+fn player_process_step2_charges_the_chunks_it_clears() {
+	// 250 entries need 3 chunks. The shorter map does not add to the charge.
+	committed_ext(|| put_step2_game(250, 30)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(10));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(3));
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// The game continues while one map still holds entries, also when the other map is empty.
+#[test]
+fn player_process_step2_stops_at_the_chunks_its_weight_covers() {
+	let mut ext = committed_ext(|| put_step2_game(300, 30));
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(2));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(2));
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 100);
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert_eq!(
+			crate::Game::<Test>::get().expect("the game continues").state,
+			GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices }
+		);
+	});
+	// The next call runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(10));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(1));
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// A second step 2 call in a block walks the keys that the first call removed. It charges the
+/// walk, clears nothing more and does not end the game.
+#[test]
+fn player_process_step2_makes_no_progress_in_a_second_call_of_a_block() {
+	let mut ext = committed_ext(|| put_step2_game(300, 30));
+	ext.execute_with(|| {
+		for _ in 0..2 {
+			let mut meter = WeightMeter::with_limit(step2_weight(2));
+
+			Game::player_process_step2(&mut meter);
+
+			assert_eq!(meter.consumed(), step2_weight(2));
+			assert_eq!(IndexToPlayer::<Test>::iter().count(), 100);
+			assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+			assert!(crate::Game::<Test>::get().is_some(), "the game continues");
+		}
+	});
+	// The next call runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(2));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(1));
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// Step 2 ends the game in the call that clears the last entries, also when the entries use the
+/// whole limit.
+#[test]
+fn player_process_step2_ends_the_game_when_the_entries_fill_its_chunks() {
+	committed_ext(|| put_step2_game(200, 200)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(2));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(2));
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+#[test]
+fn player_process_step2_clears_nothing_below_the_weight_of_one_chunk() {
+	// One unit short of a chunk, in either weight component.
+	for shortfall in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+		committed_ext(|| put_step2_game(100, 100)).execute_with(|| {
+			let mut meter = WeightMeter::with_limit(step2_weight(1).saturating_sub(shortfall));
+
+			Game::player_process_step2(&mut meter);
+
+			assert_eq!(meter.consumed(), step2_weight(0));
+			assert_eq!(IndexToPlayer::<Test>::iter().count(), 100);
+			assert_eq!(PlayerToIndex::<Test>::iter().count(), 100);
+			assert!(crate::Game::<Test>::get().is_some(), "the game continues");
+		});
+	}
+}
+
+#[test]
+fn player_process_step2_charges_one_chunk_for_empty_maps() {
+	committed_ext(|| put_step2_game(0, 0)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(10));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(1));
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+#[test]
+fn affordable_chunks_follow_the_scarcer_weight_component() {
+	let chunk_weight = Weight::from_parts(100, 10);
+	let mut meter = WeightMeter::with_limit(Weight::from_parts(1_000, 70));
+	// The ref time covers 10 chunks. The proof size covers 7.
+	assert_eq!(Game::affordable_chunks(&meter, chunk_weight), 7);
+
+	// The consumed weight is not available: 45 of proof size cover 4 chunks.
+	meter.consume(Weight::from_parts(0, 25));
+	assert_eq!(Game::affordable_chunks(&meter, chunk_weight), 4);
+
+	// A component that a chunk does not use does not bound the count.
+	assert_eq!(Game::affordable_chunks(&meter, Weight::from_parts(100, 0)), 10);
+	assert_eq!(Game::affordable_chunks(&meter, Weight::from_parts(1_001, 0)), 0);
+}
+
+#[test]
+fn affordable_chunks_stop_at_the_operation_bound() {
+	let chunk_weight = Weight::from_parts(1, 1);
+	let bound = u64::from(OP_UPPER_BOUND);
+	let below = WeightMeter::with_limit(Weight::from_parts(bound - 1, bound - 1));
+	assert_eq!(Game::affordable_chunks(&below, chunk_weight), OP_UPPER_BOUND - 1);
+	let above = WeightMeter::with_limit(Weight::from_parts(bound + 1, bound + 1));
+	assert_eq!(Game::affordable_chunks(&above, chunk_weight), OP_UPPER_BOUND);
+	// A count that does not fit `u32`.
+	assert_eq!(Game::affordable_chunks(&WeightMeter::new(), chunk_weight), OP_UPPER_BOUND);
+	// A chunk without weight is not bounded by the meter.
+	assert_eq!(
+		Game::affordable_chunks(&WeightMeter::with_limit(Weight::zero()), Weight::zero()),
+		OP_UPPER_BOUND
+	);
+}
+
+#[test]
+fn chunked_clear_charges_the_chunks_it_walks_within_its_limit() {
+	let removal =
+		sp_io::MultiRemovalResults { maybe_cursor: None, backend: 250, unique: 250, loops: 250 };
+
+	assert_eq!(ChunkedClear::new(slice::from_ref(&removal), 100, 3).chunks, 3);
+	assert_eq!(ChunkedClear::new(slice::from_ref(&removal), 100, 4).chunks, 3);
+}
+
+/// An implementation of `clear_game_credits` outside this pallet can walk more keys than the
+/// limit. The overrun panics in debug builds. A release build logs it and charges every chunk
+/// that the clear walked.
+#[test]
+fn chunked_clear_reports_a_walk_past_its_limit() {
+	let removal =
+		sp_io::MultiRemovalResults { maybe_cursor: None, backend: 250, unique: 250, loops: 250 };
+
+	let result = std::panic::catch_unwind(|| ChunkedClear::new(slice::from_ref(&removal), 100, 2));
+
+	#[cfg(debug_assertions)]
+	assert!(result.is_err());
+	#[cfg(not(debug_assertions))]
+	assert_eq!(result.unwrap().chunks, 3);
+}
+
+/// Puts game 0 in the shuffle drain of a cancellation, with `recognized` entries in
+/// `ShuffleRecognized` and `not_recognized` entries in `ShuffleNotRecognized`. The game has no
+/// player.
+fn put_cancelling_game(recognized: u32, not_recognized: u32) {
+	let player = AccountOrPerson::<AccountId32>::Account(ALICE);
+	for i in 0..recognized {
+		let key = sp_io::hashing::blake2_256(&i.to_le_bytes());
+		crate::ShuffleRecognized::<Test>::insert(0u8, key, &player);
+	}
+	for i in 0..not_recognized {
+		let key = sp_io::hashing::blake2_256(&i.to_le_bytes());
+		crate::ShuffleNotRecognized::<Test>::insert(0u8, key, &player);
+	}
+
+	crate::Game::<Test>::put(GameInfo {
+		index: 0,
+		registration_ends: 0,
+		shuffle_deadline: 0,
+		game_date: 0,
+		report_ends: 0,
+		state: GameState::Cancelling { step: CancellingStep::Step1DrainShuffle },
+		max_group_size: <Test as Config>::MaxGroupSize::get(),
+		rounds: 1,
+		pending_attendance: 0,
+		airdrops_scheduled: 0,
+		tenure_claim_opens: 0,
+	});
+}
+
+/// The weight of a cancelling call that clears `chunks` shuffle chunks.
+fn shuffle_drain_weight(chunks: u64) -> Weight {
+	<MockWeightInfo as WeightInfo>::process_cancelling().saturating_add(
+		<MockWeightInfo as WeightInfo>::process_cancelling_step_shuffle().saturating_mul(chunks),
+	)
+}
+
+/// The weight of the player drain iteration that finds no player and ends the cancellation.
+fn last_player_drain_weight() -> Weight {
+	<MockWeightInfo as WeightInfo>::process_cancelling_step_player(1)
+}
+
+/// The cancellation charges the shuffle chunks of the longest map, then drains the players in the
+/// same call.
+#[test]
+fn process_cancelling_charges_the_shuffle_chunks_it_clears() {
+	// 250 entries need 3 chunks. The shorter map does not add to the charge.
+	committed_ext(|| put_cancelling_game(250, 30)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(
+			shuffle_drain_weight(10).saturating_add(last_player_drain_weight()),
+		);
+
+		Game::process_cancelling(&mut meter);
+
+		assert_eq!(
+			meter.consumed(),
+			shuffle_drain_weight(3).saturating_add(last_player_drain_weight())
+		);
+		assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
+		assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// The shuffle drain continues while one map still holds entries, also when the other map is
+/// empty.
+#[test]
+fn process_cancelling_stops_at_the_shuffle_chunks_its_weight_covers() {
+	let mut ext = committed_ext(|| put_cancelling_game(30, 300));
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(shuffle_drain_weight(2));
+
+		Game::process_cancelling(&mut meter);
+
+		assert_eq!(meter.consumed(), shuffle_drain_weight(2));
+		assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
+		assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 100);
+		assert_eq!(
+			crate::Game::<Test>::get().expect("the game continues").state,
+			GameState::Cancelling { step: CancellingStep::Step1DrainShuffle }
+		);
+	});
+	// The next call runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(
+			shuffle_drain_weight(10).saturating_add(last_player_drain_weight()),
+		);
+
+		Game::process_cancelling(&mut meter);
+
+		assert_eq!(
+			meter.consumed(),
+			shuffle_drain_weight(1).saturating_add(last_player_drain_weight())
+		);
+		assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
+		assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// A call that clears the last shuffle entries and has no weight left stores the player drain as
+/// the next step.
+#[test]
+fn process_cancelling_stores_the_player_drain_when_the_shuffle_drain_ends() {
+	committed_ext(|| put_cancelling_game(250, 30)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(shuffle_drain_weight(3));
+
+		Game::process_cancelling(&mut meter);
+
+		assert_eq!(meter.consumed(), shuffle_drain_weight(3));
+		assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
+		assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 0);
+		assert_eq!(
+			crate::Game::<Test>::get().expect("the game continues").state,
+			GameState::Cancelling {
+				step: CancellingStep::Step2DrainPlayers { last_iteration: None }
+			}
+		);
+	});
+}
+
+#[test]
+fn process_cancelling_clears_nothing_below_the_weight_of_one_shuffle_chunk() {
+	// One unit short of a chunk, in either weight component.
+	for shortfall in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+		committed_ext(|| put_cancelling_game(100, 100)).execute_with(|| {
+			let mut meter =
+				WeightMeter::with_limit(shuffle_drain_weight(1).saturating_sub(shortfall));
+
+			Game::process_cancelling(&mut meter);
+
+			assert_eq!(meter.consumed(), shuffle_drain_weight(0));
+			assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 100);
+			assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 100);
+			assert_eq!(
+				crate::Game::<Test>::get().expect("the game continues").state,
+				GameState::Cancelling { step: CancellingStep::Step1DrainShuffle }
+			);
+		});
+	}
 }
 
 #[test]
@@ -8826,6 +9195,36 @@ mod game_steps {
 				Call::<Test>::process_players { game_index, discriminator: 0 },
 				Game::player_process_step2,
 			);
+			assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+		});
+	}
+
+	/// The refund of step 2 leaves the charge for the chunks that the call clears.
+	#[test]
+	fn process_players_charges_the_step2_chunks_it_clears() {
+		// 250 entries need 3 chunks.
+		committed_ext(|| put_step2_game(250, 30)).execute_with(|| {
+			assert_step_charges(
+				Call::<Test>::process_players { game_index: 0, discriminator: 0 },
+				MockWeightInfo::game_step_base().saturating_add(step2_weight(3)),
+			);
+			assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+			assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+		});
+	}
+
+	/// The refund of the shuffle drain leaves the charge for the chunks that the call clears.
+	#[test]
+	fn advance_cancelling_charges_the_shuffle_chunks_it_clears() {
+		// 250 entries need 3 chunks.
+		committed_ext(|| put_cancelling_game(250, 30)).execute_with(|| {
+			assert_step_charges(
+				Call::<Test>::advance_cancelling { game_index: 0, discriminator: 0 },
+				MockWeightInfo::game_step_base()
+					.saturating_add(shuffle_drain_weight(3))
+					.saturating_add(last_player_drain_weight()),
+			);
+			assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
 			assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
 		});
 	}
