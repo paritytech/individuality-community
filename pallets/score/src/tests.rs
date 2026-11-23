@@ -1299,7 +1299,7 @@ fn recognition_flow() {
 		));
 		let participant = Participants::<Test>::get(&user_key).unwrap();
 		let personal_id = match participant.recognition {
-			Recognition::Recognized(id) => id,
+			Recognition::Recognized { id, .. } => id,
 			_ => panic!("Expected participant to be Recognized now"),
 		};
 
@@ -1353,7 +1353,7 @@ fn recognition_flow() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), None));
 		let participant = Participants::<Test>::get(&user_key).unwrap();
 		match participant.recognition {
-			Recognition::Recognized(same_id) => assert_eq!(same_id, personal_id),
+			Recognition::Recognized { id: same_id, .. } => assert_eq!(same_id, personal_id),
 			_ => panic!("Expected participant recognized again"),
 		}
 		// Confirm People pallet => recognized again
@@ -1677,7 +1677,7 @@ fn register_works_for_suspended_participant() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), Some((key, proof))));
 		let participant = Participants::<Test>::get(&who).unwrap();
 		let id = match participant.recognition {
-			Recognized(id) => id,
+			Recognized { id, .. } => id,
 			_ => panic!("expected participant to be Recognized after registration"),
 		};
 
@@ -1706,7 +1706,7 @@ fn register_works_for_suspended_participant() {
 		// Should succeed now.
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), None));
 		let participant = Participants::<Test>::get(&who).unwrap();
-		assert_eq!(participant.recognition, Recognized(id));
+		assert_eq!(participant.recognition, Recognized { id, newly_recognized: true });
 		assert!(participant.reached_personhood);
 		assert!(participant.has_ever_reached_personhood);
 		System::assert_last_event(
@@ -1777,7 +1777,7 @@ fn offboard_fails_when_suspension_fails() {
 		// suspension on offboard fails.
 		PalletScore::onboard_for_recognition(&user).unwrap();
 		Participants::<Test>::mutate(&who, |p| {
-			p.as_mut().unwrap().recognition = Recognized(404);
+			p.as_mut().unwrap().recognition = Recognized { id: 404, newly_recognized: false };
 		});
 
 		assert_noop!(PalletScore::offboard(&who), indiv_pallet_people::Error::<Test>::NotPerson);
@@ -1807,7 +1807,7 @@ fn set_attendance_retries_suspension_after_failure() {
 		assert_ok!(PalletScore::onboard_for_recognition(&user));
 		Participants::<Test>::mutate(&who, |p| {
 			let p = p.as_mut().unwrap();
-			p.recognition = Recognized(0);
+			p.recognition = Recognized { id: 0, newly_recognized: false };
 			p.reached_personhood = true;
 			p.score = 21;
 		});
@@ -1825,7 +1825,7 @@ fn set_attendance_retries_suspension_after_failure() {
 		// their personhood.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert_eq!(p.recognition, Recognized(0));
+		assert_eq!(p.recognition, Recognized { id: 0, newly_recognized: false });
 		assert!(p.reached_personhood);
 
 		// The person with that id now exists.
@@ -1900,7 +1900,7 @@ fn register_works_for_not_recognized_participant() {
 		// Should succeed now.
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), Some((key, proof))));
 		let participant = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(participant.recognition, Recognized(_)));
+		assert!(matches!(participant.recognition, Recognized { newly_recognized: true, .. }));
 		assert!(participant.reached_personhood);
 		assert!(participant.has_ever_reached_personhood);
 		System::assert_last_event(
@@ -1950,7 +1950,7 @@ fn setup_recognised_person(user: u64) -> (AccountOrPerson<u64>, u64) {
 
 	let participant = Participants::<Test>::get(&who).unwrap();
 	let personal_id = match participant.recognition {
-		Recognized(id) => id,
+		Recognized { id, .. } => id,
 		_ => panic!("Expected Recognized"),
 	};
 
@@ -1989,7 +1989,7 @@ fn grace_ratio_suspension() {
 			attend(&who, false);
 			let p = Participants::<Test>::get(&who).unwrap();
 			assert!(
-				matches!(p.recognition, Recognized(_)),
+				matches!(p.recognition, Recognized { .. }),
 				"should remain Recognized after {i} misses (allowed_misses=5)"
 			);
 			assert!(p.reached_personhood);
@@ -2008,6 +2008,26 @@ fn grace_ratio_suspension() {
 
 /// Attending pushes misses out of the rolling window, preventing suspension.
 #[test]
+fn set_attendance_ends_the_newly_recognized_state() {
+	new_test_ext().execute_with(|| {
+		set_active_members(100); // grace ratio = (5, 6): one absence does not suspend
+		let (who, id) = setup_recognised_person(99);
+		assert_eq!(
+			Participants::<Test>::get(&who).unwrap().recognition,
+			Recognized { id, newly_recognized: true }
+		);
+
+		// An absence ends the state as an attendance does.
+		attend(&who, false);
+
+		assert_eq!(
+			Participants::<Test>::get(&who).unwrap().recognition,
+			Recognized { id, newly_recognized: false }
+		);
+	});
+}
+
+#[test]
 fn attendance_within_window_prevents_suspension() {
 	new_test_ext().execute_with(|| {
 		set_active_members(100); // grace ratio = (5, 6), personhood threshold = 1
@@ -2019,19 +2039,19 @@ fn attendance_within_window_prevents_suspension() {
 			attend(&who, false);
 		}
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)), "still Recognized after 5 misses");
+		assert!(matches!(p.recognition, Recognized { .. }), "still Recognized after 5 misses");
 
 		// Attend once — window still has 5 misses out of 6, but within allowance.
 		attend(&who, true);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)), "still Recognized after recovery");
+		assert!(matches!(p.recognition, Recognized { .. }), "still Recognized after recovery");
 
 		// Keep missing — the single attendance stays in the window, capping misses at 5.
 		for _ in 0..5 {
 			attend(&who, false);
 			let p = Participants::<Test>::get(&who).unwrap();
 			assert!(
-				matches!(p.recognition, Recognized(_)),
+				matches!(p.recognition, Recognized { .. }),
 				"still Recognized — attendance keeps misses within allowance"
 			);
 		}
@@ -2121,7 +2141,7 @@ fn large_network_second_miss_in_window_suspends() {
 		// First miss: 1 miss in 6, within allowance.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)), "1 miss in 6 is tolerated");
+		assert!(matches!(p.recognition, Recognized { .. }), "1 miss in 6 is tolerated");
 
 		// Attend a few then miss again: 2 misses in window of 6.
 		attend(&who, true);
@@ -2151,10 +2171,10 @@ fn grace_ratio_window_three_full_cycle() {
 		// First two misses: 2 misses in 3, within allowance.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)));
+		assert!(matches!(p.recognition, Recognized { .. }));
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)));
+		assert!(matches!(p.recognition, Recognized { .. }));
 		assert!(p.reached_personhood);
 
 		// Third miss: 3 misses in window of 3, exceeds allowance → suspended.
@@ -2184,7 +2204,7 @@ fn grace_ratio_window_three_full_cycle() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(99), None));
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(id) if id == personal_id),
+			matches!(p.recognition, Recognized { id, .. } if id == personal_id),
 			"register(None) should resume personhood with same id"
 		);
 		assert!(p.reached_personhood);
@@ -2207,7 +2227,7 @@ fn grace_ratio_window_two_full_cycle() {
 		// First miss: 1/2, tolerated.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)));
+		assert!(matches!(p.recognition, Recognized { .. }));
 		assert!(p.reached_personhood);
 		// Score: started at 15, lost 1 => 14.
 		assert_eq!(p.score, 14);
@@ -2240,7 +2260,7 @@ fn grace_ratio_window_two_full_cycle() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(99), None));
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(id) if id == personal_id),
+			matches!(p.recognition, Recognized { id, .. } if id == personal_id),
 			"register(None) should resume personhood with same ID"
 		);
 		assert!(p.reached_personhood);
@@ -2264,7 +2284,7 @@ fn grace_ratio_large_network_full_cycle() {
 		// First miss: 1/6, tolerated.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)));
+		assert!(matches!(p.recognition, Recognized { .. }));
 		// Score: started at 21 (capped), lost 1 => 20.
 		assert_eq!(p.score, 20);
 
@@ -2296,7 +2316,7 @@ fn grace_ratio_large_network_full_cycle() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(99), None));
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(id) if id == personal_id),
+			matches!(p.recognition, Recognized { id, .. } if id == personal_id),
 			"register(None) should resume personhood with same ID"
 		);
 
@@ -2306,7 +2326,7 @@ fn grace_ratio_large_network_full_cycle() {
 			attend(&who, true);
 			let p = Participants::<Test>::get(&who).unwrap();
 			assert!(
-				matches!(p.recognition, Recognized(_)),
+				matches!(p.recognition, Recognized { .. }),
 				"should remain Recognized after attendance {i}"
 			);
 			assert!(p.reached_personhood);
@@ -2327,7 +2347,7 @@ fn attending_does_not_suspend() {
 		for _ in 0..8 {
 			attend(&who, true);
 			let p = Participants::<Test>::get(&who).unwrap();
-			assert!(matches!(p.recognition, Recognized(_)));
+			assert!(matches!(p.recognition, Recognized { .. }));
 			assert!(p.reached_personhood);
 		}
 	});
@@ -2607,7 +2627,10 @@ fn force_set_attendance_absence_suspends_recognised_person() {
 	new_test_ext().execute_with(|| {
 		advance_to(1);
 		let (who, personal_id) = setup_recognised_person(7);
-		assert_eq!(Participants::<Test>::get(&who).unwrap().recognition, Recognized(personal_id));
+		assert_eq!(
+			Participants::<Test>::get(&who).unwrap().recognition,
+			Recognized { id: personal_id, newly_recognized: true }
+		);
 
 		// No grace: any absence suspends.
 		let schedule: AbsenceGraceTiers = BoundedVec::try_from(vec![AbsenceGraceTier {
@@ -2834,7 +2857,7 @@ fn mid_session_schedule_tightening_does_not_affect_current_session() {
 		}
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"still recognized after 5 misses under (5,6)"
 		);
 		// Start a new session (caches ratio), then tighten the schedule mid-session.
@@ -2857,7 +2880,7 @@ fn mid_session_schedule_tightening_does_not_affect_current_session() {
 		People::on_poll(System::block_number(), &mut WeightMeter::new());
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"still recognized: mid-session change did not affect current session"
 		);
 		// Next session picks up the strict (0, 0) ratio. Any absence now suspends.
@@ -2892,7 +2915,7 @@ fn schedule_relaxation_saves_participant_next_session() {
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"still recognized after 1 miss under (1,2)"
 		);
 		// Governance relaxes the schedule to (5, 6) before the next session.
@@ -2911,7 +2934,7 @@ fn schedule_relaxation_saves_participant_next_session() {
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"still recognized: relaxed (5,6) ratio saved the participant"
 		);
 	});
@@ -3355,7 +3378,7 @@ fn personhood_schedule_raise_does_not_retroactively_suspend() {
 		assert_eq!(PersonhoodThreshold::<Test>::get(), 1);
 		let (who, personal_id) = setup_recognised_person(99);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(id) if id == personal_id));
+		assert!(matches!(p.recognition, Recognized { id, .. } if id == personal_id));
 		let original_score = p.score;
 		assert!(original_score < 21, "score should be modest under default curve at N=100");
 
@@ -3372,7 +3395,7 @@ fn personhood_schedule_raise_does_not_retroactively_suspend() {
 		// Recognition retained — non-retroactivity guarantee.
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"raising the bar must not retroactively suspend already-recognized participants"
 		);
 		assert!(p.reached_personhood, "reached_personhood must remain true");
@@ -3487,7 +3510,7 @@ mod migration {
 			true,
 			true,
 			true,
-			Recognized(42),
+			Recognized { id: 42, newly_recognized: false },
 			Some(5u32),
 		);
 		unhashed::put_raw(&Participants::<Test>::hashed_key_for(key), &old.encode());
@@ -3523,7 +3546,7 @@ mod migration {
 					cashed_out: true,
 					reached_personhood: true,
 					has_ever_reached_personhood: true,
-					recognition: Recognized(42),
+					recognition: Recognized { id: 42, newly_recognized: false },
 					last_attended_game: Some(5),
 					attended_games_while_recognized: 0,
 				})

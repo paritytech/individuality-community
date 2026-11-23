@@ -3577,7 +3577,7 @@ mod claim_tenure_credits {
 		let id = People::reserve_new_id();
 		let (key, _) = mock_key(id);
 		assert_ok!(People::recognize_personhood(id, Some(key)));
-		set_recognition(who, Recognition::Recognized(id));
+		set_recognition(who, Recognition::Recognized { id, newly_recognized: false });
 		id
 	}
 
@@ -3593,7 +3593,7 @@ mod claim_tenure_credits {
 			.expect("sign-up onboards the account")
 			.recognition
 		{
-			Recognition::Recognized(id) => id,
+			Recognition::Recognized { id, .. } => id,
 			_ => recognise(who),
 		};
 		set_recognition(who, Recognition::Suspended(id));

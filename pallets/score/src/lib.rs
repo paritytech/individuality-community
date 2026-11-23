@@ -987,10 +987,11 @@ pub mod pallet {
 					T::People::recognize_personhood(id, Some(member_key))?;
 					(id, false)
 				},
-				ExternallyRecognized | Recognized(_) => return Err(Error::<T>::Recognized.into()),
+				ExternallyRecognized | Recognized { .. } =>
+					return Err(Error::<T>::Recognized.into()),
 			};
 
-			score.recognition = Recognized(id);
+			score.recognition = Recognized { id, newly_recognized: true };
 			score.reached_personhood = true;
 			score.has_ever_reached_personhood = true;
 			Participants::<T>::insert(&who, score);
@@ -1157,7 +1158,7 @@ pub mod pallet {
 		/// entry.
 		pub fn offboard(who: &AccountOrPerson<T::AccountId>) -> DispatchResult {
 			let maybe_recognition = Participants::<T>::get(who).map(|p| p.recognition);
-			if let Some(Recognized(id)) = maybe_recognition {
+			if let Some(Recognized { id, .. }) = maybe_recognition {
 				with_storage_layer::<_, DispatchError, _>(|| {
 					T::People::start_people_set_mutation_session()?;
 					T::People::suspend_personhood(&[id])?;
@@ -1243,6 +1244,10 @@ pub mod pallet {
 		) -> Result<Participant<BalanceOf<T>>, DispatchError> {
 			let mut score = Participants::<T>::get(who).ok_or(Error::<T>::NoScore)?;
 
+			if let Recognized { newly_recognized, .. } = &mut score.recognition {
+				*newly_recognized = false;
+			}
+
 			let personhood_threshold = PersonhoodThreshold::<T>::get();
 
 			// If they are externally recognized, their score is always set to the threshold.
@@ -1256,7 +1261,7 @@ pub mod pallet {
 			}
 
 			// Counting games attended while recognized through games
-			if attended && matches!(score.recognition, Recognized(_)) {
+			if attended && matches!(score.recognition, Recognized { .. }) {
 				score.attended_games_while_recognized =
 					score.attended_games_while_recognized.saturating_add(1);
 			}
@@ -1296,7 +1301,7 @@ pub mod pallet {
 					// exceeding the allowed misses within the window triggers suspension.
 					// A window of 0 (with allowed_misses 0) means no grace: any absence
 					// immediately suspends.
-					Recognized(_) => window == 0 || misses > allowed_misses,
+					Recognized { .. } => window == 0 || misses > allowed_misses,
 
 					// NotRecognized participants additionally lose personhood when their
 					// score drops below threshold, otherwise a stale flag would let them
@@ -1311,7 +1316,7 @@ pub mod pallet {
 			// and keeps their personhood until the next attendance where, if they are absent, the
 			// suspension is retried.
 			if suspend_personhood {
-				if let Recognized(id) = score.recognition {
+				if let Recognized { id, .. } = score.recognition {
 					if T::People::suspend_personhood(&[id]).is_ok() {
 						score.recognition = Suspended(id);
 					} else {

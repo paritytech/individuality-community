@@ -233,12 +233,20 @@ pub enum Recognition {
 	///
 	/// A participant may have reached personhood score, it is not recognized until he submit his
 	/// key and calls `register`.
-	Recognized(PersonalId),
+	Recognized {
+		/// The personal id of the participant.
+		id: PersonalId,
+		/// Whether the participant is newly recognized until the next attendance.
+		///
+		/// Set to true after calling `register` until the next attendance set with
+		/// `set_attendance`.
+		newly_recognized: bool,
+	},
 }
 
 impl Recognition {
 	pub fn is_recognized(&self) -> bool {
-		matches!(self, Recognition::Recognized(_) | Recognition::ExternallyRecognized)
+		matches!(self, Recognition::Recognized { .. } | Recognition::ExternallyRecognized)
 	}
 
 	pub fn is_externally_recognized(&self) -> bool {
