@@ -5409,6 +5409,41 @@ mod dynamic_parameters {
 			);
 		});
 	}
+
+	#[test]
+	fn allowance_view_functions_follow_their_parameters() {
+		new_test_ext().execute_with(|| {
+			let accounts_api = StatementAllowance { max_size: 2048, max_count: 3 };
+			let notification = StatementAllowance { max_size: 256, max_count: 5 };
+			AccountsApiAllowance::set(&accounts_api);
+			NotificationAllowance::set(&notification);
+
+			assert_eq!(Resources::get_accounts_api_allowance(), accounts_api);
+			assert_eq!(Resources::get_notification_allowance(), notification);
+		});
+	}
+
+	#[test]
+	fn statement_limit_and_long_term_storage_view_functions_return_their_parameters() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(
+				Resources::get_lite_person_statement_limit(),
+				StatementAllowance { max_size: 4 * 1024, max_count: 10 }
+			);
+			assert_eq!(
+				Resources::get_person_statement_limit(),
+				StatementAllowance { max_size: 16 * 1024, max_count: 50 }
+			);
+			assert_eq!(
+				Resources::get_long_term_storage_allowance_for_people(),
+				LongTermStorageAllocation { transactions: 32, bytes: 64 * 1024 * 1024 }
+			);
+			assert_eq!(
+				Resources::get_long_term_storage_allowance_for_lite_people(),
+				LongTermStorageAllocation { transactions: 8, bytes: 2 * 1024 * 1024 }
+			);
+		});
+	}
 }
 
 /// Verify that the default mock configuration passes all integrity checks,
