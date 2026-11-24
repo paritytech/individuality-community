@@ -3642,7 +3642,8 @@ fn kickout_suspends_recognized_player() {
 		let (key, _sk) = mock_key(1234);
 		assert_ok!(People::recognize_personhood(id, Some(key)));
 		indiv_pallet_score::Participants::<Test>::mutate(&player, |p| {
-			p.as_mut().unwrap().recognition = indiv_pallet_score::Recognition::Recognized(id);
+			p.as_mut().unwrap().recognition =
+				indiv_pallet_score::Recognition::Recognized { id, newly_recognized: false };
 		});
 		ArchivedPlayers::<Test>::insert(
 			&player,
@@ -3686,7 +3687,8 @@ fn offboard_fails_when_suspension_fails() {
 		// Make ALICE `Recognized` with a personal id that does not belong to any person, so
 		// the suspension on offboard fails.
 		indiv_pallet_score::Participants::<Test>::mutate(&alice, |p| {
-			p.as_mut().unwrap().recognition = indiv_pallet_score::Recognition::Recognized(404);
+			p.as_mut().unwrap().recognition =
+				indiv_pallet_score::Recognition::Recognized { id: 404, newly_recognized: false };
 		});
 
 		let err = Game::offboard(RuntimeOrigin::signed(ALICE)).unwrap_err();
@@ -3703,7 +3705,8 @@ fn kickout_fails_when_suspension_fails() {
 		// belong to any person, so the suspension on kickout fails.
 		assert_ok!(indiv_pallet_score::Pallet::<Test>::onboard_for_recognition(&ALICE));
 		indiv_pallet_score::Participants::<Test>::mutate(&player, |p| {
-			p.as_mut().unwrap().recognition = indiv_pallet_score::Recognition::Recognized(404);
+			p.as_mut().unwrap().recognition =
+				indiv_pallet_score::Recognition::Recognized { id: 404, newly_recognized: false };
 		});
 		ArchivedPlayers::<Test>::insert(
 			&player,
@@ -5792,8 +5795,10 @@ mod airdrop {
 		recognition: Recognition,
 		last_attended_game: Option<u32>,
 	) {
-		let reached =
-			matches!(recognition, Recognition::Recognized(_) | Recognition::ExternallyRecognized,);
+		let reached = matches!(
+			recognition,
+			Recognition::Recognized { .. } | Recognition::ExternallyRecognized
+		);
 		indiv_pallet_score::Participants::<Test>::insert(
 			player,
 			Participant {
@@ -5809,6 +5814,49 @@ mod airdrop {
 				attended_games_while_recognized: 0,
 			},
 		);
+	}
+
+	/// The account variant for the single event `event_id`, with a VRF signature that verifies.
+	/// Registers a fresh sr25519 key as the public key of `account`.
+	fn valid_account_proofs(
+		account: AccountId32,
+		event_id: indiv_pallet_airdrop::types::EventId,
+	) -> crate::AirdropVrfs<<verifiable::mock::Mock as verifiable::GenerateVerifiable>::Proof> {
+		let pair = sr25519::Pair::from_seed(b"valid_account_proofs_seed_______");
+		register_account_pubkey(account, pair.public());
+		let signature = pair.vrf_sign(
+			&indiv_pallet_airdrop::vrf::transcript_for_event(&event_id, &pair.public())
+				.into_sign_data(),
+		);
+		crate::AirdropVrfs::Account(vec![signature].try_into().expect("one entry fits the bound"))
+	}
+
+	/// Make `account` a newly recognized player. The player is archived so that the sign-up skips
+	/// the onboarding.
+	fn force_newly_recognized(account: AccountId32) {
+		force_recognition(
+			AccountOrPerson::Account(account.clone()),
+			Recognition::Recognized { id: 0, newly_recognized: true },
+		);
+		ArchivedPlayers::<Test>::insert(
+			AccountOrPerson::Account(account),
+			ArchivedPlayer::Unkickable { first_game: 0 },
+		);
+	}
+
+	/// Start a game with one airdrop event open for registration. Returns the event id.
+	fn new_game_with_open_airdrop() -> indiv_pallet_airdrop::types::EventId {
+		let schedule = GameSchedule::<u32, u128> {
+			game_play_time: 10,
+			rounds: 2,
+			max_group_size: 3,
+			airdrops: test_airdrops(1),
+			tenure_claim_window: 0,
+		};
+		assert_ok!(Game::new_game(&schedule));
+		let event_id = Game::airdrop_event_id(GameIndex::<Test>::get(), 0);
+		set_event_status(event_id, Status::Registering { total_participants: 0 });
+		event_id
 	}
 
 	/// Disable the airdrop's prize asset so the next `T::Airdrop::schedule` call
@@ -6176,6 +6224,32 @@ mod airdrop {
 	}
 
 	#[test]
+	fn sign_up_accepts_both_variants_for_newly_recognized_player() {
+		new_test_ext().execute_with(|| {
+			let event_id = new_game_with_open_airdrop();
+			force_newly_recognized(ALICE);
+			force_newly_recognized(BOB);
+
+			assert_ok!(Game::sign_up_with_account(
+				RuntimeOrigin::signed(ALICE),
+				DEFAULT_IDENTIFIER_KEY,
+				Some(valid_account_proofs(ALICE, event_id)),
+			));
+			assert_ok!(Game::sign_up_with_account(
+				RuntimeOrigin::signed(BOB),
+				DEFAULT_IDENTIFIER_KEY,
+				Some(alias_proofs(1)),
+			));
+			let entries =
+				AirdropRegistrations::<Test>::iter_prefix_values(event_id).collect::<Vec<_>>();
+			assert_eq!(entries.len(), 2);
+			for account_id in [ALICE, BOB] {
+				assert!(entries.contains(&RegistrationEntry::Account { account_id }));
+			}
+		});
+	}
+
+	#[test]
 	fn sign_up_rejects_account_variant_for_recognized_player() {
 		new_test_ext().execute_with(|| {
 			let schedule = GameSchedule::<u32, u128> {
@@ -6188,7 +6262,10 @@ mod airdrop {
 			assert_ok!(Game::new_game(&schedule));
 			// Pre-recognized account player: in `Participants` as `Recognized(_)` and in
 			// `ArchivedPlayers` so the sign-up's onboard step is skipped.
-			force_recognition(AccountOrPerson::Account(ALICE), Recognition::Recognized(0));
+			force_recognition(
+				AccountOrPerson::Account(ALICE),
+				Recognition::Recognized { id: 0, newly_recognized: false },
+			);
 			ArchivedPlayers::<Test>::insert(
 				AccountOrPerson::Account(ALICE),
 				ArchivedPlayer::Unkickable { first_game: 0 },
@@ -6201,6 +6278,33 @@ mod airdrop {
 				),
 				Error::<Test>::InvalidAirdropVrfVariantForRecognition,
 			);
+		});
+	}
+
+	#[test]
+	fn validate_register_for_airdrop_follows_the_recognition() {
+		new_test_ext().execute_with(|| {
+			let event_id = new_game_with_open_airdrop();
+			let game_index = GameIndex::<Test>::get();
+			let who = AccountOrPerson::Account(ALICE);
+			let account_proofs = Some(valid_account_proofs(ALICE, event_id));
+			let alias_proofs = Some(alias_proofs(1));
+
+			force_newly_recognized(ALICE);
+			for proofs in [&account_proofs, &alias_proofs] {
+				assert!(Game::validate_register_for_airdrop(proofs, &who, game_index, 1).is_ok());
+			}
+			// The dry runs registered nothing.
+			assert_eq!(AirdropRegistrations::<Test>::iter_prefix(event_id).count(), 0);
+
+			force_recognition(
+				who.clone(),
+				Recognition::Recognized { id: 0, newly_recognized: false },
+			);
+			assert!(matches!(
+				Game::validate_register_for_airdrop(&account_proofs, &who, game_index, 1),
+				Err(CustomError::InvalidAirdropVrfVariant)
+			));
 		});
 	}
 
@@ -6400,7 +6504,11 @@ mod airdrop {
 	#[test]
 	fn claim_rejects_when_never_attended() {
 		new_test_ext().execute_with(|| {
-			force_participant(AccountOrPerson::Account(ALICE), Recognition::Recognized(0), None);
+			force_participant(
+				AccountOrPerson::Account(ALICE),
+				Recognition::Recognized { id: 0, newly_recognized: false },
+				None,
+			);
 			assert_noop!(
 				Game::claim_airdrop(RuntimeOrigin::signed(ALICE), 1, 0, id_to_account(99)),
 				Error::<Test>::NotEligibleForAirdrop,
@@ -6413,7 +6521,11 @@ mod airdrop {
 		// Eligibility is `last_attended_game == Some(game_index)`. ALICE attended game 5;
 		// claims for the previous (game 4) and the next (game 6) must both be rejected.
 		new_test_ext().execute_with(|| {
-			force_participant(AccountOrPerson::Account(ALICE), Recognition::Recognized(0), Some(5));
+			force_participant(
+				AccountOrPerson::Account(ALICE),
+				Recognition::Recognized { id: 0, newly_recognized: false },
+				Some(5),
+			);
 
 			// Previous game.
 			stage_claim_for(4, RegistrationEntry::Account { account_id: ALICE });
@@ -6487,7 +6599,8 @@ mod airdrop {
 			let who = AccountOrPerson::Account(ALICE);
 			assert_ok!(indiv_pallet_score::Pallet::<Test>::set_attendance(&who, true, game_index));
 			indiv_pallet_score::Participants::<Test>::mutate(&who, |maybe| {
-				maybe.as_mut().unwrap().recognition = Recognition::Recognized(0);
+				maybe.as_mut().unwrap().recognition =
+					Recognition::Recognized { id: 0, newly_recognized: false };
 			});
 
 			// Stage the event as `Claiming` with ALICE as the sole winner, then claim.
@@ -6525,7 +6638,11 @@ mod airdrop {
 
 			// Pre-recognized account player: in `Participants` as `Recognized(_)` and in
 			// `ArchivedPlayers` so the sign-up's onboard step is skipped.
-			force_participant(AccountOrPerson::Account(ALICE), Recognition::Recognized(0), None);
+			force_participant(
+				AccountOrPerson::Account(ALICE),
+				Recognition::Recognized { id: 0, newly_recognized: false },
+				None,
+			);
 			ArchivedPlayers::<Test>::insert(
 				AccountOrPerson::Account(ALICE),
 				ArchivedPlayer::Unkickable { first_game: 0 },
@@ -6579,7 +6696,11 @@ mod airdrop {
 	#[test]
 	fn claim_forwards_account_registrant() {
 		new_test_ext().execute_with(|| {
-			force_participant(AccountOrPerson::Account(ALICE), Recognition::Recognized(0), Some(7));
+			force_participant(
+				AccountOrPerson::Account(ALICE),
+				Recognition::Recognized { id: 0, newly_recognized: false },
+				Some(7),
+			);
 			stage_claim_for(7, RegistrationEntry::Account { account_id: ALICE });
 			let beneficiary = id_to_account(123);
 			let prize_amount = test_airdrop_prize().asset_amount;
@@ -7223,7 +7344,11 @@ mod airdrop {
 	fn claim_airdrop_selects_event_by_index() {
 		new_test_ext().execute_with(|| {
 			let alice_entry = RegistrationEntry::<AccountId32>::Account { account_id: ALICE };
-			force_participant(AccountOrPerson::Account(ALICE), Recognition::Recognized(0), Some(5));
+			force_participant(
+				AccountOrPerson::Account(ALICE),
+				Recognition::Recognized { id: 0, newly_recognized: false },
+				Some(5),
+			);
 
 			// Index 0: claimable with a winning entry for ALICE.
 			stage_claim_for_index(5, 0, alice_entry.clone());
@@ -7261,7 +7386,11 @@ mod airdrop {
 	fn claim_each_won_airdrop_separately() {
 		new_test_ext().execute_with(|| {
 			let alice_entry = RegistrationEntry::<AccountId32>::Account { account_id: ALICE };
-			force_participant(AccountOrPerson::Account(ALICE), Recognition::Recognized(0), Some(5));
+			force_participant(
+				AccountOrPerson::Account(ALICE),
+				Recognition::Recognized { id: 0, newly_recognized: false },
+				Some(5),
+			);
 			stage_claim_for_index(5, 0, alice_entry.clone());
 			stage_claim_for_index(5, 1, alice_entry.clone());
 

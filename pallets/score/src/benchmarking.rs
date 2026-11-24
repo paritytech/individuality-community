@@ -412,7 +412,7 @@ mod benches {
 
 		let after = Participants::<T>::get(&participant_key).expect("entry must exist");
 		assert!(
-			matches!(after.recognition, Recognition::Recognized(_)),
+			matches!(after.recognition, Recognition::Recognized { .. }),
 			"participant must now be Recognized"
 		);
 
@@ -498,7 +498,8 @@ mod benches {
 			SystemOrigin::Signed(caller.clone()).into(),
 			Some((pk, proof_of_ownership)),
 		)?;
-		let Recognition::Recognized(id) = Participants::<T>::get(&who).expect("exists").recognition
+		let Recognition::Recognized { id, .. } =
+			Participants::<T>::get(&who).expect("exists").recognition
 		else {
 			return Err(BenchmarkError::Stop("participant must be Recognized"));
 		};

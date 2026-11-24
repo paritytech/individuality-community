@@ -1299,7 +1299,7 @@ fn recognition_flow() {
 		));
 		let participant = Participants::<Test>::get(&user_key).unwrap();
 		let personal_id = match participant.recognition {
-			Recognition::Recognized(id) => id,
+			Recognition::Recognized { id, .. } => id,
 			_ => panic!("Expected participant to be Recognized now"),
 		};
 
@@ -1353,7 +1353,7 @@ fn recognition_flow() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), None));
 		let participant = Participants::<Test>::get(&user_key).unwrap();
 		match participant.recognition {
-			Recognition::Recognized(same_id) => assert_eq!(same_id, personal_id),
+			Recognition::Recognized { id: same_id, .. } => assert_eq!(same_id, personal_id),
 			_ => panic!("Expected participant recognized again"),
 		}
 		// Confirm People pallet => recognized again
@@ -1677,7 +1677,7 @@ fn register_works_for_suspended_participant() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), Some((key, proof))));
 		let participant = Participants::<Test>::get(&who).unwrap();
 		let id = match participant.recognition {
-			Recognized(id) => id,
+			Recognized { id, .. } => id,
 			_ => panic!("expected participant to be Recognized after registration"),
 		};
 
@@ -1706,7 +1706,7 @@ fn register_works_for_suspended_participant() {
 		// Should succeed now.
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), None));
 		let participant = Participants::<Test>::get(&who).unwrap();
-		assert_eq!(participant.recognition, Recognized(id));
+		assert_eq!(participant.recognition, Recognized { id, newly_recognized: true });
 		assert!(participant.reached_personhood);
 		assert!(participant.has_ever_reached_personhood);
 		System::assert_last_event(
@@ -1777,7 +1777,7 @@ fn offboard_fails_when_suspension_fails() {
 		// suspension on offboard fails.
 		PalletScore::onboard_for_recognition(&user).unwrap();
 		Participants::<Test>::mutate(&who, |p| {
-			p.as_mut().unwrap().recognition = Recognized(404);
+			p.as_mut().unwrap().recognition = Recognized { id: 404, newly_recognized: false };
 		});
 
 		assert_noop!(PalletScore::offboard(&who), indiv_pallet_people::Error::<Test>::NotPerson);
@@ -1807,7 +1807,7 @@ fn set_attendance_retries_suspension_after_failure() {
 		assert_ok!(PalletScore::onboard_for_recognition(&user));
 		Participants::<Test>::mutate(&who, |p| {
 			let p = p.as_mut().unwrap();
-			p.recognition = Recognized(0);
+			p.recognition = Recognized { id: 0, newly_recognized: false };
 			p.reached_personhood = true;
 			p.score = 21;
 		});
@@ -1825,7 +1825,7 @@ fn set_attendance_retries_suspension_after_failure() {
 		// their personhood.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert_eq!(p.recognition, Recognized(0));
+		assert_eq!(p.recognition, Recognized { id: 0, newly_recognized: false });
 		assert!(p.reached_personhood);
 
 		// The person with that id now exists.
@@ -1900,7 +1900,7 @@ fn register_works_for_not_recognized_participant() {
 		// Should succeed now.
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(user), Some((key, proof))));
 		let participant = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(participant.recognition, Recognized(_)));
+		assert!(matches!(participant.recognition, Recognized { newly_recognized: true, .. }));
 		assert!(participant.reached_personhood);
 		assert!(participant.has_ever_reached_personhood);
 		System::assert_last_event(
@@ -1950,7 +1950,7 @@ fn setup_recognised_person(user: u64) -> (AccountOrPerson<u64>, u64) {
 
 	let participant = Participants::<Test>::get(&who).unwrap();
 	let personal_id = match participant.recognition {
-		Recognized(id) => id,
+		Recognized { id, .. } => id,
 		_ => panic!("Expected Recognized"),
 	};
 
@@ -1989,7 +1989,7 @@ fn grace_ratio_suspension() {
 			attend(&who, false);
 			let p = Participants::<Test>::get(&who).unwrap();
 			assert!(
-				matches!(p.recognition, Recognized(_)),
+				matches!(p.recognition, Recognized { .. }),
 				"should remain Recognized after {i} misses (allowed_misses=5)"
 			);
 			assert!(p.reached_personhood);
@@ -2008,6 +2008,26 @@ fn grace_ratio_suspension() {
 
 /// Attending pushes misses out of the rolling window, preventing suspension.
 #[test]
+fn set_attendance_ends_the_newly_recognized_state() {
+	new_test_ext().execute_with(|| {
+		set_active_members(100); // grace ratio = (5, 6): one absence does not suspend
+		let (who, id) = setup_recognised_person(99);
+		assert_eq!(
+			Participants::<Test>::get(&who).unwrap().recognition,
+			Recognized { id, newly_recognized: true }
+		);
+
+		// An absence ends the state as an attendance does.
+		attend(&who, false);
+
+		assert_eq!(
+			Participants::<Test>::get(&who).unwrap().recognition,
+			Recognized { id, newly_recognized: false }
+		);
+	});
+}
+
+#[test]
 fn attendance_within_window_prevents_suspension() {
 	new_test_ext().execute_with(|| {
 		set_active_members(100); // grace ratio = (5, 6), personhood threshold = 1
@@ -2019,19 +2039,19 @@ fn attendance_within_window_prevents_suspension() {
 			attend(&who, false);
 		}
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)), "still Recognized after 5 misses");
+		assert!(matches!(p.recognition, Recognized { .. }), "still Recognized after 5 misses");
 
 		// Attend once — window still has 5 misses out of 6, but within allowance.
 		attend(&who, true);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)), "still Recognized after recovery");
+		assert!(matches!(p.recognition, Recognized { .. }), "still Recognized after recovery");
 
 		// Keep missing — the single attendance stays in the window, capping misses at 5.
 		for _ in 0..5 {
 			attend(&who, false);
 			let p = Participants::<Test>::get(&who).unwrap();
 			assert!(
-				matches!(p.recognition, Recognized(_)),
+				matches!(p.recognition, Recognized { .. }),
 				"still Recognized — attendance keeps misses within allowance"
 			);
 		}
@@ -2121,7 +2141,7 @@ fn large_network_second_miss_in_window_suspends() {
 		// First miss: 1 miss in 6, within allowance.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)), "1 miss in 6 is tolerated");
+		assert!(matches!(p.recognition, Recognized { .. }), "1 miss in 6 is tolerated");
 
 		// Attend a few then miss again: 2 misses in window of 6.
 		attend(&who, true);
@@ -2151,10 +2171,10 @@ fn grace_ratio_window_three_full_cycle() {
 		// First two misses: 2 misses in 3, within allowance.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)));
+		assert!(matches!(p.recognition, Recognized { .. }));
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)));
+		assert!(matches!(p.recognition, Recognized { .. }));
 		assert!(p.reached_personhood);
 
 		// Third miss: 3 misses in window of 3, exceeds allowance → suspended.
@@ -2184,7 +2204,7 @@ fn grace_ratio_window_three_full_cycle() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(99), None));
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(id) if id == personal_id),
+			matches!(p.recognition, Recognized { id, .. } if id == personal_id),
 			"register(None) should resume personhood with same id"
 		);
 		assert!(p.reached_personhood);
@@ -2207,7 +2227,7 @@ fn grace_ratio_window_two_full_cycle() {
 		// First miss: 1/2, tolerated.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)));
+		assert!(matches!(p.recognition, Recognized { .. }));
 		assert!(p.reached_personhood);
 		// Score: started at 15, lost 1 => 14.
 		assert_eq!(p.score, 14);
@@ -2240,7 +2260,7 @@ fn grace_ratio_window_two_full_cycle() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(99), None));
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(id) if id == personal_id),
+			matches!(p.recognition, Recognized { id, .. } if id == personal_id),
 			"register(None) should resume personhood with same ID"
 		);
 		assert!(p.reached_personhood);
@@ -2264,7 +2284,7 @@ fn grace_ratio_large_network_full_cycle() {
 		// First miss: 1/6, tolerated.
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(_)));
+		assert!(matches!(p.recognition, Recognized { .. }));
 		// Score: started at 21 (capped), lost 1 => 20.
 		assert_eq!(p.score, 20);
 
@@ -2296,7 +2316,7 @@ fn grace_ratio_large_network_full_cycle() {
 		assert_ok!(PalletScore::register(RuntimeOrigin::signed(99), None));
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(id) if id == personal_id),
+			matches!(p.recognition, Recognized { id, .. } if id == personal_id),
 			"register(None) should resume personhood with same ID"
 		);
 
@@ -2306,7 +2326,7 @@ fn grace_ratio_large_network_full_cycle() {
 			attend(&who, true);
 			let p = Participants::<Test>::get(&who).unwrap();
 			assert!(
-				matches!(p.recognition, Recognized(_)),
+				matches!(p.recognition, Recognized { .. }),
 				"should remain Recognized after attendance {i}"
 			);
 			assert!(p.reached_personhood);
@@ -2327,7 +2347,7 @@ fn attending_does_not_suspend() {
 		for _ in 0..8 {
 			attend(&who, true);
 			let p = Participants::<Test>::get(&who).unwrap();
-			assert!(matches!(p.recognition, Recognized(_)));
+			assert!(matches!(p.recognition, Recognized { .. }));
 			assert!(p.reached_personhood);
 		}
 	});
@@ -2607,7 +2627,10 @@ fn force_set_attendance_absence_suspends_recognised_person() {
 	new_test_ext().execute_with(|| {
 		advance_to(1);
 		let (who, personal_id) = setup_recognised_person(7);
-		assert_eq!(Participants::<Test>::get(&who).unwrap().recognition, Recognized(personal_id));
+		assert_eq!(
+			Participants::<Test>::get(&who).unwrap().recognition,
+			Recognized { id: personal_id, newly_recognized: true }
+		);
 
 		// No grace: any absence suspends.
 		let schedule: AbsenceGraceTiers = BoundedVec::try_from(vec![AbsenceGraceTier {
@@ -2834,7 +2857,7 @@ fn mid_session_schedule_tightening_does_not_affect_current_session() {
 		}
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"still recognized after 5 misses under (5,6)"
 		);
 		// Start a new session (caches ratio), then tighten the schedule mid-session.
@@ -2857,7 +2880,7 @@ fn mid_session_schedule_tightening_does_not_affect_current_session() {
 		People::on_poll(System::block_number(), &mut WeightMeter::new());
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"still recognized: mid-session change did not affect current session"
 		);
 		// Next session picks up the strict (0, 0) ratio. Any absence now suspends.
@@ -2892,7 +2915,7 @@ fn schedule_relaxation_saves_participant_next_session() {
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"still recognized after 1 miss under (1,2)"
 		);
 		// Governance relaxes the schedule to (5, 6) before the next session.
@@ -2911,7 +2934,7 @@ fn schedule_relaxation_saves_participant_next_session() {
 		attend(&who, false);
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"still recognized: relaxed (5,6) ratio saved the participant"
 		);
 	});
@@ -3355,7 +3378,7 @@ fn personhood_schedule_raise_does_not_retroactively_suspend() {
 		assert_eq!(PersonhoodThreshold::<Test>::get(), 1);
 		let (who, personal_id) = setup_recognised_person(99);
 		let p = Participants::<Test>::get(&who).unwrap();
-		assert!(matches!(p.recognition, Recognized(id) if id == personal_id));
+		assert!(matches!(p.recognition, Recognized { id, .. } if id == personal_id));
 		let original_score = p.score;
 		assert!(original_score < 21, "score should be modest under default curve at N=100");
 
@@ -3372,7 +3395,7 @@ fn personhood_schedule_raise_does_not_retroactively_suspend() {
 		// Recognition retained — non-retroactivity guarantee.
 		let p = Participants::<Test>::get(&who).unwrap();
 		assert!(
-			matches!(p.recognition, Recognized(_)),
+			matches!(p.recognition, Recognized { .. }),
 			"raising the bar must not retroactively suspend already-recognized participants"
 		);
 		assert!(p.reached_personhood, "reached_personhood must remain true");
@@ -3471,7 +3494,10 @@ fn integrity_test_passes() {
 
 mod migration {
 	use super::*;
-	use crate::migration::{v1::MigrateToAttendedGamesCounter, MigrateV0ToV1};
+	use crate::migration::{
+		v1, v1::MigrateToAttendedGamesCounter, v2::MigrateToNewlyRecognizedTestnetOnly,
+		MigrateV0ToV1, MigrateV1ToV2TestnetOnly,
+	};
 	use frame_support::{
 		storage::unhashed,
 		traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion, UncheckedOnRuntimeUpgrade},
@@ -3487,10 +3513,42 @@ mod migration {
 			true,
 			true,
 			true,
-			Recognized(42),
+			v1::Recognition::Recognized(42),
 			Some(5u32),
 		);
 		unhashed::put_raw(&Participants::<Test>::hashed_key_for(key), &old.encode());
+	}
+
+	/// Returns a participant in the version 1 shape with the given recognition.
+	fn v1_participant(credit: u64, recognition: v1::Recognition) -> v1::Participant<u64> {
+		v1::Participant {
+			score: 7,
+			streak: Streak::Attended(3),
+			attendance_history: AttendanceHistory::default(),
+			credit,
+			cashed_out: true,
+			reached_personhood: true,
+			has_ever_reached_personhood: true,
+			recognition,
+			last_attended_game: Some(5),
+			attended_games_while_recognized: 4,
+		}
+	}
+
+	/// Returns the current-shape counterpart of [`v1_participant`].
+	fn participant(credit: u64, recognition: Recognition) -> Participant<u64> {
+		Participant {
+			score: 7,
+			streak: Streak::Attended(3),
+			attendance_history: AttendanceHistory::default(),
+			credit,
+			cashed_out: true,
+			reached_personhood: true,
+			has_ever_reached_personhood: true,
+			recognition,
+			last_attended_game: Some(5),
+			attended_games_while_recognized: 4,
+		}
 	}
 
 	fn old_keys() -> [AccountOrPerson<u64>; 3] {
@@ -3514,8 +3572,8 @@ mod migration {
 
 			// Every stored field survives and the counter starts at zero.
 			assert_eq!(
-				Participants::<Test>::get(&key),
-				Some(Participant {
+				v1::Participants::<Test>::get(&key),
+				Some(v1::Participant {
 					score: 7,
 					streak: Streak::Attended(3),
 					attendance_history: AttendanceHistory::default(),
@@ -3523,7 +3581,7 @@ mod migration {
 					cashed_out: true,
 					reached_personhood: true,
 					has_ever_reached_personhood: true,
-					recognition: Recognized(42),
+					recognition: v1::Recognition::Recognized(42),
 					last_attended_game: Some(5),
 					attended_games_while_recognized: 0,
 				})
@@ -3542,13 +3600,18 @@ mod migration {
 			// An old-shaped participant is stored.
 			let key = AccountOrPerson::Account(1);
 			put_old_participant(&key, 77);
-			assert_eq!(Participants::<Test>::get(&key), None, "the old encoding must not decode");
+			assert_eq!(
+				v1::Participants::<Test>::get(&key),
+				None,
+				"the old encoding must not decode"
+			);
 
 			// The inner migration runs.
 			MigrateToAttendedGamesCounter::<Test>::on_runtime_upgrade();
 
 			// The participant decodes again.
-			let participant = Participants::<Test>::get(&key).expect("the migration restored it");
+			let participant =
+				v1::Participants::<Test>::get(&key).expect("the migration restored it");
 			assert_eq!(participant.credit, 77);
 			assert_eq!(participant.attended_games_while_recognized, 0);
 		});
@@ -3566,7 +3629,7 @@ mod migration {
 			MigrateToAttendedGamesCounter::<Test>::on_runtime_upgrade();
 
 			// All three decode.
-			assert_eq!(Participants::<Test>::iter().count(), 3);
+			assert_eq!(v1::Participants::<Test>::iter().count(), 3);
 		});
 	}
 
@@ -3578,23 +3641,120 @@ mod migration {
 				PalletScore::in_code_storage_version(),
 				"genesis must stamp the in-code version"
 			);
-			// A participant registered by the current code has a non-zero counter.
-			PalletScore::onboard_for_recognition(&1).unwrap();
+			// A participant registered by the current code has a non-zero counter and is newly
+			// recognized.
 			let key = AccountOrPerson::Account(1);
-			Participants::<Test>::mutate(&key, |p| {
-				p.as_mut().unwrap().attended_games_while_recognized = 9
-			});
+			let current = participant(9, Recognized { id: 42, newly_recognized: true });
+			Participants::<Test>::insert(&key, &current);
+
+			// The wired migrations run.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			let weight = <MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			assert_eq!(weight, db.reads(1));
+			let weight = <MigrateV1ToV2TestnetOnly<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			assert_eq!(weight, db.reads(1));
+
+			// The participant is untouched and only the version reads are charged.
+			assert_eq!(
+				Participants::<Test>::get(&key),
+				Some(current),
+				"the gates must leave a current participant alone"
+			);
+		});
+	}
+
+	#[test]
+	fn versioned_migration_adds_newly_recognized_and_bumps_the_version() {
+		new_test_ext().execute_with(|| {
+			// Chain at version 1 holds one recognized participant in the version 1 shape.
+			StorageVersion::new(1).put::<PalletScore>();
+			let key = AccountOrPerson::Account(1);
+			v1::Participants::<Test>::insert(
+				&key,
+				v1_participant(77, v1::Recognition::Recognized(42)),
+			);
+			assert_eq!(Participants::<Test>::get(&key), None, "the old encoding must not decode");
 
 			// The wired migration runs.
-			let weight = <MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			let weight = <MigrateV1ToV2TestnetOnly<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
 
-			// The counter is untouched and only the version read is charged.
+			// Every stored field survives and the participant is not newly recognized.
 			assert_eq!(
-				Participants::<Test>::get(&key).expect("exists").attended_games_while_recognized,
-				9,
-				"the gate must leave a current participant alone"
+				Participants::<Test>::get(&key),
+				Some(participant(77, Recognized { id: 42, newly_recognized: false }))
 			);
-			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));
+			assert_eq!(PalletScore::on_chain_storage_version(), 2, "the gate must close behind it");
+			// One read and write for the one participant, one more read for the end of the
+			// prefix iteration, and a read and write for the version the gate checks and stamps.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			assert_eq!(weight, db.reads_writes(3, 2), "the translation must charge what it did");
+		});
+	}
+
+	#[test]
+	fn newly_recognized_migration_keeps_every_recognition_variant() {
+		new_test_ext().execute_with(|| {
+			// One participant per version 1 recognition variant is stored.
+			let cases = [
+				(1, v1::Recognition::ExternallyRecognized, ExternallyRecognized),
+				(2, v1::Recognition::NotRecognized, NotRecognized),
+				(3, v1::Recognition::Suspended(11), Suspended(11)),
+				(
+					4,
+					v1::Recognition::Recognized(12),
+					Recognized { id: 12, newly_recognized: false },
+				),
+			];
+			let expected = cases
+				.into_iter()
+				.map(|(who, old, new)| {
+					let key = AccountOrPerson::Account(who);
+					v1::Participants::<Test>::insert(&key, v1_participant(who, old));
+					(key, participant(who, new))
+				})
+				.collect::<Vec<_>>();
+			let person = AccountOrPerson::Person([3u8; 32]);
+			v1::Participants::<Test>::insert(
+				&person,
+				v1_participant(5, v1::Recognition::Recognized(13)),
+			);
+
+			// The inner migration runs.
+			MigrateToNewlyRecognizedTestnetOnly::<Test>::on_runtime_upgrade();
+
+			// Each participant keeps its fields and its recognition.
+			for (key, participant) in expected {
+				assert_eq!(Participants::<Test>::get(&key), Some(participant));
+			}
+			assert_eq!(
+				Participants::<Test>::get(&person),
+				Some(participant(5, Recognized { id: 13, newly_recognized: false }))
+			);
+			assert_eq!(Participants::<Test>::iter().count(), 5);
+		});
+	}
+
+	#[test]
+	fn both_migrations_chain_from_version_zero() {
+		new_test_ext().execute_with(|| {
+			// Chain at version 0 holds one participant in the oldest shape.
+			StorageVersion::new(0).put::<PalletScore>();
+			let key = AccountOrPerson::Account(1);
+			put_old_participant(&key, 77);
+
+			// Both wired migrations run in the runtime order.
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			<MigrateV1ToV2TestnetOnly<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			// The participant decodes under the current type.
+			assert_eq!(
+				Participants::<Test>::get(&key),
+				Some(Participant {
+					attended_games_while_recognized: 0,
+					..participant(77, Recognized { id: 42, newly_recognized: false })
+				})
+			);
+			assert_eq!(PalletScore::on_chain_storage_version(), 2);
 		});
 	}
 
@@ -3606,7 +3766,7 @@ mod migration {
 			for key in &old_keys() {
 				put_old_participant(key, 5);
 			}
-			assert_eq!(Participants::<Test>::iter().count(), 0, "nothing decodes before");
+			assert_eq!(v1::Participants::<Test>::iter().count(), 0, "nothing decodes before");
 
 			// Pre-upgrade state is captured and the migration runs.
 			let state = MigrateToAttendedGamesCounter::<Test>::pre_upgrade().expect("counts keys");
@@ -3633,6 +3793,83 @@ mod migration {
 
 			// Post-upgrade check reports the loss.
 			assert!(MigrateToAttendedGamesCounter::<Test>::post_upgrade(state).is_err());
+		});
+	}
+
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn newly_recognized_try_runtime_checks_span_the_translation() {
+		new_test_ext().execute_with(|| {
+			// Two recognized participants and one that is not are stored in the version 1 shape.
+			let [first, second, third] = old_keys();
+			v1::Participants::<Test>::insert(
+				&first,
+				v1_participant(5, v1::Recognition::Recognized(1)),
+			);
+			v1::Participants::<Test>::insert(
+				&second,
+				v1_participant(5, v1::Recognition::NotRecognized),
+			);
+			v1::Participants::<Test>::insert(
+				&third,
+				v1_participant(5, v1::Recognition::Recognized(2)),
+			);
+
+			// Pre-upgrade state is captured and the migration runs.
+			let state =
+				MigrateToNewlyRecognizedTestnetOnly::<Test>::pre_upgrade().expect("counts keys");
+			assert_eq!(<(u32, u32)>::decode(&mut &state[..]).unwrap(), (3, 2));
+			MigrateToNewlyRecognizedTestnetOnly::<Test>::on_runtime_upgrade();
+
+			// Post-upgrade check passes.
+			assert_ok!(MigrateToNewlyRecognizedTestnetOnly::<Test>::post_upgrade(state));
+		});
+	}
+
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn newly_recognized_post_upgrade_check_catches_a_lost_participant() {
+		new_test_ext().execute_with(|| {
+			// Pre-upgrade state counted one recognized participant.
+			let key = AccountOrPerson::Account(1);
+			v1::Participants::<Test>::insert(
+				&key,
+				v1_participant(5, v1::Recognition::Recognized(1)),
+			);
+			let state =
+				MigrateToNewlyRecognizedTestnetOnly::<Test>::pre_upgrade().expect("counts keys");
+
+			// A value that decodes as neither shape is dropped by `translate_values`.
+			unhashed::put_raw(&Participants::<Test>::hashed_key_for(&key), &[0xffu8]);
+			MigrateToNewlyRecognizedTestnetOnly::<Test>::on_runtime_upgrade();
+
+			// Post-upgrade check reports the loss.
+			assert!(MigrateToNewlyRecognizedTestnetOnly::<Test>::post_upgrade(state).is_err());
+		});
+	}
+
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn newly_recognized_post_upgrade_check_rejects_a_newly_recognized_participant() {
+		new_test_ext().execute_with(|| {
+			// Pre-upgrade state counted one recognized participant.
+			let key = AccountOrPerson::Account(1);
+			v1::Participants::<Test>::insert(
+				&key,
+				v1_participant(5, v1::Recognition::Recognized(1)),
+			);
+			let state =
+				MigrateToNewlyRecognizedTestnetOnly::<Test>::pre_upgrade().expect("counts keys");
+			MigrateToNewlyRecognizedTestnetOnly::<Test>::on_runtime_upgrade();
+
+			// The participant is marked as newly recognized after the migration.
+			Participants::<Test>::insert(
+				&key,
+				participant(5, Recognized { id: 1, newly_recognized: true }),
+			);
+
+			// Post-upgrade check reports it.
+			assert!(MigrateToNewlyRecognizedTestnetOnly::<Test>::post_upgrade(state).is_err());
 		});
 	}
 }

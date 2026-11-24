@@ -186,6 +186,14 @@
 //! invited player is a new, non-recognized account, so the remaining work in dispatch cannot fail
 //! and the invite buys a sign-up.
 //!
+//! ## Airdrop entries of a newly recognized player
+//!
+//! A player that is not recognized enters the airdrop draws with [`AirdropVrfs::Account`]. A
+//! player enters them with either variant from its `register` call in indiv-pallet-score until
+//! the game next sets its attendance, and with [`AirdropVrfs::Alias`] in the games after that.
+//! The reason is that `register` only queues the member key for a ring, so the player cannot build
+//! the ring proof of the alias variant right after it.
+//!
 //! # Statement store usage
 //!
 //! All players in the game are given some statement store usage allowance. The player's allowance
@@ -334,7 +342,7 @@ use indiv_pallet_airdrop::types::{
 	Airdrop, EventId as AirdropEventId, EventInfo as AirdropEventInfo,
 	ProductName as AirdropProductName, RegistrationEntry as AirdropRegistrationEntry,
 };
-use indiv_pallet_score::AccountOrPerson;
+use indiv_pallet_score::{AccountOrPerson, Recognition};
 use indiv_support::{
 	credit_trees::AwardCredits,
 	offchain::{submit_authorized, TX_LONGEVITY},
@@ -2290,25 +2298,32 @@ pub mod pallet {
 		}
 
 		/// Check the count and the variant of the airdrop VRF entries against the player's
-		/// `recognized` state.
+		/// `recognition` in indiv-pallet-score.
 		///
-		/// The caller computes `recognized` itself: dispatch after onboarding, the extension
-		/// before it. Registration for the events is a separate step.
+		/// The caller reads `recognition` itself: dispatch after onboarding, the extension before
+		/// it. Registration for the events is a separate step.
 		pub(crate) fn check_airdrop_shape(
 			airdrops: &AirdropVrfs<AirdropProofOf<T>>,
 			who: &AccountOrPerson<T::AccountId>,
-			recognized: bool,
+			recognition: Option<&Recognition>,
 			airdrops_scheduled: u8,
 		) -> Result<(), AirdropShapeError> {
 			ensure!(
 				airdrops.count() == usize::from(airdrops_scheduled),
 				AirdropShapeError::CountMismatch
 			);
+			let recognized = recognition.is_some_and(Recognition::is_recognized);
+			// A newly recognized player may supply either variant. See the module documentation.
+			let newly_recognized =
+				matches!(recognition, Some(Recognition::Recognized { newly_recognized: true, .. }));
 			match airdrops {
 				AirdropVrfs::Alias { .. } =>
 					ensure!(recognized, AirdropShapeError::RecognitionMismatch),
 				AirdropVrfs::Account(_) => {
-					ensure!(!recognized, AirdropShapeError::RecognitionMismatch);
+					ensure!(
+						!recognized || newly_recognized,
+						AirdropShapeError::RecognitionMismatch
+					);
 					ensure!(
 						matches!(who, AccountOrPerson::Account(_)),
 						AirdropShapeError::AccountVariantForPerson
@@ -2947,10 +2962,10 @@ pub mod pallet {
 				return Ok(());
 			};
 
-			let recognized = indiv_pallet_score::Participants::<T>::get(who)
+			let recognition = indiv_pallet_score::Participants::<T>::get(who)
 				.defensive_proof("pallet-game: registering account must be a participant")
-				.is_some_and(|p| p.recognition.is_recognized());
-			Self::check_airdrop_shape(&airdrops, who, recognized, airdrops_scheduled)
+				.map(|p| p.recognition);
+			Self::check_airdrop_shape(&airdrops, who, recognition.as_ref(), airdrops_scheduled)
 				.map_err(Error::<T>::from)?;
 			match airdrops {
 				AirdropVrfs::Account(vrfs) => {
@@ -2984,8 +2999,8 @@ pub mod pallet {
 		/// Validation-only counterpart of [`Self::register_for_airdrop`] for the `GameAsInvited`
 		/// extension: it dry-runs the per-event registration and rolls the storage back.
 		///
-		/// The invite path is the only caller, where the player is a new account. `recognized` is
-		/// `false` both here, where the participant is not onboarded yet, and in
+		/// The invite path is the only caller, where the player is a new account. Only the account
+		/// variant is accepted both here, where the participant is not onboarded yet, and in
 		/// [`Self::register_for_airdrop`], where a freshly onboarded account is `NotRecognized`.
 		pub(crate) fn validate_register_for_airdrop(
 			airdrops: &Option<AirdropVrfs<AirdropProofOf<T>>>,
@@ -3000,17 +3015,16 @@ pub mod pallet {
 				return Ok(());
 			};
 
-			let recognized = indiv_pallet_score::Participants::<T>::get(who)
+			let recognition = indiv_pallet_score::Participants::<T>::get(who)
 				// When None, it will be onboarded as NotRecognized.
-				.is_some_and(|p| p.recognition.is_recognized());
+				.map(|p| p.recognition);
 
-			Self::check_airdrop_shape(airdrops, who, recognized, airdrops_scheduled).map_err(
-				|e| match e {
+			Self::check_airdrop_shape(airdrops, who, recognition.as_ref(), airdrops_scheduled)
+				.map_err(|e| match e {
 					AirdropShapeError::CountMismatch => InvalidAirdropVrfCount,
 					AirdropShapeError::RecognitionMismatch |
 					AirdropShapeError::AccountVariantForPerson => InvalidAirdropVrfVariant,
-				},
-			)?;
+				})?;
 
 			let res = match airdrops {
 				AirdropVrfs::Account(vrfs) => {

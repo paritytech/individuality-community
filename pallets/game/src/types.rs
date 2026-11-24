@@ -183,7 +183,9 @@ pub enum AttendanceStatus {
 ///
 /// The variant picks the identity path: if the player is recognized (pallet-score `Recognition`
 /// is `Recognized` or `ExternallyRecognized`) then they must provide the alias variant,
-/// otherwise they must provide the account variant. The variant holds exactly one entry per
+/// otherwise they must provide the account variant. A newly recognized player (pallet-score
+/// `Recognized` with `newly_recognized`) may provide either variant (in case the key is not
+/// included in a ring yet). The variant holds exactly one entry per
 /// scheduled airdrop event of the game, in airdrop-index order: the entry at position `i` is
 /// bound to the event id of airdrop index `i` (see `Pallet::airdrop_event_id`).
 #[derive(Encode, Decode, TypeInfo, Debug, Clone, PartialEq, Eq)]

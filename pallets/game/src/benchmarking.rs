@@ -112,7 +112,7 @@ pub mod benches {
 		PeopleOf::<T>::recognize_personhood(id, Some(key))?;
 		indiv_pallet_score::Participants::<T>::mutate(who, |p| {
 			p.as_mut().expect("participant entry exists").recognition =
-				indiv_pallet_score::Recognition::Recognized(id);
+				indiv_pallet_score::Recognition::Recognized { id, newly_recognized: false };
 		});
 		Ok(id)
 	}
