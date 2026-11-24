@@ -3494,7 +3494,10 @@ fn integrity_test_passes() {
 
 mod migration {
 	use super::*;
-	use crate::migration::{v1::MigrateToAttendedGamesCounter, MigrateV0ToV1};
+	use crate::migration::{
+		v1, v1::MigrateToAttendedGamesCounter, v2::MigrateToNewlyRecognizedTestnetOnly,
+		MigrateV0ToV1, MigrateV1ToV2TestnetOnly,
+	};
 	use frame_support::{
 		storage::unhashed,
 		traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion, UncheckedOnRuntimeUpgrade},
@@ -3510,10 +3513,42 @@ mod migration {
 			true,
 			true,
 			true,
-			Recognized { id: 42, newly_recognized: false },
+			v1::Recognition::Recognized(42),
 			Some(5u32),
 		);
 		unhashed::put_raw(&Participants::<Test>::hashed_key_for(key), &old.encode());
+	}
+
+	/// Returns a participant in the version 1 shape with the given recognition.
+	fn v1_participant(credit: u64, recognition: v1::Recognition) -> v1::Participant<u64> {
+		v1::Participant {
+			score: 7,
+			streak: Streak::Attended(3),
+			attendance_history: AttendanceHistory::default(),
+			credit,
+			cashed_out: true,
+			reached_personhood: true,
+			has_ever_reached_personhood: true,
+			recognition,
+			last_attended_game: Some(5),
+			attended_games_while_recognized: 4,
+		}
+	}
+
+	/// Returns the current-shape counterpart of [`v1_participant`].
+	fn participant(credit: u64, recognition: Recognition) -> Participant<u64> {
+		Participant {
+			score: 7,
+			streak: Streak::Attended(3),
+			attendance_history: AttendanceHistory::default(),
+			credit,
+			cashed_out: true,
+			reached_personhood: true,
+			has_ever_reached_personhood: true,
+			recognition,
+			last_attended_game: Some(5),
+			attended_games_while_recognized: 4,
+		}
 	}
 
 	fn old_keys() -> [AccountOrPerson<u64>; 3] {
@@ -3537,8 +3572,8 @@ mod migration {
 
 			// Every stored field survives and the counter starts at zero.
 			assert_eq!(
-				Participants::<Test>::get(&key),
-				Some(Participant {
+				v1::Participants::<Test>::get(&key),
+				Some(v1::Participant {
 					score: 7,
 					streak: Streak::Attended(3),
 					attendance_history: AttendanceHistory::default(),
@@ -3546,7 +3581,7 @@ mod migration {
 					cashed_out: true,
 					reached_personhood: true,
 					has_ever_reached_personhood: true,
-					recognition: Recognized { id: 42, newly_recognized: false },
+					recognition: v1::Recognition::Recognized(42),
 					last_attended_game: Some(5),
 					attended_games_while_recognized: 0,
 				})
@@ -3565,13 +3600,18 @@ mod migration {
 			// An old-shaped participant is stored.
 			let key = AccountOrPerson::Account(1);
 			put_old_participant(&key, 77);
-			assert_eq!(Participants::<Test>::get(&key), None, "the old encoding must not decode");
+			assert_eq!(
+				v1::Participants::<Test>::get(&key),
+				None,
+				"the old encoding must not decode"
+			);
 
 			// The inner migration runs.
 			MigrateToAttendedGamesCounter::<Test>::on_runtime_upgrade();
 
 			// The participant decodes again.
-			let participant = Participants::<Test>::get(&key).expect("the migration restored it");
+			let participant =
+				v1::Participants::<Test>::get(&key).expect("the migration restored it");
 			assert_eq!(participant.credit, 77);
 			assert_eq!(participant.attended_games_while_recognized, 0);
 		});
@@ -3589,7 +3629,7 @@ mod migration {
 			MigrateToAttendedGamesCounter::<Test>::on_runtime_upgrade();
 
 			// All three decode.
-			assert_eq!(Participants::<Test>::iter().count(), 3);
+			assert_eq!(v1::Participants::<Test>::iter().count(), 3);
 		});
 	}
 
@@ -3601,23 +3641,120 @@ mod migration {
 				PalletScore::in_code_storage_version(),
 				"genesis must stamp the in-code version"
 			);
-			// A participant registered by the current code has a non-zero counter.
-			PalletScore::onboard_for_recognition(&1).unwrap();
+			// A participant registered by the current code has a non-zero counter and is newly
+			// recognized.
 			let key = AccountOrPerson::Account(1);
-			Participants::<Test>::mutate(&key, |p| {
-				p.as_mut().unwrap().attended_games_while_recognized = 9
-			});
+			let current = participant(9, Recognized { id: 42, newly_recognized: true });
+			Participants::<Test>::insert(&key, &current);
+
+			// The wired migrations run.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			let weight = <MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			assert_eq!(weight, db.reads(1));
+			let weight = <MigrateV1ToV2TestnetOnly<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			assert_eq!(weight, db.reads(1));
+
+			// The participant is untouched and only the version reads are charged.
+			assert_eq!(
+				Participants::<Test>::get(&key),
+				Some(current),
+				"the gates must leave a current participant alone"
+			);
+		});
+	}
+
+	#[test]
+	fn versioned_migration_adds_newly_recognized_and_bumps_the_version() {
+		new_test_ext().execute_with(|| {
+			// Chain at version 1 holds one recognized participant in the version 1 shape.
+			StorageVersion::new(1).put::<PalletScore>();
+			let key = AccountOrPerson::Account(1);
+			v1::Participants::<Test>::insert(
+				&key,
+				v1_participant(77, v1::Recognition::Recognized(42)),
+			);
+			assert_eq!(Participants::<Test>::get(&key), None, "the old encoding must not decode");
 
 			// The wired migration runs.
-			let weight = <MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			let weight = <MigrateV1ToV2TestnetOnly<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
 
-			// The counter is untouched and only the version read is charged.
+			// Every stored field survives and the participant is not newly recognized.
 			assert_eq!(
-				Participants::<Test>::get(&key).expect("exists").attended_games_while_recognized,
-				9,
-				"the gate must leave a current participant alone"
+				Participants::<Test>::get(&key),
+				Some(participant(77, Recognized { id: 42, newly_recognized: false }))
 			);
-			assert_eq!(weight, <Test as frame_system::Config>::DbWeight::get().reads(1));
+			assert_eq!(PalletScore::on_chain_storage_version(), 2, "the gate must close behind it");
+			// One read and write for the one participant, one more read for the end of the
+			// prefix iteration, and a read and write for the version the gate checks and stamps.
+			let db = <Test as frame_system::Config>::DbWeight::get();
+			assert_eq!(weight, db.reads_writes(3, 2), "the translation must charge what it did");
+		});
+	}
+
+	#[test]
+	fn newly_recognized_migration_keeps_every_recognition_variant() {
+		new_test_ext().execute_with(|| {
+			// One participant per version 1 recognition variant is stored.
+			let cases = [
+				(1, v1::Recognition::ExternallyRecognized, ExternallyRecognized),
+				(2, v1::Recognition::NotRecognized, NotRecognized),
+				(3, v1::Recognition::Suspended(11), Suspended(11)),
+				(
+					4,
+					v1::Recognition::Recognized(12),
+					Recognized { id: 12, newly_recognized: false },
+				),
+			];
+			let expected = cases
+				.into_iter()
+				.map(|(who, old, new)| {
+					let key = AccountOrPerson::Account(who);
+					v1::Participants::<Test>::insert(&key, v1_participant(who, old));
+					(key, participant(who, new))
+				})
+				.collect::<Vec<_>>();
+			let person = AccountOrPerson::Person([3u8; 32]);
+			v1::Participants::<Test>::insert(
+				&person,
+				v1_participant(5, v1::Recognition::Recognized(13)),
+			);
+
+			// The inner migration runs.
+			MigrateToNewlyRecognizedTestnetOnly::<Test>::on_runtime_upgrade();
+
+			// Each participant keeps its fields and its recognition.
+			for (key, participant) in expected {
+				assert_eq!(Participants::<Test>::get(&key), Some(participant));
+			}
+			assert_eq!(
+				Participants::<Test>::get(&person),
+				Some(participant(5, Recognized { id: 13, newly_recognized: false }))
+			);
+			assert_eq!(Participants::<Test>::iter().count(), 5);
+		});
+	}
+
+	#[test]
+	fn both_migrations_chain_from_version_zero() {
+		new_test_ext().execute_with(|| {
+			// Chain at version 0 holds one participant in the oldest shape.
+			StorageVersion::new(0).put::<PalletScore>();
+			let key = AccountOrPerson::Account(1);
+			put_old_participant(&key, 77);
+
+			// Both wired migrations run in the runtime order.
+			<MigrateV0ToV1<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+			<MigrateV1ToV2TestnetOnly<Test> as OnRuntimeUpgrade>::on_runtime_upgrade();
+
+			// The participant decodes under the current type.
+			assert_eq!(
+				Participants::<Test>::get(&key),
+				Some(Participant {
+					attended_games_while_recognized: 0,
+					..participant(77, Recognized { id: 42, newly_recognized: false })
+				})
+			);
+			assert_eq!(PalletScore::on_chain_storage_version(), 2);
 		});
 	}
 
@@ -3629,7 +3766,7 @@ mod migration {
 			for key in &old_keys() {
 				put_old_participant(key, 5);
 			}
-			assert_eq!(Participants::<Test>::iter().count(), 0, "nothing decodes before");
+			assert_eq!(v1::Participants::<Test>::iter().count(), 0, "nothing decodes before");
 
 			// Pre-upgrade state is captured and the migration runs.
 			let state = MigrateToAttendedGamesCounter::<Test>::pre_upgrade().expect("counts keys");
@@ -3656,6 +3793,83 @@ mod migration {
 
 			// Post-upgrade check reports the loss.
 			assert!(MigrateToAttendedGamesCounter::<Test>::post_upgrade(state).is_err());
+		});
+	}
+
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn newly_recognized_try_runtime_checks_span_the_translation() {
+		new_test_ext().execute_with(|| {
+			// Two recognized participants and one that is not are stored in the version 1 shape.
+			let [first, second, third] = old_keys();
+			v1::Participants::<Test>::insert(
+				&first,
+				v1_participant(5, v1::Recognition::Recognized(1)),
+			);
+			v1::Participants::<Test>::insert(
+				&second,
+				v1_participant(5, v1::Recognition::NotRecognized),
+			);
+			v1::Participants::<Test>::insert(
+				&third,
+				v1_participant(5, v1::Recognition::Recognized(2)),
+			);
+
+			// Pre-upgrade state is captured and the migration runs.
+			let state =
+				MigrateToNewlyRecognizedTestnetOnly::<Test>::pre_upgrade().expect("counts keys");
+			assert_eq!(<(u32, u32)>::decode(&mut &state[..]).unwrap(), (3, 2));
+			MigrateToNewlyRecognizedTestnetOnly::<Test>::on_runtime_upgrade();
+
+			// Post-upgrade check passes.
+			assert_ok!(MigrateToNewlyRecognizedTestnetOnly::<Test>::post_upgrade(state));
+		});
+	}
+
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn newly_recognized_post_upgrade_check_catches_a_lost_participant() {
+		new_test_ext().execute_with(|| {
+			// Pre-upgrade state counted one recognized participant.
+			let key = AccountOrPerson::Account(1);
+			v1::Participants::<Test>::insert(
+				&key,
+				v1_participant(5, v1::Recognition::Recognized(1)),
+			);
+			let state =
+				MigrateToNewlyRecognizedTestnetOnly::<Test>::pre_upgrade().expect("counts keys");
+
+			// A value that decodes as neither shape is dropped by `translate_values`.
+			unhashed::put_raw(&Participants::<Test>::hashed_key_for(&key), &[0xffu8]);
+			MigrateToNewlyRecognizedTestnetOnly::<Test>::on_runtime_upgrade();
+
+			// Post-upgrade check reports the loss.
+			assert!(MigrateToNewlyRecognizedTestnetOnly::<Test>::post_upgrade(state).is_err());
+		});
+	}
+
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn newly_recognized_post_upgrade_check_rejects_a_newly_recognized_participant() {
+		new_test_ext().execute_with(|| {
+			// Pre-upgrade state counted one recognized participant.
+			let key = AccountOrPerson::Account(1);
+			v1::Participants::<Test>::insert(
+				&key,
+				v1_participant(5, v1::Recognition::Recognized(1)),
+			);
+			let state =
+				MigrateToNewlyRecognizedTestnetOnly::<Test>::pre_upgrade().expect("counts keys");
+			MigrateToNewlyRecognizedTestnetOnly::<Test>::on_runtime_upgrade();
+
+			// The participant is marked as newly recognized after the migration.
+			Participants::<Test>::insert(
+				&key,
+				participant(5, Recognized { id: 1, newly_recognized: true }),
+			);
+
+			// Post-upgrade check reports it.
+			assert!(MigrateToNewlyRecognizedTestnetOnly::<Test>::post_upgrade(state).is_err());
 		});
 	}
 }

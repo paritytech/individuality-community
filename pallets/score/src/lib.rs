@@ -95,7 +95,7 @@ pub mod pallet {
 	/// far in the future.
 	const CUSTOM_ERROR_FAR_FUTURE: u8 = 87;
 
-	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
 
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
