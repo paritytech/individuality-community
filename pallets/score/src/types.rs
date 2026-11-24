@@ -238,8 +238,7 @@ pub enum Recognition {
 		id: PersonalId,
 		/// Whether the participant is newly recognized until the next attendance.
 		///
-		/// Set to true after calling `register` until the next attendance set with
-		/// `set_attendance`.
+		/// `register` sets this and the next `set_attendance` clears it.
 		newly_recognized: bool,
 	},
 }
