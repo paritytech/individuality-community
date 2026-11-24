@@ -681,7 +681,9 @@ pub(crate) struct ChunkedClear {
 	/// The chunks that the clear used: the most keys it walked in one map, rounded up to whole
 	/// chunks. At least one, because a clear reads a map that is already empty.
 	pub(crate) chunks: u32,
-	/// [`StepResult::Finished`] means that every map is empty.
+	/// [`StepResult::Finished`] means that every map is empty. [`StepResult::Continue`] means
+	/// that a map still holds entries. Clear it again in a later block, because a second clear
+	/// in the same block walks the same keys again.
 	pub(crate) result: StepResult,
 }
 

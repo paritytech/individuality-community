@@ -3951,6 +3951,9 @@ pub mod pallet {
 		/// Clears up to `chunks` chunks of [`PLAYER_PROCESS_STEP2_CHUNK`] entries from each
 		/// per-game index <-> player map and from the game's [`AwardedNftClaimCredits`].
 		///
+		/// Call it at most once per block. A second call in the same block walks the same keys
+		/// again, so continue a [`StepResult::Continue`] in a later block.
+		///
 		/// The chunks used count only the keys walked in the index maps, because
 		/// `clear_game_credits` does not report its walk. A claimant holds one credit entry and
 		/// one `IndexToPlayer` entry per round, so the index maps walk at least as many keys.
@@ -4129,6 +4132,9 @@ pub mod pallet {
 
 		/// Clears up to `chunks` chunks of [`CANCELLING_SHUFFLE_CHUNK`] entries from each shuffle
 		/// map ([`ShuffleRecognized`] and [`ShuffleNotRecognized`]).
+		///
+		/// Call it at most once per block. A second call in the same block walks the same keys
+		/// again, so continue a [`StepResult::Continue`] in a later block.
 		pub(crate) fn clear_shuffle_chunks(chunks: u32) -> ChunkedClear {
 			let limit = chunks.saturating_mul(CANCELLING_SHUFFLE_CHUNK);
 			ChunkedClear::new(
