@@ -3154,9 +3154,10 @@ fn offboard_allowed_when_game_in_registration_and_player_not_registered() {
 
 		// Sanity-check: BOB is stored but not registered.
 		let bob_key = AccountOrPerson::Account(BOB);
-		assert!(
-			Players::<Test>::get(&bob_key).is_some_and(|p| !p.registered),
-			"BOB must exist in Players with registered = false"
+		assert_eq!(
+			Players::<Test>::get(&bob_key).map(|p| p.registration),
+			Some(PlayerRegistration::NotRegistered),
+			"BOB must exist in Players and not be registered"
 		);
 
 		// 2. Start a *new* game - still in Registration. ALICE signs up, BOB does *not*.
@@ -4681,7 +4682,7 @@ fn pending_attendance_counts_registered_only() {
 		for acc in [ALICE, BOB, CHARLIE] {
 			let p = Players::<Test>::get(AccountOrPerson::Account(acc))
 				.expect("player still in Players after game 1");
-			assert!(!p.registered);
+			assert_eq!(p.registration, PlayerRegistration::NotRegistered);
 		}
 
 		// Game 2: only DAVE and EVE sign up. The three non-registered players linger
@@ -5254,7 +5255,7 @@ mod cancel_game {
 			assert!(matches!(game.state, GameState::Cancelling { .. }));
 			let player = AccountOrPerson::<AccountId32>::Account(ALICE);
 			let info = crate::Players::<Test>::get(&player).expect("player record retained");
-			assert!(info.registered, "cleanup happens later, not during the extrinsic");
+			assert!(info.is_registered(), "cleanup happens later, not during the extrinsic");
 			// `GameCancelled` is emitted up-front, when the game is flipped to `Cancelling`.
 			System::assert_has_event(
 				crate::Event::<Test>::GameCancelled {
@@ -5303,8 +5304,12 @@ mod cancel_game {
 			);
 			let alice = AccountOrPerson::<AccountId32>::Account(ALICE);
 			let bob = AccountOrPerson::<AccountId32>::Account(BOB);
-			assert!(!crate::Players::<Test>::get(&alice).unwrap().registered);
-			assert!(!crate::Players::<Test>::get(&bob).unwrap().registered);
+			for who in [&alice, &bob] {
+				assert_eq!(
+					crate::Players::<Test>::get(who).unwrap().registration,
+					PlayerRegistration::NotRegistered
+				);
+			}
 			System::assert_has_event(
 				crate::Event::<Test>::GameCancelled { game_index, reason: CancelReason::Manager }
 					.into(),
@@ -6970,6 +6975,33 @@ mod airdrop {
 		});
 	}
 
+	// An airdrop takes no withdrawal, so the entry of the first sign-up stays in the draw.
+	#[test]
+	fn an_unregistered_player_keeps_their_airdrop_entry() {
+		new_test_ext().execute_with(|| {
+			let schedule = GameSchedule::<u32, u128> {
+				game_play_time: 10,
+				rounds: 2,
+				max_group_size: 3,
+				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
+			};
+			assert_ok!(Game::new_game(&schedule));
+			let game_index = GameIndex::<Test>::get();
+			let event_id = Game::airdrop_event_id(game_index, 0);
+			open_airdrop_events(game_index, 1);
+			assert_ok!(Game::sign_up_with_account(
+				RuntimeOrigin::signed(ALICE),
+				DEFAULT_IDENTIFIER_KEY,
+				Some(alice_airdrop_vrfs(game_index, 1)),
+			));
+			let slot = alice_event_slot(game_index, 0);
+
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+			assert!(AirdropRegistrations::<Test>::contains_key(event_id, slot));
+		});
+	}
+
 	#[test]
 	fn cancellation_only_touches_scheduled_airdrops() {
 		new_test_ext().execute_with(|| {
@@ -8170,7 +8202,7 @@ mod sign_up_with_account_lite_invite {
 					);
 					let player_info =
 						Players::<Test>::get(&player).expect("the account is a player");
-					assert!(player_info.registered);
+					assert!(player_info.is_registered());
 					assert!(matches!(player_info.credibility, PlayerCredibility::Invited));
 					assert_eq!(player_info.first_game, game_index);
 					assert!(indiv_pallet_score::Participants::<Test>::contains_key(&player));
@@ -8257,11 +8289,35 @@ mod sign_up_with_account_lite_invite {
 			assert_ok!(lite_invite(PRODUCT_KEY));
 			assert!(!ArchivedPlayers::<Test>::contains_key(&player));
 			let player_info = Players::<Test>::get(&player).expect("the account is a player again");
-			assert!(player_info.registered);
+			assert!(player_info.is_registered());
 			assert!(matches!(player_info.credibility, PlayerCredibility::Invited));
 			assert_eq!(player_info.first_game, next_game);
 			assert_eq!(get_allowance(PRODUCT_KEY), PlayerStatementLimit::get());
 			assert!(DepositStorage::<Test>::get().active.is_empty());
+		});
+	}
+
+	/// An account that unregisters stays a player and cannot sign up again for the game, with a
+	/// lite invite or with `sign_up_with_account`.
+	#[test]
+	fn lite_invited_account_that_unregisters_cannot_sign_up_again() {
+		new_test_ext().execute_with(|| {
+			start_game(10);
+			assert_ok!(lite_invite(PRODUCT_KEY));
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(PRODUCT_KEY)));
+
+			let error = lite_invite(PRODUCT_KEY).expect_err("the account is still a player");
+			assert_eq!(error.error, Error::<Test>::UseInviteButAlreadyPlaying.into());
+
+			assert_noop!(
+				Game::sign_up_with_account(
+					RuntimeOrigin::signed(PRODUCT_KEY),
+					DEFAULT_IDENTIFIER_KEY,
+					None,
+				),
+				Error::<Test>::UnregisteredFromGame
+			);
+			assert_eq!(get_allowance(PRODUCT_KEY), PlayerStatementLimit::get());
 		});
 	}
 
@@ -8979,4 +9035,544 @@ fn metadata_lists_every_extra_constant() {
 			assert!(names.contains(&name), "{name} is missing from the metadata");
 		}
 	});
+}
+
+mod unregister {
+	use super::*;
+	use codec::Decode;
+	use deposit::DepositStorage;
+	use frame_support::dispatch::GetDispatchInfo;
+	use indiv_pallet_score::Recognition;
+	use sp_runtime::traits::Dispatchable;
+
+	fn schedule() -> GameSchedule<u32, u128> {
+		GameSchedule { game_play_time: 20, rounds: 1, max_group_size: 2, ..Default::default() }
+	}
+
+	/// The report of a player that is alone in their group.
+	fn report_alone(_: &AccountOrPerson<AccountId32>) -> Option<FullReport<Test>> {
+		Some(vec![BoundedVec::default()].try_into().unwrap())
+	}
+
+	fn recognition(who: &AccountId32) -> Recognition {
+		indiv_pallet_score::Participants::<Test>::get(AccountOrPerson::Account(who.clone()))
+			.expect("the account is a participant")
+			.recognition
+	}
+
+	fn set_time(secs: u64) {
+		MOCK_UNIX_TIME.with(|time| *time.borrow_mut() = Duration::from_secs(secs));
+	}
+
+	fn sign_up(who: &AccountId32) {
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(who.clone()),
+			DEFAULT_IDENTIFIER_KEY,
+			None,
+		));
+	}
+
+	fn is_registered(who: &AccountId32) -> bool {
+		Players::<Test>::get(AccountOrPerson::Account(who.clone()))
+			.is_some_and(|player| player.is_registered())
+	}
+
+	fn registration(who: &AccountId32) -> PlayerRegistration {
+		Players::<Test>::get(AccountOrPerson::Account(who.clone()))
+			.expect("the account is a player")
+			.registration
+	}
+
+	/// The number of registered players the game in registration counts.
+	fn registered_count() -> u32 {
+		match crate::Game::<Test>::get().expect("game exists").state {
+			GameState::Registration { next_player_index } => next_player_index,
+			state => panic!("the game is not in registration: {state:?}"),
+		}
+	}
+
+	#[test]
+	fn a_registered_player_unregisters() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			sign_up(&BOB);
+			assert_eq!(registered_count(), 2);
+			let alice = AccountOrPerson::Account(ALICE);
+			TenureClaims::<Test>::insert(&alice, 1);
+
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			assert_eq!(registration(&ALICE), PlayerRegistration::Unregistered);
+			assert_eq!(registration(&BOB), PlayerRegistration::Registered);
+			assert_eq!(registered_count(), 1);
+			// ALICE keeps her tenure claim.
+			assert_eq!(TenureClaims::<Test>::get(&alice), Some(1));
+			System::assert_has_event(Event::<Test>::Unregistered { who: alice.clone() }.into());
+
+			// ALICE stays a player, onboarded in the score pallet, with her deposit held.
+			assert!(Players::<Test>::contains_key(&alice));
+			assert!(indiv_pallet_score::Participants::<Test>::contains_key(&alice));
+			let deposits = DepositStorage::<Test>::get();
+			assert_eq!(deposits.active.len(), 2);
+			assert_eq!(deposits.dropped.len(), 0);
+			assert_eq!(deposits.burned.len(), 0);
+		});
+	}
+
+	#[test]
+	fn a_registered_alias_player_unregisters() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			let alias: Alias = [42u8; 32];
+			let stmt_account = id_to_account(999);
+			assert_ok!(Game::sign_up_with_alias(
+				runtime_origin_for_alias(&alias),
+				DEFAULT_IDENTIFIER_KEY,
+				stmt_account.clone(),
+				StatementSignature(stmt_account.clone()),
+				None,
+			));
+			assert_eq!(registered_count(), 1);
+
+			assert_ok!(Game::unregister(runtime_origin_for_alias(&alias)));
+
+			let player = Players::<Test>::get(AccountOrPerson::Person(alias))
+				.expect("the alias stays a player");
+			assert_eq!(player.registration, PlayerRegistration::Unregistered);
+			assert_eq!(registered_count(), 0);
+			// The statement account stays bound to the alias.
+			assert_eq!(AliasToStmtAccount::<Test>::get(alias), Some(stmt_account.clone()));
+
+			// The alias cannot sign up again, with the same statement account or with another.
+			for account in [stmt_account, id_to_account(998)] {
+				assert_noop!(
+					Game::sign_up_with_alias(
+						runtime_origin_for_alias(&alias),
+						DEFAULT_IDENTIFIER_KEY,
+						account.clone(),
+						StatementSignature(account),
+						None,
+					),
+					Error::<Test>::UnregisteredFromGame
+				);
+			}
+		});
+	}
+
+	// An invited account holds no funds. It reaches the call as a participant.
+	#[test]
+	fn a_participant_origin_unregisters() {
+		new_test_ext().execute_with(|| {
+			let ticket = 12345u64;
+			let signature = TestSignature(ticket, NOT_FUNDED_ACCOUNT.encode());
+			assert_ok!(Game::grant_invites(RuntimeOrigin::root(), ALICE, 1));
+			assert_ok!(Game::set_invite_ticket(RuntimeOrigin::signed(ALICE), ticket));
+			assert_ok!(Game::new_game(&schedule()));
+			assert_ok!(exec_invited_tx(
+				NOT_FUNDED_ACCOUNT,
+				GameAsInvitedData { nonce: 0, inviter: ALICE, ticket, signature },
+				Call::sign_up_with_invite {
+					identifier_key: DEFAULT_IDENTIFIER_KEY,
+					airdrops: None
+				}
+			));
+			assert!(is_registered(&NOT_FUNDED_ACCOUNT));
+
+			assert_ok!(exec_participant_tx(NOT_FUNDED_ACCOUNT, 1, Call::unregister {}));
+			assert_eq!(registration(&NOT_FUNDED_ACCOUNT), PlayerRegistration::Unregistered);
+			assert_eq!(registered_count(), 0);
+		});
+	}
+
+	#[test]
+	fn a_player_that_is_not_registered_cannot_unregister() {
+		new_test_ext().execute_with(|| {
+			// BOB plays a game, so he is a player that the next game does not register.
+			let finished = GameSchedule { game_play_time: 10, ..schedule() };
+			run_game_scenario(finished, &[AccountOrPerson::Account(BOB)], |_| {
+				Some(vec![BoundedVec::<Report, _>::default()].try_into().unwrap())
+			});
+			assert!(Players::<Test>::contains_key(AccountOrPerson::Account(BOB)));
+
+			assert_ok!(Game::new_game(&GameSchedule { game_play_time: 50, ..schedule() }));
+			sign_up(&ALICE);
+
+			// BOB did not sign up for this game, and CHARLIE is not a player.
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(BOB)),
+				Error::<Test>::NotRegistered
+			);
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(CHARLIE)),
+				Error::<Test>::NotRegistered
+			);
+			assert_eq!(registered_count(), 1);
+
+			// A player unregisters once.
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::NotRegistered
+			);
+			assert_eq!(registered_count(), 0);
+		});
+	}
+
+	#[test]
+	fn an_origin_that_is_no_account_and_no_person_cannot_unregister() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+
+			for origin in [RuntimeOrigin::root(), RuntimeOrigin::none()] {
+				assert_noop!(
+					Game::unregister(origin),
+					indiv_pallet_score::Error::<Test>::BadOriginNotPersonNotSignedNotAccountParticipant
+				);
+			}
+			assert_eq!(registered_count(), 1);
+		});
+	}
+
+	#[test]
+	fn unregister_closes_when_the_sign_ups_close() {
+		new_test_ext().execute_with(|| {
+			assert_noop!(Game::unregister(RuntimeOrigin::signed(ALICE)), Error::<Test>::NoGame);
+
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			sign_up(&BOB);
+			let registration_ends = u64::from(GameTimes::<Test>::registration_end(&schedule()));
+
+			set_time(registration_ends - 1);
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(BOB)));
+
+			// The deadline passed. The game stays in registration until the `end_registration`
+			// step runs, and takes no unregister meanwhile.
+			set_time(registration_ends);
+			assert_eq!(registered_count(), 1);
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::NoRegistration
+			);
+
+			advance_process();
+			assert!(matches!(
+				crate::Game::<Test>::get().expect("game exists").state,
+				GameState::Shuffle { .. }
+			));
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::NoRegistration
+			);
+			assert!(is_registered(&ALICE));
+		});
+	}
+
+	// The clock is before the registration deadline, so only the game state refuses the call.
+	#[test]
+	fn a_cancelling_game_takes_no_unregister() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
+
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::NoRegistration
+			);
+		});
+	}
+
+	#[test]
+	fn an_unregistered_player_is_left_out_of_the_shuffle_and_counted_absent() {
+		new_test_ext().execute_with(|| {
+			let alice = AccountOrPerson::Account(ALICE);
+			let bob = AccountOrPerson::Account(BOB);
+			let charlie = AccountOrPerson::Account(CHARLIE);
+
+			run_game_scenario_with_phase(
+				schedule(),
+				|| {
+					for who in [ALICE, BOB, CHARLIE] {
+						sign_up(&who);
+					}
+					assert_ok!(Game::unregister(RuntimeOrigin::signed(CHARLIE)));
+				},
+				|| {
+					// The shuffle gives an index to the two registered players only.
+					let game = crate::Game::<Test>::get().expect("game exists");
+					assert_eq!(game.state, GameState::Reporting { player_count: 2 });
+					assert_eq!(game.pending_attendance, 2);
+					assert!(!PlayerToIndex::<Test>::contains_key(&charlie));
+
+					for who in [&alice, &bob] {
+						assert_ok!(Game::report(
+							RuntimeOrigin::signed(who.account().expect("an account").clone()),
+							build_report_with_opinion(who, |_| Report::Person),
+						));
+					}
+				},
+			);
+
+			for who in [&alice, &bob] {
+				let score = indiv_pallet_score::Participants::<Test>::get(who).unwrap();
+				assert_eq!(score.streak.attendance(), 1);
+			}
+
+			// CHARLIE is absent. A new account has a score of zero then, so the game archives it
+			// and burns its deposit.
+			let score = indiv_pallet_score::Participants::<Test>::get(&charlie).unwrap();
+			assert_eq!(score.streak.absence(), 1);
+			assert!(ArchivedPlayers::<Test>::contains_key(&charlie));
+			assert_eq!(DepositStorage::<Test>::get().burned.len(), 1);
+		});
+	}
+
+	// One player is enough for this game, so the game is cancelled only if the call lowers the
+	// player count.
+	#[test]
+	fn a_game_left_with_too_few_players_is_cancelled() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			assert_ok!(Game::new_game(&schedule()));
+			let game_index = GameIndex::<Test>::get();
+			sign_up(&ALICE);
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			set_time(u64::from(GameTimes::<Test>::registration_end(&schedule())) + 1);
+			advance_process();
+
+			System::assert_has_event(
+				Event::GameCancelled { game_index, reason: CancelReason::TooFewPlayers }.into(),
+			);
+		});
+	}
+
+	#[test]
+	fn an_unregistered_player_cannot_sign_up_again() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			sign_up(&BOB);
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			assert_noop!(
+				Game::sign_up_with_account(
+					RuntimeOrigin::signed(ALICE),
+					DEFAULT_IDENTIFIER_KEY,
+					None
+				),
+				Error::<Test>::UnregisteredFromGame
+			);
+			assert_eq!(registration(&ALICE), PlayerRegistration::Unregistered);
+			assert_eq!(registered_count(), 1);
+		});
+	}
+
+	#[test]
+	fn an_unregistered_player_cannot_offboard_before_the_game_ends() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			assert_noop!(
+				Game::offboard(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::CannotOffboardWhileRegisteredForGame
+			);
+
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+			assert_noop!(
+				Game::offboard(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::UnregisteredFromGame
+			);
+
+			// The deposit stays in play.
+			let deposits = DepositStorage::<Test>::get();
+			assert_eq!(deposits.active.len(), 1);
+			assert_eq!(deposits.dropped.len(), 0);
+		});
+	}
+
+	#[test]
+	fn a_cancelled_game_lets_an_unregistered_player_offboard() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			sign_up(&BOB);
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
+			advance_process();
+			assert!(crate::Game::<Test>::get().is_none(), "the cancelled game is removed");
+
+			// The cancellation resets every player, so ALICE is free to leave with her deposit.
+			assert_eq!(registration(&ALICE), PlayerRegistration::NotRegistered);
+			assert_ok!(Game::offboard(RuntimeOrigin::signed(ALICE)));
+			let deposits = DepositStorage::<Test>::get();
+			assert_eq!(deposits.active.len(), 1);
+			assert_eq!(deposits.dropped.len(), 1);
+			assert_eq!(deposits.burned.len(), 0);
+		});
+	}
+
+	#[test]
+	fn a_played_game_resets_a_kept_player_that_unregistered() {
+		new_test_ext().execute_with(|| {
+			let alice = AccountOrPerson::Account(ALICE);
+			let bob = AccountOrPerson::Account(BOB);
+			// BOB plays two games, so his score outlasts one absence and the game keeps him.
+			for game_play_time in [10, 50] {
+				let played = GameSchedule { game_play_time, ..schedule() };
+				run_game_scenario(played, slice::from_ref(&bob), |_| {
+					Some(vec![BoundedVec::<Report, _>::default()].try_into().unwrap())
+				});
+			}
+
+			run_game_scenario_with_phase(
+				GameSchedule { game_play_time: 100, ..schedule() },
+				|| {
+					sign_up(&ALICE);
+					sign_up(&BOB);
+					assert_ok!(Game::unregister(RuntimeOrigin::signed(BOB)));
+				},
+				|| {
+					assert_ok!(Game::report(
+						RuntimeOrigin::signed(ALICE),
+						build_report_with_opinion(&alice, |_| Report::Person),
+					));
+				},
+			);
+			assert!(crate::Game::<Test>::get().is_none(), "the played game is removed");
+
+			// BOB is absent and stays a player with his deposit. He signs up for the next game.
+			assert_eq!(registration(&BOB), PlayerRegistration::NotRegistered);
+			assert_eq!(DepositStorage::<Test>::get().burned.len(), 0);
+			assert_ok!(Game::new_game(&GameSchedule { game_play_time: 150, ..schedule() }));
+			sign_up(&BOB);
+			assert_eq!(registration(&BOB), PlayerRegistration::Registered);
+		});
+	}
+
+	// An unregister is an absence, so it counts against the absence grace like a missed game.
+	#[test]
+	fn a_recognized_person_that_unregisters_past_the_absence_grace_is_suspended() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Members::create_collection(
+				0,
+				PEOPLE_MEMBER_IDENTIFIER,
+				1,
+				RingMode::Flexible,
+				RingExponent::R2e9,
+				None
+			));
+			let alice = AccountOrPerson::Account(ALICE);
+			let bob = AccountOrPerson::Account(BOB);
+			let mut game = GameSchedule { game_play_time: 10, ..schedule() };
+
+			// The mock has 100,000 active members, so the personhood threshold is 21. ALICE reaches
+			// it with six games attended in a row, then registers as a person.
+			for _ in 0..6 {
+				run_game_scenario(game.clone(), slice::from_ref(&alice), report_alone);
+				game.game_play_time = minimal_next_game_play_time(&game);
+			}
+			assert!(Score::reached_personhood(&alice));
+			let (key, secret) = mock_key(1234);
+			let message = [&b"pop register using"[..], &ALICE.encode()[..]].concat();
+			let proof = Mock::sign(&secret, &message[..]).unwrap();
+			assert_ok!(Score::register(RuntimeOrigin::signed(ALICE), Some((key, proof))));
+			assert!(matches!(recognition(&ALICE), Recognition::Recognized(_)));
+
+			// The default grace of that population allows one miss in six games. The last six
+			// games of ALICE have no miss.
+			assert_eq!(indiv_pallet_score::AbsenceGraceRatio::<Test>::get(), (1, 6));
+
+			// ALICE signs up for the next two games and unregisters from both. BOB plays them, so
+			// the games are not cancelled.
+			for unregisters in 1..=2 {
+				run_game_scenario_with_phase(
+					game.clone(),
+					|| {
+						sign_up(&ALICE);
+						sign_up(&BOB);
+						assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+					},
+					|| {
+						assert_ok!(Game::report(
+							RuntimeOrigin::signed(BOB),
+							build_report_with_opinion(&bob, |_| Report::Person)
+						));
+					},
+				);
+				game.game_play_time = minimal_next_game_play_time(&game);
+
+				// The grace allows the first miss. The second miss suspends ALICE.
+				let suspended = unregisters == 2;
+				assert_eq!(matches!(recognition(&ALICE), Recognition::Suspended(_)), suspended);
+				assert_eq!(Score::reached_personhood(&alice), !suspended);
+				let ring_position =
+					indiv_pallet_members::Members::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, key);
+				assert_eq!(ring_position == Some(RingPosition::Suspended), suspended);
+			}
+		});
+	}
+
+	/// A player as stored before [`PlayerRegistration`], with a flag for the registration.
+	#[derive(Encode)]
+	struct PlayerWithFlag {
+		first_game: GameIdx,
+		registered: bool,
+		sent_report: bool,
+		early_attendance_enactment: Option<EarlyAttendanceEnactment>,
+		yes_person: u8,
+		no_not_person: u8,
+		expected_max_vote_weight: u16,
+		vote_weight: u8,
+		credibility: PlayerCredibility<()>,
+	}
+
+	// No migration translates `Players`, so a player stored with the flag must decode unchanged.
+	#[test]
+	fn a_player_stored_with_the_registered_flag_decodes_unchanged() {
+		for (registered, registration) in
+			[(false, PlayerRegistration::NotRegistered), (true, PlayerRegistration::Registered)]
+		{
+			let stored = PlayerWithFlag {
+				first_game: 7,
+				registered,
+				sent_report: true,
+				early_attendance_enactment: None,
+				yes_person: 2,
+				no_not_person: 1,
+				expected_max_vote_weight: 300,
+				vote_weight: 3,
+				credibility: PlayerCredibility::Invited,
+			}
+			.encode();
+
+			let player = Player::<()>::decode(&mut &stored[..]).expect("the stored player decodes");
+			assert_eq!(player.registration, registration);
+			assert_eq!(player.encode(), stored);
+		}
+	}
+
+	#[test]
+	fn unregister_pays_its_fee() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+
+			let call = crate::Call::<Test>::unregister {};
+			let info = call.get_dispatch_info();
+			assert_eq!(info.pays_fee, Pays::Yes);
+			assert_eq!(info.call_weight, <MockWeightInfo as WeightInfo>::unregister());
+
+			let post = RuntimeCall::from(call)
+				.dispatch(RuntimeOrigin::signed(ALICE))
+				.expect("ALICE is registered");
+			assert_eq!(post.pays_fee, Pays::Yes);
+			assert_eq!(post.actual_weight, None);
+		});
+	}
 }

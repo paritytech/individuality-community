@@ -28,7 +28,9 @@
 //!
 //! 3. **Registration**: Players call [`Pallet::sign_up_with_account`],
 //!    [`Pallet::sign_up_with_invite`] or [`Pallet::sign_up_with_alias`] to be part of the game. A
-//!    player who fails to register before the deadline is considered absent.
+//!    player who fails to register before the deadline is considered absent. A registered player
+//!    calls [`Pallet::unregister`] to leave the game before the deadline, see
+//!    [Unregistering](#unregistering).
 //!
 //! 4. **Shuffle**:
 //!    - After registration ends, the `end_registration` step moves the game to the shuffle phase.
@@ -186,6 +188,18 @@
 //! invited player is a new, non-recognized account, so the remaining work in dispatch cannot fail
 //! and the invite buys a sign-up.
 //!
+//! # Unregistering
+//!
+//! A registered player leaves the current game with [`Pallet::unregister`] while the game accepts
+//! sign-ups. The shuffle gives every registered player an index in every round, and the groups
+//! follow from the indices and the player count. To remove a player after the shuffle starts would
+//! invalidate that computation, so the call closes when the sign-ups close.
+//!
+//! To unregister is final for that game. The player stays a player and the game counts them as
+//! absent. Their airdrop entries stay in the draws, so they can neither sign up again nor
+//! `offboard` until the game ends: their deposit stays in play, as for a registered player that
+//! does not attend. The player keeps their tenure claim, see [Tenure claim](#tenure-claim).
+//!
 //! # Statement store usage
 //!
 //! All players in the game are given some statement store usage allowance. The player's allowance
@@ -217,6 +231,9 @@
 //! the thresholds `[0, 1, 5]`, a player that never attended a game while recognised earns one
 //! credit, a person with 3 games earns two and a person with 5 or more earns three. A
 //! threshold of zero thus gives every player a credit. A player claims once per game.
+//!
+//! A player that unregisters keeps their tenure claim. The game pays it as for a player that does
+//! not attend.
 //!
 //! ## Payout
 //!
@@ -251,6 +268,7 @@
 //!   player must be new or archived, otherwise they must use `sign_up_with_account` for free.
 //! - `report`: Each participant’s self-contained reporting of whether their peers are persons.
 //! - `claim_tenure_credits`: claim one credit per tenure threshold reached, before the game begins.
+//! - `unregister`: leave the current game while it accepts sign-ups.
 //! - `offboard`: Offboard from the game.
 //!
 //! Manager origin calls: (configured origin [`Config::ManagerOrigin`])
@@ -862,6 +880,8 @@ pub mod pallet {
 			game_index: GameIdx,
 			credits: u32,
 		},
+		/// A player unregistered from the game.
+		Unregistered { who: AccountOrPerson<T::AccountId> },
 	}
 
 	#[pallet::error]
@@ -951,6 +971,9 @@ pub mod pallet {
 		NoTenureCredit,
 		/// The caller claimed tenure credits for the game already.
 		TenureCreditsAlreadyClaimed,
+		/// The player unregistered from the current game. They can neither sign up again nor
+		/// offboard until the game ends.
+		UnregisteredFromGame,
 	}
 
 	/// A reason for this pallet placing a hold on funds.
@@ -1509,7 +1532,8 @@ pub mod pallet {
 		/// `ScoreAsParticipant` extension.
 		///
 		/// There must be no game or the existing game must be in registration phase and the player
-		/// must have not signed up for the game.
+		/// must have not signed up for the game. A player that unregistered from the game signed
+		/// up for it.
 		///
 		/// A player whose pallet-score recognition is `Recognized` has their personhood suspended,
 		/// the same as an absence-triggered suspension. Offboarding is permanent. Playing as a
@@ -1535,11 +1559,15 @@ pub mod pallet {
 				game.is_none_or(|g| matches!(g.state, GameState::Registration { .. }));
 			ensure!(game_is_none_or_registration, Error::<T>::InvalidGameState);
 
-			let player_is_none_or_not_registered = player.as_ref().is_none_or(|p| !p.registered);
-			ensure!(
-				player_is_none_or_not_registered,
-				Error::<T>::CannotOffboardWhileRegisteredForGame
-			);
+			match player.as_ref().map(|player| player.registration) {
+				Some(PlayerRegistration::Registered) =>
+					return Err(Error::<T>::CannotOffboardWhileRegisteredForGame.into()),
+				// The player keeps their airdrop entries. Their deposit stays in play until the
+				// game ends, as for a registered player.
+				Some(PlayerRegistration::Unregistered) =>
+					return Err(Error::<T>::UnregisteredFromGame.into()),
+				Some(PlayerRegistration::NotRegistered) | None => (),
+			}
 
 			ensure!(archived.is_some() || player.is_some(), Error::<T>::NoPlayer);
 
@@ -2205,6 +2233,48 @@ pub mod pallet {
 				pays_fee: Pays::No,
 			})
 		}
+
+		/// Unregisters the caller from the current game.
+		///
+		/// The game must be in its registration phase, `registration_ends` has not passed and the
+		/// caller must be signed up for the game.
+		///
+		/// The caller stays a player and the game counts them as absent. They can neither sign up
+		/// again nor call [`Pallet::offboard`] until the game ends. The caller keeps their tenure
+		/// claim and their airdrop entries, see [Unregistering](crate#unregistering). The call
+		/// pays its fee.
+		#[pallet::call_index(30)]
+		#[pallet::weight(<T as Config>::WeightInfo::unregister())]
+		pub fn unregister(origin: OriginFor<T>) -> DispatchResult {
+			let who =
+				indiv_pallet_score::Pallet::<T>::ensure_signed_or_participant_or_person(origin)?;
+
+			let mut game = Self::require_open_game().map_err(Error::<T>::from)?;
+			let GameState::Registration { next_player_index } = &mut game.state else {
+				return Err(Error::<T>::NoRegistration.into());
+			};
+
+			Players::<T>::try_mutate(&who, |maybe_player| {
+				let player = maybe_player
+					.as_mut()
+					.filter(|player| player.is_registered())
+					.ok_or(Error::<T>::NotRegistered)?;
+				player.registration = PlayerRegistration::Unregistered;
+				Ok::<_, Error<T>>(())
+			})?;
+
+			if next_player_index.is_zero() {
+				defensive!("indiv-pallet-game: a registered player is missing from the count");
+			}
+			next_player_index.saturating_dec();
+			Game::<T>::put(game);
+
+			log::trace!(target: LOG_TARGET, "Player {who:?} unregistered from game");
+
+			Self::deposit_event(Event::<T>::Unregistered { who });
+
+			Ok(())
+		}
 	}
 
 	/// Reasons a game is not open for player registration.
@@ -2270,6 +2340,8 @@ pub mod pallet {
 		AlreadyPlayingWithInvite,
 		/// The player is already registered for the current game.
 		AlreadyRegistered,
+		/// The player unregistered from the current game.
+		Unregistered,
 	}
 
 	impl<T: Config> From<SignUpEligibilityError> for Error<T> {
@@ -2278,6 +2350,7 @@ pub mod pallet {
 				SignUpEligibilityError::AlreadyPlayingWithInvite =>
 					Self::UseInviteButAlreadyPlaying,
 				SignUpEligibilityError::AlreadyRegistered => Self::AlreadyRegistered,
+				SignUpEligibilityError::Unregistered => Self::UnregisteredFromGame,
 			}
 		}
 	}
@@ -2332,12 +2405,14 @@ pub mod pallet {
 				!matches!(kind, SignUpKind::WithInvite) || maybe_player.is_none(),
 				SignUpEligibilityError::AlreadyPlayingWithInvite
 			);
-			// The player must not be registered for the current game yet.
-			ensure!(
-				maybe_player.as_ref().is_none_or(|player| !player.registered),
-				SignUpEligibilityError::AlreadyRegistered
-			);
-			Ok(maybe_player)
+			match maybe_player.as_ref().map(|player| player.registration) {
+				// The player must not be registered for the current game yet.
+				Some(PlayerRegistration::Registered) =>
+					Err(SignUpEligibilityError::AlreadyRegistered),
+				// A player unregisters from a game once and for all.
+				Some(PlayerRegistration::Unregistered) => Err(SignUpEligibilityError::Unregistered),
+				Some(PlayerRegistration::NotRegistered) | None => Ok(maybe_player),
+			}
 		}
 
 		/// Return the current game, if it is open for registration.
@@ -2899,7 +2974,7 @@ pub mod pallet {
 				&who,
 				Player {
 					first_game,
-					registered: true,
+					registration: PlayerRegistration::Registered,
 					sent_report: false,
 					early_attendance_enactment: None,
 					yes_person: 0,
@@ -3094,7 +3169,7 @@ pub mod pallet {
 
 			// Ideally we should iterate on registered players only, or at least refund the weight
 			// when skipping this part.
-			if player_info.registered {
+			if player_info.is_registered() {
 				*pending_attendance = pending_attendance.saturating_add(1);
 
 				let player_recognized_as_person =
@@ -3524,7 +3599,7 @@ pub mod pallet {
 			let result = Self::apply_attendance(
 				player_id,
 				attendance,
-				player.registered,
+				player.is_registered(),
 				game.index,
 				&mut game.pending_attendance,
 			);
@@ -3595,7 +3670,7 @@ pub mod pallet {
 
 		/// Determine the attendance status of a player given a partial vote state.
 		pub(crate) fn determine_attendance(player: &Player<T::PlayDeposit>) -> AttendanceStatus {
-			if !player.registered {
+			if !player.is_registered() {
 				return AttendanceStatus::NotAttended;
 			}
 
@@ -3655,12 +3730,12 @@ pub mod pallet {
 					cached
 				} else {
 					let half_plus_one = player.yes_person.saturating_sub(1) >= player.no_not_person;
-					let attendance = player.registered && player.sent_report && half_plus_one;
+					let attendance = player.is_registered() && player.sent_report && half_plus_one;
 
 					Self::apply_attendance(
 						&player_id,
 						attendance,
-						player.registered,
+						player.is_registered(),
 						game_index,
 						pending_attendance,
 					)
@@ -3753,7 +3828,7 @@ pub mod pallet {
 					&player_id,
 					Player {
 						first_game: player.first_game,
-						registered: false,
+						registration: PlayerRegistration::NotRegistered,
 						sent_report: false,
 						early_attendance_enactment: None,
 						yes_person: 0,
@@ -3968,7 +4043,7 @@ pub mod pallet {
 					&player_id,
 					Player {
 						first_game: player.first_game,
-						registered: false,
+						registration: PlayerRegistration::NotRegistered,
 						sent_report: false,
 						early_attendance_enactment: None,
 						yes_person: 0,

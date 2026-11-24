@@ -922,7 +922,7 @@ pub mod benches {
 		for i in 0..player_count {
 			let mut player = Player {
 				first_game: 0,
-				registered: true,
+				registration: PlayerRegistration::Registered,
 				sent_report: true,
 				early_attendance_enactment: None,
 				yes_person: max_group_size as u8 - 1,
@@ -1013,8 +1013,8 @@ pub mod benches {
 
 		assert_eq!(last_iteration, Some(target_player.clone()));
 		let stored = <Players<T>>::get(&target_player)
-			.expect("attended player should remain in Players, registered = false");
-		assert!(!stored.registered);
+			.expect("attended player should remain in Players, not registered");
+		assert_eq!(stored.registration, PlayerRegistration::NotRegistered);
 		assert!(<ArchivedPlayers<T>>::get(&target_player).is_none());
 		assert!(matches!(stored.credibility, PlayerCredibility::Recognized));
 		let attendance = PlayerAttendanceHistory::<T>::get(&target_player);
@@ -1252,7 +1252,7 @@ pub mod benches {
 
 		// All the player's info is reset
 		let player = Players::<T>::get(&account_or_person).unwrap();
-		assert!(!player.registered, "Player should have registered set to false");
+		assert_eq!(player.registration, PlayerRegistration::NotRegistered);
 		assert!(!player.sent_report, "Player should have sent_report set to false");
 
 		// All player's indices were removed
@@ -1305,7 +1305,7 @@ pub mod benches {
 		let account_or_person: AccountOrPerson<T::AccountId> = AccountOrPerson::Account(caller);
 		let player = <Players<T>>::get(account_or_person);
 		assert!(player.is_some());
-		assert!(player.unwrap().registered);
+		assert!(player.unwrap().is_registered());
 
 		Ok(())
 	}
@@ -1343,7 +1343,7 @@ pub mod benches {
 		// New player + onboarding ran (caller wasn't in `Participants` beforehand).
 		let aop: AccountOrPerson<T::AccountId> = AccountOrPerson::Account(caller);
 		let player = <Players<T>>::get(&aop).expect("player inserted");
-		assert!(player.registered);
+		assert!(player.is_registered());
 		assert!(indiv_pallet_score::Participants::<T>::contains_key(&aop));
 		Ok(())
 	}
@@ -1397,7 +1397,7 @@ pub mod benches {
 			&account_or_person,
 			Player {
 				first_game: 0,
-				registered: false,
+				registration: PlayerRegistration::NotRegistered,
 				sent_report: false,
 				early_attendance_enactment: None,
 				yes_person: 0,
@@ -1416,7 +1416,7 @@ pub mod benches {
 		sign_up_with_account(RawOrigin::Signed(caller.clone()), DEFAULT_IDENTIFIER_KEY, Some(vrfs));
 
 		let player = <Players<T>>::get(&account_or_person).expect("existing player record");
-		assert!(player.registered, "existing player marked registered for this game");
+		assert!(player.is_registered(), "existing player marked registered for this game");
 		Ok(())
 	}
 
@@ -1482,7 +1482,7 @@ pub mod benches {
 		let account_or_person: AccountOrPerson<T::AccountId> = AccountOrPerson::Person(person);
 		let player = <Players<T>>::get(account_or_person);
 		assert!(player.is_some());
-		assert!(player.unwrap().registered);
+		assert!(player.unwrap().is_registered());
 
 		// Post-assertions confirm the replacement landed.
 		assert!(!StmtAccountToAlias::<T>::contains_key(&prev_stmt_account));
@@ -1525,7 +1525,7 @@ pub mod benches {
 
 		let who = AccountOrPerson::Account(account.clone());
 		let player = Players::<T>::get(&who).expect("the invited account is a player");
-		assert!(player.registered);
+		assert!(player.is_registered());
 		assert!(matches!(player.credibility, PlayerCredibility::Invited));
 		assert_eq!(LiteInvites::<T>::get(alias), Some(account));
 		assert!(indiv_pallet_score::Participants::<T>::contains_key(&who));
@@ -1728,7 +1728,7 @@ pub mod benches {
 		let deposit = T::PlayDeposit::new(&caller, pallet::PlayDepositAmount::<T>::get())?;
 		let player: Player<<T as Config>::PlayDeposit> = Player {
 			first_game: 0,
-			registered: false,
+			registration: PlayerRegistration::NotRegistered,
 			sent_report: false,
 			early_attendance_enactment: None,
 			yes_person: 0,
@@ -1784,7 +1784,7 @@ pub mod benches {
 
 		let player: Player<<T as Config>::PlayDeposit> = Player {
 			first_game: 0,
-			registered: false,
+			registration: PlayerRegistration::NotRegistered,
 			sent_report: false,
 			early_attendance_enactment: Some(EarlyAttendanceEnactment {
 				attendance: true,
@@ -2420,6 +2420,28 @@ pub mod benches {
 		Ok(())
 	}
 
+	#[benchmark]
+	fn unregister() -> Result<(), BenchmarkError> {
+		let caller: T::AccountId = whitelisted_caller();
+		let player = AccountOrPerson::Account(caller.clone());
+		// The caller is signed up for a game in registration.
+		set_up_tenure_claim::<T>(&caller, 1)?;
+
+		#[extrinsic_call]
+		_(RawOrigin::Signed(caller));
+
+		assert_eq!(
+			Players::<T>::get(&player).expect("the caller stays a player").registration,
+			PlayerRegistration::Unregistered
+		);
+		assert!(matches!(
+			Game::<T>::get().expect("the game exists").state,
+			GameState::Registration { next_player_index: 0 }
+		));
+
+		Ok(())
+	}
+
 	/// Makes `caller` a person that attended `n` games while recognised, signed up for a game and
 	/// inside its tenure claim window, with a full list of thresholds that their tenure reaches the
 	/// first `n` of.
@@ -2442,7 +2464,7 @@ pub mod benches {
 			&player,
 			Player {
 				first_game: 1,
-				registered: true,
+				registration: PlayerRegistration::Registered,
 				sent_report: false,
 				early_attendance_enactment: None,
 				yes_person: 0,

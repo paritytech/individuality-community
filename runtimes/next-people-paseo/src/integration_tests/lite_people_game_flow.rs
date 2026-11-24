@@ -115,7 +115,7 @@ fn lite_person_plays_the_game_for_free_with_a_product_key() {
 		let player = indiv_pallet_game::Players::<Runtime>::get(&product_player)
 			.expect("the product key is a player");
 		assert!(matches!(player.credibility, indiv_pallet_game::PlayerCredibility::Invited));
-		assert!(player.registered, "the product key is registered for the ongoing game");
+		assert!(player.is_registered(), "the product key is registered for the ongoing game");
 
 		// The player attends the game: it reports about its group, alone here, and is processed as
 		// having attended.

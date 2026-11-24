@@ -1017,6 +1017,7 @@ impl ContainsPair<RestrictedEntity, RuntimeCall> for OperationAllowedOneTimeExce
 						RuntimeCall::Game(sign_up_with_account { .. }) |
 						RuntimeCall::Game(report { .. }) |
 						RuntimeCall::Game(claim_tenure_credits { .. }) |
+						RuntimeCall::Game(unregister { .. }) |
 						RuntimeCall::Game(offboard { .. }) |
 						RuntimeCall::Game(claim_airdrop { .. })
 				)
