@@ -9042,10 +9042,22 @@ mod unregister {
 	use codec::Decode;
 	use deposit::DepositStorage;
 	use frame_support::dispatch::GetDispatchInfo;
+	use indiv_pallet_score::Recognition;
 	use sp_runtime::traits::Dispatchable;
 
 	fn schedule() -> GameSchedule<u32, u128> {
 		GameSchedule { game_play_time: 20, rounds: 1, max_group_size: 2, ..Default::default() }
+	}
+
+	/// The report of a player that is alone in their group.
+	fn report_alone(_: &AccountOrPerson<AccountId32>) -> Option<FullReport<Test>> {
+		Some(vec![BoundedVec::default()].try_into().unwrap())
+	}
+
+	fn recognition(who: &AccountId32) -> Recognition {
+		indiv_pallet_score::Participants::<Test>::get(AccountOrPerson::Account(who.clone()))
+			.expect("the account is a participant")
+			.recognition
 	}
 
 	fn set_time(secs: u64) {
@@ -9440,6 +9452,69 @@ mod unregister {
 			assert_ok!(Game::new_game(&GameSchedule { game_play_time: 150, ..schedule() }));
 			sign_up(&BOB);
 			assert_eq!(registration(&BOB), PlayerRegistration::Registered);
+		});
+	}
+
+	// An unregister is an absence, so it counts against the absence grace like a missed game.
+	#[test]
+	fn a_recognized_person_that_unregisters_past_the_absence_grace_is_suspended() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Members::create_collection(
+				0,
+				PEOPLE_MEMBER_IDENTIFIER,
+				1,
+				RingMode::Flexible,
+				RingExponent::R2e9,
+				None
+			));
+			let alice = AccountOrPerson::Account(ALICE);
+			let bob = AccountOrPerson::Account(BOB);
+			let mut game = GameSchedule { game_play_time: 10, ..schedule() };
+
+			// The mock has 100,000 active members, so the personhood threshold is 21. ALICE reaches
+			// it with six games attended in a row, then registers as a person.
+			for _ in 0..6 {
+				run_game_scenario(game.clone(), slice::from_ref(&alice), report_alone);
+				game.game_play_time = minimal_next_game_play_time(&game);
+			}
+			assert!(Score::reached_personhood(&alice));
+			let (key, secret) = mock_key(1234);
+			let message = [&b"pop register using"[..], &ALICE.encode()[..]].concat();
+			let proof = Mock::sign(&secret, &message[..]).unwrap();
+			assert_ok!(Score::register(RuntimeOrigin::signed(ALICE), Some((key, proof))));
+			assert!(matches!(recognition(&ALICE), Recognition::Recognized(_)));
+
+			// The default grace of that population allows one miss in six games. The last six
+			// games of ALICE have no miss.
+			assert_eq!(indiv_pallet_score::AbsenceGraceRatio::<Test>::get(), (1, 6));
+
+			// ALICE signs up for the next two games and unregisters from both. BOB plays them, so
+			// the games are not cancelled.
+			for unregisters in 1..=2 {
+				run_game_scenario_with_phase(
+					game.clone(),
+					|| {
+						sign_up(&ALICE);
+						sign_up(&BOB);
+						assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+					},
+					|| {
+						assert_ok!(Game::report(
+							RuntimeOrigin::signed(BOB),
+							build_report_with_opinion(&bob, |_| Report::Person)
+						));
+					},
+				);
+				game.game_play_time = minimal_next_game_play_time(&game);
+
+				// The grace allows the first miss. The second miss suspends ALICE.
+				let suspended = unregisters == 2;
+				assert_eq!(matches!(recognition(&ALICE), Recognition::Suspended(_)), suspended);
+				assert_eq!(Score::reached_personhood(&alice), !suspended);
+				let ring_position =
+					indiv_pallet_members::Members::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, key);
+				assert_eq!(ring_position == Some(RingPosition::Suspended), suspended);
+			}
 		});
 	}
 
