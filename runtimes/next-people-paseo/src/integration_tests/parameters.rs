@@ -17,13 +17,25 @@
 use super::*;
 use crate::{
 	parameters::{
-		dynamic_params::{bulletin_storage, people_airdrops, statement_storage},
+		dynamic_params::{bulletin_storage, lite_personhood, people_airdrops, statement_storage},
 		RuntimeParameters, LONG_TERM_STORAGE_CLEANUP_LIMIT_CAP, STMT_STORE_CLEANUP_LIMIT_CAP,
 	},
-	Parameters,
+	ExistentialDeposit, Parameters,
 };
-use frame_support::{assert_noop, assert_ok, traits::Get, PalletId};
-use indiv_pallet_resources::WeightInfo as ResourcesWeightInfo;
+use codec::Decode;
+use frame_support::{assert_noop, assert_ok, traits::Get, view_functions::ViewFunction, PalletId};
+use indiv_pallet_people_airdrops::GetPrizeSourceViewFunction;
+use indiv_pallet_people_lite::{
+	GetMaxLitePeopleViewFunction, GetPaidRegistrationPeriodViewFunction,
+	GetPaidRegistrationThresholdViewFunction, GetPaidRegistrationsPerPeriodViewFunction,
+	GetRegistrationFeeViewFunction,
+};
+use indiv_pallet_resources::{
+	types::LongTermStorageAllocation, GetAccountsApiAllowanceViewFunction,
+	GetLitePersonStatementLimitViewFunction, GetLongTermStorageAllowanceForLitePeopleViewFunction,
+	GetLongTermStorageAllowanceForPeopleViewFunction, GetNotificationAllowanceViewFunction,
+	GetPersonStatementLimitViewFunction, WeightInfo as ResourcesWeightInfo,
+};
 use indiv_support::{
 	statement_allowance::BoundedStatementAllowance, weight_budget::OcwWeightBudget,
 };
@@ -51,6 +63,24 @@ where
 	bulletin_storage::Parameters: From<(Key, Value)>,
 {
 	set_parameter(RuntimeParameters::BulletinStorage((key, value).into()));
+}
+
+/// Stores `value` for a lite-personhood parameter.
+fn set_lite_personhood_parameter<Key, Value>(key: Key, value: Value)
+where
+	lite_personhood::Parameters: From<(Key, Value)>,
+{
+	set_parameter(RuntimeParameters::LitePersonhood((key, value).into()));
+}
+
+/// Runs a view function without arguments through the runtime dispatch that clients call.
+fn execute_view_function<Query: ViewFunction>() -> Query::ReturnType
+where
+	Query::ReturnType: Decode,
+{
+	let output = Runtime::execute_view_function(Query::id(), Vec::new())
+		.expect("the runtime dispatches the view function");
+	Decode::decode(&mut &output[..]).expect("the output decodes as the return type")
 }
 
 /// Stores `value` for a people-airdrops parameter.
@@ -147,6 +177,104 @@ fn root_parameter_updates_change_what_the_resources_pallet_reads() {
 		assert_eq!(
 			<Runtime as indiv_pallet_resources::Config>::NotificationPeriodDuration::get(),
 			60 * 60
+		);
+	});
+}
+
+#[test]
+fn prize_source_view_function_returns_the_updated_parameter() {
+	new_test_ext().execute_with(|| {
+		let updated = Sr25519Keyring::Alice.to_account_id();
+		set_people_airdrops_parameter(people_airdrops::PrizeSource, updated.clone());
+
+		assert_eq!(execute_view_function::<GetPrizeSourceViewFunction<Runtime>>(), updated);
+	});
+}
+
+#[test]
+fn statement_storage_view_functions_return_the_updated_parameters() {
+	new_test_ext().execute_with(|| {
+		let allowance = |max_size, max_count| BoundedStatementAllowance { max_size, max_count };
+		set_statement_parameter(statement_storage::AccountsApiAllowance, allowance(7, 1));
+		set_statement_parameter(statement_storage::NotificationAllowance, allowance(9, 3));
+		set_statement_parameter(statement_storage::LitePersonStatementLimit, allowance(11, 2));
+		set_statement_parameter(statement_storage::PersonStatementLimit, allowance(13, 4));
+
+		assert_eq!(
+			execute_view_function::<GetAccountsApiAllowanceViewFunction<Runtime>>(),
+			StatementAllowance { max_size: 7, max_count: 1 }
+		);
+		assert_eq!(
+			execute_view_function::<GetNotificationAllowanceViewFunction<Runtime>>(),
+			StatementAllowance { max_size: 9, max_count: 3 }
+		);
+		assert_eq!(
+			execute_view_function::<GetLitePersonStatementLimitViewFunction<Runtime>>(),
+			StatementAllowance { max_size: 11, max_count: 2 }
+		);
+		assert_eq!(
+			execute_view_function::<GetPersonStatementLimitViewFunction<Runtime>>(),
+			StatementAllowance { max_size: 13, max_count: 4 }
+		);
+	});
+}
+
+#[test]
+fn long_term_storage_view_functions_return_the_updated_parameters() {
+	new_test_ext().execute_with(|| {
+		let for_people = LongTermStorageAllocation { transactions: 3, bytes: 42 };
+		let for_lite_people = LongTermStorageAllocation { transactions: 5, bytes: 7 };
+		set_bulletin_parameter(bulletin_storage::LongTermStorageAllowanceForPeople, for_people);
+		set_bulletin_parameter(
+			bulletin_storage::LongTermStorageAllowanceForLitePeople,
+			for_lite_people,
+		);
+
+		assert_eq!(
+			execute_view_function::<GetLongTermStorageAllowanceForPeopleViewFunction<Runtime>>(),
+			for_people
+		);
+		assert_eq!(
+			execute_view_function::<GetLongTermStorageAllowanceForLitePeopleViewFunction<Runtime>>(
+			),
+			for_lite_people
+		);
+	});
+}
+
+#[test]
+fn lite_personhood_view_functions_return_the_updated_parameters() {
+	new_test_ext().execute_with(|| {
+		let fee = ExistentialDeposit::get() + 1;
+		set_lite_personhood_parameter(lite_personhood::RegistrationFee, fee);
+		set_lite_personhood_parameter(lite_personhood::MaxLitePeople, 12);
+		set_lite_personhood_parameter(lite_personhood::PaidRegistrationThreshold, 13);
+		set_lite_personhood_parameter(lite_personhood::PaidRegistrationPeriod, 14);
+		set_lite_personhood_parameter(lite_personhood::PaidRegistrationsPerPeriod, 15);
+
+		assert_eq!(execute_view_function::<GetRegistrationFeeViewFunction<Runtime>>(), fee);
+		assert_eq!(execute_view_function::<GetMaxLitePeopleViewFunction<Runtime>>(), 12);
+		assert_eq!(
+			execute_view_function::<GetPaidRegistrationThresholdViewFunction<Runtime>>(),
+			13
+		);
+		assert_eq!(execute_view_function::<GetPaidRegistrationPeriodViewFunction<Runtime>>(), 14);
+		assert_eq!(
+			execute_view_function::<GetPaidRegistrationsPerPeriodViewFunction<Runtime>>(),
+			15
+		);
+	});
+}
+
+#[test]
+fn registration_fee_view_function_returns_the_fee_that_registration_charges() {
+	new_test_ext().execute_with(|| {
+		// The runtime charges at least the existential deposit whatever governance stores.
+		set_lite_personhood_parameter(lite_personhood::RegistrationFee, 0);
+
+		assert_eq!(
+			execute_view_function::<GetRegistrationFeeViewFunction<Runtime>>(),
+			ExistentialDeposit::get()
 		);
 	});
 }
