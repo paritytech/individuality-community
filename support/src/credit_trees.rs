@@ -378,6 +378,9 @@ pub trait AwardCredits<AccountId> {
 	fn remaining_capacity(game_index: u32) -> u32;
 
 	/// Clears up to `limit` awarded-credit entries of `game_index`.
+	///
+	/// Call it at most once per block for a game. A second call in the same block walks the
+	/// same entries again and does not advance the clear.
 	/// The result's `loops` counts the entries walked and must not exceed `limit`.
 	/// Its `maybe_cursor` is `None` when the game has no entry left.
 	fn clear_game_credits(game_index: u32, limit: u32) -> MultiRemovalResults;

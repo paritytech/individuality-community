@@ -3954,10 +3954,6 @@ pub mod pallet {
 		/// Call it at most once per block. A second call in the same block walks the same keys
 		/// again, so continue a [`StepResult::Continue`] in a later block.
 		///
-		/// The chunks used count only the keys walked in the index maps, because
-		/// `clear_game_credits` does not report its walk. A claimant holds one credit entry and
-		/// one `IndexToPlayer` entry per round, so the index maps walk at least as many keys.
-		///
 		/// The awarded-credit slots go with the maps, being positions in groups only those maps
 		/// resolve. Step 1 has finished the attendance backfill by now, so no award can name
 		/// this game again and the slots have no reader left.
