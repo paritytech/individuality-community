@@ -152,6 +152,14 @@ pub mod pallet {
 		}
 	}
 
+	#[pallet::view_functions]
+	impl<T: Config> Pallet<T> {
+		/// Returns the current value of [`Config::PrizeSource`].
+		pub fn get_prize_source() -> T::AccountId {
+			T::PrizeSource::get()
+		}
+	}
+
 	impl<T: Config> Pallet<T> {
 		/// The personhood product name every draw is scheduled under.
 		pub fn product_name() -> ProductName {

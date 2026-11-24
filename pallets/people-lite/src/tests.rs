@@ -2081,3 +2081,28 @@ mod lite_people_cap {
 		});
 	}
 }
+
+mod view_functions {
+	use super::*;
+	use crate::mock::{
+		MaxLitePeople, PaidRegistrationPeriod, PaidRegistrationThreshold,
+		PaidRegistrationsPerPeriod,
+	};
+
+	#[test]
+	fn parameter_view_functions_follow_their_parameters() {
+		new_test_ext().execute_with(|| {
+			LitePersonRegistrationFee::set(&11);
+			MaxLitePeople::set(&12);
+			PaidRegistrationThreshold::set(&13);
+			PaidRegistrationPeriod::set(&14);
+			PaidRegistrationsPerPeriod::set(&15);
+
+			assert_eq!(PeopleLitePallet::<Test>::get_registration_fee(), 11);
+			assert_eq!(PeopleLitePallet::<Test>::get_max_lite_people(), 12);
+			assert_eq!(PeopleLitePallet::<Test>::get_paid_registration_threshold(), 13);
+			assert_eq!(PeopleLitePallet::<Test>::get_paid_registration_period(), 14);
+			assert_eq!(PeopleLitePallet::<Test>::get_paid_registrations_per_period(), 15);
+		});
+	}
+}
