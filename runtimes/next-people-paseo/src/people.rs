@@ -1226,7 +1226,9 @@ impl
 
 	fn fund_account(acc: AccountId) {
 		use frame_support::traits::Currency;
-		let balance = 1_000_000_000_000_000u128;
+		// Enough to place the play deposit and keep a spendable balance.
+		let balance = indiv_pallet_game::PlayDepositAmount::<Runtime>::get()
+			.saturating_add(1_000_000_000_000_000u128);
 		let _ = Balances::make_free_balance_be(&acc, balance);
 	}
 
