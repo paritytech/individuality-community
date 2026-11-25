@@ -1079,28 +1079,13 @@ pub mod benches {
 			T::NftClaimCredits::benchmark_award_every_slot(game_index, &account_or_person);
 		}
 
-		let mut cursor1: Option<Vec<u8>> = None;
-		let mut cursor2: Option<Vec<u8>> = None;
-		let mut cursor3: Option<Vec<u8>> = None;
-		let mut done1 = false;
-		let mut done2 = false;
-		let mut done3 = false;
-
 		#[block]
 		{
-			pallet::Pallet::<T>::player_process_step2_inner_loop(
-				game_index,
-				&mut cursor1,
-				&mut cursor2,
-				&mut cursor3,
-				&mut done1,
-				&mut done2,
-				&mut done3,
-			);
+			let _ = pallet::Pallet::<T>::clear_index_chunks(game_index, 1);
 		}
 
-		assert!(IndexToPlayer::<T>::iter().count() < total_entries as usize);
-		assert!(PlayerToIndex::<T>::iter().count() < total_entries as usize);
+		assert!(IndexToPlayer::<T>::iter().count() <= 1);
+		assert!(PlayerToIndex::<T>::iter().count() <= 1);
 		// The third map is the credits pallet's, reached through `T::NftClaimCredits`, so what it
 		// costs is measured with whatever the runtime wires in and asserted in its own tests.
 
@@ -1160,23 +1145,15 @@ pub mod benches {
 			ShuffleNotRecognized::<T>::insert(0u8, hash, &aop);
 		}
 
-		let mut cursor1: Option<Vec<u8>> = None;
-		let mut cursor2: Option<Vec<u8>> = None;
-		let mut done1 = false;
-		let mut done2 = false;
-
 		#[block]
 		{
-			pallet::Pallet::<T>::process_cancelling_step_shuffle(
-				&mut cursor1,
-				&mut cursor2,
-				&mut done1,
-				&mut done2,
-			);
+			let _ = pallet::Pallet::<T>::clear_shuffle_chunks(1);
 		}
 
-		assert!(ShuffleRecognized::<T>::iter().count() < total_entries as usize);
-		assert!(ShuffleNotRecognized::<T>::iter().count() < total_entries as usize);
+		// One chunk leaves the one entry beyond it in each map. The benchmark tests run on
+		// uncommitted storage, where a clear removes every entry.
+		assert!(ShuffleRecognized::<T>::iter().count() <= 1);
+		assert!(ShuffleNotRecognized::<T>::iter().count() <= 1);
 
 		Ok(())
 	}
