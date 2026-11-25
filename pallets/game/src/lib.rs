@@ -3959,8 +3959,6 @@ pub mod pallet {
 		/// this game again and the slots have no reader left.
 		pub(crate) fn clear_index_chunks(game_index: GameIdx, chunks: u32) -> ChunkedClear {
 			let limit = chunks.saturating_mul(PLAYER_PROCESS_STEP2_CHUNK);
-			let mut cleared = ChunkedClear::from_removals(
-				&[IndexToPlayer::<T>::clear(limit, None), PlayerToIndex::<T>::clear(limit, None)],
 			ChunkedClear::from_removals(
 				&[
 					IndexToPlayer::<T>::clear(limit, None),
