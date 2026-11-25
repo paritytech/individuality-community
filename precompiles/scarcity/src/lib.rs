@@ -151,6 +151,7 @@ use pallet_revive::{
 		AddressMapper, AddressMatcher, Error, Ext, RuntimeCosts, H160, H256,
 	},
 	sp_runtime::{DispatchError, Weight},
+	ContractLogTopics,
 };
 
 pub(crate) use indiv_precompile_support::{
@@ -454,6 +455,11 @@ fn deposit_event<T: pallet_revive::Config>(
 ) -> Result<(), Error> {
 	let (topics, data) = event.into_log_data().split();
 	let topics = topics.into_iter().map(|topic| H256(topic.0)).collect::<Vec<_>>();
+	// A Solidity event has at most four topics, which `ContractLogTopics` holds.
+	let topics = ContractLogTopics::try_from(topics).map_err(|topics| {
+		log::error!(target: LOG_TARGET, "event has {} topics, above the limit", topics.len());
+		revert("too many event topics")
+	})?;
 	env.frame_meter_mut().charge_weight_token(RuntimeCosts::DepositEvent {
 		num_topic: topics.len() as u32,
 		len: data.len() as u32,

@@ -61,7 +61,7 @@ impl<T: frame_system::Config> pallet_election_provider_multi_block::unsigned::We
 	/// Proof: `MultiBlockElectionVerifier::MinimumScore` (`max_values`: Some(1), `max_size`: Some(48), added: 543, mode: `Measured`)
 	/// Storage: `MultiBlockElection::DesiredTargets` (r:1 w:0)
 	/// Proof: `MultiBlockElection::DesiredTargets` (`max_values`: None, `max_size`: Some(16), added: 2491, mode: `Measured`)
-	fn validate_unsigned() -> Weight {
+	fn authorize_submit_unsigned() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `354`
 		//  Estimated: `6294`
