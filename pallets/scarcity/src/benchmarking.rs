@@ -23,7 +23,7 @@ use alloc::{vec, vec::Vec};
 use frame_benchmarking::v2::*;
 use frame_support::{
 	dispatch::{DispatchInfo, GetDispatchInfo, PostDispatchInfo},
-	traits::{Consideration, Get, StorageVersion},
+	traits::{Consideration, Get, StorageVersion, UnixTime},
 };
 use frame_system::RawOrigin;
 use sp_runtime::{
@@ -35,7 +35,10 @@ use sp_runtime::{
 use super::*;
 use crate::{
 	extension::{AsScarcity, AsScarcityInfo},
-	migration::v3::{old, MigrateToLocations},
+	migration::{
+		v3::{old, MigrateToLocations},
+		v4::{Cursor, MigrateToPledges},
+	},
 };
 
 fn metadata_key<T: Config>(seed: u32) -> MetadataKeyOf<T> {
@@ -68,13 +71,33 @@ fn create_definition<T: Config>(
 	Ok((collection, item))
 }
 
+/// The latest `until` a pledge made now may name.
+fn longest_pledge<T: Config>() -> u64 {
+	T::UnixTime::now().as_secs().saturating_add(T::MaxPledgeDuration::get())
+}
+
+/// Mint an instance from a new definition of `owner` into `holder` and pledge it to `pledgee`.
+fn mint_pledged<T: Config>(
+	owner: &T::AccountId,
+	holder: &T::AccountId,
+	pledgee: &T::AccountId,
+) -> Result<InstanceId, BenchmarkError> {
+	let (collection, item) = create_definition::<T>(owner)?;
+	let instance =
+		Pallet::<T>::do_mint(owner.clone(), collection, item, holder.clone(), Vec::new())?;
+	let nft = NftsByOwner::<T>::take(holder).expect("holder has the minted NFT");
+	let origin: T::RuntimeOrigin = Origin::<T>::Nft { owner: holder.clone(), nft }.into();
+	Pallet::<T>::pledge(origin, pledgee.clone(), longest_pledge::<T>()).map_err(|e| e.error)?;
+	Ok(instance)
+}
+
 /// The instance `instance` as `holder` holds it, in either map.
-fn held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> Option<Nft> {
+fn held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> Option<NftOf<T>> {
 	Pallet::<T>::nft_held_by(holder, instance).map(|(nft, _)| nft)
 }
 
 /// The instance `instance`, after a check that `holder` holds it.
-fn assert_held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> Nft {
+fn assert_held<T: Config>(holder: &T::AccountId, instance: InstanceId) -> NftOf<T> {
 	held::<T>(holder, instance).expect("holder holds the instance")
 }
 
@@ -336,6 +359,70 @@ mod benchmarks {
 	}
 
 	#[benchmark]
+	fn pledge() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = whitelisted_caller();
+		let pledgee: T::AccountId = account("pledgee", 0, 0);
+		let (collection, item) = create_definition::<T>(&owner)?;
+		Pallet::<T>::do_mint(owner.clone(), collection, item, owner.clone(), Vec::new())?;
+		let nft = NftsByOwner::<T>::take(&owner).expect("owner has the minted NFT");
+		let until = longest_pledge::<T>();
+		let origin: T::RuntimeOrigin = Origin::<T>::Nft { owner: owner.clone(), nft }.into();
+
+		#[extrinsic_call]
+		_(origin, pledgee.clone(), until);
+
+		assert_eq!(
+			NftsByOwner::<T>::get(&owner).and_then(|nft| nft.pledge),
+			Some(Pledge { pledgee, until })
+		);
+		Ok(())
+	}
+
+	/// Contract environments charge this weight for `do_seize`, which no extrinsic reaches.
+	#[benchmark]
+	fn seize() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = account("owner", 0, 0);
+		let holder: T::AccountId = whitelisted_caller();
+		let pledgee: T::AccountId = account("pledgee", 0, 0);
+		let to: T::AccountId = account("to", 0, 0);
+		NftsByOwner::<T>::remove(&to);
+		let instance = mint_pledged::<T>(&owner, &holder, &pledgee)?;
+		// A contract destination also writes `ContractNftCount`.
+		T::ContractAccounts::set_contract(&to);
+		// Worst case clears a lock on the source purse.
+		Locked::<T>::insert(&holder, LockInfo { retries: u8::MAX, until: u64::MAX });
+
+		#[block]
+		{
+			Pallet::<T>::do_seize(&pledgee, instance, to.clone())?;
+		}
+
+		assert_eq!(assert_held::<T>(&to, instance).pledge, None);
+		assert!(held::<T>(&holder, instance).is_none());
+		assert!(!Locked::<T>::contains_key(&holder));
+		Ok(())
+	}
+
+	/// Contract environments charge this weight for `do_release`, which no extrinsic reaches.
+	#[benchmark]
+	fn release() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = account("owner", 0, 0);
+		let holder: T::AccountId = whitelisted_caller();
+		let pledgee: T::AccountId = account("pledgee", 0, 0);
+		let instance = mint_pledged::<T>(&owner, &holder, &pledgee)?;
+
+		#[block]
+		{
+			Pallet::<T>::do_release(&pledgee, instance)?;
+		}
+
+		let nft = NftsByOwner::<T>::get(&holder).expect("the holder keeps the NFT");
+		assert_eq!(nft.instance, instance);
+		assert_eq!(nft.pledge, None);
+		Ok(())
+	}
+
+	#[benchmark]
 	fn delete_item() -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
 		let (collection, item) = create_definition::<T>(&caller)?;
@@ -383,6 +470,8 @@ mod benchmarks {
 		Ok(())
 	}
 
+	/// Measured on a transfer. The transfer arm of `validate` reads everything the pledge and
+	/// burn arms read and the destination key on top, so this weight bounds all three.
 	#[benchmark]
 	fn as_scarcity_pipeline() -> Result<(), BenchmarkError> {
 		let owner: T::AccountId = whitelisted_caller();
@@ -450,6 +539,27 @@ mod benchmarks {
 		}
 
 		assert_eq!(Instances::<T>::get(instance), Some(Location::Purse(holder)));
+		Ok(())
+	}
+
+	/// The step that finds no purse key after the cursor and translates the first contract NFT.
+	#[benchmark]
+	fn migrate_pledge() -> Result<(), BenchmarkError> {
+		let owner: T::AccountId = whitelisted_caller();
+		let purse: T::AccountId = account("purse", 0, 0);
+		let contract: T::AccountId = account("contract", 0, 0);
+		let (collection, item) = create_definition::<T>(&owner)?;
+		Pallet::<T>::do_mint(owner.clone(), collection, item, purse.clone(), Vec::new())?;
+		T::ContractAccounts::set_contract(&contract);
+		let instance = Pallet::<T>::do_mint(owner, collection, item, contract.clone(), Vec::new())?;
+		StorageVersion::new(3).put::<Pallet<T>>();
+
+		#[block]
+		{
+			MigrateToPledges::<T>::translate_next(Some(Cursor::Purse(purse)));
+		}
+
+		assert_eq!(assert_held::<T>(&contract, instance).pledge, None);
 		Ok(())
 	}
 

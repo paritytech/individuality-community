@@ -2353,6 +2353,17 @@ fn all_collection_calls(
 		}),
 		IScarcityCollectionCalls::contractURI(IScarcityCollection::contractURICall {}),
 		IScarcityCollectionCalls::locked(IScarcityCollection::lockedCall { tokenId: token }),
+		IScarcityCollectionCalls::pledgeOf(IScarcityCollection::pledgeOfCall { tokenId: token }),
+		IScarcityCollectionCalls::pledge(IScarcityCollection::pledgeCall {
+			tokenId: token,
+			pledgee: empty,
+			until: 100,
+		}),
+		IScarcityCollectionCalls::seize(IScarcityCollection::seizeCall {
+			tokenId: token,
+			to: empty
+		}),
+		IScarcityCollectionCalls::release(IScarcityCollection::releaseCall { tokenId: token }),
 		IScarcityCollectionCalls::defineItem(IScarcityCollection::defineItemCall {
 			soulbound: false,
 			keys: alloc::vec![],
@@ -3219,7 +3230,8 @@ fn collection_owner_deposit_reports_aggregate() {
 /// metadata and fails on any that starts trapping instead of reverting.
 #[test]
 fn mapped_scarcity_errors_are_exhaustive() {
-	// The ABI covers the pallet's whole owner surface, so every error variant is reachable.
+	// The ABI covers the pallet's whole owner, holder and pledgee surface, so every error variant
+	// is reachable.
 	const UNREACHABLE: [&str; 0] = [];
 
 	let pallet_index = match DispatchError::from(indiv_pallet_scarcity::Error::<Test>::NoPermission)
@@ -3649,6 +3661,557 @@ fn royalty_basis_points_reject_a_value_that_is_not_exactly_u128() {
 	});
 }
 
+/// One collection whose instance sits at a funded eth-derived purse, with a funded pledgee.
+struct PledgeWorld {
+	alice: AccountId32,
+	collection: CollectionId,
+	target: H160,
+	holder_address: Address,
+	holder: AccountId32,
+	instance: InstanceId,
+	token: U256,
+	pledgee_address: Address,
+	pledgee: AccountId32,
+}
+
+/// The pallet clock when a pledge world starts.
+const PLEDGE_NOW: u64 = 1_000;
+/// When the pledges these tests make stop having effect.
+const PLEDGE_UNTIL: u64 = 1_100;
+
+impl PledgeWorld {
+	fn new() -> Self {
+		MockNow::set(PLEDGE_NOW);
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let (holder_address, holder, instance) =
+			mint_to_funded_purse(&alice, collection, item, 0xBB);
+		let (pledgee_address, pledgee) = purse(0xAA);
+		Balances::make_free_balance_be(&pledgee, u64::MAX / 4);
+		Self {
+			alice,
+			collection,
+			target: collection_address(collection),
+			holder_address: holder_address.0.into(),
+			holder,
+			instance,
+			token: U256::from(instance),
+			pledgee_address: pledgee_address.0.into(),
+			pledgee,
+		}
+	}
+
+	/// Pledge the instance to the pledgee natively, as `AsScarcity` dispatches it: the record
+	/// leaves the purse before the call and the call writes it back with one more move spent.
+	fn pledge_natively(&self) {
+		let nft = NftsByOwner::<Test>::take(&self.holder).unwrap();
+		let origin = RuntimeOrigin::from(indiv_pallet_scarcity::Origin::<Test>::Nft {
+			owner: self.holder.clone(),
+			nft,
+		});
+		assert_ok!(Scarcity::pledge(origin, self.pledgee.clone(), PLEDGE_UNTIL));
+	}
+
+	fn pledge_of(&self) -> (Address, u64) {
+		let data = call_ok(
+			&self.alice,
+			self.target,
+			IScarcityCollection::pledgeOfCall { tokenId: self.token }.abi_encode(),
+		);
+		let answer = IScarcityCollection::pledgeOfCall::abi_decode_returns(&data).unwrap();
+		(answer.pledgee, answer.until)
+	}
+
+	fn locked(&self) -> bool {
+		let data = call_ok(
+			&self.alice,
+			self.target,
+			IScarcityCollection::lockedCall { tokenId: self.token }.abi_encode(),
+		);
+		IScarcityCollection::lockedCall::abi_decode_returns(&data).unwrap()
+	}
+
+	fn seize(&self, to: Address) -> Vec<u8> {
+		IScarcityCollection::seizeCall { tokenId: self.token, to }.abi_encode()
+	}
+
+	fn transfer_from(&self, to: Address) -> Vec<u8> {
+		IScarcityCollection::transferFromCall { from: self.holder_address, to, tokenId: self.token }
+			.abi_encode()
+	}
+}
+
+#[test]
+fn pledge_of_reports_only_a_pledge_with_effect() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		assert_eq!(world.pledge_of(), (Address::ZERO, 0));
+		assert!(!world.locked());
+
+		world.pledge_natively();
+		assert_eq!(world.pledge_of(), (world.pledgee_address, PLEDGE_UNTIL));
+		assert!(world.locked(), "a pledged token is locked to its holder");
+
+		MockNow::set(PLEDGE_UNTIL);
+		assert_eq!(world.pledge_of(), (Address::ZERO, 0), "an expired pledge reads as none");
+		assert!(!world.locked());
+	});
+}
+
+/// A pledge is not an approval, so the ERC-721 approval reads stay empty and `approve` keeps
+/// reverting while one stands.
+#[test]
+fn a_pledge_is_not_an_approval() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+
+		let data = call_ok(
+			&world.alice,
+			world.target,
+			IScarcityCollection::getApprovedCall { tokenId: world.token }.abi_encode(),
+		);
+		assert_eq!(
+			IScarcityCollection::getApprovedCall::abi_decode_returns(&data).unwrap(),
+			Address::ZERO
+		);
+		let data = call_ok(
+			&world.alice,
+			world.target,
+			IScarcityCollection::isApprovedForAllCall {
+				owner: world.holder_address,
+				operator: world.pledgee_address,
+			}
+			.abi_encode(),
+		);
+		assert!(!IScarcityCollection::isApprovedForAllCall::abi_decode_returns(&data).unwrap());
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			IScarcityCollection::approveCall { to: Address::ZERO, tokenId: world.token }
+				.abi_encode(),
+			ERR_APPROVALS_UNSUPPORTED,
+		);
+		assert_eq!(world.pledge_of(), (world.pledgee_address, PLEDGE_UNTIL));
+	});
+}
+
+#[test]
+fn the_holder_pledges_through_the_precompile() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		let before = NftsByOwner::<Test>::get(&world.holder).unwrap();
+		let pledge = |pledgee: Address, until: u64| {
+			IScarcityCollection::pledgeCall { tokenId: world.token, pledgee, until }.abi_encode()
+		};
+
+		call_reverted_with(
+			&world.alice,
+			world.target,
+			pledge(world.pledgee_address, PLEDGE_UNTIL),
+			"caller does not hold this token",
+		);
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			pledge(Address::ZERO, PLEDGE_UNTIL),
+			ERR_ZERO_PLEDGEE,
+		);
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			pledge(world.holder_address, PLEDGE_UNTIL),
+			"token cannot be pledged to its holder",
+		);
+		for until in [PLEDGE_NOW, PLEDGE_NOW + 3_600 + 1] {
+			call_reverted_with(
+				&world.holder,
+				world.target,
+				pledge(world.pledgee_address, until),
+				"pledge must end in the future and within the maximum duration",
+			);
+		}
+		assert_no_contract_event();
+
+		call_ok(&world.holder, world.target, pledge(world.pledgee_address, PLEDGE_UNTIL));
+
+		assert_only_contract_event(
+			world.target,
+			IScarcityCollection::Locked { tokenId: world.token },
+		);
+		let after = NftsByOwner::<Test>::get(&world.holder).unwrap();
+		assert_eq!(
+			after.pledge,
+			Some(indiv_pallet_scarcity::Pledge {
+				pledgee: world.pledgee.clone(),
+				until: PLEDGE_UNTIL
+			})
+		);
+		assert_eq!(after.moves, before.moves, "a paid pledge spends no feeless move");
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			pledge(address_of::<Test>(&world.alice), PLEDGE_UNTIL),
+			"token already carries a pledge",
+		);
+	});
+}
+
+#[test]
+fn a_soulbound_token_cannot_be_pledged() {
+	new_test_ext().execute_with(|| {
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item_as(&alice, collection, Transferability::Soulbound);
+		let (_, holder, instance) = mint_to_funded_purse(&alice, collection, item, 0xBB);
+		let (pledgee, _) = purse(0xAA);
+
+		call_reverted_with(
+			&holder,
+			collection_address(collection),
+			IScarcityCollection::pledgeCall {
+				tokenId: U256::from(instance),
+				pledgee: pledgee.0.into(),
+				until: 100,
+			}
+			.abi_encode(),
+			"token is soulbound to its purse key",
+		);
+	});
+}
+
+#[test]
+fn the_pledgee_seizes_into_an_empty_key() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let (to_address, to) = purse(0xCC);
+		let to_address: Address = to_address.0.into();
+		let before = NftsByOwner::<Test>::get(&world.holder).unwrap();
+		assert_eq!(before.moves, 1, "the native pledge spent a feeless move");
+
+		call_ok(&world.pledgee, world.target, world.seize(to_address));
+
+		assert!(NftsByOwner::<Test>::get(&world.holder).is_none());
+		let moved = NftsByOwner::<Test>::get(&to).expect("the destination holds the token");
+		assert_eq!(moved.instance, world.instance);
+		assert_eq!(moved.pledge, None);
+		assert_eq!(moved.moves, 0, "a seize is a paid move and refills the budget");
+		assert_eq!(moved.state_nonce, before.state_nonce + 1);
+		assert_eq!(
+			Instances::<Test>::get(world.instance),
+			Some(indiv_pallet_scarcity::Location::Purse(to))
+		);
+		assert_contract_event(world.target, IScarcityCollection::Unlocked { tokenId: world.token });
+		assert_contract_event(
+			world.target,
+			IScarcityCollection::Transfer {
+				from: world.holder_address,
+				to: to_address,
+				tokenId: world.token,
+			},
+		);
+		assert_eq!(contract_event_count(), 2);
+		assert_eq!(world.pledge_of(), (Address::ZERO, 0));
+		assert!(!world.locked());
+	});
+}
+
+#[test]
+fn only_the_pledgee_seizes_and_only_into_an_empty_key_while_the_pledge_lasts() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let (empty, _) = purse(0xCC);
+		let empty: Address = empty.0.into();
+		let item = setup_item(&world.alice, world.collection);
+		let (occupied, _, _) = mint_to_funded_purse(&world.alice, world.collection, item, 0xDD);
+
+		let cases: [(&AccountId32, Address, &str); 5] = [
+			(&world.alice, empty, ERR_NOT_PLEDGEE),
+			(&world.holder, empty, ERR_NOT_PLEDGEE),
+			(&world.pledgee, Address::ZERO, ERR_ZERO_DESTINATION),
+			(&world.pledgee, occupied.0.into(), "destination purse already holds an instance"),
+			(&world.pledgee, world.holder_address, ERR_SELF_TRANSFER),
+		];
+		for (caller, to, reason) in cases {
+			call_reverted_with(caller, world.target, world.seize(to), reason);
+		}
+
+		MockNow::set(PLEDGE_UNTIL);
+		call_reverted_with(&world.pledgee, world.target, world.seize(empty), ERR_NOT_PLEDGEE);
+
+		assert_eq!(
+			Instances::<Test>::get(world.instance),
+			Some(indiv_pallet_scarcity::Location::Purse(world.holder.clone()))
+		);
+		assert_no_contract_event();
+	});
+}
+
+#[test]
+fn the_pledgee_releases_and_the_token_stays() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let release = IScarcityCollection::releaseCall { tokenId: world.token }.abi_encode();
+
+		call_reverted_with(&world.alice, world.target, release.clone(), ERR_NOT_PLEDGEE);
+		call_reverted_with(&world.holder, world.target, release.clone(), ERR_NOT_PLEDGEE);
+		call_ok(&world.pledgee, world.target, release.clone());
+
+		assert_only_contract_event(
+			world.target,
+			IScarcityCollection::Unlocked { tokenId: world.token },
+		);
+		assert_eq!(NftsByOwner::<Test>::get(&world.holder).unwrap().pledge, None);
+		assert_eq!(world.pledge_of(), (Address::ZERO, 0));
+		call_reverted_with(&world.pledgee, world.target, release, ERR_NOT_PLEDGEE);
+
+		let (empty, _) = purse(0xCC);
+		call_ok(&world.holder, world.target, world.transfer_from(empty.0.into()));
+	});
+}
+
+/// No ERC-721 transfer function moves a pledged token: the holder, the pledgee and every other
+/// caller are refused, each with its own reason, and `seize` is the pledgee's move.
+#[test]
+fn transfer_from_refuses_every_caller_while_a_pledge_has_effect() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		let before = NftsByOwner::<Test>::get(&world.holder).unwrap();
+		let (to_address, to) = purse(0xCC);
+		let to_address: Address = to_address.0.into();
+		let safe_transfers = [
+			IScarcityCollection::safeTransferFrom_1Call {
+				from: world.holder_address,
+				to: to_address,
+				tokenId: world.token,
+			}
+			.abi_encode(),
+			IScarcityCollection::safeTransferFrom_0Call {
+				from: world.holder_address,
+				to: to_address,
+				tokenId: world.token,
+				data: Bytes::from_static(b"payload"),
+			}
+			.abi_encode(),
+		];
+
+		call_reverted_with(
+			&world.holder,
+			world.target,
+			world.transfer_from(to_address),
+			ERR_PLEDGED,
+		);
+		call_reverted_with(
+			&world.alice,
+			world.target,
+			world.transfer_from(to_address),
+			"caller does not hold this token",
+		);
+		call_reverted_with(
+			&world.pledgee,
+			world.target,
+			world.transfer_from(to_address),
+			ERR_PLEDGEE_TRANSFER,
+		);
+		for input in safe_transfers {
+			call_reverted_with(&world.pledgee, world.target, input, ERR_PLEDGEE_TRANSFER);
+		}
+		assert_eq!(NftsByOwner::<Test>::get(&world.holder).unwrap(), before);
+		assert!(world.locked());
+		assert_no_contract_event();
+
+		call_ok(&world.pledgee, world.target, world.seize(to_address));
+
+		let moved = NftsByOwner::<Test>::get(&to).expect("the destination holds the token");
+		assert_eq!((moved.instance, moved.pledge), (world.instance, None));
+	});
+}
+
+#[test]
+fn an_expired_pledge_hands_transfers_back_to_the_holder() {
+	new_test_ext().execute_with(|| {
+		let world = PledgeWorld::new();
+		world.pledge_natively();
+		MockNow::set(PLEDGE_UNTIL);
+		let (to_address, to) = purse(0xCC);
+		let to_address: Address = to_address.0.into();
+
+		call_reverted_with(
+			&world.pledgee,
+			world.target,
+			world.transfer_from(to_address),
+			"caller does not hold this token",
+		);
+		call_ok(&world.holder, world.target, world.transfer_from(to_address));
+
+		assert_eq!(NftsByOwner::<Test>::get(&to).unwrap().pledge, None, "the move clears it");
+	});
+}
+
+/// `seize` charges its reads ahead of its refusals, and the move and the destination's
+/// registration only once they pass.
+///
+/// Three calls by the same caller. A zero destination is refused ahead of every charge. A token
+/// pledged to someone else is refused right after the reads. A seize of a token pledged to the
+/// caller pays everything. The mock prices reads and the registration only in proof size, so a
+/// charge moved ahead of the refusal or dropped from the move fails one of the bounds.
+#[test]
+fn seize_charges_the_move_only_past_its_refusals() {
+	new_test_ext().execute_with(|| {
+		MockNow::set(PLEDGE_NOW);
+		let alice = id_to_account(1);
+		let collection = setup_collection(&alice);
+		let item = setup_item(&alice, collection);
+		let target = collection_address(collection);
+		let (_, mine_holder, mine) = mint_to_funded_purse(&alice, collection, item, 0xBB);
+		let (_, theirs_holder, theirs) = mint_to_funded_purse(&alice, collection, item, 0xCC);
+		let (other, _) = purse(0xAA);
+		let pledge = |holder: &AccountId32, instance, pledgee: AccountId32| {
+			indiv_pallet_scarcity::Pallet::<Test>::do_pledge_by_holder(
+				holder,
+				instance,
+				pledgee,
+				PLEDGE_UNTIL,
+			)
+			.unwrap()
+		};
+		pledge(&mine_holder, mine, alice.clone());
+		pledge(&theirs_holder, theirs, account_of::<Test>(&other.0.into()));
+		let (empty, _) = purse(0xDD);
+		let seize = |instance: InstanceId, to: Address| {
+			IScarcityCollection::seizeCall { tokenId: U256::from(instance), to }.abi_encode()
+		};
+		let weigh = |input: Vec<u8>, reverts: bool| {
+			let result = call_full(&alice, target, input);
+			assert_eq!(result.result.expect("call executes").did_revert(), reverts);
+			result.weight_consumed
+		};
+
+		let uncharged = weigh(seize(mine, Address::ZERO), true);
+		let refused = weigh(seize(theirs, empty.0.into()), true);
+		let moved = weigh(seize(mine, empty.0.into()), false);
+
+		let reads = 4 * PROOF_SIZE_PER_READ;
+		let seize_weight = <() as indiv_pallet_scarcity::weights::WeightInfo>::seize();
+		let registration = <MapPurseKey<Test> as indiv_pallet_scarcity::OnPurseOccupied<
+			AccountId32,
+		>>::on_purse_occupied_weight();
+		assert!(registration.proof_size() > 0, "the mock must price the registration");
+		assert!(
+			refused.proof_size() >= uncharged.proof_size() + reads,
+			"the reads come ahead of the refusal: refused {refused:?}, uncharged {uncharged:?}"
+		);
+		assert!(
+			refused.proof_size() < uncharged.proof_size() + reads + registration.proof_size(),
+			"a refused seize pays neither the move nor the registration: refused {refused:?}"
+		);
+		assert!(
+			moved.proof_size() >=
+				refused.proof_size() + seize_weight.proof_size() + registration.proof_size(),
+			"a seize pays the move and the registration: moved {moved:?}, refused {refused:?}"
+		);
+	});
+}
+
+/// How a pledgee ends a pledge.
+enum PledgeEnd {
+	Seize,
+	Release,
+}
+
+/// A pledge to the address of an unmapped account stores the fallback account. The owner then
+/// maps its account and resolves to the original account. That account still acts as the
+/// pledgee, because both accounts have the same address.
+#[test]
+fn a_pledgee_that_maps_its_account_after_the_pledge_keeps_it() {
+	for end in [PledgeEnd::Seize, PledgeEnd::Release] {
+		new_test_ext().execute_with(|| {
+			let world = PledgeWorld::new();
+			let late = id_to_account(7);
+			let late_address = address_of::<Test>(&late);
+			call_ok(
+				&world.holder,
+				world.target,
+				IScarcityCollection::pledgeCall {
+					tokenId: world.token,
+					pledgee: late_address,
+					until: PLEDGE_UNTIL,
+				}
+				.abi_encode(),
+			);
+			let stored = NftsByOwner::<Test>::get(&world.holder).unwrap().pledge.unwrap();
+			assert_ne!(stored.pledgee, late, "the pledge names the fallback account");
+
+			map_account(&late);
+			assert_eq!(world.pledge_of(), (late_address, PLEDGE_UNTIL));
+			let (to_address, to) = purse(0xCC);
+			let to_address: Address = to_address.0.into();
+			call_reverted_with(
+				&late,
+				world.target,
+				world.transfer_from(to_address),
+				ERR_PLEDGEE_TRANSFER,
+			);
+			match end {
+				PledgeEnd::Seize => {
+					call_ok(&late, world.target, world.seize(to_address));
+					assert_eq!(NftsByOwner::<Test>::get(&to).unwrap().instance, world.instance);
+				},
+				PledgeEnd::Release => {
+					call_ok(
+						&late,
+						world.target,
+						IScarcityCollection::releaseCall { tokenId: world.token }.abi_encode(),
+					);
+					assert_eq!(NftsByOwner::<Test>::get(&world.holder).unwrap().pledge, None);
+				},
+			}
+		});
+	}
+}
+
+/// `forceTransfer` announces `Unlocked` when it clears a pledge with effect, and only then.
+#[test]
+fn force_transfer_unlocks_a_token_whose_pledge_has_effect() {
+	for (now, unlocks) in [(PLEDGE_NOW, true), (PLEDGE_UNTIL, false)] {
+		new_test_ext().execute_with(|| {
+			let world = PledgeWorld::new();
+			world.pledge_natively();
+			MockNow::set(now);
+			let (to, _) = purse(0xCC);
+			let to: Address = to.0.into();
+
+			call_ok(
+				&world.alice,
+				world.target,
+				IScarcityCollection::forceTransferCall { tokenId: world.token, to }.abi_encode(),
+			);
+
+			assert_contract_event(
+				world.target,
+				IScarcityCollection::Transfer {
+					from: world.holder_address,
+					to,
+					tokenId: world.token,
+				},
+			);
+			if unlocks {
+				assert_contract_event(
+					world.target,
+					IScarcityCollection::Unlocked { tokenId: world.token },
+				);
+			}
+			assert_eq!(contract_event_count(), 1 + usize::from(unlocks));
+			assert!(!world.locked());
+		});
+	}
+}
+
 /// Frame-flag guards, driven through `pallet_revive::precompiles::run`, which executes a
 /// precompile inside a frame with controlled read-only and delegate-call flags.
 ///
@@ -3780,7 +4343,7 @@ mod guards {
 			// A tripwire, not a safety net: `all_collection_calls` already pins that every selector
 			// is driven, and a new mutator classified as a read leaves this count untouched. That
 			// one is caught by review or not at all.
-			assert_eq!(mutating, 20, "mutating arm count changed; update this test deliberately");
+			assert_eq!(mutating, 23, "mutating arm count changed; update this test deliberately");
 
 			let factory = run_precompile::<ScarcityFactory<Test, FACTORY_INDEX>, _>(
 				&mut ext,
@@ -4317,6 +4880,21 @@ mod evm_fixture {
 	}
 
 	alloy::sol! {
+		interface IPledgeGame {
+			function join(uint256 tokenId) external;
+			function settle(uint256 winningToken, address[] calldata prizeKeys) external;
+			function settleIntoCustody(uint256 winningToken) external;
+			function claimPrize(uint256 tokenId, address to) external;
+			function stakerOf(uint256 tokenId) external view returns (address staker);
+			function stakeCount() external view returns (uint256 count);
+			error NotPledgedHere();
+			error PledgeTooShort();
+			error AlreadyJoined();
+			error Settled();
+			error NotOperator();
+			error NotWinner();
+		}
+
 		interface ITokenVault {
 			function release(address collection, uint256 tokenId, address to) external;
 			function held(address collection) external view returns (uint256 count);
@@ -4324,6 +4902,310 @@ mod evm_fixture {
 
 		interface ITerminableVault {
 			function terminate(address beneficiary) external;
+		}
+	}
+
+	/// The pallet clock when a round starts.
+	const GAME_NOW: u64 = 1_000;
+	/// The Unix second by which a round settles.
+	const GAME_DEADLINE: u64 = 1_500;
+	/// When the pledges the players make stop having effect, after the deadline.
+	const GAME_PLEDGE_UNTIL: u64 = 2_000;
+
+	fn pledge_game_codes() -> [(&'static str, Vec<u8>); 2] {
+		[("solc", fixture_code("PledgeGame")), ("resolc", resolc_code("PledgeGame"))]
+	}
+
+	/// A player: an eth-derived purse holding one token of the round's collection.
+	struct Player {
+		address: H160,
+		account: AccountId32,
+		token: U256,
+	}
+
+	/// A `PledgeGame` deployed by `alice` over a collection she owns, with two players.
+	struct Game {
+		alice: AccountId32,
+		game: H160,
+		game_account: AccountId32,
+		target: H160,
+		players: [Player; 2],
+	}
+
+	impl Game {
+		fn new(code: Vec<u8>) -> Self {
+			MockNow::set(GAME_NOW);
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let item = setup_item(&alice, collection);
+			let mut args = alloy_address(collection_address(collection)).into_word().0.to_vec();
+			args.extend_from_slice(&U256::from(GAME_DEADLINE).to_be_bytes::<32>());
+			let game = deploy_with_args(&alice, code, args);
+			let players = [0xB1u8, 0xB2].map(|byte| {
+				let (address, account, instance) =
+					mint_to_funded_purse(&alice, collection, item, byte);
+				Player { address, account, token: U256::from(instance) }
+			});
+			let game_account = account_of::<Test>(&alloy_address(game));
+			Self { alice, game, game_account, target: collection_address(collection), players }
+		}
+
+		/// Pledge `player`'s token natively, as `AsScarcity` dispatches it: the record leaves the
+		/// purse before the call and the call writes it back.
+		fn pledge_natively(&self, player: &Player, pledgee: AccountId32, until: u64) {
+			let nft = NftsByOwner::<Test>::take(&player.account).unwrap();
+			let origin = RuntimeOrigin::from(indiv_pallet_scarcity::Origin::<Test>::Nft {
+				owner: player.account.clone(),
+				nft,
+			});
+			assert_ok!(Scarcity::pledge(origin, pledgee, until));
+		}
+
+		fn pledge_to_game(&self, player: &Player) {
+			self.pledge_natively(player, self.game_account.clone(), GAME_PLEDGE_UNTIL);
+		}
+
+		fn join(&self, caller: &AccountId32, token: U256) -> pallet_revive::ExecReturnValue {
+			call_precompile(
+				caller,
+				self.game,
+				IPledgeGame::joinCall { tokenId: token }.abi_encode(),
+			)
+		}
+
+		fn settle(
+			&self,
+			caller: &AccountId32,
+			winner: U256,
+			prize_keys: &[H160],
+		) -> pallet_revive::ExecReturnValue {
+			call_precompile(
+				caller,
+				self.game,
+				IPledgeGame::settleCall {
+					winningToken: winner,
+					prizeKeys: prize_keys.iter().map(|key| alloy_address(*key)).collect(),
+				}
+				.abi_encode(),
+			)
+		}
+
+		fn settle_into_custody(
+			&self,
+			caller: &AccountId32,
+			winner: U256,
+		) -> pallet_revive::ExecReturnValue {
+			call_precompile(
+				caller,
+				self.game,
+				IPledgeGame::settleIntoCustodyCall { winningToken: winner }.abi_encode(),
+			)
+		}
+
+		fn claim_prize(
+			&self,
+			caller: &AccountId32,
+			token: U256,
+			to: H160,
+		) -> pallet_revive::ExecReturnValue {
+			call_precompile(
+				caller,
+				self.game,
+				IPledgeGame::claimPrizeCall { tokenId: token, to: alloy_address(to) }.abi_encode(),
+			)
+		}
+
+		fn staker_of(&self, token: U256) -> Address {
+			let data = call_ok(
+				&self.alice,
+				self.game,
+				IPledgeGame::stakerOfCall { tokenId: token }.abi_encode(),
+			);
+			IPledgeGame::stakerOfCall::abi_decode_returns(&data).unwrap()
+		}
+	}
+
+	/// Assert `output` reverted with the custom error whose selector is `selector`.
+	fn assert_custom_error(output: &pallet_revive::ExecReturnValue, selector: [u8; 4], case: &str) {
+		assert!(output.did_revert(), "{case}: expected a revert, got {output:?}");
+		assert_eq!(output.data.get(..4), Some(&selector[..]), "{case}: wrong revert {output:?}");
+	}
+
+	/// Two players pledge and join, and settling releases the winner's stake and moves the
+	/// loser's to the key the winner named.
+	#[test]
+	fn a_round_settles_on_pledges() {
+		for (compiler, code) in pledge_game_codes() {
+			new_test_ext().execute_with(|| {
+				let game = Game::new(code);
+				let [winner, loser] = &game.players;
+				for player in &game.players {
+					game.pledge_to_game(player);
+					assert!(!game.join(&game.alice, player.token).did_revert(), "{compiler}");
+				}
+				let (prize_address, prize) = purse(0xC1);
+
+				assert_custom_error(
+					&game.settle(&winner.account, winner.token, &[prize_address]),
+					IPledgeGame::NotOperator::SELECTOR,
+					compiler,
+				);
+				let settled = game.settle(&game.alice, winner.token, &[prize_address]);
+				assert!(!settled.did_revert(), "{compiler}: {settled:?}");
+
+				let moved = NftsByOwner::<Test>::get(&prize).expect("the prize key holds a token");
+				assert_eq!(U256::from(moved.instance), loser.token, "{compiler}");
+				assert_eq!(moved.pledge, None, "{compiler}");
+				assert_eq!(moved.moves, 0, "{compiler}: a seize refills the budget");
+				assert!(NftsByOwner::<Test>::get(&loser.account).is_none(), "{compiler}");
+				let kept = NftsByOwner::<Test>::get(&winner.account).expect("the winner keeps");
+				assert_eq!(U256::from(kept.instance), winner.token, "{compiler}");
+				assert_eq!(kept.pledge, None, "{compiler}: the winner's stake is released");
+
+				assert_custom_error(
+					&game.settle(&game.alice, winner.token, &[prize_address]),
+					IPledgeGame::Settled::SELECTOR,
+					compiler,
+				);
+			});
+		}
+	}
+
+	/// Settling into custody seizes the loser's stake into the game contract itself, and only the
+	/// winner moves it out.
+	#[test]
+	fn a_round_settles_into_the_game_contract() {
+		for (compiler, code) in pledge_game_codes() {
+			new_test_ext().execute_with(|| {
+				let game = Game::new(code);
+				let [winner, loser] = &game.players;
+				for player in &game.players {
+					game.pledge_to_game(player);
+					assert!(!game.join(&game.alice, player.token).did_revert(), "{compiler}");
+				}
+
+				assert_custom_error(
+					&game.settle_into_custody(&winner.account, winner.token),
+					IPledgeGame::NotOperator::SELECTOR,
+					compiler,
+				);
+				let settled = game.settle_into_custody(&game.alice, winner.token);
+				assert!(!settled.did_revert(), "{compiler}: {settled:?}");
+
+				let loser_instance = u64::try_from(loser.token).unwrap();
+				let (holder, moved, holding) =
+					Scarcity::holding_of(loser_instance).expect("the loser's stake is live");
+				assert_eq!(holder, game.game_account, "{compiler}");
+				assert_eq!(holding, indiv_pallet_scarcity::Holding::Contract, "{compiler}");
+				assert_eq!(moved.pledge, None, "{compiler}");
+				assert!(NftsByOwner::<Test>::get(&loser.account).is_none(), "{compiler}");
+				let kept = NftsByOwner::<Test>::get(&winner.account).expect("the winner keeps");
+				assert_eq!(kept.pledge, None, "{compiler}: the winner's stake is released");
+
+				let (prize_address, prize) = purse(0xC1);
+				assert_custom_error(
+					&game.claim_prize(&loser.account, loser.token, prize_address),
+					IPledgeGame::NotWinner::SELECTOR,
+					compiler,
+				);
+				let claimed = game.claim_prize(&winner.account, loser.token, prize_address);
+				assert!(!claimed.did_revert(), "{compiler}: {claimed:?}");
+				let prize_nft = NftsByOwner::<Test>::get(&prize).expect("the prize key holds it");
+				assert_eq!(U256::from(prize_nft.instance), loser.token, "{compiler}");
+			});
+		}
+	}
+
+	/// Anyone may report a pledge, and the stake is credited to the holder whoever reports it.
+	#[test]
+	fn a_front_run_join_credits_the_holder() {
+		for (compiler, code) in pledge_game_codes() {
+			new_test_ext().execute_with(|| {
+				let game = Game::new(code);
+				let [staker, intruder] = &game.players;
+				game.pledge_to_game(staker);
+
+				assert!(!game.join(&intruder.account, staker.token).did_revert(), "{compiler}");
+
+				assert_eq!(
+					game.staker_of(staker.token),
+					alloy_address(staker.address),
+					"{compiler}"
+				);
+				assert_custom_error(
+					&game.join(&staker.account, staker.token),
+					IPledgeGame::AlreadyJoined::SELECTOR,
+					compiler,
+				);
+			});
+		}
+	}
+
+	/// `join` counts only a pledge that names the round and outlives its deadline.
+	#[test]
+	fn join_refuses_a_pledge_that_does_not_bind_the_token_to_the_round() {
+		for (compiler, code) in pledge_game_codes() {
+			new_test_ext().execute_with(|| {
+				let game = Game::new(code);
+				let [first, second] = &game.players;
+
+				assert_custom_error(
+					&game.join(&game.alice, first.token),
+					IPledgeGame::NotPledgedHere::SELECTOR,
+					&alloc::format!("{compiler}: an unpledged token"),
+				);
+				game.pledge_natively(first, game.alice.clone(), GAME_PLEDGE_UNTIL);
+				assert_custom_error(
+					&game.join(&game.alice, first.token),
+					IPledgeGame::NotPledgedHere::SELECTOR,
+					&alloc::format!("{compiler}: a token pledged elsewhere"),
+				);
+				game.pledge_natively(second, game.game_account.clone(), GAME_DEADLINE);
+				assert_custom_error(
+					&game.join(&game.alice, second.token),
+					IPledgeGame::PledgeTooShort::SELECTOR,
+					&alloc::format!("{compiler}: a pledge that ends at the deadline"),
+				);
+			});
+		}
+	}
+
+	/// A round that is never settled holds nothing: once the pledges expire, settling fails and
+	/// each player moves its own stake again.
+	#[test]
+	fn an_unsettled_round_hands_the_stakes_back_at_expiry() {
+		for (compiler, code) in pledge_game_codes() {
+			new_test_ext().execute_with(|| {
+				let game = Game::new(code);
+				let [first, second] = &game.players;
+				for player in &game.players {
+					game.pledge_to_game(player);
+					assert!(!game.join(&game.alice, player.token).did_revert(), "{compiler}");
+				}
+				MockNow::set(GAME_PLEDGE_UNTIL);
+				let (prize_address, _) = purse(0xC1);
+
+				let late = game.settle(&game.alice, first.token, &[prize_address]);
+				assert!(late.did_revert(), "{compiler}: a settle after expiry must revert");
+				assert_eq!(
+					NftsByOwner::<Test>::get(&second.account).map(|nft| U256::from(nft.instance)),
+					Some(second.token),
+					"{compiler}: the stake stays with its holder"
+				);
+
+				let (to_address, to) = purse(0xC2);
+				call_ok(
+					&second.account,
+					game.target,
+					IScarcityCollection::transferFromCall {
+						from: alloy_address(second.address),
+						to: alloy_address(to_address),
+						tokenId: second.token,
+					}
+					.abi_encode(),
+				);
+				assert!(NftsByOwner::<Test>::contains_key(&to), "{compiler}");
+			});
 		}
 	}
 
@@ -4433,6 +5315,79 @@ mod evm_fixture {
 	#[test]
 	fn polkavm_contract_holds_several_tokens_and_releases_them() {
 		assert_vault_holds_and_releases(resolc_code("TokenVault"));
+	}
+
+	/// A token that a contract holds carries no pledge, and the contract cannot pledge it.
+	#[test]
+	fn a_contract_held_token_reads_unpledged_and_cannot_be_pledged() {
+		new_test_ext().execute_with(|| {
+			MockNow::set(PLEDGE_NOW);
+			let alice = id_to_account(1);
+			let collection = setup_collection(&alice);
+			let vault = deploy(&alice, fixture_code("TokenVault"));
+			let vault_account = contract_account(vault);
+			Balances::make_free_balance_be(&vault_account, u64::MAX / 4);
+			let token = U256::from(mint_into(&alice, collection, &vault_account));
+			let target = collection_address(collection);
+
+			let data = call_ok(
+				&alice,
+				target,
+				IScarcityCollection::pledgeOfCall { tokenId: token }.abi_encode(),
+			);
+			let answer = IScarcityCollection::pledgeOfCall::abi_decode_returns(&data).unwrap();
+			assert_eq!((answer.pledgee, answer.until), (Address::ZERO, 0));
+			let data = call_ok(
+				&alice,
+				target,
+				IScarcityCollection::lockedCall { tokenId: token }.abi_encode(),
+			);
+			assert!(!IScarcityCollection::lockedCall::abi_decode_returns(&data).unwrap());
+
+			call_reverted_with(
+				&vault_account,
+				target,
+				IScarcityCollection::pledgeCall {
+					tokenId: token,
+					pledgee: alloy_address(purse(0xAA).0),
+					until: PLEDGE_UNTIL,
+				}
+				.abi_encode(),
+				ERR_CONTRACT_HOLDING,
+			);
+		});
+	}
+
+	/// A pledgee seizes a pledged token into a contract, which holds it in `ContractNfts`.
+	#[test]
+	fn the_pledgee_seizes_into_a_contract() {
+		new_test_ext().execute_with(|| {
+			// Deployed first: the world funds its accounts close to the issuance limit.
+			let deployer = id_to_account(1);
+			map_account(&deployer);
+			let vault = deploy(&deployer, fixture_code("TokenVault"));
+			let vault_account = contract_account(vault);
+			let world = PledgeWorld::new();
+			world.pledge_natively();
+
+			call_ok(&world.pledgee, world.target, world.seize(alloy_address(vault)));
+
+			let (holder, nft, holding) = Scarcity::holding_of(world.instance).expect("live");
+			assert_eq!(holder, vault_account);
+			assert_eq!(holding, indiv_pallet_scarcity::Holding::Contract);
+			assert_eq!(nft.pledge, None);
+			assert!(NftsByOwner::<Test>::get(&world.holder).is_none());
+			assert_eq!(owner_of(world.collection, world.instance).into_array(), vault.0);
+			assert_eq!(balance_of(world.collection, vault), U256::from(1));
+			assert_contract_event(
+				world.target,
+				IScarcityCollection::Transfer {
+					from: world.holder_address,
+					to: alloy_address(vault),
+					tokenId: world.token,
+				},
+			);
+		});
 	}
 
 	/// `terminate` in a later transaction leaves a vault's code in place, as on Ethereum since

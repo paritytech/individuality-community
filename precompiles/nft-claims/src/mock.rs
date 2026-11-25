@@ -141,6 +141,7 @@ impl indiv_pallet_scarcity::Config for Test {
 	type LockPeriod = ConstU64<60>;
 	type MaxTransferPriority = ConstU64<1_000_000>;
 	type MaximumMoves = ConstU16<16>;
+	type MaxPledgeDuration = ConstU64<3_600>;
 	type OnCollectionDeleted = indiv_pallet_nft_claims::ClearCollectionMinter<Test>;
 	type OnCollectionOwnerChanged = indiv_pallet_nft_claims::ClearCollectionMinter<Test>;
 	// The runtime maps a mint's destination here. These tests cover the registration surface

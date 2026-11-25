@@ -26,8 +26,8 @@ use crate::{
 	CollectionMetadata, Collections, Error, Event, InspectCollection, InstanceDeposits, InstanceId,
 	InstanceMetadata, InstanceMetadataCount, Instances, ItemDefs, ItemMetadata, LockInfo, Locked,
 	MetadataEntry, MetadataKeyOf, MetadataValueOf, MintWithoutDeposit, NextCollectionId,
-	NextInstanceId, Nft, NftsByOwner, OnCollectionDeleted, OnCollectionOwnerChanged,
-	OnPurseOccupied, Origin, Transferability,
+	NextInstanceId, Nft, NftOf, NftsByOwner, OnCollectionDeleted, OnCollectionOwnerChanged,
+	OnPurseOccupied, Origin, Pledge, Transferability,
 };
 use codec::{Decode, Encode};
 #[cfg(feature = "try-runtime")]
@@ -91,7 +91,7 @@ fn mint_with_metadata(item: u32, to: u64, entries: &[(&[u8], &[u8])]) {
 	assert_ok!(Scarcity::mint(RuntimeOrigin::signed(OWNER), 0, item, to, metadata(entries),));
 }
 
-fn nft_origin(owner: u64, nft: Nft) -> RuntimeOrigin {
+fn nft_origin(owner: u64, nft: NftOf<Test>) -> RuntimeOrigin {
 	RuntimeOrigin::from(Origin::<Test>::Nft { owner, nft })
 }
 
@@ -1070,6 +1070,15 @@ mod integrity {
 	fn rejects_an_expensive_deletion_hook() {
 		new_test_ext().execute_with(|| {
 			DeletionHookWeight::set(&Weight::from_parts(u64::MAX / 100, 0));
+			<Scarcity as Hooks<u64>>::integrity_test();
+		});
+	}
+
+	#[test]
+	#[should_panic = "`MaxPledgeDuration` must be greater than zero"]
+	fn rejects_a_zero_pledge_duration() {
+		new_test_ext().execute_with(|| {
+			MaxPledgeDuration::set(&0);
 			<Scarcity as Hooks<u64>>::integrity_test();
 		});
 	}
@@ -2940,6 +2949,87 @@ fn try_state_rejects_nft_without_item_definition() {
 	});
 }
 
+/// Write a pledge straight into the record, past every check a call would make.
+fn put_pledge(holder: u64, pledgee: u64, until: u64) {
+	NftsByOwner::<Test>::mutate(holder, |maybe_nft| {
+		maybe_nft.as_mut().expect("the holder has an NFT").pledge = Some(Pledge { pledgee, until });
+	});
+}
+
+#[test]
+fn try_state_accepts_a_live_and_an_expired_pledge() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		mint(0, OTHER);
+		MockNow::set(100);
+		put_pledge(RECIPIENT, OWNER, 200);
+		put_pledge(OTHER, OWNER, 50);
+
+		assert_ok!(Scarcity::do_try_state());
+	});
+}
+
+#[test]
+fn try_state_rejects_a_pledge_on_a_contract_nft() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		MockContracts::add(50);
+		mint(0, 50);
+		crate::ContractNfts::<Test>::mutate((50, 0, 0), |maybe_nft| {
+			maybe_nft.as_mut().expect("the contract holds the NFT").pledge =
+				Some(Pledge { pledgee: OWNER, until: 200 });
+		});
+
+		assert_try_state_error("ContractNfts entry carries a pledge");
+	});
+}
+
+#[test]
+fn try_state_rejects_a_pledge_to_the_holder() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		put_pledge(RECIPIENT, RECIPIENT, 200);
+
+		assert_try_state_error("NFT is pledged to its own holder");
+	});
+}
+
+#[test]
+fn try_state_rejects_a_pledge_on_a_soulbound_instance() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Scarcity::create_collection(RuntimeOrigin::signed(OWNER)));
+		define_as(0, Transferability::Soulbound);
+		mint(0, RECIPIENT);
+		put_pledge(RECIPIENT, OWNER, 200);
+
+		assert_try_state_error("a soulbound NFT carries a pledge");
+	});
+}
+
+/// Every move rebuilds the record without the pledge, so an expired one does not travel.
+#[test]
+fn every_move_drops_an_expired_pledge() {
+	new_test_ext().execute_with(|| {
+		setup_item();
+		mint(0, RECIPIENT);
+		MockNow::set(100);
+
+		put_pledge(RECIPIENT, OWNER, 50);
+		feeless_move(RECIPIENT, OTHER);
+		assert_eq!(NftsByOwner::<Test>::get(OTHER).expect("moved").pledge, None);
+
+		put_pledge(OTHER, OWNER, 50);
+		assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(OTHER), 0, RECIPIENT));
+		assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("moved").pledge, None);
+
+		put_pledge(RECIPIENT, OTHER, 50);
+		assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, 4));
+		assert_eq!(NftsByOwner::<Test>::get(4).expect("moved").pledge, None);
+	});
+}
+
 #[test]
 fn try_state_rejects_live_supply_below_stored_instances() {
 	new_test_ext().execute_with(|| {
@@ -3226,11 +3316,640 @@ fn the_extension_passes_the_paid_holder_call_through() {
 	});
 }
 
+mod pledges {
+	use super::*;
+	use crate::{ContractNftCount, ContractNfts};
+	use frame_support::dispatch::DispatchResultWithPostInfo;
+
+	const PLEDGEE: u64 = 5;
+	const CONTRACT: u64 = 50;
+
+	fn nft_of(holder: u64) -> NftOf<Test> {
+		NftsByOwner::<Test>::get(holder).expect("the holder has an NFT")
+	}
+
+	/// Dispatch a fee-less pledge of the instance `holder` holds, as the extension would.
+	fn pledge_from(holder: u64, to: u64, until: u64) -> DispatchResultWithPostInfo {
+		Scarcity::pledge(nft_origin(holder, nft_of(holder)), to, until)
+	}
+
+	/// Mint instance 0 to `RECIPIENT` and pledge it to `PLEDGEE` until 100.
+	fn pledged_instance() {
+		setup_item();
+		mint(0, RECIPIENT);
+		assert_ok!(pledge_from(RECIPIENT, PLEDGEE, 100));
+	}
+
+	#[test]
+	fn a_pledge_spends_a_move_and_advances_the_state_nonce() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			MockNow::set(10);
+			let before = nft_of(RECIPIENT);
+
+			let post = pledge_from(RECIPIENT, PLEDGEE, 100).expect("the pledge is valid");
+
+			assert_eq!(post.pays_fee, Pays::No);
+			let after = nft_of(RECIPIENT);
+			assert_eq!(after.pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
+			assert_eq!(after.moves, before.moves + 1);
+			assert_eq!(after.state_nonce, before.state_nonce + 1);
+			assert_eq!(after.last_moved, 10, "a pledge restarts the rest time");
+			assert_eq!(holder_of(0), Some(RECIPIENT));
+			System::assert_has_event(
+				Event::<Test>::Pledged {
+					instance: 0,
+					collection: 0,
+					holder: RECIPIENT,
+					pledgee: PLEDGEE,
+					until: 100,
+				}
+				.into(),
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn a_failed_pledge_pays_its_fee() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+
+			let error = pledge_from(RECIPIENT, RECIPIENT, 100).expect_err("a pledge to self");
+			assert_eq!(error.error, Error::<Test>::PledgeToSelf.into());
+			assert_eq!(error.post_info.pays_fee, Pays::Yes);
+
+			let error = Scarcity::pledge(RuntimeOrigin::signed(RECIPIENT), PLEDGEE, 100)
+				.expect_err("pledging needs the purse-key origin");
+			assert_eq!(error.error, sp_runtime::DispatchError::BadOrigin);
+			assert_eq!(error.post_info.pays_fee, Pays::Yes);
+		});
+	}
+
+	/// Each term the holder picks is checked, each with its own error.
+	#[test]
+	fn a_pledge_is_refused_for_each_invalid_term() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			define_as(0, Transferability::Soulbound);
+			mint(0, RECIPIENT);
+			mint(1, OTHER);
+			MockNow::set(1_000);
+			let cap = MaxPledgeDuration::get();
+
+			assert_noop!(pledge_from(RECIPIENT, RECIPIENT, 1_100), Error::<Test>::PledgeToSelf);
+			assert_noop!(pledge_from(OTHER, PLEDGEE, 1_100), Error::<Test>::Soulbound);
+			assert_noop!(pledge_from(RECIPIENT, PLEDGEE, 999), Error::<Test>::PledgeExpiry);
+			assert_noop!(pledge_from(RECIPIENT, PLEDGEE, 1_000), Error::<Test>::PledgeExpiry);
+			assert_noop!(
+				pledge_from(RECIPIENT, PLEDGEE, 1_000 + cap + 1),
+				Error::<Test>::PledgeExpiry
+			);
+			NftsByOwner::<Test>::mutate(RECIPIENT, |nft| {
+				nft.as_mut().expect("minted").state_nonce = u64::MAX;
+			});
+			assert_noop!(pledge_from(RECIPIENT, PLEDGEE, 1_100), Error::<Test>::StateNonceOverflow);
+			NftsByOwner::<Test>::mutate(RECIPIENT, |nft| {
+				nft.as_mut().expect("minted").state_nonce = 0;
+			});
+
+			assert_ok!(pledge_from(RECIPIENT, PLEDGEE, 1_000 + cap));
+		});
+	}
+
+	#[test]
+	fn a_live_pledge_cannot_be_replaced_and_an_expired_one_can() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+
+			assert_noop!(pledge_from(RECIPIENT, OTHER, 200), Error::<Test>::AlreadyPledged);
+
+			MockNow::set(100);
+			assert_ok!(pledge_from(RECIPIENT, OTHER, 200));
+			assert_eq!(nft_of(RECIPIENT).pledge, Some(Pledge { pledgee: OTHER, until: 200 }));
+		});
+	}
+
+	/// The holder cannot move or burn a pledged instance on any path until the pledge expires.
+	#[test]
+	fn a_live_pledge_stops_every_holder_path_until_it_expires() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+
+			assert_noop!(
+				Scarcity::transfer(nft_origin(RECIPIENT, nft_of(RECIPIENT)), OTHER),
+				Error::<Test>::Pledged
+			);
+			assert_noop!(
+				Scarcity::burn(nft_origin(RECIPIENT, nft_of(RECIPIENT))),
+				Error::<Test>::Pledged
+			);
+			assert_noop!(
+				Scarcity::do_transfer_by_holder(&RECIPIENT, 0, OTHER),
+				Error::<Test>::Pledged
+			);
+			assert_noop!(
+				Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER),
+				Error::<Test>::Pledged
+			);
+
+			MockNow::set(100);
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER));
+			assert_eq!(nft_of(OTHER).pledge, None, "the move clears the expired pledge");
+		});
+	}
+
+	#[test]
+	fn an_expired_pledge_frees_the_fee_less_paths() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			mint(0, OTHER);
+			assert_ok!(pledge_from(OTHER, PLEDGEE, 100));
+			MockNow::set(100);
+
+			feeless_move(RECIPIENT, 4);
+			assert_eq!(nft_of(4).pledge, None, "the move clears the expired pledge");
+
+			let (_, val, origin) = validate_burn(OTHER).expect("the burn is authorized");
+			let pre = prepare_burn(val, &origin);
+			assert_ok!(Scarcity::burn(origin));
+			post_dispatch(pre, Ok(()));
+			assert!(!Instances::<Test>::contains_key(1));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn the_pledgee_seizes_into_an_empty_key() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			let before = nft_of(RECIPIENT);
+			assert_eq!(before.moves, 1, "the pledge spent a move");
+			MockNow::set(50);
+
+			assert_ok!(Scarcity::do_seize(&PLEDGEE, 0, 4));
+
+			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT));
+			assert_eq!(holder_of(0), Some(4));
+			let after = nft_of(4);
+			assert_eq!(after.pledge, None);
+			assert_eq!(after.moves, 0, "a seize is a paid move and refills the budget");
+			assert_eq!(after.state_nonce, before.state_nonce + 1);
+			assert_eq!(after.last_moved, 50);
+			assert_eq!(OccupiedPurses::get().last(), Some(&4));
+			System::assert_has_event(
+				Event::<Test>::Seized {
+					instance: 0,
+					collection: 0,
+					from: RECIPIENT,
+					to: 4,
+					pledgee: PLEDGEE,
+				}
+				.into(),
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	#[test]
+	fn only_the_pledgee_seizes_and_only_into_an_empty_key_while_the_pledge_lasts() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			mint(0, OTHER);
+
+			assert_noop!(Scarcity::do_seize(&OTHER, 0, 4), Error::<Test>::NotPledgee);
+			assert_noop!(Scarcity::do_seize(&RECIPIENT, 0, 4), Error::<Test>::NotPledgee);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 1, 4), Error::<Test>::NotPledgee);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 99, 4), Error::<Test>::UnknownInstance);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, OTHER), Error::<Test>::AddressOccupied);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, RECIPIENT), Error::<Test>::SelfTransfer);
+
+			MockNow::set(100);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, 4), Error::<Test>::NotPledgee);
+		});
+	}
+
+	#[test]
+	fn the_pledgee_releases_and_the_instance_stays() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			let before = nft_of(RECIPIENT);
+
+			assert_noop!(Scarcity::do_release(&OTHER, 0), Error::<Test>::NotPledgee);
+			assert_noop!(Scarcity::do_release(&RECIPIENT, 0), Error::<Test>::NotPledgee);
+			assert_ok!(Scarcity::do_release(&PLEDGEE, 0));
+
+			let after = nft_of(RECIPIENT);
+			assert_eq!(after.pledge, None);
+			assert_eq!(after.state_nonce, before.state_nonce + 1);
+			assert_eq!(after.moves, before.moves, "a release refills nothing");
+			System::assert_has_event(
+				Event::<Test>::PledgeReleased {
+					instance: 0,
+					collection: 0,
+					holder: RECIPIENT,
+					pledgee: PLEDGEE,
+				}
+				.into(),
+			);
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(RECIPIENT), 0, OTHER));
+		});
+	}
+
+	#[test]
+	fn an_expired_pledge_cannot_be_released() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			MockNow::set(100);
+
+			assert_noop!(Scarcity::do_release(&PLEDGEE, 0), Error::<Test>::NotPledgee);
+		});
+	}
+
+	/// The collection owner's force powers ignore a pledge, and a force move clears it.
+	#[test]
+	fn the_collection_owner_ignores_a_pledge() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			mint(0, OTHER);
+			assert_ok!(pledge_from(OTHER, PLEDGEE, 100));
+
+			assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, 4));
+			assert_eq!(nft_of(4).pledge, None);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, 6), Error::<Test>::NotPledgee);
+
+			assert_ok!(Scarcity::force_burn(RuntimeOrigin::signed(OWNER), 1));
+			assert!(!Instances::<Test>::contains_key(1));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// A contract pledgee seizes into itself and into another contract, and each lands in
+	/// `ContractNfts` without the purse hook.
+	#[test]
+	fn the_pledgee_seizes_into_a_contract() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			mint(0, OTHER);
+			assert_ok!(pledge_from(OTHER, PLEDGEE, 100));
+			MockContracts::add(PLEDGEE);
+			MockContracts::add(CONTRACT);
+			let occupied = OccupiedPurses::get();
+
+			assert_ok!(Scarcity::do_seize(&PLEDGEE, 0, PLEDGEE));
+			assert_ok!(Scarcity::do_seize(&PLEDGEE, 1, CONTRACT));
+
+			for (contract, instance) in [(PLEDGEE, 0), (CONTRACT, 1)] {
+				let nft = ContractNfts::<Test>::get((contract, 0, instance)).expect("seized");
+				assert_eq!((nft.pledge, nft.moves), (None, 0));
+				assert_eq!(ContractNftCount::<Test>::get(contract, 0), 1);
+				assert_eq!(holder_of(instance), Some(contract));
+			}
+			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT));
+			assert!(!NftsByOwner::<Test>::contains_key(OTHER));
+			assert_eq!(OccupiedPurses::get(), occupied, "a contract runs no purse hook");
+			System::assert_has_event(
+				Event::<Test>::Seized {
+					instance: 0,
+					collection: 0,
+					from: RECIPIENT,
+					to: PLEDGEE,
+					pledgee: PLEDGEE,
+				}
+				.into(),
+			);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// An instance in `ContractNfts` cannot be pledged, so no pledgee can seize or release it.
+	#[test]
+	fn a_contract_held_instance_cannot_be_pledged() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			MockContracts::add(CONTRACT);
+			mint(0, CONTRACT);
+
+			assert_noop!(
+				Scarcity::do_pledge_by_holder(&CONTRACT, 0, PLEDGEE, 100),
+				Error::<Test>::ContractHolding
+			);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, 4), Error::<Test>::NotPledgee);
+			assert_noop!(Scarcity::do_release(&PLEDGEE, 0), Error::<Test>::NotPledgee);
+		});
+	}
+
+	/// A force transfer into a contract clears the pledge, so the pledgee loses its right.
+	#[test]
+	fn a_force_transfer_into_a_contract_clears_the_pledge() {
+		new_test_ext().execute_with(|| {
+			pledged_instance();
+			MockContracts::add(CONTRACT);
+
+			assert_ok!(Scarcity::force_transfer(RuntimeOrigin::signed(OWNER), 0, CONTRACT));
+
+			let nft = ContractNfts::<Test>::get((CONTRACT, 0, 0)).expect("moved");
+			assert_eq!(nft.pledge, None);
+			assert_noop!(Scarcity::do_seize(&PLEDGEE, 0, 4), Error::<Test>::NotPledgee);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// The paid path checks the same terms and spends no feeless move.
+	#[test]
+	fn a_paid_pledge_spends_no_move() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			mint(0, OTHER);
+			let before = nft_of(RECIPIENT);
+
+			assert_noop!(
+				Scarcity::do_pledge_by_holder(&RECIPIENT, 1, PLEDGEE, 100),
+				Error::<Test>::UnknownInstance
+			);
+			assert_noop!(
+				Scarcity::do_pledge_by_holder(&4, 0, PLEDGEE, 100),
+				Error::<Test>::UnknownInstance
+			);
+			assert_noop!(
+				Scarcity::do_pledge_by_holder(&RECIPIENT, 0, RECIPIENT, 100),
+				Error::<Test>::PledgeToSelf
+			);
+			assert_ok!(Scarcity::do_pledge_by_holder(&RECIPIENT, 0, PLEDGEE, 100));
+
+			let after = nft_of(RECIPIENT);
+			assert_eq!(after.pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
+			assert_eq!(after.moves, before.moves, "the caller pays, so no feeless move is spent");
+			assert_eq!(after.state_nonce, before.state_nonce + 1);
+			assert_noop!(
+				Scarcity::do_pledge_by_holder(&RECIPIENT, 0, OTHER, 100),
+				Error::<Test>::AlreadyPledged
+			);
+		});
+	}
+
+	fn pledge_call(to: u64, until: u64) -> RuntimeCall {
+		RuntimeCall::Scarcity(crate::Call::pledge { to, until })
+	}
+
+	fn validate_pledge(
+		signer: u64,
+		to: u64,
+		until: u64,
+	) -> Result<(ValidTransaction, Val<Test>, RuntimeOrigin), TransactionValidityError> {
+		scarcity_extension(current_authorization(signer)).validate(
+			RuntimeOrigin::signed(signer),
+			&pledge_call(to, until),
+			&Default::default(),
+			0,
+			(),
+			&TxBaseImplication(()),
+			TransactionSource::External,
+		)
+	}
+
+	fn prepare_pledge(val: Val<Test>, origin: &RuntimeOrigin, to: u64, until: u64) -> Pre<Test> {
+		extension_for_val(&val)
+			.prepare(val, origin, &pledge_call(to, until), &Default::default(), 0)
+			.unwrap()
+	}
+
+	/// One fee-less pledge through the whole extension pipeline.
+	fn feeless_pledge(holder: u64, to: u64, until: u64) {
+		let (_, val, origin) =
+			validate_pledge(holder, to, until).expect("the pledge is authorized");
+		let pre = prepare_pledge(val, &origin, to, until);
+		assert_ok!(Scarcity::pledge(origin, to, until));
+		post_dispatch(pre, Ok(()));
+	}
+
+	#[test]
+	fn a_pledge_runs_through_the_whole_pipeline() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			MockNow::set(10);
+
+			let (valid, val, origin) = validate_pledge(RECIPIENT, PLEDGEE, 100).unwrap();
+			assert_eq!(valid.priority, 10, "a pledge is ordered by rest time like a transfer");
+			let pre = prepare_pledge(val, &origin, PLEDGEE, 100);
+			assert!(!NftsByOwner::<Test>::contains_key(RECIPIENT), "prepare takes the NFT");
+			assert_ok!(Scarcity::pledge(origin, PLEDGEE, 100));
+			post_dispatch(pre, Ok(()));
+
+			assert_eq!(nft_of(RECIPIENT).pledge, Some(Pledge { pledgee: PLEDGEE, until: 100 }));
+			assert_eq!(Locked::<Test>::get(RECIPIENT), None);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// A pledge restarts the rest time, so a run of short pledges does not keep the priority
+	/// of a rested instance.
+	#[test]
+	fn a_pledge_restarts_the_rest_time() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			mint(0, OTHER);
+			MockNow::set(1_000);
+
+			feeless_pledge(RECIPIENT, PLEDGEE, 1_001);
+			assert_ok!(Scarcity::do_pledge_by_holder(&OTHER, 1, PLEDGEE, 1_001));
+			assert_eq!(nft_of(RECIPIENT).last_moved, 1_000);
+			assert_eq!(nft_of(OTHER).last_moved, 1_000, "a paid pledge restarts it too");
+
+			MockNow::set(1_005);
+			let (valid, _, _) = validate_pledge(RECIPIENT, PLEDGEE, 1_100).unwrap();
+			assert_eq!(valid.priority, 5, "the priority counts from the pledge, not the mint");
+		});
+	}
+
+	#[test]
+	fn the_extension_charges_its_pipeline_for_a_pledge() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			let extension = scarcity_extension(current_authorization(RECIPIENT));
+
+			assert_eq!(
+				extension.weight(&pledge_call(PLEDGEE, 100)),
+				<() as crate::WeightInfo>::as_scarcity_pipeline()
+			);
+			assert_ne!(
+				<() as crate::WeightInfo>::as_scarcity_pipeline(),
+				frame_support::weights::Weight::zero()
+			);
+		});
+	}
+
+	/// Every pledge term dispatch checks is checked at the pool first, so a mistaken pledge
+	/// never earns a lock.
+	#[test]
+	fn the_pool_refuses_each_invalid_pledge_without_a_lock() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			define_as(0, Transferability::Soulbound);
+			mint(0, RECIPIENT);
+			mint(1, OTHER);
+			MockNow::set(1_000);
+			let cap = MaxPledgeDuration::get();
+
+			let cases = [
+				(RECIPIENT, RECIPIENT, 1_100, CustomInvalidity::PledgeToSelf),
+				(OTHER, PLEDGEE, 1_100, CustomInvalidity::Soulbound),
+				(RECIPIENT, PLEDGEE, 999, CustomInvalidity::PledgeExpiry),
+				(RECIPIENT, PLEDGEE, 1_000, CustomInvalidity::PledgeExpiry),
+				(RECIPIENT, PLEDGEE, 1_000 + cap + 1, CustomInvalidity::PledgeExpiry),
+			];
+			for (holder, to, until, expected) in cases {
+				assert_invalidity(
+					validate_pledge(holder, to, until).err().expect("refused"),
+					expected,
+				);
+			}
+
+			feeless_pledge(RECIPIENT, PLEDGEE, 1_100);
+			assert_invalidity(
+				validate_pledge(RECIPIENT, OTHER, 1_200).err().expect("refused"),
+				CustomInvalidity::AlreadyPledged,
+			);
+			assert_eq!(Locked::<Test>::iter().count(), 0, "a pool refusal writes no lock");
+
+			MockNow::set(1_100);
+			assert!(validate_pledge(RECIPIENT, OTHER, 1_100 + cap).is_ok());
+		});
+	}
+
+	#[test]
+	fn a_pledge_spends_the_feeless_budget() {
+		new_test_ext().execute_with(|| {
+			MaximumMoves::set(&1);
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_move(RECIPIENT, OTHER);
+
+			assert_invalidity(
+				validate_pledge(OTHER, PLEDGEE, 100).err().expect("the budget is spent"),
+				CustomInvalidity::MovesExhausted,
+			);
+
+			assert_ok!(Scarcity::transfer_by_holder(RuntimeOrigin::signed(OTHER), 0, 4));
+			feeless_pledge(4, PLEDGEE, 100);
+			assert_eq!(nft_of(4).moves, 1);
+			MockNow::set(100);
+			assert_invalidity(
+				validate_transfer(4, 6).err().expect("the pledge spent the refilled move"),
+				CustomInvalidity::MovesExhausted,
+			);
+		});
+	}
+
+	#[test]
+	fn the_pool_refuses_a_move_or_burn_of_a_pledged_instance_until_it_expires() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_pledge(RECIPIENT, PLEDGEE, 100);
+
+			assert_invalidity(
+				validate_transfer(RECIPIENT, 4).err().expect("pledged"),
+				CustomInvalidity::Pledged,
+			);
+			assert_invalidity(
+				validate_transfer(RECIPIENT, RECIPIENT).err().expect("pledged"),
+				CustomInvalidity::Pledged,
+			);
+			assert_invalidity(
+				validate_burn(RECIPIENT).err().expect("pledged"),
+				CustomInvalidity::Pledged,
+			);
+			assert_eq!(Locked::<Test>::get(RECIPIENT), None);
+			assert!(NftsByOwner::<Test>::contains_key(RECIPIENT));
+
+			MockNow::set(100);
+			assert!(validate_transfer(RECIPIENT, 4).is_ok());
+			assert!(validate_burn(RECIPIENT).is_ok());
+		});
+	}
+
+	/// A transaction the pool refused for a pledge applies once the pledge expires, because
+	/// expiry leaves the state nonce where it was.
+	#[test]
+	fn an_authorization_refused_for_a_pledge_applies_once_it_expires() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_pledge(RECIPIENT, PLEDGEE, 100);
+			let signed_during = current_authorization(RECIPIENT);
+			assert!(validate_transfer_as(RECIPIENT, 4, signed_during.clone()).is_err());
+
+			MockNow::set(100);
+			assert!(validate_transfer_as(RECIPIENT, 4, signed_during).is_ok());
+		});
+	}
+
+	/// A release advances the state nonce, so what the holder signed during the pledge stays
+	/// dead.
+	#[test]
+	fn an_authorization_signed_during_a_pledge_does_not_apply_after_a_release() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			feeless_pledge(RECIPIENT, PLEDGEE, 100);
+			let signed_during = current_authorization(RECIPIENT);
+			assert_invalidity(
+				validate_transfer_as(RECIPIENT, 4, signed_during.clone())
+					.err()
+					.expect("pledged"),
+				CustomInvalidity::Pledged,
+			);
+
+			assert_ok!(Scarcity::do_release(&PLEDGEE, 0));
+
+			assert_state_mismatch(
+				validate_transfer_as(RECIPIENT, 4, signed_during).err().expect("stale"),
+			);
+			assert!(validate_transfer(RECIPIENT, 4).is_ok());
+		});
+	}
+
+	/// The pool checks every term dispatch checks except the state nonce's headroom, so that is
+	/// the failure that reaches dispatch. It locks the purse like any failed dispatch.
+	#[test]
+	fn a_failed_pledge_dispatch_restores_the_nft_and_locks_the_purse() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			NftsByOwner::<Test>::mutate(RECIPIENT, |nft| {
+				nft.as_mut().expect("minted").state_nonce = u64::MAX;
+			});
+
+			let (_, val, origin) = validate_pledge(RECIPIENT, PLEDGEE, 100).unwrap();
+			let pre = prepare_pledge(val, &origin, PLEDGEE, 100);
+			assert_noop!(Scarcity::pledge(origin, PLEDGEE, 100), Error::<Test>::StateNonceOverflow);
+			post_dispatch(pre, Err(Error::<Test>::StateNonceOverflow.into()));
+
+			assert_eq!(nft_of(RECIPIENT).pledge, None);
+			assert_eq!(Locked::<Test>::get(RECIPIENT), Some(LockInfo { retries: 1, until: 60 }));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+}
+
 mod migration {
 	use super::*;
-	use crate::migration::{
-		v1::MigrateToTransferability, v2::MigrateToMoves, v3::MigrateToLocations, MigrateV0ToV1,
-		MigrateV1ToV2,
+	use crate::{
+		migration::{
+			v1::MigrateToTransferability,
+			v2::MigrateToMoves,
+			v3::MigrateToLocations,
+			v4::{Cursor, MigrateToPledges},
+			MigrateV0ToV1, MigrateV1ToV2,
+		},
+		ContractNfts,
 	};
 	#[cfg(feature = "try-runtime")]
 	use codec::Decode;
@@ -3806,6 +4525,282 @@ mod migration {
 			let state = MigrateToLocations::<Test>::pre_upgrade().expect("counts the keys");
 			migrate_locations();
 			assert!(MigrateToLocations::<Test>::post_upgrade(state).is_err());
+		});
+	}
+
+	/// A contract that holds instances in [`ContractNfts`] in these tests.
+	const CONTRACT: u64 = 50;
+
+	/// Write an NFT in the shape stored before pledges existed.
+	///
+	/// Encoded as the bare field sequence rather than through the migration's own `OldNft`, so a
+	/// mistake in that struct fails here instead of round-tripping through itself and passing.
+	fn put_unpledged_nft(owner: u64, instance: u64) {
+		let old = (instance, 0u32, 0u32, 7u64, 9u64, 3u64, 5u16);
+		unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(owner), &old.encode());
+	}
+
+	/// The bare field sequence of `nft` without its pledge.
+	fn unpledged(nft: NftOf<Test>) -> Vec<u8> {
+		(
+			nft.instance,
+			nft.collection,
+			nft.item,
+			nft.minted_at,
+			nft.last_moved,
+			nft.state_nonce,
+			nft.moves,
+		)
+			.encode()
+	}
+
+	/// Mint through the pallet, then strip only the pledge field from the stored NFT.
+	fn strip_the_pledge_of_a_real_nft(owner: u64) {
+		let nft = NftsByOwner::<Test>::get(owner).expect("the instance was minted");
+		unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(owner), &unpledged(nft));
+		assert_eq!(NftsByOwner::<Test>::get(owner), None, "the downgrade must be unreadable");
+	}
+
+	/// Mint into [`CONTRACT`] through the pallet, then strip only the pledge field from the
+	/// stored NFT.
+	fn strip_the_pledge_of_a_real_contract_nft() -> u64 {
+		MockContracts::add(CONTRACT);
+		let instance = NextInstanceId::<Test>::get();
+		mint(0, CONTRACT);
+		let key = (CONTRACT, 0, instance);
+		let nft = ContractNfts::<Test>::get(key).expect("the instance was minted");
+		unhashed::put_raw(&ContractNfts::<Test>::hashed_key_for(key), &unpledged(nft));
+		assert_eq!(ContractNfts::<Test>::get(key), None, "the downgrade must be unreadable");
+		instance
+	}
+
+	/// Step the pledge migration with an unlimited meter until it completes.
+	fn migrate_pledges() {
+		let mut cursor = None;
+		loop {
+			cursor = MigrateToPledges::<Test>::step(cursor, &mut WeightMeter::new())
+				.expect("an unlimited meter covers a step");
+			if cursor.is_none() {
+				break;
+			}
+		}
+	}
+
+	/// The old encoding is unreadable under the current type, and the migration recovers every
+	/// field of it and sets the version to 4.
+	#[test]
+	fn translates_nfts_written_before_pledges() {
+		new_test_ext().execute_with(|| {
+			for (owner, instance) in [(RECIPIENT, 4), (OTHER, 5), (6, 6)] {
+				put_unpledged_nft(owner, instance);
+			}
+			assert_eq!(NftsByOwner::<Test>::iter().count(), 0, "the old encoding must not decode");
+			StorageVersion::new(3).put::<Scarcity>();
+
+			migrate_pledges();
+
+			assert_eq!(NftsByOwner::<Test>::iter().count(), 3, "every NFT is translated");
+			let nft = NftsByOwner::<Test>::get(RECIPIENT).expect("the migration restored the NFT");
+			assert_eq!(nft.instance, 4);
+			assert_eq!(nft.minted_at, 7);
+			assert_eq!(nft.last_moved, 9);
+			assert_eq!(nft.state_nonce, 3);
+			assert_eq!(nft.moves, 5, "the spent budget carries over");
+			assert_eq!(nft.pledge, None);
+			assert_eq!(Scarcity::on_chain_storage_version(), 4, "the gate must close behind it");
+		});
+	}
+
+	/// A translated NFT is usable again, and the state it belongs to stays consistent.
+	#[test]
+	fn a_translated_unpledged_nft_is_usable_again() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			strip_the_pledge_of_a_real_nft(RECIPIENT);
+			assert!(validate_transfer_as(RECIPIENT, OTHER, authorization(0, 0)).is_err());
+			StorageVersion::new(3).put::<Scarcity>();
+
+			migrate_pledges();
+
+			assert_ok!(Scarcity::do_try_state());
+			feeless_move(RECIPIENT, OTHER);
+			assert_eq!(NftsByOwner::<Test>::get(OTHER).expect("moved").moves, 1);
+		});
+	}
+
+	/// A contract NFT written before pledges is translated too, so the contract keeps it.
+	#[test]
+	fn the_pledge_migration_translates_a_contract_nft() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			let instance = strip_the_pledge_of_a_real_contract_nft();
+			StorageVersion::new(3).put::<Scarcity>();
+
+			migrate_pledges();
+
+			let nft = ContractNfts::<Test>::get((CONTRACT, 0, instance)).expect("translated");
+			assert_eq!(nft.pledge, None);
+			assert_eq!(holder_of(instance), Some(CONTRACT));
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// A chain at version 2 reaches version 4 in one upgrade when both multi-block migrations
+	/// run in the order the runtime lists them.
+	///
+	/// The location migration reads a purse NFT that the pledge migration has not translated
+	/// yet, so it must not need the NFT to decode in full.
+	#[test]
+	fn a_version_two_chain_reaches_version_four_in_one_upgrade() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			let instance = NextInstanceId::<Test>::get();
+			mint(0, RECIPIENT);
+			strip_the_pledge_of_a_real_nft(RECIPIENT);
+			put_old_location(instance, RECIPIENT);
+			StorageVersion::new(2).put::<Scarcity>();
+
+			migrate_locations();
+			migrate_pledges();
+
+			assert_eq!(Instances::<Test>::get(instance), Some(crate::Location::Purse(RECIPIENT)));
+			assert_eq!(NftsByOwner::<Test>::get(RECIPIENT).expect("translated").pledge, None);
+			assert_eq!(Scarcity::on_chain_storage_version(), 4);
+			assert_ok!(Scarcity::do_try_state());
+		});
+	}
+
+	/// A meter with room for one step translates one NFT: the purse keys first, then the
+	/// contract NFTs. The version stays at 3 until the step that finds no NFT left.
+	#[test]
+	fn the_pledge_migration_translates_one_nft_per_step_weight() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			strip_the_pledge_of_a_real_nft(RECIPIENT);
+			let instance = strip_the_pledge_of_a_real_contract_nft();
+			StorageVersion::new(3).put::<Scarcity>();
+			let required =
+				<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::migrate_pledge();
+			let step = |cursor| {
+				let mut meter = WeightMeter::with_limit(required);
+				let next = MigrateToPledges::<Test>::step(cursor, &mut meter);
+				assert_eq!(meter.consumed(), required, "each step must charge its weight");
+				next.expect("the meter covers one step")
+			};
+
+			let cursor = step(None);
+			assert_eq!(cursor, Some(Cursor::Purse(RECIPIENT)));
+			assert!(NftsByOwner::<Test>::get(RECIPIENT).is_some());
+			assert_eq!(ContractNfts::<Test>::get((CONTRACT, 0, instance)), None);
+			assert_eq!(Scarcity::on_chain_storage_version(), 3);
+
+			let cursor = step(cursor);
+			assert_eq!(cursor, Some(Cursor::Contract(CONTRACT, 0, instance)));
+			assert!(ContractNfts::<Test>::get((CONTRACT, 0, instance)).is_some());
+			assert_eq!(Scarcity::on_chain_storage_version(), 3);
+
+			assert_eq!(step(cursor), None);
+			assert_eq!(Scarcity::on_chain_storage_version(), 4);
+		});
+	}
+
+	/// A meter without room for one step reports the weight it needs and changes nothing.
+	#[test]
+	fn the_pledge_migration_reports_insufficient_weight() {
+		new_test_ext().execute_with(|| {
+			put_unpledged_nft(RECIPIENT, 0);
+			StorageVersion::new(3).put::<Scarcity>();
+			let required =
+				<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::migrate_pledge();
+			let mut meter =
+				WeightMeter::with_limit(required.saturating_sub(Weight::from_parts(1, 0)));
+
+			assert_eq!(
+				MigrateToPledges::<Test>::step(None, &mut meter),
+				Err(SteppedMigrationError::InsufficientWeight { required })
+			);
+			assert_eq!(NftsByOwner::<Test>::get(RECIPIENT), None);
+			assert_eq!(Scarcity::on_chain_storage_version(), 3);
+		});
+	}
+
+	/// A chain built from this code is already at version 4, so the gate holds shut.
+	///
+	/// Without it a second run would decode a pledged NFT as its own seven-field prefix and drop
+	/// the pledge, which frees a staked token from the contract it was pledged to.
+	#[test]
+	fn a_fresh_chain_skips_the_pledge_migration() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(
+				Scarcity::on_chain_storage_version(),
+				4,
+				"genesis stamps the in-code version"
+			);
+			setup_item();
+			mint(0, RECIPIENT);
+			put_pledge(RECIPIENT, OTHER, 200);
+			let mut meter = WeightMeter::new();
+
+			assert_eq!(MigrateToPledges::<Test>::step(None, &mut meter), Ok(None));
+
+			assert_eq!(meter.consumed(), Weight::zero());
+			assert_eq!(
+				NftsByOwner::<Test>::get(RECIPIENT).expect("the NFT exists").pledge,
+				Some(Pledge { pledgee: OTHER, until: 200 }),
+				"the gate must leave a pledge alone"
+			);
+		});
+	}
+
+	/// The version gate is what makes the migration single-shot.
+	#[test]
+	fn a_second_unguarded_pledge_migration_would_drop_the_pledge() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			put_pledge(RECIPIENT, OTHER, 200);
+
+			MigrateToPledges::<Test>::translate_next(None);
+
+			assert_eq!(
+				NftsByOwner::<Test>::get(RECIPIENT).expect("the NFT exists").pledge,
+				None,
+				"an unguarded rerun drops the pledge, which is why `MigrateToPledges` gates on the \
+				 storage version"
+			);
+		});
+	}
+
+	/// The try-runtime checks pass over the state the migration is meant for, and fail when an
+	/// NFT does not survive.
+	#[cfg(feature = "try-runtime")]
+	#[test]
+	fn the_try_runtime_checks_span_the_pledge_translation() {
+		new_test_ext().execute_with(|| {
+			setup_item();
+			mint(0, RECIPIENT);
+			strip_the_pledge_of_a_real_nft(RECIPIENT);
+			strip_the_pledge_of_a_real_contract_nft();
+			StorageVersion::new(3).put::<Scarcity>();
+			assert_eq!(NftsByOwner::<Test>::iter().count(), 0, "nothing decodes before");
+			assert_eq!(ContractNfts::<Test>::iter().count(), 0, "nothing decodes before");
+
+			let state = MigrateToPledges::<Test>::pre_upgrade().expect("counts the keys");
+			assert_eq!(
+				<(u32, u32)>::decode(&mut &state[..]).unwrap(),
+				(1, 1),
+				"keys are counted, not entries"
+			);
+			migrate_pledges();
+			assert_ok!(MigrateToPledges::<Test>::post_upgrade(state));
+
+			unhashed::put_raw(&NftsByOwner::<Test>::hashed_key_for(OTHER), &[0xffu8]);
+			StorageVersion::new(3).put::<Scarcity>();
+			let state = MigrateToPledges::<Test>::pre_upgrade().expect("counts the keys");
+			migrate_pledges();
+			assert!(MigrateToPledges::<Test>::post_upgrade(state).is_err());
 		});
 	}
 }
