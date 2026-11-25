@@ -368,10 +368,13 @@ use sp_statement_store::{
 /// An upper bound on a number of operation
 pub const OP_UPPER_BOUND: u32 = 100_000;
 
-/// Chunk size for clearing the per-game index <-> player maps in `player_process_step2`.
+/// The entries that one chunk clears from each per-game index <-> player map in
+/// `player_process_step2`. `WeightInfo::player_process_step2_inner_loop` is the weight of one
+/// chunk.
 pub const PLAYER_PROCESS_STEP2_CHUNK: u32 = 100;
 
-/// Chunk size for clearing the shuffle maps in `process_cancelling`.
+/// The entries that one chunk clears from each shuffle map in `process_cancelling`.
+/// `WeightInfo::process_cancelling_step_shuffle` is the weight of one chunk.
 const CANCELLING_SHUFFLE_CHUNK: u32 = 100;
 
 #[frame_support::pallet]
@@ -3930,39 +3933,45 @@ pub mod pallet {
 			Game::<T>::put(game);
 		}
 
-		/// Clear one bounded chunk from each per-game index <-> player map, and from the game's
-		/// [`AwardedNftClaimCredits`].
+		/// The chunks of weight `chunk_weight` that `weight_meter` can pay for, at most
+		/// [`OP_UPPER_BOUND`].
+		///
+		/// The count sizes the limit of one `clear` per map. A storage `clear` does not support
+		/// its cursor argument: a second `clear` of a map in the same block starts at the first
+		/// key again, so a loop of clears with a cursor does not advance.
+		pub(crate) fn affordable_chunks(weight_meter: &WeightMeter, chunk_weight: Weight) -> u32 {
+			weight_meter
+				.remaining()
+				.checked_div_per_component(&chunk_weight)
+				.map_or(OP_UPPER_BOUND, |chunks| {
+					u32::try_from(chunks).unwrap_or(u32::MAX).min(OP_UPPER_BOUND)
+				})
+		}
+
+		/// Clears up to `chunks` chunks of [`PLAYER_PROCESS_STEP2_CHUNK`] entries from each
+		/// per-game index <-> player map and from the game's [`AwardedNftClaimCredits`].
+		///
+		/// Call it at most once per block. A second call in the same block walks the same keys
+		/// again, so continue a [`StepResult::Continue`] in a later block.
+		///
+		/// The chunks used count only the keys walked in the index maps, because
+		/// `clear_game_credits` does not report its walk. A claimant holds one credit entry and
+		/// one `IndexToPlayer` entry per round, so the index maps walk at least as many keys.
 		///
 		/// The awarded-credit slots go with the maps, being positions in groups only those maps
 		/// resolve. Step 1 has finished the attendance backfill by now, so no award can name
 		/// this game again and the slots have no reader left.
-		pub(crate) fn player_process_step2_inner_loop(
-			game_index: GameIdx,
-			cursor1: &mut Option<Vec<u8>>,
-			cursor2: &mut Option<Vec<u8>>,
-			cursor3: &mut Option<Vec<u8>>,
-			done1: &mut bool,
-			done2: &mut bool,
-			done3: &mut bool,
-		) {
-			if !*done1 {
-				let r = IndexToPlayer::<T>::clear(PLAYER_PROCESS_STEP2_CHUNK, cursor1.as_deref());
-				*cursor1 = r.maybe_cursor;
-				*done1 = cursor1.is_none();
+		pub(crate) fn clear_index_chunks(game_index: GameIdx, chunks: u32) -> ChunkedClear {
+			let limit = chunks.saturating_mul(PLAYER_PROCESS_STEP2_CHUNK);
+			let mut cleared = ChunkedClear::from_removals(
+				&[IndexToPlayer::<T>::clear(limit, None), PlayerToIndex::<T>::clear(limit, None)],
+				PLAYER_PROCESS_STEP2_CHUNK,
+				chunks,
+			);
+			if T::NftClaimCredits::clear_game_credits(game_index, limit, None).is_some() {
+				cleared.result = StepResult::Continue;
 			}
-			if !*done2 {
-				let r = PlayerToIndex::<T>::clear(PLAYER_PROCESS_STEP2_CHUNK, cursor2.as_deref());
-				*cursor2 = r.maybe_cursor;
-				*done2 = cursor2.is_none();
-			}
-			if !*done3 {
-				*cursor3 = T::NftClaimCredits::clear_game_credits(
-					game_index,
-					PLAYER_PROCESS_STEP2_CHUNK,
-					cursor3.as_deref(),
-				);
-				*done3 = cursor3.is_none();
-			}
+			cleared
 		}
 
 		pub(crate) fn player_process_step2(weight_meter: &mut WeightMeter) {
@@ -3985,40 +3994,16 @@ pub mod pallet {
 				return;
 			};
 
-			let mut cursor1: Option<Vec<u8>> = None;
-			let mut cursor2: Option<Vec<u8>> = None;
-			let mut cursor3: Option<Vec<u8>> = None;
-			let mut done1 = false;
-			let mut done2 = false;
-			let mut done3 = false;
-			for _ in 0..OP_UPPER_BOUND {
-				if weight_meter
-					.try_consume(<T as Config>::WeightInfo::player_process_step2_inner_loop())
-					.is_err()
-				{
-					return;
-				}
-
-				Self::player_process_step2_inner_loop(
-					game.index,
-					&mut cursor1,
-					&mut cursor2,
-					&mut cursor3,
-					&mut done1,
-					&mut done2,
-					&mut done3,
-				);
-
-				if done1 && done2 && done3 {
-					break;
-				}
+			let chunk_weight = <T as Config>::WeightInfo::player_process_step2_inner_loop();
+			let affordable = Self::affordable_chunks(weight_meter, chunk_weight);
+			if affordable == 0 {
+				return;
 			}
+			let cleared = Self::clear_index_chunks(game.index, affordable);
+			weight_meter.consume(chunk_weight.saturating_mul(cleared.chunks.into()));
 
-			// If still not done continue later.
-			if !(done1 && done2 && done3) {
-				defensive!(
-					"indiv-pallet-game: player_process_step2 exhausted OP_UPPER_BOUND without draining; possible cursor bug or miscalibrated weight meter"
-				);
+			// A later call continues while a map still holds entries.
+			if cleared.result == StepResult::Continue {
 				return;
 			}
 
@@ -4097,51 +4082,38 @@ pub mod pallet {
 
 			let rounds = game.rounds;
 			let game_index = game.index;
+			if let CancellingStep::Step1DrainShuffle = step {
+				let chunk_weight = <T as Config>::WeightInfo::process_cancelling_step_shuffle();
+				let affordable = Self::affordable_chunks(weight_meter, chunk_weight);
+				if affordable == 0 {
+					return;
+				}
+				let cleared = Self::clear_shuffle_chunks(affordable);
+				weight_meter.consume(chunk_weight.saturating_mul(cleared.chunks.into()));
+
+				// A later call continues while a shuffle map still holds entries.
+				if cleared.result == StepResult::Continue {
+					return;
+				}
+				*step = CancellingStep::Step2DrainPlayers { last_iteration: None };
+			}
+
 			let mut finished = false;
-			let mut shuffle_cursor1: Option<Vec<u8>> = None;
-			let mut shuffle_cursor2: Option<Vec<u8>> = None;
-			let mut shuffle_done1 = false;
-			let mut shuffle_done2 = false;
-			for _ in 0..OP_UPPER_BOUND {
-				match step {
-					CancellingStep::Step1DrainShuffle => {
-						if weight_meter
-							.try_consume(
-								<T as Config>::WeightInfo::process_cancelling_step_shuffle(),
-							)
-							.is_err()
-						{
-							break;
-						}
-						Self::process_cancelling_step_shuffle(
-							&mut shuffle_cursor1,
-							&mut shuffle_cursor2,
-							&mut shuffle_done1,
-							&mut shuffle_done2,
-						);
-						// Once both shuffle maps are drained, move on to draining players.
-						if shuffle_done1 && shuffle_done2 {
-							*step = CancellingStep::Step2DrainPlayers { last_iteration: None };
-						}
-					},
-					CancellingStep::Step2DrainPlayers { last_iteration } => {
-						if weight_meter
-							.try_consume(<T as Config>::WeightInfo::process_cancelling_step_player(
-								rounds as u32,
-							))
-							.is_err()
-						{
-							break;
-						}
-						finished = Self::process_cancelling_step_player(
-							game_index,
-							last_iteration,
-							rounds,
-						);
-						if finished {
-							break;
-						}
-					},
+			if let CancellingStep::Step2DrainPlayers { last_iteration } = step {
+				for _ in 0..OP_UPPER_BOUND {
+					if weight_meter
+						.try_consume(<T as Config>::WeightInfo::process_cancelling_step_player(
+							rounds as u32,
+						))
+						.is_err()
+					{
+						break;
+					}
+					finished =
+						Self::process_cancelling_step_player(game_index, last_iteration, rounds);
+					if finished {
+						break;
+					}
 				}
 			}
 
@@ -4153,26 +4125,21 @@ pub mod pallet {
 			}
 		}
 
-		/// Clear one bounded chunk from each shuffle map ([`ShuffleRecognized`]
-		/// and [`ShuffleNotRecognized`]). The caller checks `done1 && done2`
-		/// after this call to detect overall completion.
-		pub(crate) fn process_cancelling_step_shuffle(
-			cursor1: &mut Option<Vec<u8>>,
-			cursor2: &mut Option<Vec<u8>>,
-			done1: &mut bool,
-			done2: &mut bool,
-		) {
-			if !*done1 {
-				let r = ShuffleRecognized::<T>::clear(CANCELLING_SHUFFLE_CHUNK, cursor1.as_deref());
-				*cursor1 = r.maybe_cursor;
-				*done1 = cursor1.is_none();
-			}
-			if !*done2 {
-				let r =
-					ShuffleNotRecognized::<T>::clear(CANCELLING_SHUFFLE_CHUNK, cursor2.as_deref());
-				*cursor2 = r.maybe_cursor;
-				*done2 = cursor2.is_none();
-			}
+		/// Clears up to `chunks` chunks of [`CANCELLING_SHUFFLE_CHUNK`] entries from each shuffle
+		/// map ([`ShuffleRecognized`] and [`ShuffleNotRecognized`]).
+		///
+		/// Call it at most once per block. A second call in the same block walks the same keys
+		/// again, so continue a [`StepResult::Continue`] in a later block.
+		pub(crate) fn clear_shuffle_chunks(chunks: u32) -> ChunkedClear {
+			let limit = chunks.saturating_mul(CANCELLING_SHUFFLE_CHUNK);
+			ChunkedClear::from_removals(
+				&[
+					ShuffleRecognized::<T>::clear(limit, None),
+					ShuffleNotRecognized::<T>::clear(limit, None),
+				],
+				CANCELLING_SHUFFLE_CHUNK,
+				chunks,
+			)
 		}
 
 		/// The number of attestations one player is involved in over a game with these
