@@ -171,6 +171,7 @@ use indiv_support::{
 	tx_priority,
 	weight_budget::OcwWeightBudget,
 };
+use sp_io::MultiRemovalResults;
 use sp_runtime::{traits::BlakeTwo256, SaturatedConversion, Saturating};
 use xcm::{
 	latest::{
@@ -1197,7 +1198,9 @@ impl<T: Config> Pallet<T> {
 	/// One tree a block, over at most [`CHUNKS_PER_TREE`] chunks of awards, bounds this hook. Each
 	/// tree stands alone. It is built once, from a complete leaf set, so no root grows over time
 	/// and no inclusion proof can go stale. The awards it was built over stay for the retained
-	/// window, so a claim can be proven from state; the root itself is never removed.
+	/// window, so a claim can be proven from state. The root stays until the claims chain reports
+	/// the tree finished, in [`Pallet::receive_tree_deletions`], or until
+	/// [`Pallet::sweep_expired_roots`] removes it once [`Pallet::root_ttl`] has passed.
 	///
 	/// Every root recorded is also queued for delivery to the NFT claims chain, which the
 	/// offchain worker then ships (see [`Pallet::send_credit_trees`]).
@@ -2273,12 +2276,8 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 		Self::remaining_credit_capacity(game_index)
 	}
 
-	fn clear_game_credits(
-		game_index: GameIdx,
-		limit: u32,
-		cursor: Option<&[u8]>,
-	) -> Option<Vec<u8>> {
-		AwardedNftClaimCredits::<T>::clear_prefix(game_index, limit, cursor).maybe_cursor
+	fn clear_game_credits(game_index: GameIdx, limit: u32) -> MultiRemovalResults {
+		AwardedNftClaimCredits::<T>::clear_prefix(game_index, limit, None)
 	}
 
 	fn forget_player_credits(game_index: GameIdx, player: &AccountOrPerson<T::AccountId>) {

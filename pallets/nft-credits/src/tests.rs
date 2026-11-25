@@ -24,16 +24,18 @@
 use crate::{mock::*, *};
 use frame_support::{
 	assert_noop, assert_ok,
+	dispatch::PostDispatchInfo,
 	traits::{Hooks, OffchainWorker},
 	BoundedVec,
 };
 use indiv_pallet_game::{
-	EarlyAttendanceEnactment, FullReport, Game as GameStore, GameSchedule, GameState, GameTimes,
-	GroupsSetting, IndexToPlayer, PlayerProcessStep, PlayerToIndex, Players, Report,
+	EarlyAttendanceEnactment, FullReport, Game as GameStore, GameInfo, GameSchedule, GameState,
+	GameTimes, GroupsSetting, IndexToPlayer, PlayerProcessStep, PlayerToIndex, Players, Report,
+	WeightInfo as GameWeightInfo,
 };
 use indiv_pallet_score::AccountOrPerson;
 use sp_core::{bounded_vec, H256};
-use sp_runtime::AccountId32;
+use sp_runtime::{traits::Dispatchable, AccountId32};
 use std::time::Duration;
 
 const ALICE: AccountId32 = AccountId32::new(*b"10______________________________");
@@ -1495,6 +1497,125 @@ fn every_credit_of_a_multi_round_game_is_awarded_exactly_once() {
 		}
 		assert_eq!(awarded_credit_count(), players.len() * expected);
 		assert_eq!(committed_leaf_count() as usize, players.len() * expected);
+	});
+}
+
+/// Stores one awarded credit entry for each of `players` players of game `game_index`.
+fn put_awarded_credits(game_index: GameIdx, players: u32) {
+	let mut credits = AwardedCredits::default();
+	credits.insert(0);
+	for i in 0..players {
+		let mut alias = [0u8; 32];
+		let i_bytes = i.to_le_bytes();
+		alias[..i_bytes.len()].copy_from_slice(&i_bytes);
+		let player = AccountOrPerson::<AccountId32>::Person(alias);
+		AwardedNftClaimCredits::<Test>::insert(game_index, player, credits);
+	}
+}
+
+/// `clear_game_credits` reports the entries that it clears and whether entries remain.
+///
+/// The test commits the entries first. A clear with a limit removes every uncommitted entry in one
+/// pass, so the limit only applies to committed entries.
+#[test]
+fn clear_game_credits_reports_the_entries_it_clears() {
+	let mut ext = new_test_ext();
+	ext.execute_with(|| {
+		put_awarded_credits(0, 250);
+		put_awarded_credits(7, 3);
+	});
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let cleared = <NftCredits as AwardCredits<AccountId32>>::clear_game_credits(0, 100);
+		assert_eq!(cleared.loops, 100);
+		assert!(cleared.maybe_cursor.is_some(), "entries remain");
+		assert_eq!(AwardedNftClaimCredits::<Test>::iter_prefix(0).count(), 150);
+	});
+	// The next clear runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let cleared = <NftCredits as AwardCredits<AccountId32>>::clear_game_credits(0, 200);
+		assert_eq!(cleared.loops, 150);
+		assert!(cleared.maybe_cursor.is_none(), "no entry remains");
+		assert_eq!(AwardedNftClaimCredits::<Test>::iter_prefix(0).count(), 0);
+		assert_eq!(
+			AwardedNftClaimCredits::<Test>::iter_prefix(7).count(),
+			3,
+			"the entries of another game stay"
+		);
+	});
+}
+
+/// Step 2 of the player process charges the chunks of credit entries that it clears. The game
+/// continues while it holds credit entries, also when the index maps are empty.
+#[test]
+fn process_players_clears_the_credit_entries_in_chunks() {
+	type GameWeight = <Test as indiv_pallet_game::Config>::WeightInfo;
+	let step_weight = |chunks: u64| {
+		GameWeight::game_step_base()
+			.saturating_add(GameWeight::player_process_step2())
+			.saturating_add(GameWeight::player_process_step2_inner_loop().saturating_mul(chunks))
+	};
+	let process_players = || -> PostDispatchInfo {
+		RuntimeCall::Game(indiv_pallet_game::Call::process_players {
+			game_index: 0,
+			discriminator: 0,
+		})
+		.dispatch(frame_system::RawOrigin::Authorized.into())
+		.expect("the step runs")
+	};
+
+	let mut ext = new_test_ext();
+	ext.execute_with(|| {
+		GameStore::<Test>::put(GameInfo {
+			index: 0,
+			registration_ends: 0,
+			shuffle_deadline: 0,
+			game_date: 0,
+			report_ends: 0,
+			state: GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices },
+			max_group_size: 2,
+			rounds: 1,
+			pending_attendance: 0,
+			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
+		});
+		put_awarded_credits(0, 250);
+		put_awarded_credits(7, 3);
+		// The index maps hold fewer entries than the credits. The first step clears them.
+		for i in 0..30u32 {
+			let player = AccountOrPerson::<AccountId32>::Person([i as u8; 32]);
+			IndexToPlayer::<Test>::insert((0u8, i), &player);
+			PlayerToIndex::<Test>::insert(&player, BoundedVec::truncate_from(vec![i]));
+		}
+		// The step budget is half of the block weight. It covers 2 chunks.
+		MockBlockWeight::set(&Some(step_weight(2).saturating_mul(2)));
+	});
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let post = process_players();
+		assert_eq!(post.actual_weight, Some(step_weight(2)));
+		assert_eq!(AwardedNftClaimCredits::<Test>::iter_prefix(0).count(), 50);
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert!(GameStore::<Test>::get().is_some(), "the game continues");
+	});
+	// The next step runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let post = process_players();
+		assert_eq!(post.actual_weight, Some(step_weight(1)));
+		assert_eq!(AwardedNftClaimCredits::<Test>::iter_prefix(0).count(), 0);
+		assert_eq!(
+			AwardedNftClaimCredits::<Test>::iter_prefix(7).count(),
+			3,
+			"the entries of another game stay"
+		);
+		assert!(GameStore::<Test>::get().is_none(), "the game is removed");
 	});
 }
 
@@ -3518,8 +3639,8 @@ mod claim_tenure_credits {
 	// The tenure claim is the game's, so its calls, storage, errors, events and weights shadow this
 	// pallet's of the same name.
 	use indiv_pallet_game::{
-		Call, CancellingStep, Error, Event, GamesAttended, TenureClaims, TenureThresholds,
-		WeightInfo,
+		Call, CancellingStep, Error, Event, GamesAttended, PlayerRegistration, TenureClaims,
+		TenureThresholds, WeightInfo,
 	};
 	use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
 	use indiv_pallet_score::{Participants, Recognition};
@@ -4257,6 +4378,90 @@ mod claim_tenure_credits {
 	}
 
 	#[test]
+	fn a_cancelled_game_clears_the_slots_of_every_claimant() {
+		new_test_ext().execute_with(|| {
+			let game = set_up_full_group();
+			sign_up_recognised(&EVE);
+			set_time(OPENS);
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_ok!(claim_tenure_credits(&EVE));
+
+			// EVE unregisters with her awarded slot. ALICE stays registered with hers.
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(EVE)));
+			assert_eq!(slots(game, &ALICE).count(), 1);
+			assert_eq!(slots(game, &EVE).count(), 1);
+
+			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
+			while GameStore::<Test>::get().is_some() {
+				advance_process();
+			}
+
+			assert_eq!(AwardedNftClaimCredits::<Test>::iter().count(), 0);
+			assert_eq!(TenureClaims::<Test>::iter().count(), 0);
+		});
+	}
+
+	#[test]
+	fn a_player_that_unregisters_keeps_their_tenure_claim_and_is_paid_as_an_absent_player() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			sign_up(&EVE);
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 1);
+
+			// One of ALICE's credits fits the buffers now. EVE is not a person and is awarded
+			// nothing before the game.
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_ok!(claim_tenure_credits(&EVE));
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(EVE)));
+
+			assert_eq!(tenure_claim_of(&ALICE), Some(2));
+			assert_eq!(tenure_claim_of(&EVE), Some(1));
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+
+			play_to_end(&[BOB, CHARLIE, DAVE]);
+
+			// The attendance backfill pays a person the rest of a tenure claim, and pays an
+			// absent account that is not a person nothing.
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0, 1]);
+			assert_eq!(awarded_tenure_credits(game, &EVE), Vec::<u32>::new());
+			assert_eq!(TenureClaims::<Test>::iter().count(), 0);
+		});
+	}
+
+	#[test]
+	fn a_player_that_unregisters_cannot_claim_tenure_credits_again() {
+		new_test_ext().execute_with(|| {
+			set_thresholds(vec![0, 1]);
+			let game = set_up_full_group();
+			set_tenure(&ALICE, 1);
+			set_time(OPENS);
+			fill_credit_buffer(game, System::block_number(), 1);
+
+			// One credit fits the buffers now.
+			assert_ok!(claim_tenure_credits(&ALICE));
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			// A tenure claim takes a registered player, and ALICE cannot sign up again.
+			assert_err_ignore_postinfo!(claim_tenure_credits(&ALICE), Error::<Test>::NotRegistered);
+			assert_noop!(
+				Game::sign_up_with_account(
+					RuntimeOrigin::signed(ALICE),
+					DEFAULT_IDENTIFIER_KEY,
+					None
+				),
+				Error::<Test>::UnregisteredFromGame
+			);
+			assert_eq!(awarded_tenure_credits(game, &ALICE), vec![0]);
+		});
+	}
+
+	#[test]
 	fn a_tenure_claim_without_a_game_is_refused() {
 		new_test_ext().execute_with(|| {
 			assert_err_ignore_postinfo!(claim_tenure_credits(&ALICE), Error::<Test>::NoGame);
@@ -4278,7 +4483,7 @@ mod claim_tenure_credits {
 			// ALICE played the previous game, but did not sign up for this one.
 			let player = Players::<Test>::get(AccountOrPerson::Account(ALICE))
 				.expect("ALICE stays a player after the game");
-			assert!(!player.registered);
+			assert_eq!(player.registration, PlayerRegistration::NotRegistered);
 			let refused = claim_tenure_credits(&ALICE).expect_err("ALICE did not sign up");
 			assert_eq!(refused.error, Error::<Test>::NotRegistered.into());
 			assert_eq!(refused.post_info.pays_fee, Pays::Yes);

@@ -451,6 +451,13 @@ fn offchain_worker_cleans_up_stale_salts() {
 }
 
 #[test]
+fn prize_source_view_function_returns_the_configured_account() {
+	new_test_ext().execute_with(|| {
+		assert_eq!(crate::Pallet::<Test>::get_prize_source(), 7);
+	});
+}
+
+#[test]
 fn slot_depends_on_event_salt_and_alias() {
 	let event_a = [1u8; 32];
 	let event_b = [2u8; 32];

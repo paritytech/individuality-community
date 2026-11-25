@@ -311,7 +311,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 3_004_000,
+	spec_version: 3_005_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 7,
@@ -1017,6 +1017,7 @@ impl ContainsPair<RestrictedEntity, RuntimeCall> for OperationAllowedOneTimeExce
 						RuntimeCall::Game(sign_up_with_account { .. }) |
 						RuntimeCall::Game(report { .. }) |
 						RuntimeCall::Game(claim_tenure_credits { .. }) |
+						RuntimeCall::Game(unregister { .. }) |
 						RuntimeCall::Game(offboard { .. }) |
 						RuntimeCall::Game(claim_airdrop { .. })
 				)

@@ -68,10 +68,10 @@ setup_stablecoin() {
   else
     native_reserve=$(echo "$reserves" | jq -r '.[0] // "0"')
   fi
-  local native_max=$(( 10000 * 10**NATIVE_DECIMALS ))
-  local native_min=$(( 5000 * 10**NATIVE_DECIMALS ))
-  local asset_max=$(( 40000 * 10**decimals ))
-  local asset_min=$(( 20000 * 10**decimals ))
+  local native_max=$(( 50000 * 10**NATIVE_DECIMALS ))
+  local native_min=$(( 25000 * 10**NATIVE_DECIMALS ))
+  local asset_max=$(( 200000 * 10**decimals ))
+  local asset_min=$(( 100000 * 10**decimals ))
   if [ "$native_reserve" == "null" ] || [ "$native_reserve" -lt "$native_max" ]; then
     echo "Pool liquidity insufficient (native=$native_reserve), adding liquidity (1:4 ratio)"
     dot asset-hub.tx.AssetConversion.add_liquidity "$NATIVE_TOKEN" "$asset_local" $native_max $asset_max $native_min $asset_min "$ACCOUNT_ASSET_OWNER" --from "$SIGNER_ASSET_OWNER"
