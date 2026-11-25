@@ -5027,8 +5027,8 @@ fn chunked_clear_charges_the_chunks_it_walks_within_its_limit() {
 	let removal =
 		sp_io::MultiRemovalResults { maybe_cursor: None, backend: 250, unique: 250, loops: 250 };
 
-	assert_eq!(ChunkedClear::new(slice::from_ref(&removal), 100, 3).chunks, 3);
-	assert_eq!(ChunkedClear::new(slice::from_ref(&removal), 100, 4).chunks, 3);
+	assert_eq!(ChunkedClear::from_removals(slice::from_ref(&removal), 100, 3).chunks, 3);
+	assert_eq!(ChunkedClear::from_removals(slice::from_ref(&removal), 100, 4).chunks, 3);
 }
 
 /// An implementation of `clear_game_credits` outside this pallet can walk more keys than the
@@ -5039,7 +5039,8 @@ fn chunked_clear_reports_a_walk_past_its_limit() {
 	let removal =
 		sp_io::MultiRemovalResults { maybe_cursor: None, backend: 250, unique: 250, loops: 250 };
 
-	let result = std::panic::catch_unwind(|| ChunkedClear::new(slice::from_ref(&removal), 100, 2));
+	let result =
+		std::panic::catch_unwind(|| ChunkedClear::from_removals(slice::from_ref(&removal), 100, 2));
 
 	#[cfg(debug_assertions)]
 	assert!(result.is_err());

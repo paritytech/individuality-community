@@ -3963,7 +3963,7 @@ pub mod pallet {
 		/// this game again and the slots have no reader left.
 		pub(crate) fn clear_index_chunks(game_index: GameIdx, chunks: u32) -> ChunkedClear {
 			let limit = chunks.saturating_mul(PLAYER_PROCESS_STEP2_CHUNK);
-			let mut cleared = ChunkedClear::new(
+			let mut cleared = ChunkedClear::from_removals(
 				&[IndexToPlayer::<T>::clear(limit, None), PlayerToIndex::<T>::clear(limit, None)],
 				PLAYER_PROCESS_STEP2_CHUNK,
 				chunks,
@@ -4137,7 +4137,7 @@ pub mod pallet {
 		/// again, so continue a [`StepResult::Continue`] in a later block.
 		pub(crate) fn clear_shuffle_chunks(chunks: u32) -> ChunkedClear {
 			let limit = chunks.saturating_mul(CANCELLING_SHUFFLE_CHUNK);
-			ChunkedClear::new(
+			ChunkedClear::from_removals(
 				&[
 					ShuffleRecognized::<T>::clear(limit, None),
 					ShuffleNotRecognized::<T>::clear(limit, None),

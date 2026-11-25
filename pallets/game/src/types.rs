@@ -695,7 +695,11 @@ impl ChunkedClear {
 	/// removes the entries written in the current block without counting them. A removal that
 	/// walks more keys than the limit is a defensive failure, and the outcome charges every chunk
 	/// that it walked.
-	pub(crate) fn new(removals: &[MultiRemovalResults], chunk_size: u32, chunks: u32) -> Self {
+	pub(crate) fn from_removals(
+		removals: &[MultiRemovalResults],
+		chunk_size: u32,
+		chunks: u32,
+	) -> Self {
 		let walked = removals.iter().map(|removal| removal.loops).max().unwrap_or(0);
 		let limit = chunks.saturating_mul(chunk_size);
 		if walked > limit {
