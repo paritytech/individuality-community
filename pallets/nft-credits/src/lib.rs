@@ -171,6 +171,7 @@ use indiv_support::{
 	tx_priority,
 	weight_budget::OcwWeightBudget,
 };
+use sp_io::MultiRemovalResults;
 use sp_runtime::{traits::BlakeTwo256, SaturatedConversion, Saturating};
 use xcm::{
 	latest::{
@@ -2255,12 +2256,8 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 		Self::remaining_credit_capacity(game_index)
 	}
 
-	fn clear_game_credits(
-		game_index: GameIdx,
-		limit: u32,
-		cursor: Option<&[u8]>,
-	) -> Option<Vec<u8>> {
-		AwardedNftClaimCredits::<T>::clear_prefix(game_index, limit, cursor).maybe_cursor
+	fn clear_game_credits(game_index: GameIdx, limit: u32) -> MultiRemovalResults {
+		AwardedNftClaimCredits::<T>::clear_prefix(game_index, limit, None)
 	}
 
 	fn forget_player_credits(game_index: GameIdx, player: &AccountOrPerson<T::AccountId>) {
