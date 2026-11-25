@@ -3171,11 +3171,11 @@ pub mod migrations {
 	pub type SingleBlockMigrations = (Unreleased, Permanent);
 
 	/// MBM migrations to apply on runtime upgrade.
-	pub type MbmMigrations = (
-		pallet_revive::migrations::v3::Migration<Runtime>,
-		pallet_revive::migrations::v4::Migration<Runtime>,
-		indiv_pallet_scarcity::migration::v3::MigrateToLocations<Runtime>,
-	);
+	///
+	/// The `pallet-revive` v3 and v4 migrations are not listed. They do not check whether they
+	/// already ran, so a chain built from genesis would migrate its state twice. Paseo Next v2
+	/// has run both.
+	pub type MbmMigrations = (indiv_pallet_scarcity::migration::v3::MigrateToLocations<Runtime>,);
 }
 
 /// Executive: handles dispatch to the various modules.
