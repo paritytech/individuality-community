@@ -79,6 +79,36 @@ pub enum Report {
 pub type FullReport<T> =
 	BoundedVec<BoundedVec<Report, <T as Config>::MaxGroupSize>, <T as Config>::MaxRounds>;
 
+/// The registration of a player for the current game.
+///
+/// The variant indices are part of the storage layout of [`Player`], so they are explicit.
+#[derive(
+	Encode,
+	Decode,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	DecodeWithMemTracking,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+)]
+pub enum PlayerRegistration {
+	/// The player did not sign up for the current game.
+	#[codec(index = 0)]
+	NotRegistered,
+	/// The player signed up for the current game.
+	#[codec(index = 1)]
+	Registered,
+	/// The player signed up for the current game, then unregistered.
+	///
+	/// Their airdrop entries stay in the draws. They can neither sign up again nor offboard
+	/// until the game ends.
+	#[codec(index = 2)]
+	Unregistered,
+}
+
 /// The information of a player.
 ///
 /// The player may hold a deposit and a sufficient ref, both must be handled when the player is
@@ -87,8 +117,8 @@ pub type FullReport<T> =
 pub struct Player<PlayDeposit> {
 	/// The index of the first game this player was eligible to play.
 	pub first_game: GameIdx,
-	/// The player has registered for the current game.
-	pub registered: bool,
+	/// The registration of the player for the current game.
+	pub registration: PlayerRegistration,
 	/// The player sent a report for the current game.
 	pub sent_report: bool,
 	/// When the player's attendance was determined early during the reporting phase, the
@@ -112,6 +142,13 @@ pub struct Player<PlayDeposit> {
 	/// The credibility, the reason the player can play.
 	/// This is also used to know if the player is recognized or not.
 	pub credibility: PlayerCredibility<PlayDeposit>,
+}
+
+impl<PlayDeposit> Player<PlayDeposit> {
+	/// Whether the player is registered for the current game.
+	pub fn is_registered(&self) -> bool {
+		self.registration == PlayerRegistration::Registered
+	}
 }
 
 /// The cached outcome of an early `set_attendance` call.

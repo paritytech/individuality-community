@@ -76,7 +76,7 @@ impl<T: Config> Pallet<T> {
 		);
 		ensure!(u64::from(game.tenure_claim_opens) <= now, Error::<T>::TenureClaimNotOpen);
 		ensure!(
-			Players::<T>::get(player).is_some_and(|player| player.registered),
+			Players::<T>::get(player).is_some_and(|player| player.is_registered()),
 			Error::<T>::NotRegistered
 		);
 		ensure!(!TenureClaims::<T>::contains_key(player), Error::<T>::TenureCreditsAlreadyClaimed);
