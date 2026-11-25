@@ -4865,17 +4865,20 @@ fn player_process_step2_clears_every_chunk_its_weight_covers() {
 /// Step 2 charges the chunks of the longest map and refunds the rest of its budget.
 #[test]
 fn player_process_step2_charges_the_chunks_it_clears() {
-	// 250 entries need 3 chunks. The shorter map does not add to the charge.
-	committed_ext(|| put_step2_game(250, 30)).execute_with(|| {
-		let mut meter = WeightMeter::with_limit(step2_weight(10));
+	// 250 entries need 3 chunks. The shorter map does not add to the charge. Each map is the
+	// longer map in one case.
+	for (index_entries, player_entries) in [(250, 30), (30, 250)] {
+		committed_ext(|| put_step2_game(index_entries, player_entries)).execute_with(|| {
+			let mut meter = WeightMeter::with_limit(step2_weight(10));
 
-		Game::player_process_step2(&mut meter);
+			Game::player_process_step2(&mut meter);
 
-		assert_eq!(meter.consumed(), step2_weight(3));
-		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
-		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
-		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
-	});
+			assert_eq!(meter.consumed(), step2_weight(3));
+			assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+			assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+			assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+		});
+	}
 }
 
 /// The game continues while one map still holds entries, also when the other map is empty.
