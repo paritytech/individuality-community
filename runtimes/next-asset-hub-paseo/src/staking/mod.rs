@@ -480,7 +480,9 @@ impl pallet_staking_async::Config for Runtime {
 	type StakerRewardCalculator = pallet_staking_async::reward::DefaultStakerRewardCalculator<Self>;
 	type MaxPruningItems = MaxPruningItems;
 	type WeightInfo = weights::pallet_staking_async::WeightInfo<Runtime>;
-	type IsValidatorInactive = ();
+	// A validator is inactive in an era if it earned zero points in every service.
+	// `chill_inactive` stays disabled while no `ChillInactiveThreshold` is stored.
+	type IsValidatorInactive = pallet_staking_async::AllZero;
 }
 
 sp_runtime::impl_opaque_keys! {
