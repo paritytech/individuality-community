@@ -2006,7 +2006,6 @@ fn grace_ratio_suspension() {
 	});
 }
 
-/// Attending pushes misses out of the rolling window, preventing suspension.
 #[test]
 fn set_attendance_ends_the_newly_recognized_state() {
 	new_test_ext().execute_with(|| {
@@ -2027,6 +2026,7 @@ fn set_attendance_ends_the_newly_recognized_state() {
 	});
 }
 
+/// Attending pushes misses out of the rolling window, preventing suspension.
 #[test]
 fn attendance_within_window_prevents_suspension() {
 	new_test_ext().execute_with(|| {
