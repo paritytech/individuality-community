@@ -16,6 +16,7 @@
 
 //! Tests for the dotNS gateway pallet.
 
+use alloy_core::sol_types::SolCall;
 use frame_support::{
 	assert_noop, assert_ok,
 	traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion},
@@ -28,7 +29,10 @@ use crate::{
 		AccountAlias, AccountNames, AliasRegistration, AttestationAllowance, DispatcherAddress,
 		Error, LiteLabelOwner,
 	},
-	types::{AccountNameRecord, BaseLabel, ChatKey, Collection, DispatcherRevert, Link, NameEntry},
+	types::{
+		issueDeviceNameCall, issueDeviceNameWithReservationCall, issuePersonhoodNameCall,
+		AccountNameRecord, BaseLabel, ChatKey, Collection, DispatcherRevert, Link, NameEntry,
+	},
 	weights::WeightInfo,
 };
 use sp_core::H160;
@@ -50,7 +54,7 @@ fn base_name(s: &[u8]) -> BaseLabel {
 	BaseLabel::try_from(s.to_vec()).unwrap()
 }
 
-// Canonical fixtures matching `StringUtils.isLitePersonLabel` / `isSingleLabel`.
+// Device and personhood labels valid under both the pallet's and the contracts' label checks.
 const ALICE_LITE: &[u8] = b"alice.42";
 const BOB_LITE: &[u8] = b"bob.42";
 const ALICE_BASE: &[u8] = b"alice";
@@ -286,6 +290,7 @@ mod reservation {
 			let calls = get_contract_calls();
 			assert_eq!(calls.len(), 1);
 			assert_eq!(calls[0].0, DispatcherAddr::get());
+			assert_eq!(calls[0].1[..4], issueDeviceNameCall::SELECTOR);
 			assert_eq!(calls[0].2, 0);
 
 			assert_eq!(
@@ -314,7 +319,7 @@ mod reservation {
 	}
 
 	#[test]
-	fn later_reservation_overwrites_account_lite_label() {
+	fn second_reservation_for_same_account_fails() {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			set_attestation_allowance(ATTESTER, 5);
@@ -328,20 +333,25 @@ mod reservation {
 				None,
 				SIGNED_AT_NOW
 			));
-			assert_ok!(DotnsGateway::reserve_name(
-				RuntimeOrigin::signed(ATTESTER),
-				ALICE,
-				valid_candidate_signature(ALICE),
-				base_name(BOB_LITE),
-				default_chat_key(),
-				None,
-				SIGNED_AT_NOW
-			));
+			assert_noop!(
+				DotnsGateway::reserve_name(
+					RuntimeOrigin::signed(ATTESTER),
+					ALICE,
+					valid_candidate_signature(ALICE),
+					base_name(BOB_LITE),
+					default_chat_key(),
+					None,
+					SIGNED_AT_NOW
+				),
+				Error::<Test>::AccountAlreadyHasDeviceName
+			);
 
+			assert_eq!(AttestationAllowance::<Test>::get(ATTESTER), 4);
+			assert_eq!(LiteLabelOwner::<Test>::get(base_name(BOB_LITE)), None);
 			assert_eq!(
 				AccountNames::<Test>::get(ALICE),
 				Some(AccountNameRecord {
-					lite: entry(BOB_LITE, Some(default_chat_key())),
+					lite: entry(ALICE_LITE, Some(default_chat_key())),
 					full: None
 				})
 			);
@@ -710,9 +720,10 @@ mod reservation {
 
 			assert_ok!(&result);
 
-			// Single contract call dispatched.
+			// Single contract call dispatched, which also queues the reservation.
 			let calls = get_contract_calls();
 			assert_eq!(calls.len(), 1);
+			assert_eq!(calls[0].1[..4], issueDeviceNameWithReservationCall::SELECTOR);
 
 			System::assert_last_event(
 				crate::Event::<Test>::NameReserved {
@@ -799,6 +810,7 @@ mod registration {
 			let calls = get_contract_calls();
 			assert_eq!(calls.len(), 1);
 			assert_eq!(calls[0].0, DispatcherAddr::get());
+			assert_eq!(calls[0].1[..4], issuePersonhoodNameCall::SELECTOR);
 
 			System::assert_last_event(
 				crate::Event::<Test>::NameRegistered {
@@ -863,9 +875,9 @@ mod registration {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
 			LiteLabelOwner::<Test>::insert(base_name(ALICE_LITE), ALICE);
-			// The account owns two lite labels and the record holds the most recent one. The
-			// registration links the other label, whose key the pallet never recorded, so the
-			// key the contracts copy to the full label is not known here.
+			// The account owns two device names and the record holds one of them. The
+			// registration links the other name, whose key the pallet never recorded, so the
+			// key the contracts copy to the personhood name is not known here.
 			AccountNames::<Test>::insert(
 				ALICE,
 				AccountNameRecord { lite: entry(BOB_LITE, Some(lite_chat_key())), full: None },
@@ -1063,14 +1075,14 @@ mod registration {
 		use alloy_core::sol_types::SolError;
 
 		new_test_ext().execute_with(|| {
-			set_contract_call_revert(crate::types::NotGateway::SELECTOR.to_vec());
+			set_contract_call_revert(crate::types::PersonhoodNameUnavailable::SELECTOR.to_vec());
 
 			let link = Link::None(default_chat_key());
 			let bn = base_name(ALICE_BASE);
 
 			assert_noop!(
 				DotnsGateway::register_name(person_registration_origin(alias_a()), ALICE, bn, link,),
-				Error::<Test>::ContractRevert(DispatcherRevert::NotGateway)
+				Error::<Test>::ContractRevert(DispatcherRevert::PersonhoodNameUnavailable)
 			);
 		});
 	}
@@ -1625,4 +1637,22 @@ mod migration {
 			assert_eq!(AccountNames::<Test>::get(ALICE), None);
 		});
 	}
+}
+
+#[test]
+fn signing_context_constant_is_the_context_the_pallet_verifies() {
+	// The mock's network suffix is `paseo`.
+	let expected = indiv_support::context::build_product_context(
+		indiv_support::context::personhood::PRODUCT_NAME,
+		b"paseo",
+		indiv_support::context::SIGNING,
+	);
+
+	// The published constant is the personhood signing context.
+	assert_eq!(crate::Pallet::<Test>::signing_context(), expected);
+	// Signed bytes are that context followed by the message.
+	assert_eq!(
+		crate::Pallet::<Test>::account_signing_payload(b"msg"),
+		[&expected[..], b"msg"].concat()
+	);
 }

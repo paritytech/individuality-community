@@ -123,6 +123,7 @@ impl indiv_pallet_members::Config for Test {
 impl indiv_pallet_people::Config for Test {
 	type WeightInfo = ();
 	type MemberService = Members;
+	type Clock = MockTime;
 	type CollectionOwner = MockCollectionOwner;
 	type AccountContexts = ();
 	type OnboardingQueuePageSize = ConstU32<512>;

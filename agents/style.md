@@ -18,3 +18,4 @@
 - When editing an item, rewrite its doc comment rather than appending to it, so it does not grow with every change
 - Comments state facts plainly. Follow [ASD-STE100](https://asd-ste100.org/) Simplified Technical English: one idea per sentence, active voice, present tense, the same term for the same thing, and the plain verb over a noun phrase. Avoid editorialising ("this is what keeps it out of a block", "the two can never drift apart"); say what holds and why a caller cannot infer it. Delete a comment that only restates the code
 - Prefer specific verbs over "names" or "gives". E.g. an event "contains" a field, a call "specifies" an argument, a function "returns" a value
+- Write in active voice with the acting or receiving party as the subject, not an event. E.g. "a player that checks in receives one credit" not "a check-in is owed one credit"

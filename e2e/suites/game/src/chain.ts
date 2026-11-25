@@ -1,0 +1,166 @@
+// Copyright (C) Parity Technologies (UK) Ltd.
+// This file is part of Individuality.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { AccountId, createClient, type PolkadotSigner, type SS58String } from "polkadot-api";
+import { getPolkadotSigner } from "polkadot-api/signer";
+import { getWsProvider } from "polkadot-api/ws";
+
+import { sr25519CreateDerive } from "@polkadot-labs/hdkd";
+import { DEV_PHRASE, entropyToMiniSecret, mnemonicToEntropy } from "@polkadot-labs/hdkd-helpers";
+import { ASSET_HUB_RPC, customSignedExtensions, PEOPLE_RPC } from "../../../packages/shared/src/client.ts";
+
+/** Opens the People chain connection. The untyped API needs no PAPI descriptors. */
+export function connect() {
+  const client = createClient(getWsProvider(PEOPLE_RPC));
+  return { client, api: client.getUnsafeApi() as unknown as PeopleApi };
+}
+
+/** Opens the Asset Hub connection. The untyped API needs no PAPI descriptors. */
+export function connectAssetHub() {
+  const client = createClient(getWsProvider(ASSET_HUB_RPC));
+  return { client, api: client.getUnsafeApi() as unknown as AssetHubApi };
+}
+
+/** The Asset Hub API. It has the same untyped shape as the People chain API. */
+export type AssetHubApi = PeopleApi;
+
+export type PeopleClient = ReturnType<typeof connect>["client"];
+
+/**
+ * A value the unsafe API resolves by name at runtime. It carries no generated type.
+ *
+ * Descriptors would type these values. They would also cost a `just descriptors` run before every
+ * verification. They would break compilation whenever the metadata moves. The chain rejects a wrong
+ * shape at submission.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: the unsafe API is untyped by construction
+export type Untyped = any;
+
+/** A chain API. PAPI's unsafe interface reaches it without descriptors. */
+export interface PeopleApi {
+  query: Untyped;
+  tx: Untyped;
+  event: Untyped;
+  constants: Untyped;
+  apis: Untyped;
+  getStaticApis: () => Promise<{ txFromCallData: TxFromCallData }>;
+}
+
+/**
+ * Decodes call data with the chain's metadata. Throws `Invalid call data` when the bytes do not start
+ * with a call.
+ *
+ * PAPI 2.1.7 also declares a `decodeCallData` static API, which its runtime does not provide.
+ */
+export type TxFromCallData = (callData: Uint8Array) => { decodedCall: DecodedCall };
+
+/** A call that `TxFromCallData` decodes. */
+export interface DecodedCall {
+  type: string;
+  value: { type: string; value: Untyped };
+}
+
+/** The sign options of a People chain transaction. */
+const PEOPLE_SIGN_OPTIONS = { customSignedExtensions };
+
+/** The sign options of an Asset Hub transaction. Asset Hub has no `VerifyMultiSignature`. */
+export const ASSET_HUB_SIGN_OPTIONS = {};
+
+/** Submits a call wrapped in `Sudo.sudo`. Reports the inner call's result. */
+export type Sudo = (call: Untyped, label: string) => Promise<Untyped>;
+
+/** Submits a plain signed transaction. */
+export type Submit = (tx: Untyped, label: string) => Promise<Untyped>;
+
+/** Derives a signer from the well-known dev phrase. `//Alice` is sudo on the local network. */
+export function devSigner(uri = "//Alice"): PolkadotSigner {
+  const miniSecret = entropyToMiniSecret(mnemonicToEntropy(DEV_PHRASE));
+  const keypair = sr25519CreateDerive(miniSecret)(uri);
+  return getPolkadotSigner(keypair.publicKey, "Sr25519", keypair.sign);
+}
+
+/** The SS58 address of `signer`. */
+export function addressOf(signer: PolkadotSigner): SS58String {
+  return AccountId().dec(signer.publicKey);
+}
+
+/** Serializes a value to JSON. `JSON.stringify` refuses the bigints chain values carry. */
+export function toJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v) => (typeof v === "bigint" ? v.toString() : v));
+}
+
+/**
+ * Reads the payloads of `event` in a transaction result.
+ *
+ * The unsafe API returns matches as `{ original, payload }`. The typed API returns the payload alone.
+ * This accepts either.
+ */
+export function eventsOf(result: Untyped, event: Untyped): Untyped[] {
+  return event.filter(result.events).map((match: Untyped) => match?.payload ?? match);
+}
+
+/**
+ * Transaction submitters bound to `signer`.
+ *
+ * Both resolve at finalization. Both throw a labeled error on failure. `sudo` also reports a
+ * failure of the wrapped call. The outer transaction reports that failure as success.
+ * `signOptions` defaults to the People chain's. Asset Hub needs `ASSET_HUB_SIGN_OPTIONS`.
+ */
+export function submitters(
+  api: PeopleApi,
+  signer: PolkadotSigner,
+  signOptions: object = PEOPLE_SIGN_OPTIONS,
+) {
+  const submit: Submit = async (tx, label) => {
+    const result = await tx.signAndSubmit(signer, signOptions);
+    if (!result.ok) {
+      throw new Error(`${label} failed: ${toJson(result.dispatchError)}`);
+    }
+    console.log(`  tx ${label}: ok (block #${result.block.number})`);
+    return result;
+  };
+
+  const sudo: Sudo = async (call, label) => {
+    const result = await api.tx.Sudo.sudo({ call }).signAndSubmit(signer, signOptions);
+    if (!result.ok) {
+      throw new Error(`${label}: outer sudo transaction failed: ${toJson(result.dispatchError)}`);
+    }
+    // A missing `sudo_result` would report every failed inner call as a success.
+    const [sudid] = eventsOf(result, api.event.Sudo.Sudid);
+    const outcome = sudid?.sudo_result;
+    if (outcome === undefined) {
+      throw new Error(`${label}: no Sudo.Sudid event in ${toJson(result.events)}`);
+    }
+    if (!outcome.success) {
+      throw new Error(`${label}: inner call failed: ${toJson(outcome.value)}`);
+    }
+    console.log(`  sudo ${label}: ok (block #${result.block.number})`);
+    return result;
+  };
+
+  return { submit, sudo };
+}
+
+/**
+ * Reads the chain's own time in seconds. Every game timestamp is measured against it.
+ *
+ * The read is at the best block, not the finalized one. Finality lags authoring by about 12
+ * seconds. A play time computed from a stale clock loses that lag from a schedule's margin.
+ */
+export async function chainNow(api: PeopleApi): Promise<number> {
+  const millis = (await api.query.Timestamp.Now.getValue({ at: "best" })) as bigint;
+  return Number(millis / 1000n);
+}

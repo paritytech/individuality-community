@@ -21,6 +21,7 @@ Pallet: `pallets/game`.
   time signup and for an archived player the deposit will be charged, and the user may prefer using
   `sign_up_with_invite` and `sign_up_with_account_lite_invite` to avoid paying a deposit).
 - `sign_up_with_alias` - sign up for the next game using full personhood provided from another DIM.
+- `unregister` — leave the next game while it still accepts sign-ups.
 - `report` — report your result during the reporting phase.
 - `claim_airdrop` — claim a prize from a game-linked airdrop.
 - `offboard` — leave and reclaim any deposit once you are done.

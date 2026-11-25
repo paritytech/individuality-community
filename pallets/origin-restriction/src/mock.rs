@@ -55,11 +55,13 @@ pub type UncheckedExtrinsic = sp_runtime::generic::UncheckedExtrinsic<
 pub const CALL_WEIGHT: u64 = 15;
 pub const CALL_WEIGHT_EXCESS: u64 = 150;
 pub const CALL_WEIGHT_LESS: u64 = 5;
+/// A weight whose fee does not fit in a `u32`.
+pub const CALL_WEIGHT_HEAVY: u64 = 10_000_000_000;
 
 /// A small mock pallet to test calls from within the runtime.
 #[frame_support::pallet(dev_mode)]
 pub mod mock_pallet {
-	use super::{CALL_WEIGHT, CALL_WEIGHT_EXCESS, CALL_WEIGHT_LESS};
+	use super::{CALL_WEIGHT, CALL_WEIGHT_EXCESS, CALL_WEIGHT_HEAVY, CALL_WEIGHT_LESS};
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
@@ -99,6 +101,12 @@ pub mod mock_pallet {
 				// Use lower weight than estimated to test the logic
 				actual_weight: Some(Weight::from_parts(CALL_WEIGHT_LESS, 0)),
 			})
+		}
+
+		#[pallet::call_index(4)]
+		#[pallet::weight(Weight::from_parts(CALL_WEIGHT_HEAVY, 0))]
+		pub fn do_something_heavy(_origin: OriginFor<T>) -> DispatchResult {
+			Ok(())
 		}
 	}
 }
@@ -153,7 +161,7 @@ pub enum RuntimeRestrictedEntity {
 
 impl RestrictedEntity<OriginCaller, u64> for RuntimeRestrictedEntity {
 	fn allowance(&self) -> Allowance<u64> {
-		Allowance { max: MAX_ALLOWANCE, recovery_per_block: ALLOWANCE_RECOVERY_PER_BLOCK }
+		Allowance { max: MockAllowanceMax::get(), recovery_per_block: MockRecoveryPerBlock::get() }
 	}
 
 	fn restricted_entity(caller: &OriginCaller) -> Option<RuntimeRestrictedEntity> {
@@ -197,6 +205,8 @@ pub const ALLOWANCE_RECOVERY_PER_BLOCK: u64 = 5;
 
 frame_support::parameter_types! {
 	pub storage MockRelayBlockNumber: RelayBlockNumber = RELAY_BLOCK_GENESIS;
+	pub storage MockAllowanceMax: u64 = MAX_ALLOWANCE;
+	pub storage MockRecoveryPerBlock: u64 = ALLOWANCE_RECOVERY_PER_BLOCK;
 }
 
 /// Stands in for the relay chain block number, moved by [`advance_by`] and [`advance_relay_by`].
@@ -213,8 +223,19 @@ impl BlockNumberProvider for MockRelayBlockNumberProvider {
 	}
 }
 
+pub struct MockWeightInfo;
+impl crate::WeightInfo for MockWeightInfo {
+	fn clean_usage() -> Weight {
+		Weight::zero()
+	}
+
+	fn restrict_origin_tx_ext() -> Weight {
+		Weight::zero()
+	}
+}
+
 impl crate::Config for Test {
-	type WeightInfo = ();
+	type WeightInfo = MockWeightInfo;
 	type BlockNumberProvider = MockRelayBlockNumberProvider;
 	type RestrictedEntity = RuntimeRestrictedEntity;
 	type OperationAllowedOneTimeExcess = TestOperationAllowedOneTimeExcess;

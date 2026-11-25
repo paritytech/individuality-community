@@ -40,10 +40,15 @@ use verifiable::{mock::Mock, Alias, AliasVec, Error as VerifiableError, Generate
 // First ring, used in testing.
 pub const RI_ZERO: RingIndex = 0;
 
+parameter_types! {
+	/// The current time in seconds since the UNIX epoch, adjustable by tests.
+	pub storage MockNow: u64 = 1_000_000;
+}
+
 pub struct MockTime;
 impl UnixTime for MockTime {
 	fn now() -> Duration {
-		Duration::from_secs(1_000_000)
+		Duration::from_secs(MockNow::get())
 	}
 }
 
@@ -261,6 +266,10 @@ impl crate::WeightInfo for MockWeights {
 	fn authorize_create_people_collection() -> Weight {
 		Weight::from_parts(28, 28)
 	}
+
+	fn migrate_person() -> Weight {
+		Weight::from_parts(29, 29)
+	}
 }
 
 pub const INVALID_MEMBER: [u8; 32] = [
@@ -370,6 +379,7 @@ impl indiv_pallet_members::Config for Test {
 impl crate::Config for Test {
 	type WeightInfo = MockWeights;
 	type MemberService = Members;
+	type Clock = MockTime;
 	type RingExponent = FlexibleRingExp;
 	type CollectionOwner = MockCollectionOwner;
 	type AccountContexts = TestAccountContexts;

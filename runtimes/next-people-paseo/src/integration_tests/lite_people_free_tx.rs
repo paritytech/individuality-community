@@ -50,7 +50,11 @@ fn consumer_registration_params(
 			.expect("valid username"),
 		reserved_username: None,
 	};
-	params.signature = MultiSignature::from(lite_pair.sign(&params.signing_payload(verifier)));
+	params.signature = MultiSignature::from(lite_pair.sign(&indiv_pallet_people_lite::Pallet::<
+		Runtime,
+	>::account_signing_payload(
+		&params.signing_payload(verifier)
+	)));
 	params
 }
 
@@ -68,7 +72,9 @@ fn register_lite_person(
 		})
 	});
 
-	let candidate_signature = MultiSignature::from(lite_pair.sign(&msg));
+	let candidate_signature = MultiSignature::from(
+		lite_pair.sign(&indiv_pallet_people_lite::Pallet::<Runtime>::account_signing_payload(&msg)),
+	);
 	let proof =
 		Crypto::sign(&ring_secret, &msg).expect("ring key can sign the attestation payload");
 
@@ -166,6 +172,83 @@ fn root_parameter_update_below_the_existential_deposit_uses_the_minimum_fee() {
 }
 
 #[test]
+fn root_parameter_updates_throttle_paid_registrations() {
+	new_test_ext().execute_with(|| {
+		for parameter in [
+			RuntimeParameters::LitePersonhood(
+				(lite_personhood::PaidRegistrationThreshold, 0).into(),
+			),
+			RuntimeParameters::LitePersonhood(
+				(lite_personhood::PaidRegistrationsPerPeriod, 1).into(),
+			),
+		] {
+			assert_ok!(Parameters::set_parameter(RuntimeOrigin::root(), parameter));
+		}
+		let fee = LitePersonRegistrationFee::get();
+		let candidates = [[83u8; 32], [84u8; 32]].map(|seed| {
+			let account = pair_to_account_id(&sr25519::Pair::from_seed(&seed));
+			Balances::set_balance(&account, fee.saturating_add(Balances::minimum_balance()));
+			account
+		});
+
+		let (ring_member, proof) = fee_registration_payload(&candidates[0], [47u8; 32]);
+		assert_ok!(indiv_pallet_people_lite::Pallet::<Runtime>::register_with_fee(
+			RuntimeOrigin::signed(candidates[0].clone()),
+			ring_member,
+			proof,
+			None,
+		));
+
+		let (ring_member, proof) = fee_registration_payload(&candidates[1], [48u8; 32]);
+		assert_noop!(
+			indiv_pallet_people_lite::Pallet::<Runtime>::register_with_fee(
+				RuntimeOrigin::signed(candidates[1].clone()),
+				ring_member,
+				proof,
+				None,
+			),
+			indiv_pallet_people_lite::Error::<Runtime>::PaidRegistrationLimitReached,
+		);
+	});
+}
+
+#[test]
+fn root_parameter_update_caps_lite_people() {
+	new_test_ext().execute_with(|| {
+		let cap = indiv_pallet_people_lite::LitePeople::<Runtime>::count().saturating_add(1);
+		assert_ok!(Parameters::set_parameter(
+			RuntimeOrigin::root(),
+			RuntimeParameters::LitePersonhood((lite_personhood::MaxLitePeople, cap).into())
+		));
+		let fee = LitePersonRegistrationFee::get();
+		let candidates = [[85u8; 32], [86u8; 32]].map(|seed| {
+			let account = pair_to_account_id(&sr25519::Pair::from_seed(&seed));
+			Balances::set_balance(&account, fee.saturating_add(Balances::minimum_balance()));
+			account
+		});
+
+		let (ring_member, proof) = fee_registration_payload(&candidates[0], [49u8; 32]);
+		assert_ok!(indiv_pallet_people_lite::Pallet::<Runtime>::register_with_fee(
+			RuntimeOrigin::signed(candidates[0].clone()),
+			ring_member,
+			proof,
+			None,
+		));
+
+		let (ring_member, proof) = fee_registration_payload(&candidates[1], [50u8; 32]);
+		assert_noop!(
+			indiv_pallet_people_lite::Pallet::<Runtime>::register_with_fee(
+				RuntimeOrigin::signed(candidates[1].clone()),
+				ring_member,
+				proof,
+				None,
+			),
+			indiv_pallet_people_lite::Error::<Runtime>::TooManyLitePeople,
+		);
+	});
+}
+
+#[test]
 fn fee_registration_verifies_consumer_signature_with_the_candidate_as_verifier() {
 	new_test_ext().execute_with(|| {
 		let lite_pair = sr25519::Pair::from_seed(&[80u8; 32]);
@@ -208,6 +291,78 @@ fn fee_registration_rejects_consumer_signature_for_a_different_verifier() {
 		assert!(!indiv_pallet_people_lite::LitePeople::<Runtime>::contains_key(&lite_account));
 		assert_eq!(Balances::free_balance(&lite_account), required_balance);
 		assert_eq!(Balances::free_balance(&pot), 0);
+	});
+}
+
+#[test]
+fn attest_rejects_candidate_signature_without_signing_context() {
+	new_test_ext().execute_with(|| {
+		// Attester given an allowance and candidate signed the raw registration message.
+		let attester = Sr25519Keyring::Bob.to_account_id();
+		assert_ok!(indiv_pallet_people_lite::Pallet::<Runtime>::increase_attestation_allowance(
+			RuntimeOrigin::root(),
+			attester.clone(),
+			1,
+		));
+		let lite_pair = sr25519::Pair::from_seed(&[83u8; 32]);
+		let lite_account = pair_to_account_id(&lite_pair);
+		let ring_secret = Crypto::new_secret([47u8; 32]);
+		let ring_member = Crypto::member_from_secret(&ring_secret);
+		let msg = indiv_pallet_people_lite::MSG_PREFIX
+			.iter()
+			.copied()
+			.chain(lite_account.encode())
+			.chain(ring_member.encode())
+			.collect::<Vec<_>>();
+		let proof =
+			Crypto::sign(&ring_secret, &msg).expect("ring key can sign the attestation payload");
+
+		// Attester submits the attestation.
+		assert_noop!(
+			indiv_pallet_people_lite::Pallet::<Runtime>::attest(
+				RuntimeOrigin::signed(attester),
+				lite_account.clone(),
+				MultiSignature::from(lite_pair.sign(&msg)),
+				ring_member,
+				proof,
+				None,
+			),
+			indiv_pallet_people_lite::Error::<Runtime>::InvalidAttestationSignature,
+		);
+
+		// Candidate is not registered.
+		assert!(!indiv_pallet_people_lite::LitePeople::<Runtime>::contains_key(&lite_account));
+	});
+}
+
+#[test]
+fn fee_registration_rejects_consumer_signature_without_signing_context() {
+	new_test_ext().execute_with(|| {
+		// Candidate funded and signed the raw consumer registration payload.
+		let lite_pair = sr25519::Pair::from_seed(&[84u8; 32]);
+		let lite_account = pair_to_account_id(&lite_pair);
+		let (ring_member, proof) = fee_registration_payload(&lite_account, [48u8; 32]);
+		let required_balance =
+			LitePersonRegistrationFee::get().saturating_add(Balances::minimum_balance());
+		Balances::set_balance(&lite_account, required_balance);
+		let mut params = consumer_registration_params(&lite_account, &lite_pair, &lite_account);
+		params.signature =
+			MultiSignature::from(lite_pair.sign(&params.signing_payload(&lite_account)));
+
+		// Candidate registers with a fee and a consumer registration.
+		assert_noop!(
+			indiv_pallet_people_lite::Pallet::<Runtime>::register_with_fee(
+				RuntimeOrigin::signed(lite_account.clone()),
+				ring_member,
+				proof,
+				Some(params),
+			),
+			indiv_pallet_people_lite::Error::<Runtime>::InvalidAttestationSignature,
+		);
+
+		// Candidate is not registered and keeps the fee.
+		assert!(!indiv_pallet_people_lite::LitePeople::<Runtime>::contains_key(&lite_account));
+		assert_eq!(Balances::free_balance(&lite_account), required_balance);
 	});
 }
 

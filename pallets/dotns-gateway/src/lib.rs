@@ -301,6 +301,8 @@ pub mod pallet {
 		NotLiteLabelOwner,
 		/// The `RootGatewayDispatcher` contract address has not been set.
 		DispatcherAddressNotSet,
+		/// The candidate already holds a device name.
+		AccountAlreadyHasDeviceName,
 	}
 
 	// ========== Extrinsics ==========
@@ -313,15 +315,16 @@ pub mod pallet {
 		///
 		/// The caller must be an attester with available allowance. The user's
 		/// signature proves their consent to the reservation with this specific label
-		/// and attester.
+		/// and attester. A candidate that already holds a device name is rejected.
 		///
 		/// # Parameters
 		/// - `candidate`: the Lite Person's account for whom the label is being reserved. Also the
 		///   signer of `candidate_signature`.
 		/// - `candidate_signature`: signature over the bytes returned by
-		///   `Pallet::construct_reservation_message` — a SCALE-encoded tuple binding the attester,
-		///   candidate, the candidate's chosen *base* username, and chat key. The digit suffix of
-		///   `lite_label` is **not** part of the signed message (the digits are allocated
+		///   `Pallet::construct_reservation_message` in the personhood signing context (see
+		///   [`Pallet::account_signing_payload`]). The message is a SCALE-encoded tuple binding the
+		///   attester, candidate, the candidate's chosen *base* username and chat key. The digit
+		///   suffix of `lite_label` is **not** part of the signed message (the digits are allocated
 		///   server-side after the candidate signs, so the candidate cannot commit to them at
 		///   signing time).
 		/// - `lite_label`: the lite-person label. Must be `<dns-stem>.<2+ digits>` (e.g.
@@ -329,8 +332,8 @@ pub mod pallet {
 		///   `<dns-stem>` portion enters the signed message; the digits ride along as an unsigned
 		///   extrinsic argument used for the contract calldata and storage key.
 		/// - `chat_key`: 65-byte public key used for ECDH chat.
-		/// - `reserved_base_label`: optional base label reserved for the candidate to later claim
-		///   as a Full Person. Must be a single DNS label (e.g. `alice`).
+		/// - `reserved_base_label`: optional personhood label queued for the candidate, to issue
+		///   later as their personhood name. Must be lowercase ASCII letters only (e.g. `alice`).
 		/// - `signed_at`: Unix-time second at which the candidate signed the reservation message.
 		///   The signature is accepted only if `signed_at <= now + MaxFutureSkewSeconds` and `now
 		///   <= signed_at + MaxValiditySeconds`, where `now` comes from [`Config::UnixTime`].
@@ -354,6 +357,10 @@ pub mod pallet {
 			if let Some(ref label) = reserved_base_label {
 				ensure!(label.is_valid_person(), Error::<T>::InvalidName);
 			}
+			ensure!(
+				AccountNames::<T>::get(&candidate).and_then(|record| record.lite).is_none(),
+				Error::<T>::AccountAlreadyHasDeviceName,
+			);
 
 			let now = <T as Config>::UnixTime::now().as_secs();
 			ensure!(
@@ -375,7 +382,7 @@ pub mod pallet {
 				signed_at,
 			);
 			ensure!(
-				candidate_signature.verify(&msg[..], &candidate),
+				candidate_signature.verify(&Self::account_signing_payload(&msg)[..], &candidate),
 				Error::<T>::InvalidAttestationSignature,
 			);
 
@@ -393,13 +400,13 @@ pub mod pallet {
 			// Encoding and calling the contract
 			let candidate_h160 = T::AddressMapper::to_address(&candidate);
 			let calldata = match reserved_base_label.as_ref() {
-				Some(base) => reserveBaseNameCall::new_abi_encoded(
+				Some(base) => issueDeviceNameWithReservationCall::new_abi_encoded(
 					lite_label.as_slice(),
 					candidate_h160,
 					chat_key.as_slice(),
 					base.as_slice(),
 				),
-				None => reserveLiteNameCall::new_abi_encoded(
+				None => issueDeviceNameCall::new_abi_encoded(
 					lite_label.as_slice(),
 					candidate_h160,
 					chat_key.as_slice(),
@@ -439,8 +446,8 @@ pub mod pallet {
 		/// - `who`: the account that owns the full-person label; its EVM-mapped address is the
 		///   recipient on the `DotnsPopController` contract. Must match the `who` already
 		///   authenticated by [`AsDotnsGateway`].
-		/// - `label`: the full-person label. Must be a single DNS label (e.g. `alice`), matching
-		///   `StringUtils.isSingleLabel` in the contracts.
+		/// - `label`: the personhood label. Must be lowercase ASCII letters only (e.g. `alice`),
+		///   matching `StringUtils.isPersonhoodLabel` in the contracts.
 		/// - `link`: how the full-person label relates to a pre-existing lite-person label:
 		///   - `Link::LiteUsername(lite_label)` — links to an existing lite-person label (must
 		///     match the lite format `<dns-stem>.<2+ digits>`); the chat key is inherited from the
@@ -460,7 +467,8 @@ pub mod pallet {
 			let alias = Self::ensure_person_registration(origin)?;
 
 			let who_h160 = T::AddressMapper::to_address(&who);
-			let calldata = registerBaseNameCall::new_abi_encoded(label.as_slice(), who_h160, &link);
+			let calldata =
+				issuePersonhoodNameCall::new_abi_encoded(label.as_slice(), who_h160, &link);
 			let contract_weight = Self::call_dispatcher(calldata)?;
 
 			AliasRegistration::<T>::insert(
@@ -598,6 +606,25 @@ pub mod pallet {
 				identifier, proof, ring_index, revision, context, message,
 			)?;
 			Ok(validated.alias)
+		}
+	}
+
+	#[pallet::extra_constants]
+	impl<T: Config> Pallet<T> {
+		/// The personhood signing context on this network. An account signs this context
+		/// followed by the message when it signs a message that is not a transaction; see
+		/// [`Pallet::account_signing_payload`].
+		#[pallet::constant_name(SigningContext)]
+		pub fn signing_context() -> indiv_support::traits::Context {
+			indiv_support::context::signing_context(personhood::PRODUCT_NAME, &T::Suffix::get())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
+		/// `msg`.
+		pub fn account_signing_payload(msg: &[u8]) -> Vec<u8> {
+			[&Self::signing_context()[..], msg].concat()
 		}
 
 		pub fn proof_context() -> indiv_support::traits::Context {
