@@ -4082,43 +4082,40 @@ pub mod pallet {
 
 			let rounds = game.rounds;
 			let game_index = game.index;
-			let mut finished = false;
-			for _ in 0..OP_UPPER_BOUND {
-				match step {
-					CancellingStep::Step1DrainShuffle => {
-						let chunk_weight =
-							<T as Config>::WeightInfo::process_cancelling_step_shuffle();
-						let affordable = Self::affordable_chunks(weight_meter, chunk_weight);
-						if affordable == 0 {
-							break;
-						}
-						let cleared = Self::clear_shuffle_chunks(affordable);
-						weight_meter.consume(chunk_weight.saturating_mul(cleared.chunks.into()));
+			// The game is unchanged until the shuffle maps are empty, so a return before that
+			// needs no `Game` write.
+			if let CancellingStep::Step1DrainShuffle = step {
+				let chunk_weight = <T as Config>::WeightInfo::process_cancelling_step_shuffle();
+				let affordable = Self::affordable_chunks(weight_meter, chunk_weight);
+				if affordable == 0 {
+					return;
+				}
+				let cleared = Self::clear_shuffle_chunks(affordable);
+				weight_meter.consume(chunk_weight.saturating_mul(cleared.chunks.into()));
 
-						// A later call continues while a shuffle map still holds entries.
-						if cleared.result == StepResult::Continue {
-							break;
-						}
-						*step = CancellingStep::Step2DrainPlayers { last_iteration: None };
-					},
-					CancellingStep::Step2DrainPlayers { last_iteration } => {
-						if weight_meter
-							.try_consume(<T as Config>::WeightInfo::process_cancelling_step_player(
-								rounds as u32,
-							))
-							.is_err()
-						{
-							break;
-						}
-						finished = Self::process_cancelling_step_player(
-							game_index,
-							last_iteration,
-							rounds,
-						);
-						if finished {
-							break;
-						}
-					},
+				// A later call continues while a shuffle map still holds entries.
+				if cleared.result == StepResult::Continue {
+					return;
+				}
+				*step = CancellingStep::Step2DrainPlayers { last_iteration: None };
+			}
+
+			let mut finished = false;
+			if let CancellingStep::Step2DrainPlayers { last_iteration } = step {
+				for _ in 0..OP_UPPER_BOUND {
+					if weight_meter
+						.try_consume(<T as Config>::WeightInfo::process_cancelling_step_player(
+							rounds as u32,
+						))
+						.is_err()
+					{
+						break;
+					}
+					finished =
+						Self::process_cancelling_step_player(game_index, last_iteration, rounds);
+					if finished {
+						break;
+					}
 				}
 			}
 
