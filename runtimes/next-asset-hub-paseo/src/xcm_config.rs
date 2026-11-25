@@ -37,6 +37,7 @@ use frame_support::{
 		fungible::HoldConsideration,
 		tokens::imbalance::{ResolveAssetTo, ResolveTo},
 		ConstU32, Contains, ContainsPair, Equals, Everything, LinearStoragePrice, PalletInfoAccess,
+		ProcessMessageError,
 	},
 };
 use frame_system::EnsureRoot;
@@ -49,7 +50,7 @@ use paseo_runtime_constants::system_parachain;
 use polkadot_parachain_primitives::primitives::Sibling;
 use snowbridge_outbound_queue_primitives::v2::exporter::PausableExporter;
 use sp_runtime::traits::TryConvertInto;
-use xcm::latest::prelude::*;
+use xcm::latest::{prelude::*, AssetTransferFilter};
 use xcm_builder::{
 	AccountId32Aliases, AliasChildLocation, AliasOriginRootUsingFilter,
 	AllowExplicitUnpaidExecutionFrom, AllowKnownQueryResponses, AllowSubscriptionsFrom,
@@ -64,7 +65,10 @@ use xcm_builder::{
 	TrailingSetTopicAsId, UnpaidRemoteExporter, UsingComponents, WeightInfoBounds,
 	WithComputedOrigin, WithLatestLocationConverter, WithUniqueTopic, XcmFeeManagerFromComponents,
 };
-use xcm_executor::XcmExecutor;
+use xcm_executor::{
+	traits::{DenyExecution, Properties},
+	XcmExecutor,
+};
 
 pub use system_parachains_constants::paseo::locations::{AssetHubLocation, RelayChainLocation};
 
@@ -335,9 +339,40 @@ impl Contains<Location> for LocalPlurality {
 	}
 }
 
+/// Denies an `InitiateTransfer` to the relay chain that reserve-transfers any asset or fee.
+///
+/// `DenyReserveTransferToRelayChain` does not check `InitiateTransfer`. An `InitiateTransfer` to
+/// the relay chain that only teleports passes.
+pub struct DenyInitiateReserveTransferToRelayChain;
+impl DenyExecution for DenyInitiateReserveTransferToRelayChain {
+	fn deny_execution<RuntimeCall>(
+		_origin: &Location,
+		instructions: &mut [Instruction<RuntimeCall>],
+		_max_weight: Weight,
+		_properties: &mut Properties,
+	) -> Result<(), ProcessMessageError> {
+		let is_relay_reserve_transfer = |instruction: &Instruction<RuntimeCall>| match instruction {
+			InitiateTransfer {
+				destination: Location { parents: 1, interior: Junctions::Here },
+				remote_fees,
+				assets,
+				..
+			} => remote_fees
+				.iter()
+				.chain(assets)
+				.any(|filter| !matches!(filter, AssetTransferFilter::Teleport(_))),
+			_ => false,
+		};
+		if instructions.iter().any(is_relay_reserve_transfer) {
+			return Err(ProcessMessageError::Unsupported);
+		}
+		Ok(())
+	}
+}
+
 pub type Barrier = TrailingSetTopicAsId<
 	DenyThenTry<
-		DenyRecursively<DenyReserveTransferToRelayChain>,
+		DenyRecursively<(DenyReserveTransferToRelayChain, DenyInitiateReserveTransferToRelayChain)>,
 		(
 			TakeWeightCredit,
 			// Expected responses are OK.

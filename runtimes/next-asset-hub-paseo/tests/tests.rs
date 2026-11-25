@@ -67,7 +67,7 @@ use system_parachains_constants::paseo::{
 };
 use xcm::latest::{
 	prelude::{Assets as XcmAssets, *},
-	WESTEND_GENESIS_HASH,
+	AssetTransferFilter, WESTEND_GENESIS_HASH,
 };
 use xcm_builder::WithLatestLocationConverter;
 use xcm_executor::traits::{ConvertLocation, Properties, ShouldExecute};
@@ -1038,29 +1038,101 @@ fn authorized_aliases_work() {
 		})
 }
 
+fn local_should_execute(instruction: Instruction<RuntimeCall>) -> Result<(), ProcessMessageError> {
+	let weight = Weight::from_parts(1_000_000, 1000);
+	let mut properties = Properties { weight_credit: weight, message_id: None };
+	Barrier::should_execute::<RuntimeCall>(
+		&Location::new(0, AccountId32 { network: None, id: ALICE }),
+		&mut [instruction],
+		weight,
+		&mut properties,
+	)
+}
+
+/// Wraps `instruction` in each nesting that `DenyRecursively` checks, including two levels deep.
+fn with_nestings(instruction: Instruction<RuntimeCall>) -> [Instruction<RuntimeCall>; 5] {
+	let nested = Xcm(vec![instruction.clone()]);
+	[
+		instruction,
+		SetAppendix(nested.clone()),
+		SetErrorHandler(nested.clone()),
+		ExecuteWithOrigin { descendant_origin: None, xcm: nested.clone() },
+		SetAppendix(Xcm(vec![SetErrorHandler(nested)])),
+	]
+}
+
+fn initiate_transfer(
+	destination: Location,
+	remote_fees: Option<AssetTransferFilter>,
+	assets: Vec<AssetTransferFilter>,
+) -> Instruction<RuntimeCall> {
+	InitiateTransfer {
+		destination,
+		remote_fees,
+		preserve_origin: false,
+		assets: assets.try_into().unwrap(),
+		remote_xcm: Xcm(vec![]),
+	}
+}
+
 #[test]
 fn barrier_denies_relay_reserve_transfers_recursively() {
-	let transfer = TransferReserveAsset {
-		assets: (Parent, UNITS).into(),
-		dest: Location::parent(),
-		xcm: Xcm(vec![]),
-	};
-	let results = [
-		transfer.clone(),
-		SetAppendix(Xcm(vec![transfer.clone()])),
-		SetErrorHandler(Xcm(vec![transfer])),
-	]
-	.map(|instruction| {
-		let weight = Weight::from_parts(1_000_000, 1000);
-		let mut properties = Properties { weight_credit: weight, message_id: None };
-		Barrier::should_execute::<RuntimeCall>(
-			&Location::new(0, AccountId32 { network: None, id: ALICE }),
-			&mut [instruction],
-			weight,
-			&mut properties,
-		)
-	});
-	assert_eq!(results, [Err(ProcessMessageError::Unsupported); 3]);
+	let all = Wild(AllCounted(1));
+	let reserve_transfers = [
+		TransferReserveAsset {
+			assets: (Parent, UNITS).into(),
+			dest: Location::parent(),
+			xcm: Xcm(vec![]),
+		},
+		DepositReserveAsset { assets: all.clone(), dest: Location::parent(), xcm: Xcm(vec![]) },
+		InitiateReserveWithdraw {
+			assets: all.clone(),
+			reserve: Location::parent(),
+			xcm: Xcm(vec![]),
+		},
+		initiate_transfer(
+			Location::parent(),
+			None,
+			vec![AssetTransferFilter::ReserveDeposit(all.clone())],
+		),
+		initiate_transfer(
+			Location::parent(),
+			None,
+			vec![
+				AssetTransferFilter::Teleport(all.clone()),
+				AssetTransferFilter::ReserveWithdraw(all.clone()),
+			],
+		),
+		initiate_transfer(
+			Location::parent(),
+			Some(AssetTransferFilter::ReserveWithdraw(all.clone())),
+			vec![AssetTransferFilter::Teleport(all.clone())],
+		),
+	];
+	for instruction in reserve_transfers.into_iter().flat_map(with_nestings) {
+		assert_eq!(
+			local_should_execute(instruction.clone()),
+			Err(ProcessMessageError::Unsupported),
+			"{instruction:?}"
+		);
+	}
+
+	let allowed = [
+		ClearOrigin,
+		initiate_transfer(
+			Location::parent(),
+			Some(AssetTransferFilter::Teleport(all.clone())),
+			vec![AssetTransferFilter::Teleport(all.clone())],
+		),
+		initiate_transfer(
+			Location::new(1, Parachain(2000)),
+			Some(AssetTransferFilter::ReserveDeposit(all.clone())),
+			vec![AssetTransferFilter::ReserveWithdraw(all)],
+		),
+	];
+	for instruction in allowed.into_iter().flat_map(with_nestings) {
+		assert_eq!(local_should_execute(instruction.clone()), Ok(()), "{instruction:?}");
+	}
 }
 
 #[test]
