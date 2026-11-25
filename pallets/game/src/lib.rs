@@ -4082,8 +4082,6 @@ pub mod pallet {
 
 			let rounds = game.rounds;
 			let game_index = game.index;
-			// The game is unchanged until the shuffle maps are empty, so a return before that
-			// needs no `Game` write.
 			if let CancellingStep::Step1DrainShuffle = step {
 				let chunk_weight = <T as Config>::WeightInfo::process_cancelling_step_shuffle();
 				let affordable = Self::affordable_chunks(weight_meter, chunk_weight);
