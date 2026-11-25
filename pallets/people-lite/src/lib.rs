@@ -685,6 +685,34 @@ pub mod pallet {
 		}
 	}
 
+	#[pallet::view_functions]
+	impl<T: Config> Pallet<T> {
+		/// Returns the current value of [`Config::RegistrationFee`].
+		pub fn get_registration_fee() -> BalanceOf<T> {
+			T::RegistrationFee::get()
+		}
+
+		/// Returns the current value of [`Config::MaxLitePeople`].
+		pub fn get_max_lite_people() -> u32 {
+			T::MaxLitePeople::get()
+		}
+
+		/// Returns the current value of [`Config::PaidRegistrationThreshold`].
+		pub fn get_paid_registration_threshold() -> u32 {
+			T::PaidRegistrationThreshold::get()
+		}
+
+		/// Returns the current value of [`Config::PaidRegistrationPeriod`].
+		pub fn get_paid_registration_period() -> u32 {
+			T::PaidRegistrationPeriod::get()
+		}
+
+		/// Returns the current value of [`Config::PaidRegistrationsPerPeriod`].
+		pub fn get_paid_registrations_per_period() -> u32 {
+			T::PaidRegistrationsPerPeriod::get()
+		}
+	}
+
 	impl<T: Config> Pallet<T> {
 		/// Returns the bytes an account signs for `msg`: the personhood signing context followed by
 		/// `msg`.

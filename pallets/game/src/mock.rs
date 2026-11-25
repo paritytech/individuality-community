@@ -30,6 +30,7 @@ use crate as indiv_pallet_game;
 
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::credit_trees::AwardCredits;
+use sp_io::MultiRemovalResults;
 use sp_runtime::AccountId32;
 
 frame_support::parameter_types! {
@@ -79,12 +80,23 @@ impl AwardCredits<AccountId32> for MockNftClaimCredits {
 		)
 	}
 
+	fn award_tenure_credits(
+		game_index: u32,
+		player: &AccountOrPerson<AccountId32>,
+		count: u32,
+		award_time: u32,
+	) -> u32 {
+		<() as AwardCredits<AccountId32>>::award_tenure_credits(
+			game_index, player, count, award_time,
+		)
+	}
+
 	fn remaining_capacity(_: u32) -> u32 {
 		MockCreditCapacity::get()
 	}
 
-	fn clear_game_credits(game_index: u32, limit: u32, cursor: Option<&[u8]>) -> Option<Vec<u8>> {
-		<() as AwardCredits<AccountId32>>::clear_game_credits(game_index, limit, cursor)
+	fn clear_game_credits(game_index: u32, limit: u32) -> MultiRemovalResults {
+		<() as AwardCredits<AccountId32>>::clear_game_credits(game_index, limit)
 	}
 
 	fn forget_player_credits(game_index: u32, player: &AccountOrPerson<AccountId32>) {
@@ -94,6 +106,11 @@ impl AwardCredits<AccountId32> for MockNftClaimCredits {
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_award_every_slot(game_index: u32, player: &AccountOrPerson<AccountId32>) {
 		<() as AwardCredits<AccountId32>>::benchmark_award_every_slot(game_index, player)
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_fill_buffer_but_one(game_index: u32) {
+		<() as AwardCredits<AccountId32>>::benchmark_fill_buffer_but_one(game_index)
 	}
 }
 

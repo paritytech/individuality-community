@@ -17,6 +17,21 @@ offchain worker applies every step of the game state machine: `start_game`, `end
 
 About 37 minutes at the default phase durations (measured).
 
+`nft-claim.test.ts` follows one credit from the game to an NFT on Asset Hub:
+
+| step | what runs |
+|---|---|
+| People | sets the tenure thresholds to `[0]`, so every player earns one tenure credit |
+| People | schedules a game with an open tenure claim window. Alice signs up and claims |
+| People | Alice reports alone, so she attends and the attendance backfill pays her credit |
+| People | `NftCreditsApi` returns the tree block and the inclusion proof of the credit |
+| Asset Hub | waits for the tree to arrive over XCM, then Alice creates a collection and registers it |
+| Asset Hub | Charlie's claim of Alice's credit fails with `InvalidProof` |
+| Asset Hub | Alice's claim mints the NFT to a fresh purse key. A replay fails |
+
+The suite restores the tenure thresholds afterwards. It needs the People ↔ Asset Hub HRMP channel
+and the Asset Hub funding that `just bootstrap` sets up.
+
 ## Prerequisites
 
 ```bash
@@ -40,8 +55,8 @@ pnpm run test:game
 Or from this directory: `RUN_ZOMBIENET_TESTS=1 ../../node_modules/.bin/vitest run`. Without
 `RUN_ZOMBIENET_TESTS=1` every test is skipped.
 
-`PEOPLE_RPC` overrides the endpoint, which otherwise comes from
-`scripts/initial-setup/config-local.env` (`ws://localhost:10010`).
+`PEOPLE_RPC` and `ASSET_HUB_RPC` override the endpoints, which otherwise come from
+`scripts/initial-setup/config-local.env` (`ws://localhost:10010` and `ws://localhost:10020`).
 
 ## What it prints
 
@@ -55,6 +70,20 @@ One line per state change and per `Game.*` event, then the full timeline at the 
   ...
 ```
 
+A block that includes a game step names it with the block whose offchain worker submitted it, for
+example `advance_shuffle(submitted at #480)`. The run ends with a step landing summary:
+
+```
+--- game step landing ---
+  steps landed: <n>, by blocks after the submitting block: 1: <n>, 2: <n>
+  blocks with a step due: <n>, with a step landed: <n> (<share>%)
+```
+
+The first line counts the blocks from submission to inclusion. A lag of 1 is the next block. The
+second line counts the blocks after a shuffle, player process or cancellation state, where a step is
+always due. Its share is the fraction of blocks that run a step. Block time matters: the offchain
+worker of block N must submit before block N+1 is built.
+
 ## Notes
 
 - **Phase durations.** Defaults are 60/120/24/60/60 seconds against the runtime's 300/60/30/600/60.
@@ -64,7 +93,7 @@ One line per state change and per `Game.*` event, then the full timeline at the 
   is tagged `(step, game_index)`, so once a submission sits in the pool every later block's
   resubmission is rejected as a duplicate. Only a phase that stops advancing is a failure, and the
   state-transition timeouts catch that.
-- **Steps emit no events.** `advance_shuffle` and `process_players` are recognised by the change in
+- **Steps emit no events.** `advance_shuffle` and `process_players` are recognized by the change in
   `Game.Game`, not by an event, which is why the monitor fills in the blocks that finalization
   skips.
 - **One player is enough.** The People runtime sets `TESTNET`, so a single registered player is an

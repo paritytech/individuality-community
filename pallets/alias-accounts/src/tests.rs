@@ -1012,7 +1012,7 @@ mod stale_alias_sweeps {
 			};
 			assert_eq!(accounts.len() as u32, bound);
 			// Ascending, which is what `authorize` holds a batch to.
-			assert!(accounts.windows(2).all(|pair| pair[0] < pair[1]));
+			assert!(accounts.is_sorted_by(|a, b| a < b));
 			assert_ok!(authorize(StaleAliasAction::Report, accounts));
 		});
 	}
@@ -1673,6 +1673,25 @@ mod integrity {
 		new_test_ext().execute_with(|| {
 			MappingRetention::set(&(MOCK_OLD_ROOT_RETENTION + 1));
 			<crate::Pallet<Test> as Hooks<u64>>::integrity_test();
+		});
+	}
+}
+
+// ========== View function tests ==========
+
+mod view_functions {
+	use super::*;
+
+	#[test]
+	fn parameter_view_functions_follow_their_parameters() {
+		new_test_ext().execute_with(|| {
+			assert_eq!(crate::Pallet::<Test>::get_alias_fee(), None);
+
+			AliasFee::set(&Some(7));
+			OffchainWorkerInterval::set(&9);
+
+			assert_eq!(crate::Pallet::<Test>::get_alias_fee(), Some(7));
+			assert_eq!(crate::Pallet::<Test>::get_offchain_worker_interval(), 9);
 		});
 	}
 }
