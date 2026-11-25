@@ -441,6 +441,8 @@ parameter_types! {
 
 impl pallet_staking_async::Config for Runtime {
 	type Filter = ();
+	// This runtime has no `pallet-validator-set-announcer`.
+	type OnEraStart = ();
 	type OldCurrency = Balances;
 	type Currency = Balances;
 	type CurrencyBalance = Balance;
@@ -601,7 +603,7 @@ impl Convert<rc_client::KeysMessage<AccountId>, Xcm<()>> for KeysMessageToXcm {
 			rc_client::KeysMessage::PurgeKeys { stash } =>
 				RelayChainRuntimePallets::AhClient(AhClientCalls::PurgeKeys { stash }).encode(),
 		};
-		rc_client::build_transact_xcm(encoded_call)
+		rc_client::build_transact_xcm(encoded_call, OriginKind::Native)
 	}
 }
 

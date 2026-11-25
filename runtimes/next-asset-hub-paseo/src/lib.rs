@@ -312,8 +312,6 @@ impl pallet_balances::Config for Runtime {
 	type ReserveIdentifier = [u8; 8];
 	type RuntimeHoldReason = RuntimeHoldReason;
 	type RuntimeFreezeReason = RuntimeFreezeReason;
-	type FreezeIdentifier = RuntimeFreezeReason;
-	type MaxFreezes = frame_support::traits::VariantCountOf<RuntimeFreezeReason>;
 	type DoneSlashHandler = ();
 }
 
@@ -1399,6 +1397,8 @@ parameter_types! {
 
 impl pallet_revive::Config for Runtime {
 	type Time = Timestamp;
+	// Zero until every eth-rpc that serves the chain reads receipt data V2.
+	type MaxOutsideFrameLogs = ConstU32<0>;
 	type Balance = Balance;
 	type Currency = Balances;
 	type RuntimeEvent = RuntimeEvent;
@@ -3162,6 +3162,8 @@ pub mod migrations {
 		indiv_pallet_dotns_gateway::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_nft_claims::migration::MigrateV0ToV1<Runtime>,
 		indiv_pallet_members_subscriber::migration::MigrateV0ToV1<Runtime>,
+		// polkadot-sdk#12876: `LastProcessedHrmpMessage` gains the HRMP sender.
+		cumulus_pallet_parachain_system::migration::MigrateV3ToV4<Runtime>,
 	);
 
 	/// Migrations/checks that do not need to be versioned and can run on every update.

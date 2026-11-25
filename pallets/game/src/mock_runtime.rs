@@ -436,7 +436,6 @@ impl pallet_balances::Config for Test {
 	type MaxLocks = ();
 	type ReserveIdentifier = [u8; 8];
 	type RuntimeFreezeReason = RuntimeFreezeReason;
-	type FreezeIdentifier = ();
 }
 
 #[derive_impl(pallet_assets::config_preludes::TestDefaultConfig)]
