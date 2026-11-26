@@ -10,6 +10,7 @@ e2e/
     descriptors/   @individuality-e2e/descriptors-src -> generates @polkadot-api/descriptors
   suites/
     initialization-tests/   live init-state checks against the zombienet network
+  probes/        read-only measurements against a live network
   tests/
     runtime-upgrade/        Chopsticks-based runtime-upgrade suite
   justfile      task entry points — `just <recipe>` wraps the shell scripts and pnpm commands
@@ -27,7 +28,7 @@ the `e2e/` directory; `just --list` shows every recipe with its one-line descrip
 - `suites/initialization-tests` validates the bootstrapped local network state.
 - `tests/runtime-upgrade` forks Paseo People and Paseo Asset Hub with Chopsticks and injects a local
   runtime build.
-
+- `probes/` holds read-only scripts that measure a live network
 ## Prerequisites
 
 - Rust via the repo's pinned toolchain in `rust-toolchain.toml`

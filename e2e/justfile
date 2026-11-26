@@ -72,6 +72,10 @@ test-init:
 test-runtime-upgrade:
     cd "{{ts}}" && pnpm run test:runtime-upgrade
 
+# measure NFT claim latency on a live network (defaults to Paseo Next v2; PEOPLE_RPC / ASSET_HUB_RPC override)
+probe-nft-claim-latency:
+    cd "{{ts}}" && pnpm run probe:nft-claim-latency
+
 # typecheck the workspace
 typecheck:
     cd "{{ts}}" && pnpm run typecheck
