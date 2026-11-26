@@ -28,7 +28,9 @@
     "coinage": "tsx coinage.ts",
     "game_participation": "tsx game_participation.ts",
     "subscriptions": "tsx subscriptions.ts",
-    "dotns": "tsx dotns.ts"
+    "dotns": "tsx dotns.ts",
+    "nft_minting": "tsx nft_minting.ts",
+    "nft_status": "tsx nft_status.ts"
   },
   "dependencies": {
     "@polkadot-api/descriptors": "file:.papi/descriptors",
