@@ -61,6 +61,10 @@
 //!
 //! - A contract call weight below the cost of the heaviest gateway call makes that call fail. A
 //!   weight above one normal extrinsic makes every gateway call fail.
+//!
+//! [`Pallet::reserve_name`] and [`Pallet::register_name`] charge the maximum contract call weight
+//! in advance, since a [`Pallet::set_limits`] earlier in the same batch can raise the limit, and
+//! refund what the contract does not use, whether the call succeeds or fails.
 //! - A signature validity shorter than the time from signing to inclusion makes reservations
 //!   expire. A long one lets an attester hold a reusable consent for longer.
 //! - A future skew below the clock drift of the signing devices rejects their signatures. Each
