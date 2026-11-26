@@ -626,6 +626,9 @@ impl WeightInfo for MockWeightInfo {
 	fn claim_tenure_credits(n: u32) -> Weight {
 		Weight::from_parts(600 + 10 * n as u64, 60 + n as u64)
 	}
+	fn unregister() -> Weight {
+		Weight::from_parts(30, 30)
+	}
 }
 
 parameter_types! {

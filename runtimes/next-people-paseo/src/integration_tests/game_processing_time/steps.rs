@@ -37,8 +37,9 @@ pub(super) struct GameSteps {
 	pub(super) shuffle: StepWork,
 	/// `process_players` in step 1, one loop iteration per player.
 	pub(super) process_step1: StepWork,
-	/// `process_players` in step 2. A loop iteration clears `PLAYER_PROCESS_STEP2_CHUNK` entries
-	/// of each index map, and a player has one entry per round.
+	/// `process_players` in step 2. A call clears up to `OP_UPPER_BOUND` chunks of
+	/// `PLAYER_PROCESS_STEP2_CHUNK` entries from each index map, and a player has one entry per
+	/// round.
 	pub(super) process_step2: StepWork,
 	/// The shuffle insert step, which every stored player costs, whether they play or not.
 	pub(super) shuffle_insert: Weight,

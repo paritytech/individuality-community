@@ -21,6 +21,7 @@ Pallet: `pallets/game`.
   time signup and for an archived player the deposit will be charged, and the user may prefer using
   `sign_up_with_invite` and `sign_up_with_account_lite_invite` to avoid paying a deposit).
 - `sign_up_with_alias` - sign up for the next game using full personhood provided from another DIM.
+- `unregister` — leave the next game while it still accepts sign-ups.
 - `report` — report your result during the reporting phase.
 - `claim_airdrop` — claim a prize from a game-linked airdrop.
 - `offboard` — leave and reclaim any deposit once you are done.
@@ -72,6 +73,20 @@ Pallet: `pallets/dotns-gateway` (on the Asset Hub).
   (e.g. `alice.42`) for the user; the user signs the reservation to consent.
 - `register_name` — registers a full-person label (e.g. `alice`), authenticated
   by a ring membership proof via the pallet's transaction extension.
+
+## Claim an NFT
+
+Pallet: `pallets/nft-claims` (on the Asset Hub).
+
+A game awards NFT claim credits on the People chain. The People chain then sends
+the credits to the Asset Hub, where the claimant mints:
+
+- `claim` — mint the NFT of one credit into a registered collection, with the
+  inclusion proof from the People chain's `nft_claim_credit_proofs` runtime API.
+
+[nft-overview.md](./nft-overview.md) gives a technical overview of the whole
+stack, from a game credit to an owned NFT. See [nft-minting.md](./nft-minting.md)
+for the stages between a game and the mint, and how a wallet tracks them.
 
 ## Reference
 
