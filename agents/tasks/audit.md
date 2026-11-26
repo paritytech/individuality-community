@@ -6,7 +6,7 @@ Extrinsics are identified in the transaction pool by their `provides` tags; when
 
 **Tag design.** Verify that the `provides` tags cannot be varied to produce an unbounded number of distinct entries. For example, if an extrinsic accepts a limit parameter `N` in `0..1000` and `N` appears in the tag, a single sender can place 1000 transactions in the pool at once. Use only identity-bearing data (sender key, target account, fixed operation kind) in tags.
 
-**`Stale` and `Future` matter only for a transaction already in the pool.** At submission every variant rejects it, and only an external submission bans its hash (~30 min). In the pool, view revalidation bans it from the view whatever the variant, so an OCW resubmitting the same call won't get it included until the ban expires. Finalized-block revalidation then keeps a `Future` transaction and lifts its ban, but drops a `Stale` one. To retry sooner, use a per-run discriminator in the call, a short `longevity` or `Future`.
+**`InvalidTransaction::Stale` and `InvalidTransaction::Future` matter only for a transaction already in the pool.** At submission every variant rejects it, and only an RPC or network submission bans its hash (~30 min), not an OCW submission (`submit_local`). In the pool, view revalidation bans it from the view whatever the variant, so an OCW resubmitting the same call won't get it included until the ban expires. Finalized-block revalidation then keeps a `Future` transaction and lifts its ban, but drops a `Stale` one. To retry sooner, use a per-run discriminator in the call, a short `longevity` or `Future`.
 
 **A dispatch may fail only if replaying it is costly.** A failing call reverts its own state changes, but state changes made in `authorize` are kept.
 
