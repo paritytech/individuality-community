@@ -28,7 +28,7 @@
 //! One earning has three names here, one per stage:
 //!
 //! - A *credit* ([`indiv_support::credit_trees::NftClaimCredit`]) is the hash of one successful
-//!   report. A player earns credits and capacity is counted in them.
+//!   report or of one tenure threshold. A player earns credits and capacity is counted in them.
 //! - An *award* ([`NftClaimCreditAward`]) is a credit paired with its claimant. Storage holds
 //!   awards, so chunk and buffer sizes count them.
 //! - A *leaf* ([`indiv_support::credit_trees::NftClaimCreditLeaf`]) is the hash of an award, at a
@@ -51,6 +51,13 @@
 //! credit is awarded once however many times both award paths reach it. Each award is appended to
 //! the buffer of the block that commits it in [`NftClaimCreditAwards`] and emitted as
 //! `NftClaimCreditAwarded`, in leaf order.
+//!
+//! ## Tenure credits
+//!
+//! The game pallet's `claim_tenure_credits` grants a player one credit per tenure threshold they
+//! reach, and decides when to pay them. This pallet awards them like any other credit. A tenure
+//! credit takes an [`AwardedNftClaimCredits`] slot after the report slots, so a player receives it
+//! at most once per game.
 //!
 //! ## Committing
 //!
@@ -112,6 +119,8 @@
 //!   tree blocks, against [`NftClaimCreditRoots`], so a claimant finds their roots by one lookup
 //!   instead of a scan. That index is a bounded ring, so a runtime that sizes it below the
 //!   retention window leaves the older blocks to be found from the events.
+//! - `nft_claim_credit_blocks` returns every block in that index with the state of its tree:
+//!   pending, committed or removed.
 //! - `nft_claim_credit_proofs` returns, for one tree block and one claimant, the inclusion proof of
 //!   each credit the claimant holds there: the credit, its leaf index and the sibling hashes, which
 //!   is what the claims chain verifies. `nft_claim_credit_proof_from_awards` does the same for a
@@ -164,6 +173,7 @@ use indiv_support::{
 	tx_priority,
 	weight_budget::OcwWeightBudget,
 };
+use sp_io::MultiRemovalResults;
 use sp_runtime::{traits::BlakeTwo256, SaturatedConversion, Saturating};
 use xcm::{
 	latest::{
@@ -215,6 +225,16 @@ pub const AWARDS_PER_TREE: u32 = CHUNKS_PER_TREE * AWARDS_PER_CHUNK;
 /// `StorageWeightReclaim` admits reports until what they really record fills the block, which no
 /// compile-time figure states exactly.
 pub const MAX_PENDING_CREDIT_TREES: u32 = 8;
+
+/// The prefix of the preimage of a report credit, see [`Pallet::compute_nft_claim_credit`].
+///
+/// A fixed-size array encodes without a length prefix, so the preimage starts with these bytes.
+pub const REPORT_CREDIT_PREFIX: [u8; 17] = *b"polkadot-pop-game";
+
+/// The prefix of the preimage of a tenure credit, see [`Pallet::compute_tenure_credit`].
+///
+/// It differs from [`REPORT_CREDIT_PREFIX`], so a tenure credit never equals a report credit.
+pub const TENURE_CREDIT_PREFIX: [u8; 19] = *b"polkadot-pop-tenure";
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-nft-credits";
 
@@ -311,11 +331,11 @@ pub mod pallet {
 		/// The index is a lookup aid, not the record of what a claimant is owed, so a full list
 		/// drops its oldest block rather than rejecting an award. A dropped block stays mintable
 		/// for [`Config::AwardRetentionTtl`], its proof coming from the block's
-		/// [`NftClaimCreditAwards`] entry, so the claimant loses discovery through
-		/// [`Pallet::nft_claim_credit_roots`] and nothing else. Size it to the tree blocks a
-		/// claimant accumulates over [`Config::AwardRetentionTtl`] at the chain's game cadence, and
-		/// account for the cost: the list is read and written whole at this bound, once per
-		/// distinct claimant an extrinsic awards to.
+		/// [`NftClaimCreditAwards`] entry, so the claimant only loses discovery through the runtime
+		/// API. Size it to the tree blocks a claimant accumulates over
+		/// [`Config::AwardRetentionTtl`] at the chain's game cadence, and account for the cost:
+		/// the list is read and written whole at this bound, once per distinct claimant an
+		/// extrinsic awards to.
 		#[pallet::constant]
 		type MaxCreditBlocksPerClaimant: Get<u32>;
 
@@ -578,13 +598,11 @@ pub mod pallet {
 		NftClaimCreditDropped { claimant: AccountOrPerson<T::AccountId>, credit: NftClaimCredit },
 		/// Credit trees were handed to the XCM router for delivery to the NFT claims chain.
 		CreditTreesSent {
-			/// The tree block of every tree the message carries, in the order they go out.
-			/// Empty means every tree of this message had lost its root, so nothing was sent.
+			/// The sequence and tree block of every tree the message carries, in the order they go
+			/// out. Empty means every tree of this message had lost its root, so nothing was sent.
 			///
-			/// The sequence each block travels under is not spelled out: the message takes a
-			/// contiguous run of sequences off the queue, starting at the call's `first_sequence`,
-			/// minus the ones this block's [`Event::CreditTreeDeliverySkipped`] names.
-			trees: BoundedVec<CreditTreeBlock, T::MaxCreditTreesPerMessage>,
+			/// A sequence in the claims chain's `CreditTreesMissing` resolves to its block here.
+			trees: BoundedVec<(TreeSequence, CreditTreeBlock), T::MaxCreditTreesPerMessage>,
 		},
 		/// A queued credit tree was not sent because its root is no longer recorded.
 		///
@@ -892,7 +910,7 @@ impl<T: Config> Pallet<T> {
 	/// walks the group. The attestee's own place goes unused.
 	///
 	/// Spacing slots by the configured `MaxGroupSize` rather than the game's keeps the
-	/// mapping independent of the group size, below `max_credit_slots`, which the
+	/// mapping independent of the group size, below `max_report_credit_slots`, which the
 	/// `integrity_test` holds to [`AwardedCredits::CAPACITY`].
 	pub fn credit_slot(round: RoundIndex, attester_position: AttesterPosition) -> CreditSlot {
 		CreditSlot::from(round)
@@ -900,16 +918,48 @@ impl<T: Config> Pallet<T> {
 			.saturating_add(attester_position)
 	}
 
-	/// The number of credit slots any game of this runtime can use.
-	pub(crate) fn max_credit_slots() -> u32 {
+	/// The number of report credit slots any game of this runtime can use.
+	pub(crate) fn max_report_credit_slots() -> u32 {
 		T::MaxRounds::get().saturating_mul(T::MaxGroupSize::get())
+	}
+
+	/// The number of credit slots any game of this runtime can use, the report slots followed by
+	/// the tenure credit slots.
+	pub(crate) fn max_credit_slots() -> u32 {
+		Self::max_report_credit_slots()
+			.saturating_add(<T as indiv_pallet_game::Config>::MaxTenureThresholds::get())
+	}
+
+	/// The [`AwardedNftClaimCredits`] slot of the tenure credit for the tenure threshold at
+	/// `index`.
+	///
+	/// Tenure credit slots start after the last report slot, so the two kinds never share a slot.
+	pub fn tenure_credit_slot(index: u32) -> CreditSlot {
+		Self::max_report_credit_slots().saturating_add(index)
+	}
+
+	/// Compute the NFT claim credit for the tenure threshold at `index` in a game.
+	///
+	/// Blake2 256 hash of
+	/// ```txt
+	/// "polkadot-pop-tenure" ++ game index ++ threshold index ++ claimant
+	/// ```
+	/// - `game_index` and `index`: unsigned 32bit.
+	/// - `claimant`: 0 ++ account id, or 1 ++ person id.
+	pub fn compute_tenure_credit(
+		game_index: GameIdx,
+		index: u32,
+		claimant: &AccountOrPerson<T::AccountId>,
+	) -> NftClaimCredit {
+		(TENURE_CREDIT_PREFIX, game_index, index, claimant)
+			.using_encoded(sp_io::hashing::blake2_256)
 	}
 
 	/// Compute the NFT claim credit for a successful report.
 	///
 	/// Blake2 256 hash of
 	/// ```txt
-	/// "polkadot-pop-game" ++ game index ++ attester ++ attestee ++ round
+	/// "polkadot-pop-game" ++ game index ++ round ++ attester ++ attestee
 	/// ```
 	/// - `game_index`: unsigned 32bit.
 	/// - `attester` and `attestee`:
@@ -922,7 +972,7 @@ impl<T: Config> Pallet<T> {
 		attester: &AccountOrPerson<T::AccountId>,
 		attestee: &AccountOrPerson<T::AccountId>,
 	) -> NftClaimCredit {
-		(b"polkadot-pop-game", game_index, round, attester, attestee)
+		(REPORT_CREDIT_PREFIX, game_index, round, attester, attestee)
 			.using_encoded(sp_io::hashing::blake2_256)
 	}
 
@@ -970,8 +1020,8 @@ impl<T: Config> Pallet<T> {
 		award_time: u32,
 	) -> u32 {
 		if !AwardedCredits::within_capacity(credit_slot) {
-			// `credit_slot` is below `max_received_votes()`, which the `integrity_test`
-			// holds to the mask's capacity, so this cannot be reached.
+			// `credit_slot` is a report or tenure credit slot, and the `integrity_test` holds both
+			// kinds to the mask's capacity, so this cannot be reached.
 			defensive!("indiv-pallet-nft-credits: credit slot must fit the awarded credit mask");
 			return 0;
 		}
@@ -1148,7 +1198,9 @@ impl<T: Config> Pallet<T> {
 	/// One tree a block, over at most [`CHUNKS_PER_TREE`] chunks of awards, bounds this hook. Each
 	/// tree stands alone. It is built once, from a complete leaf set, so no root grows over time
 	/// and no inclusion proof can go stale. The awards it was built over stay for the retained
-	/// window, so a claim can be proven from state; the root itself is never removed.
+	/// window, so a claim can be proven from state. The root stays until the claims chain reports
+	/// the tree finished, in [`Pallet::receive_tree_deletions`], or until
+	/// [`Pallet::sweep_expired_roots`] removes it once [`Pallet::root_ttl`] has passed.
 	///
 	/// Every root recorded is also queued for delivery to the NFT claims chain, which the
 	/// offchain worker then ships (see [`Pallet::send_credit_trees`]).
@@ -1591,6 +1643,27 @@ impl<T: Config> Pallet<T> {
 			.collect::<Vec<_>>()
 	}
 
+	/// Every block in the [`NftClaimCreditBlocks`] index of `claimant`, with the state of its tree.
+	///
+	/// A block without a root is pending while [`CreditBuffers`] still holds it. Otherwise its
+	/// root is removed.
+	pub fn nft_claim_credit_blocks(
+		claimant: &AccountOrPerson<T::AccountId>,
+	) -> Vec<(BlockNumberFor<T>, NftClaimCreditBlockState)> {
+		NftClaimCreditBlocks::<T>::get(claimant)
+			.into_iter()
+			.map(|block| {
+				let state = match NftClaimCreditRoots::<T>::get(block) {
+					Some(tree) => NftClaimCreditBlockState::Committed(tree),
+					None if CreditBuffers::<T>::contains_key(block) =>
+						NftClaimCreditBlockState::Pending,
+					None => NftClaimCreditBlockState::Removed,
+				};
+				(block, state)
+			})
+			.collect::<Vec<_>>()
+	}
+
 	/// Award every NFT claim credit a freshly-attended `attendee` is entitled to for the
 	/// current game.
 	///
@@ -1692,12 +1765,15 @@ impl<T: Config> Pallet<T> {
 			queued[..taken].iter().map(|(sequence, block)| (Some(*sequence), *block)),
 		);
 
-		// The blocks the message delivers, in sequence order, which the event carries so that a
-		// gap the claims chain reports can be turned back into the block a replay needs.
-		// Truncation is unreachable: `updates` came out of `queued[..taken]`, which
-		// `message_capacity` already held to this very bound.
+		// The sequence and block of each delivery, which the event carries so that a gap the
+		// claims chain reports resolves to the blocks a replay needs. Every queued delivery
+		// carries a sequence. Truncation is unreachable: `updates` comes from `queued[..taken]`,
+		// and `message_capacity` holds `taken` to this bound.
 		let sent = BoundedVec::<_, T::MaxCreditTreesPerMessage>::truncate_from(
-			updates.iter().map(|update| update.block).collect::<Vec<_>>(),
+			updates
+				.iter()
+				.filter_map(|update| update.sequence.map(|sequence| (sequence, update.block)))
+				.collect::<Vec<_>>(),
 		);
 
 		// An empty batch means every queued block has lost its tree in the meantime, so there
@@ -1730,7 +1806,7 @@ impl<T: Config> Pallet<T> {
 		blocks: BoundedVec<BlockNumberFor<T>, T::MaxCreditTreesPerMessage>,
 	) -> DispatchResult {
 		ensure!(!blocks.is_empty(), Error::<T>::NoBlocksToReplay);
-		ensure!(blocks.windows(2).all(|w| w[0] < w[1]), Error::<T>::UnsortedReplayBlocks);
+		ensure!(blocks.is_sorted_by(|a, b| a < b), Error::<T>::UnsortedReplayBlocks);
 
 		let message_capacity =
 			Self::max_credit_trees_per_message().ok_or(Error::<T>::ExceedsClaimsChannelCapacity)?;
@@ -1982,12 +2058,13 @@ impl<T: Config> Pallet<T> {
 	pub(crate) fn integrity_test_credits() {
 		// Every credit a claimant can earn in a game needs its own slot in
 		// `AwardedNftClaimCredits`, otherwise the overflowing ones would be awarded twice,
-		// once by `report` and once by the attendance backfill.
+		// once by `report` and once by the attendance backfill. Tenure credit slots come after the
+		// report slots.
+		let slots = Self::max_credit_slots();
 		assert!(
-			Self::max_credit_slots() <= AwardedCredits::CAPACITY,
+			slots <= AwardedCredits::CAPACITY,
 			"a game uses up to {slots} credit slots per claimant, more than the {capacity} \
 		of `AwardedNftClaimCredits`",
-			slots = Self::max_credit_slots(),
 			capacity = AwardedCredits::CAPACITY,
 		);
 
@@ -1999,6 +2076,16 @@ impl<T: Config> Pallet<T> {
 			e_max <= buffered,
 			"one `report` awards up to {e_max} credits, more than the {buffered} the credit \
 		buffers hold",
+		);
+
+		// The attendance backfill processes a player only while the buffers hold their report
+		// credits and their tenure credits. Below that, the game never ends.
+		let per_player =
+			e_max.saturating_add(<T as indiv_pallet_game::Config>::MaxTenureThresholds::get());
+		assert!(
+			per_player <= buffered,
+			"the attendance backfill awards one player up to {per_player} credits, more than the \
+		{buffered} the credit buffers hold",
 		);
 
 		// Empty buffers must also absorb a whole block of such reports, which is the state an idle
@@ -2169,16 +2256,34 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 		)
 	}
 
+	fn award_tenure_credits(
+		game_index: GameIdx,
+		player: &AccountOrPerson<T::AccountId>,
+		count: u32,
+		award_time: u32,
+	) -> u32 {
+		let awarded = AwardedNftClaimCredits::<T>::get(game_index, player);
+		(0..count)
+			.filter(|&index| !awarded.contains(Self::tenure_credit_slot(index)))
+			.take(Self::remaining_credit_capacity(game_index) as usize)
+			.map(|index| {
+				Self::award_nft_claim_credit(
+					game_index,
+					player,
+					Self::compute_tenure_credit(game_index, index, player),
+					Self::tenure_credit_slot(index),
+					award_time,
+				)
+			})
+			.sum()
+	}
+
 	fn remaining_capacity(game_index: GameIdx) -> u32 {
 		Self::remaining_credit_capacity(game_index)
 	}
 
-	fn clear_game_credits(
-		game_index: GameIdx,
-		limit: u32,
-		cursor: Option<&[u8]>,
-	) -> Option<Vec<u8>> {
-		AwardedNftClaimCredits::<T>::clear_prefix(game_index, limit, cursor).maybe_cursor
+	fn clear_game_credits(game_index: GameIdx, limit: u32) -> MultiRemovalResults {
+		AwardedNftClaimCredits::<T>::clear_prefix(game_index, limit, None)
 	}
 
 	fn forget_player_credits(game_index: GameIdx, player: &AccountOrPerson<T::AccountId>) {
@@ -2188,5 +2293,23 @@ impl<T: Config> AwardCredits<T::AccountId> for Pallet<T> {
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_award_every_slot(game_index: GameIdx, player: &AccountOrPerson<T::AccountId>) {
 		AwardedNftClaimCredits::<T>::insert(game_index, player, AwardedCredits::FULL);
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_fill_buffer_but_one(game_index: GameIdx) {
+		let block = frame_system::Pallet::<T>::block_number();
+		let timestamp = T::UnixTime::now().as_secs() as u32;
+		let filler = AWARDS_PER_TREE - 1;
+		for chunk in 0..filler.div_ceil(AWARDS_PER_CHUNK) {
+			let awards = (chunk * AWARDS_PER_CHUNK..filler.min((chunk + 1) * AWARDS_PER_CHUNK))
+				.map(|i| NftClaimCreditAward {
+					claimant: AccountOrPerson::Person(sp_io::hashing::blake2_256(&i.encode())),
+					credit: sp_io::hashing::blake2_256(&(i, b"filler").encode()),
+				})
+				.collect::<Vec<_>>();
+			NftClaimCreditAwards::<T>::insert(block, chunk, BoundedVec::truncate_from(awards));
+		}
+		CreditBuffers::<T>::insert(block, CreditBuffer { game_index, timestamp, awards: filler });
+		CreditBufferCursor::<T>::put(block);
 	}
 }

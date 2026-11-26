@@ -31,7 +31,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          compatibility=$(jq -c '[.[] | select(test("^C[0-9]+-"))]' <<<"$LABELS")
+          # The level can have a decimal part, as in `C0.5-breaking-client-api`.
+          compatibility=$(jq -c '[.[] | select(test("^C[0-9]+([.][0-9]+)?-"))]' <<<"$LABELS")
           count=$(jq 'length' <<<"$compatibility")
           names=$(jq -r 'join(", ")' <<<"$compatibility")
 

@@ -8,7 +8,8 @@
 # A line carries the pull request's audit label (`D<n>-`, tracked in issue
 # #54) and compatibility label (`C<n>-`, tracked in issue #56) when present.
 # The output ends with the overall compatibility of the range: the highest
-# `C<n>-` label of any listed pull request.
+# `C<n>-` label of any listed pull request. The level `<n>` can have a decimal
+# part, as in `C0.5-breaking-client-api`.
 #
 # Requires GH_TOKEN and GITHUB_REPOSITORY in the environment.
 
@@ -44,12 +45,12 @@ for n in $numbers; do
 	pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$n" 2> /dev/null) || continue
 	jq -r '
 		def tags(re): [.labels[].name | select(test(re))] | map(" `\(.)`") | add // "";
-		"- #\(.number) \(.title)" + tags("^D[0-9]+-") + tags("^C[0-9]+-")
+		"- #\(.number) \(.title)" + tags("^D[0-9]+-") + tags("^C[0-9]+([.][0-9]+)?-")
 	' <<< "$pr"
-	c_labels+=$(jq -r '[.labels[].name | select(test("^C[0-9]+-"))] | join("\n")' <<< "$pr")$'\n'
+	c_labels+=$(jq -r '[.labels[].name | select(test("^C[0-9]+([.][0-9]+)?-"))] | join("\n")' <<< "$pr")$'\n'
 done
 
-overall=$(printf '%s' "$c_labels" | grep -E '^C[0-9]+-' | sort -uV | tail -n1) || true
+overall=$(printf '%s' "$c_labels" | grep -E '^C[0-9]+([.][0-9]+)?-' | sort -uV | tail -n1) || true
 if [ -n "$overall" ]; then
 	printf '\nOverall compatibility: `%s`, the highest label of any pull request above.\n' "$overall"
 fi

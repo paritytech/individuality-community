@@ -325,3 +325,240 @@ fn usage_is_stamped_with_the_relay_chain_block_number() {
 		assert_eq!(usage.at_block, RELAY_BLOCK_GENESIS + 8);
 	});
 }
+
+/// An entity without a usage record has no usage.
+#[test]
+fn allowance_status_without_usage_record() {
+	new_test_ext().execute_with(|| {
+		advance_by(1);
+
+		assert_eq!(
+			OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A),
+			AllowanceStatus {
+				max: MAX_ALLOWANCE,
+				used: 0,
+				recovery_per_block: ALLOWANCE_RECOVERY_PER_BLOCK,
+				now: RELAY_BLOCK_GENESIS + 1,
+				fully_recovered_at: Some(RELAY_BLOCK_GENESIS + 1),
+			}
+		);
+	});
+}
+
+/// The status applies the recovery since the last transaction. The extension charges the next
+/// transaction on top of the usage the status reports.
+#[test]
+fn allowance_status_applies_recovery() {
+	new_test_ext().execute_with(|| {
+		advance_by(1);
+
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+		let recorded = Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap();
+		let fee = recorded.used;
+		assert!(fee > 2 * ALLOWANCE_RECOVERY_PER_BLOCK);
+		let fully_recovered_at =
+			Some(RELAY_BLOCK_GENESIS + 1 + fee.div_ceil(ALLOWANCE_RECOVERY_PER_BLOCK));
+
+		// In the block of the transaction, nothing is recovered.
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert_eq!(status.used, fee);
+		assert_eq!(status.fully_recovered_at, fully_recovered_at);
+
+		// The usage recovers with the blocks. The block of the full recovery stays the same.
+		advance_relay_by(2);
+		let used = fee - 2 * ALLOWANCE_RECOVERY_PER_BLOCK;
+		assert_eq!(
+			OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A),
+			AllowanceStatus {
+				max: MAX_ALLOWANCE,
+				used,
+				recovery_per_block: ALLOWANCE_RECOVERY_PER_BLOCK,
+				now: RELAY_BLOCK_GENESIS + 3,
+				fully_recovered_at,
+			}
+		);
+		// The view function does not write the recovery to storage.
+		assert_eq!(Usages::<Test>::get(RuntimeRestrictedEntity::A), Some(recorded));
+
+		// The extension starts from the same usage.
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+		assert_eq!(Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap().used, used + fee);
+	});
+}
+
+/// The usage reaches zero exactly at the reported block. The stale record stays in storage.
+#[test]
+fn allowance_status_reports_block_of_full_recovery() {
+	new_test_ext().execute_with(|| {
+		advance_by(1);
+
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		let fully_recovered_at = status.fully_recovered_at.unwrap();
+		assert!(fully_recovered_at > status.now + 1);
+
+		advance_relay_by(fully_recovered_at - status.now - 1);
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert!(status.used > 0);
+		assert_eq!(status.fully_recovered_at, Some(fully_recovered_at));
+
+		advance_relay_by(1);
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert_eq!(status.used, 0);
+		assert_eq!(status.now, fully_recovered_at);
+		assert_eq!(status.fully_recovered_at, Some(fully_recovered_at));
+		assert!(Usages::<Test>::get(RuntimeRestrictedEntity::A).is_some());
+
+		// After the full recovery, the reported block is the current one.
+		advance_relay_by(1_000);
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert_eq!(status.used, 0);
+		assert_eq!(status.fully_recovered_at, Some(fully_recovered_at + 1_000));
+	});
+}
+
+/// The count of blocks to the full recovery is the usage divided by the recovery, rounded up. A
+/// usage that is a multiple of the recovery needs no extra block.
+#[test]
+fn allowance_status_rounds_up_blocks_to_full_recovery() {
+	new_test_ext().execute_with(|| {
+		advance_by(1);
+
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+		let used = Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap().used;
+		assert!(used > 2);
+
+		let now = RELAY_BLOCK_GENESIS + 1;
+		let fully_recovered_at_with_recovery = |recovery: u64| {
+			MockRecoveryPerBlock::set(&recovery);
+			OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A).fully_recovered_at
+		};
+
+		assert_eq!(fully_recovered_at_with_recovery(used + 1), Some(now + 1));
+		assert_eq!(fully_recovered_at_with_recovery(used), Some(now + 1));
+		assert_eq!(fully_recovered_at_with_recovery(used - 1), Some(now + 2));
+		assert_eq!(fully_recovered_at_with_recovery(1), Some(now + used));
+
+		// One block at a recovery equal to the usage recovers it all.
+		MockRecoveryPerBlock::set(&used);
+		advance_relay_by(1);
+		assert_eq!(OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A).used, 0);
+	});
+}
+
+/// After a one-time excess the status reports a usage above the maximum.
+#[test]
+fn allowance_status_after_one_time_excess() {
+	new_test_ext().execute_with(|| {
+		advance_by(1);
+
+		assert_ok!(exec_signed_tx(
+			RESTRICTED_ORIGIN_1,
+			MockPalletCall::do_something_allowed_excess {}
+		));
+		let used = Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap().used;
+		assert!(used > MAX_ALLOWANCE);
+
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert_eq!(status.max, MAX_ALLOWANCE);
+		assert_eq!(status.used, used);
+		assert_eq!(
+			status.fully_recovered_at,
+			Some(status.now + used.div_ceil(ALLOWANCE_RECOVERY_PER_BLOCK))
+		);
+	});
+}
+
+/// An entity with a maximum of zero transacts only with the one-time excess, which requires a
+/// usage of zero. Its status tells the block at which the usage is zero.
+#[test]
+fn allowance_status_with_zero_max() {
+	new_test_ext().execute_with(|| {
+		MockAllowanceMax::set(&0);
+		advance_by(1);
+
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert_eq!(status.max, 0);
+		assert_eq!(status.used, 0);
+		assert_eq!(status.fully_recovered_at, Some(status.now));
+
+		assert_ok!(exec_signed_tx(
+			RESTRICTED_ORIGIN_1,
+			MockPalletCall::do_something_allowed_excess {}
+		));
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert!(status.used > 0);
+		let fully_recovered_at = status.fully_recovered_at.unwrap();
+		assert!(fully_recovered_at > status.now);
+
+		// The one-time excess is available again exactly at the reported block.
+		advance_relay_by(fully_recovered_at - status.now - 1);
+		assert_noop!(
+			exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something_allowed_excess {}),
+			InvalidTransaction::Payment
+		);
+		advance_relay_by(1);
+		assert_eq!(OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A).used, 0);
+		assert_ok!(exec_signed_tx(
+			RESTRICTED_ORIGIN_1,
+			MockPalletCall::do_something_allowed_excess {}
+		));
+	});
+}
+
+/// With a recovery of zero, a usage that is not zero never recovers.
+#[test]
+fn allowance_status_with_zero_recovery() {
+	new_test_ext().execute_with(|| {
+		MockRecoveryPerBlock::set(&0);
+		advance_by(1);
+
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert_eq!(status.recovery_per_block, 0);
+		assert_eq!(status.fully_recovered_at, Some(status.now));
+
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+		let used = Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap().used;
+
+		advance_relay_by(1_000);
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert_eq!(status.used, used);
+		assert_eq!(status.fully_recovered_at, None);
+	});
+}
+
+/// The status keeps a usage that does not fit in a `u32`.
+#[test]
+fn allowance_status_with_usage_above_u32() {
+	new_test_ext().execute_with(|| {
+		let recovery = 300_000_000;
+		MockAllowanceMax::set(&(2 * CALL_WEIGHT_HEAVY));
+		MockRecoveryPerBlock::set(&recovery);
+		advance_by(1);
+
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something_heavy {}));
+		let used = Usages::<Test>::get(RuntimeRestrictedEntity::A).unwrap().used;
+		assert!(used > u64::from(u32::MAX));
+
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert_eq!(status.used, used);
+		assert_eq!(status.fully_recovered_at, Some(status.now + used.div_ceil(recovery)));
+
+		advance_relay_by(1);
+		let status = OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A);
+		assert_eq!(status.used, used - recovery);
+	});
+}
+
+/// Each entity has its own status.
+#[test]
+fn allowance_status_is_entity_specific() {
+	new_test_ext().execute_with(|| {
+		advance_by(1);
+
+		assert_ok!(exec_signed_tx(RESTRICTED_ORIGIN_1, MockPalletCall::do_something {}));
+
+		assert!(OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::A).used > 0);
+		assert_eq!(OriginsRestriction::get_allowance_status(RuntimeRestrictedEntity::B).used, 0);
+	});
+}
