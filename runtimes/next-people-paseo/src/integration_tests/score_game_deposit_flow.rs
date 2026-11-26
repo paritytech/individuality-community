@@ -277,7 +277,7 @@ fn deposit_player_flow() {
 		// ─────────────────────────────────────
 		// Mint funds to Bob
 		// ─────────────────────────────────────
-		Balances::mint_into(&bob.clone(), 10 * UNITS).unwrap();
+		Balances::mint_into(&bob.clone(), PlayDepositDefault::get() + 10 * UNITS).unwrap();
 
 		// ─────────────────────────────────────
 		// Bob sign-up for game #1. No airdrop entry here — Game #7 is the one carrying
@@ -357,6 +357,8 @@ fn deposit_player_flow() {
 		// ─────────────────────────────────────
 		// Alice funds Bob again exactly for a new deposit
 		// ─────────────────────────────────────
+		Balances::mint_into(&Sr25519Keyring::Alice.to_account_id(), PlayDepositDefault::get())
+			.unwrap();
 		let transfer = pallet_balances::Call::<Runtime>::transfer_keep_alive {
 			dest: Address::Id(bob.clone()),
 			value: PlayDepositDefault::get(),

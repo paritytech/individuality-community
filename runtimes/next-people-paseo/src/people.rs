@@ -624,7 +624,7 @@ impl indiv_pallet_score::Config for Runtime {
 parameter_types! {
 	pub const PlayDepositReason: RuntimeHoldReason =
 		RuntimeHoldReason::Game(indiv_pallet_game::HoldReason::PlayDeposit);
-	pub const PlayDepositDefault: Balance = 2 * UNITS;
+	pub const PlayDepositDefault: Balance = 1_000_000_000 * UNITS;
 	// TODO(paritytech/individuality#1124): find a reasonable value.
 	pub PlayerStatementLimit: StatementAllowance = StatementAllowance {
 		max_size: 1_000_000,
@@ -1226,7 +1226,9 @@ impl
 
 	fn fund_account(acc: AccountId) {
 		use frame_support::traits::Currency;
-		let balance = 1_000_000_000_000_000u128;
+		// Enough to place the play deposit and keep a spendable balance.
+		let balance = indiv_pallet_game::PlayDepositAmount::<Runtime>::get()
+			.saturating_add(1_000_000_000_000_000u128);
 		let _ = Balances::make_free_balance_be(&acc, balance);
 	}
 
