@@ -3954,24 +3954,20 @@ pub mod pallet {
 		/// Call it at most once per block. A second call in the same block walks the same keys
 		/// again, so continue a [`StepResult::Continue`] in a later block.
 		///
-		/// The chunks used count only the keys walked in the index maps, because
-		/// `clear_game_credits` does not report its walk. A claimant holds one credit entry and
-		/// one `IndexToPlayer` entry per round, so the index maps walk at least as many keys.
-		///
 		/// The awarded-credit slots go with the maps, being positions in groups only those maps
 		/// resolve. Step 1 has finished the attendance backfill by now, so no award can name
 		/// this game again and the slots have no reader left.
 		pub(crate) fn clear_index_chunks(game_index: GameIdx, chunks: u32) -> ChunkedClear {
 			let limit = chunks.saturating_mul(PLAYER_PROCESS_STEP2_CHUNK);
-			let mut cleared = ChunkedClear::from_removals(
-				&[IndexToPlayer::<T>::clear(limit, None), PlayerToIndex::<T>::clear(limit, None)],
+			ChunkedClear::from_removals(
+				&[
+					IndexToPlayer::<T>::clear(limit, None),
+					PlayerToIndex::<T>::clear(limit, None),
+					T::NftClaimCredits::clear_game_credits(game_index, limit),
+				],
 				PLAYER_PROCESS_STEP2_CHUNK,
 				chunks,
-			);
-			if T::NftClaimCredits::clear_game_credits(game_index, limit, None).is_some() {
-				cleared.result = StepResult::Continue;
-			}
-			cleared
+			)
 		}
 
 		pub(crate) fn player_process_step2(weight_meter: &mut WeightMeter) {

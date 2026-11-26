@@ -190,7 +190,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 3_005_000,
+	spec_version: 3_006_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 22,
@@ -3173,11 +3173,7 @@ pub mod migrations {
 	pub type SingleBlockMigrations = (Unreleased, Permanent);
 
 	/// MBM migrations to apply on runtime upgrade.
-	pub type MbmMigrations = (
-		pallet_revive::migrations::v3::Migration<Runtime>,
-		pallet_revive::migrations::v4::Migration<Runtime>,
-		indiv_pallet_scarcity::migration::v3::MigrateToLocations<Runtime>,
-	);
+	pub type MbmMigrations = (indiv_pallet_scarcity::migration::v3::MigrateToLocations<Runtime>,);
 }
 
 /// Executive: handles dispatch to the various modules.

@@ -24,16 +24,18 @@
 use crate::{mock::*, *};
 use frame_support::{
 	assert_noop, assert_ok,
+	dispatch::PostDispatchInfo,
 	traits::{Hooks, OffchainWorker},
 	BoundedVec,
 };
 use indiv_pallet_game::{
-	EarlyAttendanceEnactment, FullReport, Game as GameStore, GameSchedule, GameState, GameTimes,
-	GroupsSetting, IndexToPlayer, PlayerProcessStep, PlayerToIndex, Players, Report,
+	EarlyAttendanceEnactment, FullReport, Game as GameStore, GameInfo, GameSchedule, GameState,
+	GameTimes, GroupsSetting, IndexToPlayer, PlayerProcessStep, PlayerToIndex, Players, Report,
+	WeightInfo as GameWeightInfo,
 };
 use indiv_pallet_score::AccountOrPerson;
 use sp_core::{bounded_vec, H256};
-use sp_runtime::AccountId32;
+use sp_runtime::{traits::Dispatchable, AccountId32};
 use std::time::Duration;
 
 const ALICE: AccountId32 = AccountId32::new(*b"10______________________________");
@@ -1495,6 +1497,125 @@ fn every_credit_of_a_multi_round_game_is_awarded_exactly_once() {
 		}
 		assert_eq!(awarded_credit_count(), players.len() * expected);
 		assert_eq!(committed_leaf_count() as usize, players.len() * expected);
+	});
+}
+
+/// Stores one awarded credit entry for each of `players` players of game `game_index`.
+fn put_awarded_credits(game_index: GameIdx, players: u32) {
+	let mut credits = AwardedCredits::default();
+	credits.insert(0);
+	for i in 0..players {
+		let mut alias = [0u8; 32];
+		let i_bytes = i.to_le_bytes();
+		alias[..i_bytes.len()].copy_from_slice(&i_bytes);
+		let player = AccountOrPerson::<AccountId32>::Person(alias);
+		AwardedNftClaimCredits::<Test>::insert(game_index, player, credits);
+	}
+}
+
+/// `clear_game_credits` reports the entries that it clears and whether entries remain.
+///
+/// The test commits the entries first. A clear with a limit removes every uncommitted entry in one
+/// pass, so the limit only applies to committed entries.
+#[test]
+fn clear_game_credits_reports_the_entries_it_clears() {
+	let mut ext = new_test_ext();
+	ext.execute_with(|| {
+		put_awarded_credits(0, 250);
+		put_awarded_credits(7, 3);
+	});
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let cleared = <NftCredits as AwardCredits<AccountId32>>::clear_game_credits(0, 100);
+		assert_eq!(cleared.loops, 100);
+		assert!(cleared.maybe_cursor.is_some(), "entries remain");
+		assert_eq!(AwardedNftClaimCredits::<Test>::iter_prefix(0).count(), 150);
+	});
+	// The next clear runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let cleared = <NftCredits as AwardCredits<AccountId32>>::clear_game_credits(0, 200);
+		assert_eq!(cleared.loops, 150);
+		assert!(cleared.maybe_cursor.is_none(), "no entry remains");
+		assert_eq!(AwardedNftClaimCredits::<Test>::iter_prefix(0).count(), 0);
+		assert_eq!(
+			AwardedNftClaimCredits::<Test>::iter_prefix(7).count(),
+			3,
+			"the entries of another game stay"
+		);
+	});
+}
+
+/// Step 2 of the player process charges the chunks of credit entries that it clears. The game
+/// continues while it holds credit entries, also when the index maps are empty.
+#[test]
+fn process_players_clears_the_credit_entries_in_chunks() {
+	type GameWeight = <Test as indiv_pallet_game::Config>::WeightInfo;
+	let step_weight = |chunks: u64| {
+		GameWeight::game_step_base()
+			.saturating_add(GameWeight::player_process_step2())
+			.saturating_add(GameWeight::player_process_step2_inner_loop().saturating_mul(chunks))
+	};
+	let process_players = || -> PostDispatchInfo {
+		RuntimeCall::Game(indiv_pallet_game::Call::process_players {
+			game_index: 0,
+			discriminator: 0,
+		})
+		.dispatch(frame_system::RawOrigin::Authorized.into())
+		.expect("the step runs")
+	};
+
+	let mut ext = new_test_ext();
+	ext.execute_with(|| {
+		GameStore::<Test>::put(GameInfo {
+			index: 0,
+			registration_ends: 0,
+			shuffle_deadline: 0,
+			game_date: 0,
+			report_ends: 0,
+			state: GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices },
+			max_group_size: 2,
+			rounds: 1,
+			pending_attendance: 0,
+			airdrops_scheduled: 0,
+			tenure_claim_opens: 0,
+		});
+		put_awarded_credits(0, 250);
+		put_awarded_credits(7, 3);
+		// The index maps hold fewer entries than the credits. The first step clears them.
+		for i in 0..30u32 {
+			let player = AccountOrPerson::<AccountId32>::Person([i as u8; 32]);
+			IndexToPlayer::<Test>::insert((0u8, i), &player);
+			PlayerToIndex::<Test>::insert(&player, BoundedVec::truncate_from(vec![i]));
+		}
+		// The step budget is half of the block weight. It covers 2 chunks.
+		MockBlockWeight::set(&Some(step_weight(2).saturating_mul(2)));
+	});
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let post = process_players();
+		assert_eq!(post.actual_weight, Some(step_weight(2)));
+		assert_eq!(AwardedNftClaimCredits::<Test>::iter_prefix(0).count(), 50);
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert!(GameStore::<Test>::get().is_some(), "the game continues");
+	});
+	// The next step runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let post = process_players();
+		assert_eq!(post.actual_weight, Some(step_weight(1)));
+		assert_eq!(AwardedNftClaimCredits::<Test>::iter_prefix(0).count(), 0);
+		assert_eq!(
+			AwardedNftClaimCredits::<Test>::iter_prefix(7).count(),
+			3,
+			"the entries of another game stay"
+		);
+		assert!(GameStore::<Test>::get().is_none(), "the game is removed");
 	});
 }
 
