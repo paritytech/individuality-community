@@ -31,6 +31,7 @@ use frame_support::{
 };
 use scale_info::TypeInfo;
 use sp_core::H256;
+use sp_io::MultiRemovalResults;
 use sp_runtime::{
 	transaction_validity::{
 		InvalidTransaction, TransactionSource, TransactionValidityError, ValidTransaction,
@@ -376,9 +377,12 @@ pub trait AwardCredits<AccountId> {
 	/// game's credits is not room for `game_index`'s.
 	fn remaining_capacity(game_index: u32) -> u32;
 
-	/// Clear up to `limit` of `game_index`'s awarded-credit slots, resuming from `cursor`.
-	/// Returns where to resume, or `None` once the game has none left.
-	fn clear_game_credits(game_index: u32, limit: u32, cursor: Option<&[u8]>) -> Option<Vec<u8>>;
+	/// Clears up to `limit` awarded-credit entries of `game_index`.
+	///
+	/// Call it at most once per block for a game, because a second call walks the same entries
+	/// again. The result's `loops` is at most `limit`, and `maybe_cursor` is `None` once the
+	/// game has no entry left.
+	fn clear_game_credits(game_index: u32, limit: u32) -> MultiRemovalResults;
 
 	/// Give up the awarded-credit slots `player` holds in `game_index`.
 	fn forget_player_credits(game_index: u32, player: &AccountOrPerson<AccountId>);
@@ -430,8 +434,8 @@ impl<AccountId> AwardCredits<AccountId> for () {
 		u32::MAX
 	}
 
-	fn clear_game_credits(_: u32, _: u32, _: Option<&[u8]>) -> Option<Vec<u8>> {
-		None
+	fn clear_game_credits(_: u32, _: u32) -> MultiRemovalResults {
+		MultiRemovalResults { maybe_cursor: None, backend: 0, unique: 0, loops: 0 }
 	}
 
 	fn forget_player_credits(_: u32, _: &AccountOrPerson<AccountId>) {}

@@ -15,15 +15,12 @@
 // limitations under the License.
 
 //! Label (username) format validators.
-//!
-//! Mirrors `StringUtils._isDnsLabel` and `StringUtils.isLitePersonLabel` from
-//! the `paritytech/dotns` contracts so that names produced on chain round-trip
-//! into dotNS without format changes.
 
 /// Minimum number of trailing digits required in a lite-person PoP label
 /// suffix (the part after the `.`).
 ///
-/// Must match `StringUtils.MIN_LITE_SUFFIX_DIGITS` on the contract side.
+/// dotNS `StringUtils.DEVICE_SUFFIX_DIGITS` has the same value but requires
+/// exactly that many digits.
 pub const MIN_LITE_USERNAME_DIGITS: usize = 2;
 
 /// Returns whether `bytes` is a stricter "person" label: non-empty and only
@@ -37,8 +34,8 @@ pub fn is_person_label(bytes: &[u8]) -> bool {
 /// Returns whether `bytes` matches the lite-person PoP label format
 /// `<dns-stem>.<digits{MIN_LITE_USERNAME_DIGITS,}>` (e.g. `alice.42`).
 ///
-/// Mirrors `StringUtils.isLitePersonLabel`: exactly one `.`, a DNS-valid
-/// stem before it, and at least `MIN_LITE_USERNAME_DIGITS` ASCII digits after.
+/// The label has exactly one `.`, a DNS-valid stem before it and at least
+/// `MIN_LITE_USERNAME_DIGITS` ASCII digits after it.
 pub fn is_lite_person_label(bytes: &[u8]) -> bool {
 	let length = bytes.len();
 	// Shortest valid label is `x.NN` with `NN` being `MIN_LITE_USERNAME_DIGITS` digits.
