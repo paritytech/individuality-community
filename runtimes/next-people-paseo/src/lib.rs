@@ -311,7 +311,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	spec_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	impl_name: alloc::borrow::Cow::Borrowed("next-people-paseo"),
 	authoring_version: 1,
-	spec_version: 3_004_000,
+	spec_version: 3_006_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 7,
@@ -1017,6 +1017,7 @@ impl ContainsPair<RestrictedEntity, RuntimeCall> for OperationAllowedOneTimeExce
 						RuntimeCall::Game(sign_up_with_account { .. }) |
 						RuntimeCall::Game(report { .. }) |
 						RuntimeCall::Game(claim_tenure_credits { .. }) |
+						RuntimeCall::Game(unregister { .. }) |
 						RuntimeCall::Game(offboard { .. }) |
 						RuntimeCall::Game(claim_airdrop { .. })
 				)
@@ -1751,6 +1752,7 @@ impl_runtime_apis! {
 		}
 	}
 
+	#[api_version(2)]
 	impl indiv_pallet_nft_credits::runtime_api::NftCreditsApi<Block, AccountId, BlockNumber> for Runtime {
 		fn nft_claim_credit_roots(
 			claimant: indiv_support::identity::AccountOrPerson<AccountId>,
@@ -1771,6 +1773,12 @@ impl_runtime_apis! {
 			leaf_index: u32,
 		) -> Result<indiv_pallet_nft_credits::NftClaimCreditProof, indiv_pallet_nft_credits::NftClaimCreditProofError> {
 			NftCredits::nft_claim_credit_proof_from_awards(tree_block, awards, leaf_index)
+		}
+
+		fn nft_claim_credit_blocks(
+			claimant: indiv_support::identity::AccountOrPerson<AccountId>,
+		) -> Vec<(BlockNumber, indiv_pallet_nft_credits::NftClaimCreditBlockState)> {
+			NftCredits::nft_claim_credit_blocks(&claimant)
 		}
 	}
 

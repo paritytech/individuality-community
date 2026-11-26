@@ -67,7 +67,6 @@ mod benchmarks {
 		DispatcherAddress::<T>::put(H160([0xd0; 20]));
 
 		// 32-byte lite-format label: 29 lowercase letters, a dot, two digits.
-		// Matches `<dns-stem>.<2+ digits>` per `StringUtils.isLitePersonLabel`.
 		let mut lite_bytes = [b'x'; 32];
 		lite_bytes[29] = b'.';
 		lite_bytes[30] = b'4';
@@ -77,7 +76,7 @@ mod benchmarks {
 
 		let chat_key = crate::ChatKey::from([b'k'; 65]);
 
-		// 32-byte single DNS label (lowercase letters only).
+		// 32-byte personhood label (lowercase letters only).
 		let reserved_base_label: Option<crate::BaseLabel> = Some(
 			crate::BaseLabel::try_from([b'y'; 32].to_vec())
 				.map_err(|_| BenchmarkError::Stop("reserved_base_label too long"))?,
@@ -115,7 +114,7 @@ mod benchmarks {
 	#[benchmark]
 	fn register_name() -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
-		// 32-byte single DNS label for the full-person label position.
+		// 32-byte personhood label (lowercase letters only).
 		let label = crate::BaseLabel::try_from([b'x'; 32].to_vec())
 			.map_err(|_| BenchmarkError::Stop("label too long"))?;
 
@@ -150,7 +149,7 @@ mod benchmarks {
 		T::BenchmarkHelper::set_time(1);
 		let revision = T::BenchmarkHelper::setup_ring_root(PEOPLE_IDENTIFIER, 0);
 		let caller: T::AccountId = T::BenchmarkHelper::candidate();
-		// 32-byte single DNS label for the full-person label position.
+		// 32-byte personhood label (lowercase letters only).
 		let label = crate::BaseLabel::try_from([b'x'; 32].to_vec())
 			.map_err(|_| BenchmarkError::Stop("label too long"))?;
 

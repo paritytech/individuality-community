@@ -700,6 +700,21 @@ pub mod pallet {
 		}
 	}
 
+	// ========== View Functions ==========
+
+	#[pallet::view_functions]
+	impl<T: Config> Pallet<T> {
+		/// Returns the current value of [`Config::AliasFee`].
+		pub fn get_alias_fee() -> Option<BalanceOf<T>> {
+			T::AliasFee::get()
+		}
+
+		/// Returns the current value of [`Config::OffchainWorkerInterval`].
+		pub fn get_offchain_worker_interval() -> BlockNumberFor<T> {
+			T::OffchainWorkerInterval::get()
+		}
+	}
+
 	// ========== Extra Constants ==========
 
 	#[pallet::extra_constants]

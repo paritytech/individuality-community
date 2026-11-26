@@ -23,6 +23,7 @@ use frame_support::{
 	assert_noop, assert_ok,
 	dispatch::Pays,
 	traits::{Get, Hooks, OffchainWorker},
+	weights::Weight,
 	BoundedVec,
 };
 use indiv_pallet_people::PEOPLE_MEMBER_IDENTIFIER;
@@ -3154,9 +3155,10 @@ fn offboard_allowed_when_game_in_registration_and_player_not_registered() {
 
 		// Sanity-check: BOB is stored but not registered.
 		let bob_key = AccountOrPerson::Account(BOB);
-		assert!(
-			Players::<Test>::get(&bob_key).is_some_and(|p| !p.registered),
-			"BOB must exist in Players with registered = false"
+		assert_eq!(
+			Players::<Test>::get(&bob_key).map(|p| p.registration),
+			Some(PlayerRegistration::NotRegistered),
+			"BOB must exist in Players and not be registered"
 		);
 
 		// 2. Start a *new* game - still in Registration. ALICE signs up, BOB does *not*.
@@ -4681,7 +4683,7 @@ fn pending_attendance_counts_registered_only() {
 		for acc in [ALICE, BOB, CHARLIE] {
 			let p = Players::<Test>::get(AccountOrPerson::Account(acc))
 				.expect("player still in Players after game 1");
-			assert!(!p.registered);
+			assert_eq!(p.registration, PlayerRegistration::NotRegistered);
 		}
 
 		// Game 2: only DAVE and EVE sign up. The three non-registered players linger
@@ -4772,49 +4774,421 @@ fn reporting_ends_early_when_all_attendance_determined() {
 	});
 }
 
+/// Runs `setup` and commits its storage, as the blocks before a step do.
+///
+/// A `clear` with a limit removes every uncommitted entry in one pass. The limit therefore only
+/// applies to committed entries.
+fn committed_ext(setup: impl FnOnce()) -> sp_io::TestExternalities {
+	let mut ext = new_test_ext();
+	ext.execute_with(setup);
+	ext.commit_all().expect("the test storage commits");
+	ext
+}
+
+/// Puts game 0 in step 2 of the player process, with `index_entries` entries in `IndexToPlayer`
+/// and `player_entries` entries in `PlayerToIndex`.
+fn put_step2_game(index_entries: u32, player_entries: u32) {
+	// Matches `mock::Test`'s `Config::MaxRounds = ConstUint<10>`.
+	let rounds = 10u8;
+	let player = |i: u32| {
+		let mut alias = [0u8; 32];
+		let i_bytes = i.to_le_bytes();
+		alias[..i_bytes.len()].copy_from_slice(&i_bytes);
+		AccountOrPerson::<AccountId32>::Person(alias)
+	};
+	for i in 0..index_entries {
+		IndexToPlayer::<Test>::insert((0u8, i), player(i));
+	}
+	for i in 0..player_entries {
+		let indices = BoundedVec::try_from(vec![i; rounds as usize]).expect("rounds within bound");
+		PlayerToIndex::<Test>::insert(player(i), indices);
+	}
+
+	crate::Game::<Test>::put(GameInfo {
+		index: 0,
+		registration_ends: 0,
+		shuffle_deadline: 0,
+		game_date: 0,
+		report_ends: 0,
+		state: GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices },
+		max_group_size: <Test as Config>::MaxGroupSize::get(),
+		rounds,
+		pending_attendance: 0,
+		airdrops_scheduled: 0,
+		tenure_claim_opens: 0,
+	});
+}
+
+/// The weight of a step 2 call that clears `chunks` chunks.
+fn step2_weight(chunks: u64) -> Weight {
+	<MockWeightInfo as WeightInfo>::player_process_step2().saturating_add(
+		<MockWeightInfo as WeightInfo>::player_process_step2_inner_loop().saturating_mul(chunks),
+	)
+}
+
+/// Step 2 charges its base weight once. A chunk after the first costs the chunk weight only.
 #[test]
 fn player_process_step2_uses_marginal_weight_for_follow_up_chunks() {
-	new_test_ext().execute_with(|| {
-		// Matches `mock::Test`'s `Config::MaxRounds = ConstUint<10>`.
-		let rounds = 10u8;
-		for i in 0..(PLAYER_PROCESS_STEP2_CHUNK + 1) {
-			let mut alias = [0u8; 32];
-			let i_bytes = i.to_le_bytes();
-			alias[..i_bytes.len()].copy_from_slice(&i_bytes);
-			let account_or_person = AccountOrPerson::Person(alias);
-
-			let indices =
-				BoundedVec::try_from(vec![i; rounds as usize]).expect("rounds within bound");
-			PlayerToIndex::<Test>::insert(&account_or_person, indices);
-			IndexToPlayer::<Test>::insert((0u8, i), &account_or_person);
-		}
-
-		crate::Game::<Test>::put(GameInfo {
-			index: 0,
-			registration_ends: 0,
-			shuffle_deadline: 0,
-			game_date: 0,
-			report_ends: 0,
-			state: GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices },
-			max_group_size: <Test as Config>::MaxGroupSize::get(),
-			rounds,
-			pending_attendance: 0,
-			airdrops_scheduled: 0,
-			tenure_claim_opens: 0,
-		});
-
-		let first_chunk_weight = <MockWeightInfo as WeightInfo>::player_process_step2();
-		let marginal_chunk_weight =
-			<MockWeightInfo as WeightInfo>::player_process_step2_inner_loop();
-		let mut meter =
-			WeightMeter::with_limit(first_chunk_weight.saturating_add(marginal_chunk_weight));
+	// One entry more than a chunk holds needs a second chunk.
+	let entries = PLAYER_PROCESS_STEP2_CHUNK + 1;
+	committed_ext(|| put_step2_game(entries, entries)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(2));
 
 		Game::player_process_step2(&mut meter);
 
 		assert!(crate::Game::<Test>::get().is_none());
 		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
 		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert_eq!(meter.consumed(), step2_weight(2));
 	});
+}
+
+/// Step 2 clears every chunk of each index map that its weight covers.
+///
+/// The test commits the entries before the step. A `clear` with a limit removes every uncommitted
+/// entry in one pass, so the limit only applies to committed entries.
+#[test]
+fn player_process_step2_clears_every_chunk_its_weight_covers() {
+	let entries = 3 * PLAYER_PROCESS_STEP2_CHUNK;
+	committed_ext(|| put_step2_game(entries, entries)).execute_with(|| {
+		// The meter covers 10 chunks. The entries need 3.
+		let mut meter = WeightMeter::with_limit(step2_weight(10));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0, "`IndexToPlayer` entries left");
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0, "`PlayerToIndex` entries left");
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// Step 2 charges the chunks of the longest map and refunds the rest of its budget.
+#[test]
+fn player_process_step2_charges_the_chunks_it_clears() {
+	// 250 entries need 3 chunks. The shorter map does not add to the charge. Each map is the
+	// longer map in one case.
+	for (index_entries, player_entries) in [(250, 30), (30, 250)] {
+		committed_ext(|| put_step2_game(index_entries, player_entries)).execute_with(|| {
+			let mut meter = WeightMeter::with_limit(step2_weight(10));
+
+			Game::player_process_step2(&mut meter);
+
+			assert_eq!(meter.consumed(), step2_weight(3));
+			assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+			assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+			assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+		});
+	}
+}
+
+/// The game continues while one map still holds entries, also when the other map is empty.
+#[test]
+fn player_process_step2_stops_at_the_chunks_its_weight_covers() {
+	let mut ext = committed_ext(|| put_step2_game(300, 30));
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(2));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(2));
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 100);
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert_eq!(
+			crate::Game::<Test>::get().expect("the game continues").state,
+			GameState::PlayerProcess { step: PlayerProcessStep::Step2ClearIndices }
+		);
+	});
+	// The next call runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(10));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(1));
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// A second step 2 call in a block walks the keys that the first call removed. It charges the
+/// walk, clears nothing more and does not end the game.
+#[test]
+fn player_process_step2_makes_no_progress_in_a_second_call_of_a_block() {
+	let mut ext = committed_ext(|| put_step2_game(300, 30));
+	ext.execute_with(|| {
+		for _ in 0..2 {
+			let mut meter = WeightMeter::with_limit(step2_weight(2));
+
+			Game::player_process_step2(&mut meter);
+
+			assert_eq!(meter.consumed(), step2_weight(2));
+			assert_eq!(IndexToPlayer::<Test>::iter().count(), 100);
+			assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+			assert!(crate::Game::<Test>::get().is_some(), "the game continues");
+		}
+	});
+	// The next call runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(2));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(1));
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// Step 2 ends the game in the call that clears the last entries, also when the entries use the
+/// whole limit.
+#[test]
+fn player_process_step2_ends_the_game_when_the_entries_fill_its_chunks() {
+	committed_ext(|| put_step2_game(200, 200)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(2));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(2));
+		assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+		assert_eq!(PlayerToIndex::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+#[test]
+fn player_process_step2_clears_nothing_below_the_weight_of_one_chunk() {
+	// One unit short of a chunk, in either weight component.
+	for shortfall in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+		committed_ext(|| put_step2_game(100, 100)).execute_with(|| {
+			let mut meter = WeightMeter::with_limit(step2_weight(1).saturating_sub(shortfall));
+
+			Game::player_process_step2(&mut meter);
+
+			assert_eq!(meter.consumed(), step2_weight(0));
+			assert_eq!(IndexToPlayer::<Test>::iter().count(), 100);
+			assert_eq!(PlayerToIndex::<Test>::iter().count(), 100);
+			assert!(crate::Game::<Test>::get().is_some(), "the game continues");
+		});
+	}
+}
+
+#[test]
+fn player_process_step2_charges_one_chunk_for_empty_maps() {
+	committed_ext(|| put_step2_game(0, 0)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(step2_weight(10));
+
+		Game::player_process_step2(&mut meter);
+
+		assert_eq!(meter.consumed(), step2_weight(1));
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+#[test]
+fn affordable_chunks_follow_the_scarcer_weight_component() {
+	let chunk_weight = Weight::from_parts(100, 10);
+	let mut meter = WeightMeter::with_limit(Weight::from_parts(1_000, 70));
+	// The ref time covers 10 chunks. The proof size covers 7.
+	assert_eq!(Game::affordable_chunks(&meter, chunk_weight), 7);
+
+	// The consumed weight is not available: 45 of proof size cover 4 chunks.
+	meter.consume(Weight::from_parts(0, 25));
+	assert_eq!(Game::affordable_chunks(&meter, chunk_weight), 4);
+
+	// A component that a chunk does not use does not bound the count.
+	assert_eq!(Game::affordable_chunks(&meter, Weight::from_parts(100, 0)), 10);
+	assert_eq!(Game::affordable_chunks(&meter, Weight::from_parts(1_001, 0)), 0);
+}
+
+#[test]
+fn affordable_chunks_stop_at_the_operation_bound() {
+	let chunk_weight = Weight::from_parts(1, 1);
+	let bound = u64::from(OP_UPPER_BOUND);
+	let below = WeightMeter::with_limit(Weight::from_parts(bound - 1, bound - 1));
+	assert_eq!(Game::affordable_chunks(&below, chunk_weight), OP_UPPER_BOUND - 1);
+	let above = WeightMeter::with_limit(Weight::from_parts(bound + 1, bound + 1));
+	assert_eq!(Game::affordable_chunks(&above, chunk_weight), OP_UPPER_BOUND);
+	// A count that does not fit `u32`.
+	assert_eq!(Game::affordable_chunks(&WeightMeter::new(), chunk_weight), OP_UPPER_BOUND);
+	// A chunk without weight is not bounded by the meter.
+	assert_eq!(
+		Game::affordable_chunks(&WeightMeter::with_limit(Weight::zero()), Weight::zero()),
+		OP_UPPER_BOUND
+	);
+}
+
+#[test]
+fn chunked_clear_charges_the_chunks_it_walks_within_its_limit() {
+	let removal =
+		sp_io::MultiRemovalResults { maybe_cursor: None, backend: 250, unique: 250, loops: 250 };
+
+	assert_eq!(ChunkedClear::from_removals(slice::from_ref(&removal), 100, 3).chunks, 3);
+	assert_eq!(ChunkedClear::from_removals(slice::from_ref(&removal), 100, 4).chunks, 3);
+}
+
+/// An implementation of `clear_game_credits` outside this pallet can walk more keys than the
+/// limit. The overrun panics in debug builds. A release build logs it and charges every chunk
+/// that the clear walked.
+#[test]
+fn chunked_clear_reports_a_walk_past_its_limit() {
+	let removal =
+		sp_io::MultiRemovalResults { maybe_cursor: None, backend: 250, unique: 250, loops: 250 };
+
+	let result =
+		std::panic::catch_unwind(|| ChunkedClear::from_removals(slice::from_ref(&removal), 100, 2));
+
+	#[cfg(debug_assertions)]
+	assert!(result.is_err());
+	#[cfg(not(debug_assertions))]
+	assert_eq!(result.unwrap().chunks, 3);
+}
+
+/// Puts game 0 in the shuffle drain of a cancellation, with `recognized` entries in
+/// `ShuffleRecognized` and `not_recognized` entries in `ShuffleNotRecognized`. The game has no
+/// player.
+fn put_cancelling_game(recognized: u32, not_recognized: u32) {
+	let player = AccountOrPerson::<AccountId32>::Account(ALICE);
+	for i in 0..recognized {
+		let key = sp_io::hashing::blake2_256(&i.to_le_bytes());
+		crate::ShuffleRecognized::<Test>::insert(0u8, key, &player);
+	}
+	for i in 0..not_recognized {
+		let key = sp_io::hashing::blake2_256(&i.to_le_bytes());
+		crate::ShuffleNotRecognized::<Test>::insert(0u8, key, &player);
+	}
+
+	crate::Game::<Test>::put(GameInfo {
+		index: 0,
+		registration_ends: 0,
+		shuffle_deadline: 0,
+		game_date: 0,
+		report_ends: 0,
+		state: GameState::Cancelling { step: CancellingStep::Step1DrainShuffle },
+		max_group_size: <Test as Config>::MaxGroupSize::get(),
+		rounds: 1,
+		pending_attendance: 0,
+		airdrops_scheduled: 0,
+		tenure_claim_opens: 0,
+	});
+}
+
+/// The weight of a cancelling call that clears `chunks` shuffle chunks.
+fn shuffle_drain_weight(chunks: u64) -> Weight {
+	<MockWeightInfo as WeightInfo>::process_cancelling().saturating_add(
+		<MockWeightInfo as WeightInfo>::process_cancelling_step_shuffle().saturating_mul(chunks),
+	)
+}
+
+/// The weight of the player drain iteration that finds no player and ends the cancellation.
+fn last_player_drain_weight() -> Weight {
+	<MockWeightInfo as WeightInfo>::process_cancelling_step_player(1)
+}
+
+/// The cancellation charges the shuffle chunks of the longest map, then drains the players in the
+/// same call.
+#[test]
+fn process_cancelling_charges_the_shuffle_chunks_it_clears() {
+	// 250 entries need 3 chunks. The shorter map does not add to the charge.
+	committed_ext(|| put_cancelling_game(250, 30)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(
+			shuffle_drain_weight(10).saturating_add(last_player_drain_weight()),
+		);
+
+		Game::process_cancelling(&mut meter);
+
+		assert_eq!(
+			meter.consumed(),
+			shuffle_drain_weight(3).saturating_add(last_player_drain_weight())
+		);
+		assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
+		assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// The shuffle drain continues while one map still holds entries, also when the other map is
+/// empty.
+#[test]
+fn process_cancelling_stops_at_the_shuffle_chunks_its_weight_covers() {
+	let mut ext = committed_ext(|| put_cancelling_game(30, 300));
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(shuffle_drain_weight(2));
+
+		Game::process_cancelling(&mut meter);
+
+		assert_eq!(meter.consumed(), shuffle_drain_weight(2));
+		assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
+		assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 100);
+		assert_eq!(
+			crate::Game::<Test>::get().expect("the game continues").state,
+			GameState::Cancelling { step: CancellingStep::Step1DrainShuffle }
+		);
+	});
+	// The next call runs in a later block.
+	ext.commit_all().expect("the test storage commits");
+
+	ext.execute_with(|| {
+		let mut meter = WeightMeter::with_limit(
+			shuffle_drain_weight(10).saturating_add(last_player_drain_weight()),
+		);
+
+		Game::process_cancelling(&mut meter);
+
+		assert_eq!(
+			meter.consumed(),
+			shuffle_drain_weight(1).saturating_add(last_player_drain_weight())
+		);
+		assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
+		assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 0);
+		assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+	});
+}
+
+/// A call that clears the last shuffle entries and has no weight left stores the player drain as
+/// the next step.
+#[test]
+fn process_cancelling_stores_the_player_drain_when_the_shuffle_drain_ends() {
+	committed_ext(|| put_cancelling_game(250, 30)).execute_with(|| {
+		let mut meter = WeightMeter::with_limit(shuffle_drain_weight(3));
+
+		Game::process_cancelling(&mut meter);
+
+		assert_eq!(meter.consumed(), shuffle_drain_weight(3));
+		assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
+		assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 0);
+		assert_eq!(
+			crate::Game::<Test>::get().expect("the game continues").state,
+			GameState::Cancelling {
+				step: CancellingStep::Step2DrainPlayers { last_iteration: None }
+			}
+		);
+	});
+}
+
+#[test]
+fn process_cancelling_clears_nothing_below_the_weight_of_one_shuffle_chunk() {
+	// One unit short of a chunk, in either weight component.
+	for shortfall in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+		committed_ext(|| put_cancelling_game(100, 100)).execute_with(|| {
+			let mut meter =
+				WeightMeter::with_limit(shuffle_drain_weight(1).saturating_sub(shortfall));
+
+			Game::process_cancelling(&mut meter);
+
+			assert_eq!(meter.consumed(), shuffle_drain_weight(0));
+			assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 100);
+			assert_eq!(crate::ShuffleNotRecognized::<Test>::iter().count(), 100);
+			assert_eq!(
+				crate::Game::<Test>::get().expect("the game continues").state,
+				GameState::Cancelling { step: CancellingStep::Step1DrainShuffle }
+			);
+		});
+	}
 }
 
 #[test]
@@ -5254,7 +5628,7 @@ mod cancel_game {
 			assert!(matches!(game.state, GameState::Cancelling { .. }));
 			let player = AccountOrPerson::<AccountId32>::Account(ALICE);
 			let info = crate::Players::<Test>::get(&player).expect("player record retained");
-			assert!(info.registered, "cleanup happens later, not during the extrinsic");
+			assert!(info.is_registered(), "cleanup happens later, not during the extrinsic");
 			// `GameCancelled` is emitted up-front, when the game is flipped to `Cancelling`.
 			System::assert_has_event(
 				crate::Event::<Test>::GameCancelled {
@@ -5303,8 +5677,12 @@ mod cancel_game {
 			);
 			let alice = AccountOrPerson::<AccountId32>::Account(ALICE);
 			let bob = AccountOrPerson::<AccountId32>::Account(BOB);
-			assert!(!crate::Players::<Test>::get(&alice).unwrap().registered);
-			assert!(!crate::Players::<Test>::get(&bob).unwrap().registered);
+			for who in [&alice, &bob] {
+				assert_eq!(
+					crate::Players::<Test>::get(who).unwrap().registration,
+					PlayerRegistration::NotRegistered
+				);
+			}
 			System::assert_has_event(
 				crate::Event::<Test>::GameCancelled { game_index, reason: CancelReason::Manager }
 					.into(),
@@ -6970,6 +7348,33 @@ mod airdrop {
 		});
 	}
 
+	// An airdrop takes no withdrawal, so the entry of the first sign-up stays in the draw.
+	#[test]
+	fn an_unregistered_player_keeps_their_airdrop_entry() {
+		new_test_ext().execute_with(|| {
+			let schedule = GameSchedule::<u32, u128> {
+				game_play_time: 10,
+				rounds: 2,
+				max_group_size: 3,
+				airdrops: test_airdrops(1),
+				tenure_claim_window: 0,
+			};
+			assert_ok!(Game::new_game(&schedule));
+			let game_index = GameIndex::<Test>::get();
+			let event_id = Game::airdrop_event_id(game_index, 0);
+			open_airdrop_events(game_index, 1);
+			assert_ok!(Game::sign_up_with_account(
+				RuntimeOrigin::signed(ALICE),
+				DEFAULT_IDENTIFIER_KEY,
+				Some(alice_airdrop_vrfs(game_index, 1)),
+			));
+			let slot = alice_event_slot(game_index, 0);
+
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+			assert!(AirdropRegistrations::<Test>::contains_key(event_id, slot));
+		});
+	}
+
 	#[test]
 	fn cancellation_only_touches_scheduled_airdrops() {
 		new_test_ext().execute_with(|| {
@@ -8170,7 +8575,7 @@ mod sign_up_with_account_lite_invite {
 					);
 					let player_info =
 						Players::<Test>::get(&player).expect("the account is a player");
-					assert!(player_info.registered);
+					assert!(player_info.is_registered());
 					assert!(matches!(player_info.credibility, PlayerCredibility::Invited));
 					assert_eq!(player_info.first_game, game_index);
 					assert!(indiv_pallet_score::Participants::<Test>::contains_key(&player));
@@ -8257,11 +8662,35 @@ mod sign_up_with_account_lite_invite {
 			assert_ok!(lite_invite(PRODUCT_KEY));
 			assert!(!ArchivedPlayers::<Test>::contains_key(&player));
 			let player_info = Players::<Test>::get(&player).expect("the account is a player again");
-			assert!(player_info.registered);
+			assert!(player_info.is_registered());
 			assert!(matches!(player_info.credibility, PlayerCredibility::Invited));
 			assert_eq!(player_info.first_game, next_game);
 			assert_eq!(get_allowance(PRODUCT_KEY), PlayerStatementLimit::get());
 			assert!(DepositStorage::<Test>::get().active.is_empty());
+		});
+	}
+
+	/// An account that unregisters stays a player and cannot sign up again for the game, with a
+	/// lite invite or with `sign_up_with_account`.
+	#[test]
+	fn lite_invited_account_that_unregisters_cannot_sign_up_again() {
+		new_test_ext().execute_with(|| {
+			start_game(10);
+			assert_ok!(lite_invite(PRODUCT_KEY));
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(PRODUCT_KEY)));
+
+			let error = lite_invite(PRODUCT_KEY).expect_err("the account is still a player");
+			assert_eq!(error.error, Error::<Test>::UseInviteButAlreadyPlaying.into());
+
+			assert_noop!(
+				Game::sign_up_with_account(
+					RuntimeOrigin::signed(PRODUCT_KEY),
+					DEFAULT_IDENTIFIER_KEY,
+					None,
+				),
+				Error::<Test>::UnregisteredFromGame
+			);
+			assert_eq!(get_allowance(PRODUCT_KEY), PlayerStatementLimit::get());
 		});
 	}
 
@@ -8774,6 +9203,36 @@ mod game_steps {
 		});
 	}
 
+	/// The refund of step 2 leaves the charge for the chunks that the call clears.
+	#[test]
+	fn process_players_charges_the_step2_chunks_it_clears() {
+		// 250 entries need 3 chunks.
+		committed_ext(|| put_step2_game(250, 30)).execute_with(|| {
+			assert_step_charges(
+				Call::<Test>::process_players { game_index: 0, discriminator: 0 },
+				MockWeightInfo::game_step_base().saturating_add(step2_weight(3)),
+			);
+			assert_eq!(IndexToPlayer::<Test>::iter().count(), 0);
+			assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+		});
+	}
+
+	/// The refund of the shuffle drain leaves the charge for the chunks that the call clears.
+	#[test]
+	fn advance_cancelling_charges_the_shuffle_chunks_it_clears() {
+		// 250 entries need 3 chunks.
+		committed_ext(|| put_cancelling_game(250, 30)).execute_with(|| {
+			assert_step_charges(
+				Call::<Test>::advance_cancelling { game_index: 0, discriminator: 0 },
+				MockWeightInfo::game_step_base()
+					.saturating_add(shuffle_drain_weight(3))
+					.saturating_add(last_player_drain_weight()),
+			);
+			assert_eq!(crate::ShuffleRecognized::<Test>::iter().count(), 0);
+			assert!(crate::Game::<Test>::get().is_none(), "the game is removed");
+		});
+	}
+
 	#[test]
 	fn advance_cancelling_refunds_the_unused_budget() {
 		new_test_ext().execute_with(|| {
@@ -8979,4 +9438,544 @@ fn metadata_lists_every_extra_constant() {
 			assert!(names.contains(&name), "{name} is missing from the metadata");
 		}
 	});
+}
+
+mod unregister {
+	use super::*;
+	use codec::Decode;
+	use deposit::DepositStorage;
+	use frame_support::dispatch::GetDispatchInfo;
+	use indiv_pallet_score::Recognition;
+	use sp_runtime::traits::Dispatchable;
+
+	fn schedule() -> GameSchedule<u32, u128> {
+		GameSchedule { game_play_time: 20, rounds: 1, max_group_size: 2, ..Default::default() }
+	}
+
+	/// The report of a player that is alone in their group.
+	fn report_alone(_: &AccountOrPerson<AccountId32>) -> Option<FullReport<Test>> {
+		Some(vec![BoundedVec::default()].try_into().unwrap())
+	}
+
+	fn recognition(who: &AccountId32) -> Recognition {
+		indiv_pallet_score::Participants::<Test>::get(AccountOrPerson::Account(who.clone()))
+			.expect("the account is a participant")
+			.recognition
+	}
+
+	fn set_time(secs: u64) {
+		MOCK_UNIX_TIME.with(|time| *time.borrow_mut() = Duration::from_secs(secs));
+	}
+
+	fn sign_up(who: &AccountId32) {
+		assert_ok!(Game::sign_up_with_account(
+			RuntimeOrigin::signed(who.clone()),
+			DEFAULT_IDENTIFIER_KEY,
+			None,
+		));
+	}
+
+	fn is_registered(who: &AccountId32) -> bool {
+		Players::<Test>::get(AccountOrPerson::Account(who.clone()))
+			.is_some_and(|player| player.is_registered())
+	}
+
+	fn registration(who: &AccountId32) -> PlayerRegistration {
+		Players::<Test>::get(AccountOrPerson::Account(who.clone()))
+			.expect("the account is a player")
+			.registration
+	}
+
+	/// The number of registered players the game in registration counts.
+	fn registered_count() -> u32 {
+		match crate::Game::<Test>::get().expect("game exists").state {
+			GameState::Registration { next_player_index } => next_player_index,
+			state => panic!("the game is not in registration: {state:?}"),
+		}
+	}
+
+	#[test]
+	fn a_registered_player_unregisters() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			sign_up(&BOB);
+			assert_eq!(registered_count(), 2);
+			let alice = AccountOrPerson::Account(ALICE);
+			TenureClaims::<Test>::insert(&alice, 1);
+
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			assert_eq!(registration(&ALICE), PlayerRegistration::Unregistered);
+			assert_eq!(registration(&BOB), PlayerRegistration::Registered);
+			assert_eq!(registered_count(), 1);
+			// ALICE keeps her tenure claim.
+			assert_eq!(TenureClaims::<Test>::get(&alice), Some(1));
+			System::assert_has_event(Event::<Test>::Unregistered { who: alice.clone() }.into());
+
+			// ALICE stays a player, onboarded in the score pallet, with her deposit held.
+			assert!(Players::<Test>::contains_key(&alice));
+			assert!(indiv_pallet_score::Participants::<Test>::contains_key(&alice));
+			let deposits = DepositStorage::<Test>::get();
+			assert_eq!(deposits.active.len(), 2);
+			assert_eq!(deposits.dropped.len(), 0);
+			assert_eq!(deposits.burned.len(), 0);
+		});
+	}
+
+	#[test]
+	fn a_registered_alias_player_unregisters() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			let alias: Alias = [42u8; 32];
+			let stmt_account = id_to_account(999);
+			assert_ok!(Game::sign_up_with_alias(
+				runtime_origin_for_alias(&alias),
+				DEFAULT_IDENTIFIER_KEY,
+				stmt_account.clone(),
+				StatementSignature(stmt_account.clone()),
+				None,
+			));
+			assert_eq!(registered_count(), 1);
+
+			assert_ok!(Game::unregister(runtime_origin_for_alias(&alias)));
+
+			let player = Players::<Test>::get(AccountOrPerson::Person(alias))
+				.expect("the alias stays a player");
+			assert_eq!(player.registration, PlayerRegistration::Unregistered);
+			assert_eq!(registered_count(), 0);
+			// The statement account stays bound to the alias.
+			assert_eq!(AliasToStmtAccount::<Test>::get(alias), Some(stmt_account.clone()));
+
+			// The alias cannot sign up again, with the same statement account or with another.
+			for account in [stmt_account, id_to_account(998)] {
+				assert_noop!(
+					Game::sign_up_with_alias(
+						runtime_origin_for_alias(&alias),
+						DEFAULT_IDENTIFIER_KEY,
+						account.clone(),
+						StatementSignature(account),
+						None,
+					),
+					Error::<Test>::UnregisteredFromGame
+				);
+			}
+		});
+	}
+
+	// An invited account holds no funds. It reaches the call as a participant.
+	#[test]
+	fn a_participant_origin_unregisters() {
+		new_test_ext().execute_with(|| {
+			let ticket = 12345u64;
+			let signature = TestSignature(ticket, NOT_FUNDED_ACCOUNT.encode());
+			assert_ok!(Game::grant_invites(RuntimeOrigin::root(), ALICE, 1));
+			assert_ok!(Game::set_invite_ticket(RuntimeOrigin::signed(ALICE), ticket));
+			assert_ok!(Game::new_game(&schedule()));
+			assert_ok!(exec_invited_tx(
+				NOT_FUNDED_ACCOUNT,
+				GameAsInvitedData { nonce: 0, inviter: ALICE, ticket, signature },
+				Call::sign_up_with_invite {
+					identifier_key: DEFAULT_IDENTIFIER_KEY,
+					airdrops: None
+				}
+			));
+			assert!(is_registered(&NOT_FUNDED_ACCOUNT));
+
+			assert_ok!(exec_participant_tx(NOT_FUNDED_ACCOUNT, 1, Call::unregister {}));
+			assert_eq!(registration(&NOT_FUNDED_ACCOUNT), PlayerRegistration::Unregistered);
+			assert_eq!(registered_count(), 0);
+		});
+	}
+
+	#[test]
+	fn a_player_that_is_not_registered_cannot_unregister() {
+		new_test_ext().execute_with(|| {
+			// BOB plays a game, so he is a player that the next game does not register.
+			let finished = GameSchedule { game_play_time: 10, ..schedule() };
+			run_game_scenario(finished, &[AccountOrPerson::Account(BOB)], |_| {
+				Some(vec![BoundedVec::<Report, _>::default()].try_into().unwrap())
+			});
+			assert!(Players::<Test>::contains_key(AccountOrPerson::Account(BOB)));
+
+			assert_ok!(Game::new_game(&GameSchedule { game_play_time: 50, ..schedule() }));
+			sign_up(&ALICE);
+
+			// BOB did not sign up for this game, and CHARLIE is not a player.
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(BOB)),
+				Error::<Test>::NotRegistered
+			);
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(CHARLIE)),
+				Error::<Test>::NotRegistered
+			);
+			assert_eq!(registered_count(), 1);
+
+			// A player unregisters once.
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::NotRegistered
+			);
+			assert_eq!(registered_count(), 0);
+		});
+	}
+
+	#[test]
+	fn an_origin_that_is_no_account_and_no_person_cannot_unregister() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+
+			for origin in [RuntimeOrigin::root(), RuntimeOrigin::none()] {
+				assert_noop!(
+					Game::unregister(origin),
+					indiv_pallet_score::Error::<Test>::BadOriginNotPersonNotSignedNotAccountParticipant
+				);
+			}
+			assert_eq!(registered_count(), 1);
+		});
+	}
+
+	#[test]
+	fn unregister_closes_when_the_sign_ups_close() {
+		new_test_ext().execute_with(|| {
+			assert_noop!(Game::unregister(RuntimeOrigin::signed(ALICE)), Error::<Test>::NoGame);
+
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			sign_up(&BOB);
+			let registration_ends = u64::from(GameTimes::<Test>::registration_end(&schedule()));
+
+			set_time(registration_ends - 1);
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(BOB)));
+
+			// The deadline passed. The game stays in registration until the `end_registration`
+			// step runs, and takes no unregister meanwhile.
+			set_time(registration_ends);
+			assert_eq!(registered_count(), 1);
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::NoRegistration
+			);
+
+			advance_process();
+			assert!(matches!(
+				crate::Game::<Test>::get().expect("game exists").state,
+				GameState::Shuffle { .. }
+			));
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::NoRegistration
+			);
+			assert!(is_registered(&ALICE));
+		});
+	}
+
+	// The clock is before the registration deadline, so only the game state refuses the call.
+	#[test]
+	fn a_cancelling_game_takes_no_unregister() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
+
+			assert_noop!(
+				Game::unregister(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::NoRegistration
+			);
+		});
+	}
+
+	#[test]
+	fn an_unregistered_player_is_left_out_of_the_shuffle_and_counted_absent() {
+		new_test_ext().execute_with(|| {
+			let alice = AccountOrPerson::Account(ALICE);
+			let bob = AccountOrPerson::Account(BOB);
+			let charlie = AccountOrPerson::Account(CHARLIE);
+
+			run_game_scenario_with_phase(
+				schedule(),
+				|| {
+					for who in [ALICE, BOB, CHARLIE] {
+						sign_up(&who);
+					}
+					assert_ok!(Game::unregister(RuntimeOrigin::signed(CHARLIE)));
+				},
+				|| {
+					// The shuffle gives an index to the two registered players only.
+					let game = crate::Game::<Test>::get().expect("game exists");
+					assert_eq!(game.state, GameState::Reporting { player_count: 2 });
+					assert_eq!(game.pending_attendance, 2);
+					assert!(!PlayerToIndex::<Test>::contains_key(&charlie));
+
+					for who in [&alice, &bob] {
+						assert_ok!(Game::report(
+							RuntimeOrigin::signed(who.account().expect("an account").clone()),
+							build_report_with_opinion(who, |_| Report::Person),
+						));
+					}
+				},
+			);
+
+			for who in [&alice, &bob] {
+				let score = indiv_pallet_score::Participants::<Test>::get(who).unwrap();
+				assert_eq!(score.streak.attendance(), 1);
+			}
+
+			// CHARLIE is absent. A new account has a score of zero then, so the game archives it
+			// and burns its deposit.
+			let score = indiv_pallet_score::Participants::<Test>::get(&charlie).unwrap();
+			assert_eq!(score.streak.absence(), 1);
+			assert!(ArchivedPlayers::<Test>::contains_key(&charlie));
+			assert_eq!(DepositStorage::<Test>::get().burned.len(), 1);
+		});
+	}
+
+	// One player is enough for this game, so the game is cancelled only if the call lowers the
+	// player count.
+	#[test]
+	fn a_game_left_with_too_few_players_is_cancelled() {
+		new_test_ext().execute_with(|| {
+			System::set_block_number(1);
+			assert_ok!(Game::new_game(&schedule()));
+			let game_index = GameIndex::<Test>::get();
+			sign_up(&ALICE);
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			set_time(u64::from(GameTimes::<Test>::registration_end(&schedule())) + 1);
+			advance_process();
+
+			System::assert_has_event(
+				Event::GameCancelled { game_index, reason: CancelReason::TooFewPlayers }.into(),
+			);
+		});
+	}
+
+	#[test]
+	fn an_unregistered_player_cannot_sign_up_again() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			sign_up(&BOB);
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			assert_noop!(
+				Game::sign_up_with_account(
+					RuntimeOrigin::signed(ALICE),
+					DEFAULT_IDENTIFIER_KEY,
+					None
+				),
+				Error::<Test>::UnregisteredFromGame
+			);
+			assert_eq!(registration(&ALICE), PlayerRegistration::Unregistered);
+			assert_eq!(registered_count(), 1);
+		});
+	}
+
+	#[test]
+	fn an_unregistered_player_cannot_offboard_before_the_game_ends() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			assert_noop!(
+				Game::offboard(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::CannotOffboardWhileRegisteredForGame
+			);
+
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+			assert_noop!(
+				Game::offboard(RuntimeOrigin::signed(ALICE)),
+				Error::<Test>::UnregisteredFromGame
+			);
+
+			// The deposit stays in play.
+			let deposits = DepositStorage::<Test>::get();
+			assert_eq!(deposits.active.len(), 1);
+			assert_eq!(deposits.dropped.len(), 0);
+		});
+	}
+
+	#[test]
+	fn a_cancelled_game_lets_an_unregistered_player_offboard() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+			sign_up(&BOB);
+			assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+
+			assert_ok!(Game::cancel_game(RuntimeOrigin::root()));
+			advance_process();
+			assert!(crate::Game::<Test>::get().is_none(), "the cancelled game is removed");
+
+			// The cancellation resets every player, so ALICE is free to leave with her deposit.
+			assert_eq!(registration(&ALICE), PlayerRegistration::NotRegistered);
+			assert_ok!(Game::offboard(RuntimeOrigin::signed(ALICE)));
+			let deposits = DepositStorage::<Test>::get();
+			assert_eq!(deposits.active.len(), 1);
+			assert_eq!(deposits.dropped.len(), 1);
+			assert_eq!(deposits.burned.len(), 0);
+		});
+	}
+
+	#[test]
+	fn a_played_game_resets_a_kept_player_that_unregistered() {
+		new_test_ext().execute_with(|| {
+			let alice = AccountOrPerson::Account(ALICE);
+			let bob = AccountOrPerson::Account(BOB);
+			// BOB plays two games, so his score outlasts one absence and the game keeps him.
+			for game_play_time in [10, 50] {
+				let played = GameSchedule { game_play_time, ..schedule() };
+				run_game_scenario(played, slice::from_ref(&bob), |_| {
+					Some(vec![BoundedVec::<Report, _>::default()].try_into().unwrap())
+				});
+			}
+
+			run_game_scenario_with_phase(
+				GameSchedule { game_play_time: 100, ..schedule() },
+				|| {
+					sign_up(&ALICE);
+					sign_up(&BOB);
+					assert_ok!(Game::unregister(RuntimeOrigin::signed(BOB)));
+				},
+				|| {
+					assert_ok!(Game::report(
+						RuntimeOrigin::signed(ALICE),
+						build_report_with_opinion(&alice, |_| Report::Person),
+					));
+				},
+			);
+			assert!(crate::Game::<Test>::get().is_none(), "the played game is removed");
+
+			// BOB is absent and stays a player with his deposit. He signs up for the next game.
+			assert_eq!(registration(&BOB), PlayerRegistration::NotRegistered);
+			assert_eq!(DepositStorage::<Test>::get().burned.len(), 0);
+			assert_ok!(Game::new_game(&GameSchedule { game_play_time: 150, ..schedule() }));
+			sign_up(&BOB);
+			assert_eq!(registration(&BOB), PlayerRegistration::Registered);
+		});
+	}
+
+	// An unregister is an absence, so it counts against the absence grace like a missed game.
+	#[test]
+	fn a_recognized_person_that_unregisters_past_the_absence_grace_is_suspended() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Members::create_collection(
+				0,
+				PEOPLE_MEMBER_IDENTIFIER,
+				1,
+				RingMode::Flexible,
+				RingExponent::R2e9,
+				None
+			));
+			let alice = AccountOrPerson::Account(ALICE);
+			let bob = AccountOrPerson::Account(BOB);
+			let mut game = GameSchedule { game_play_time: 10, ..schedule() };
+
+			// The mock has 100,000 active members, so the personhood threshold is 21. ALICE reaches
+			// it with six games attended in a row, then registers as a person.
+			for _ in 0..6 {
+				run_game_scenario(game.clone(), slice::from_ref(&alice), report_alone);
+				game.game_play_time = minimal_next_game_play_time(&game);
+			}
+			assert!(Score::reached_personhood(&alice));
+			let (key, secret) = mock_key(1234);
+			let message = [&b"pop register using"[..], &ALICE.encode()[..]].concat();
+			let proof = Mock::sign(&secret, &message[..]).unwrap();
+			assert_ok!(Score::register(RuntimeOrigin::signed(ALICE), Some((key, proof))));
+			assert!(matches!(recognition(&ALICE), Recognition::Recognized(_)));
+
+			// The default grace of that population allows one miss in six games. The last six
+			// games of ALICE have no miss.
+			assert_eq!(indiv_pallet_score::AbsenceGraceRatio::<Test>::get(), (1, 6));
+
+			// ALICE signs up for the next two games and unregisters from both. BOB plays them, so
+			// the games are not cancelled.
+			for unregisters in 1..=2 {
+				run_game_scenario_with_phase(
+					game.clone(),
+					|| {
+						sign_up(&ALICE);
+						sign_up(&BOB);
+						assert_ok!(Game::unregister(RuntimeOrigin::signed(ALICE)));
+					},
+					|| {
+						assert_ok!(Game::report(
+							RuntimeOrigin::signed(BOB),
+							build_report_with_opinion(&bob, |_| Report::Person)
+						));
+					},
+				);
+				game.game_play_time = minimal_next_game_play_time(&game);
+
+				// The grace allows the first miss. The second miss suspends ALICE.
+				let suspended = unregisters == 2;
+				assert_eq!(matches!(recognition(&ALICE), Recognition::Suspended(_)), suspended);
+				assert_eq!(Score::reached_personhood(&alice), !suspended);
+				let ring_position =
+					indiv_pallet_members::Members::<Test>::get(PEOPLE_MEMBER_IDENTIFIER, key);
+				assert_eq!(ring_position == Some(RingPosition::Suspended), suspended);
+			}
+		});
+	}
+
+	/// A player as stored before [`PlayerRegistration`], with a flag for the registration.
+	#[derive(Encode)]
+	struct PlayerWithFlag {
+		first_game: GameIdx,
+		registered: bool,
+		sent_report: bool,
+		early_attendance_enactment: Option<EarlyAttendanceEnactment>,
+		yes_person: u8,
+		no_not_person: u8,
+		expected_max_vote_weight: u16,
+		vote_weight: u8,
+		credibility: PlayerCredibility<()>,
+	}
+
+	// No migration translates `Players`, so a player stored with the flag must decode unchanged.
+	#[test]
+	fn a_player_stored_with_the_registered_flag_decodes_unchanged() {
+		for (registered, registration) in
+			[(false, PlayerRegistration::NotRegistered), (true, PlayerRegistration::Registered)]
+		{
+			let stored = PlayerWithFlag {
+				first_game: 7,
+				registered,
+				sent_report: true,
+				early_attendance_enactment: None,
+				yes_person: 2,
+				no_not_person: 1,
+				expected_max_vote_weight: 300,
+				vote_weight: 3,
+				credibility: PlayerCredibility::Invited,
+			}
+			.encode();
+
+			let player = Player::<()>::decode(&mut &stored[..]).expect("the stored player decodes");
+			assert_eq!(player.registration, registration);
+			assert_eq!(player.encode(), stored);
+		}
+	}
+
+	#[test]
+	fn unregister_pays_its_fee() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(Game::new_game(&schedule()));
+			sign_up(&ALICE);
+
+			let call = crate::Call::<Test>::unregister {};
+			let info = call.get_dispatch_info();
+			assert_eq!(info.pays_fee, Pays::Yes);
+			assert_eq!(info.call_weight, <MockWeightInfo as WeightInfo>::unregister());
+
+			let post = RuntimeCall::from(call)
+				.dispatch(RuntimeOrigin::signed(ALICE))
+				.expect("ALICE is registered");
+			assert_eq!(post.pays_fee, Pays::Yes);
+			assert_eq!(post.actual_weight, None);
+		});
+	}
 }

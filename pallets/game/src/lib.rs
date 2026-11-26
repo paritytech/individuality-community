@@ -28,7 +28,9 @@
 //!
 //! 3. **Registration**: Players call [`Pallet::sign_up_with_account`],
 //!    [`Pallet::sign_up_with_invite`] or [`Pallet::sign_up_with_alias`] to be part of the game. A
-//!    player who fails to register before the deadline is considered absent.
+//!    player who fails to register before the deadline is considered absent. A registered player
+//!    calls [`Pallet::unregister`] to leave the game before the deadline, see
+//!    [Unregistering](#unregistering).
 //!
 //! 4. **Shuffle**:
 //!    - After registration ends, the `end_registration` step moves the game to the shuffle phase.
@@ -186,6 +188,18 @@
 //! invited player is a new, non-recognized account, so the remaining work in dispatch cannot fail
 //! and the invite buys a sign-up.
 //!
+//! # Unregistering
+//!
+//! A registered player leaves the current game with [`Pallet::unregister`] while the game accepts
+//! sign-ups. The shuffle gives every registered player an index in every round, and the groups
+//! follow from the indices and the player count. To remove a player after the shuffle starts would
+//! invalidate that computation, so the call closes when the sign-ups close.
+//!
+//! To unregister is final for that game. The player stays a player and the game counts them as
+//! absent. Their airdrop entries stay in the draws, so they can neither sign up again nor
+//! `offboard` until the game ends: their deposit stays in play, as for a registered player that
+//! does not attend. The player keeps their tenure claim, see [Tenure claim](#tenure-claim).
+//!
 //! # Statement store usage
 //!
 //! All players in the game are given some statement store usage allowance. The player's allowance
@@ -217,6 +231,9 @@
 //! the thresholds `[0, 1, 5]`, a player that never attended a game while recognised earns one
 //! credit, a person with 3 games earns two and a person with 5 or more earns three. A
 //! threshold of zero thus gives every player a credit. A player claims once per game.
+//!
+//! A player that unregisters keeps their tenure claim. The game pays it as for a player that does
+//! not attend.
 //!
 //! ## Payout
 //!
@@ -251,6 +268,7 @@
 //!   player must be new or archived, otherwise they must use `sign_up_with_account` for free.
 //! - `report`: Each participant’s self-contained reporting of whether their peers are persons.
 //! - `claim_tenure_credits`: claim one credit per tenure threshold reached, before the game begins.
+//! - `unregister`: leave the current game while it accepts sign-ups.
 //! - `offboard`: Offboard from the game.
 //!
 //! Manager origin calls: (configured origin [`Config::ManagerOrigin`])
@@ -350,10 +368,13 @@ use sp_statement_store::{
 /// An upper bound on a number of operation
 pub const OP_UPPER_BOUND: u32 = 100_000;
 
-/// Chunk size for clearing the per-game index <-> player maps in `player_process_step2`.
+/// The entries that one chunk clears from each per-game index <-> player map in
+/// `player_process_step2`. `WeightInfo::player_process_step2_inner_loop` is the weight of one
+/// chunk.
 pub const PLAYER_PROCESS_STEP2_CHUNK: u32 = 100;
 
-/// Chunk size for clearing the shuffle maps in `process_cancelling`.
+/// The entries that one chunk clears from each shuffle map in `process_cancelling`.
+/// `WeightInfo::process_cancelling_step_shuffle` is the weight of one chunk.
 const CANCELLING_SHUFFLE_CHUNK: u32 = 100;
 
 #[frame_support::pallet]
@@ -862,6 +883,8 @@ pub mod pallet {
 			game_index: GameIdx,
 			credits: u32,
 		},
+		/// A player unregistered from the game.
+		Unregistered { who: AccountOrPerson<T::AccountId> },
 	}
 
 	#[pallet::error]
@@ -951,6 +974,9 @@ pub mod pallet {
 		NoTenureCredit,
 		/// The caller claimed tenure credits for the game already.
 		TenureCreditsAlreadyClaimed,
+		/// The player unregistered from the current game. They can neither sign up again nor
+		/// offboard until the game ends.
+		UnregisteredFromGame,
 	}
 
 	/// A reason for this pallet placing a hold on funds.
@@ -1509,7 +1535,8 @@ pub mod pallet {
 		/// `ScoreAsParticipant` extension.
 		///
 		/// There must be no game or the existing game must be in registration phase and the player
-		/// must have not signed up for the game.
+		/// must have not signed up for the game. A player that unregistered from the game signed
+		/// up for it.
 		///
 		/// A player whose pallet-score recognition is `Recognized` has their personhood suspended,
 		/// the same as an absence-triggered suspension. Offboarding is permanent. Playing as a
@@ -1535,11 +1562,15 @@ pub mod pallet {
 				game.is_none_or(|g| matches!(g.state, GameState::Registration { .. }));
 			ensure!(game_is_none_or_registration, Error::<T>::InvalidGameState);
 
-			let player_is_none_or_not_registered = player.as_ref().is_none_or(|p| !p.registered);
-			ensure!(
-				player_is_none_or_not_registered,
-				Error::<T>::CannotOffboardWhileRegisteredForGame
-			);
+			match player.as_ref().map(|player| player.registration) {
+				Some(PlayerRegistration::Registered) =>
+					return Err(Error::<T>::CannotOffboardWhileRegisteredForGame.into()),
+				// The player keeps their airdrop entries. Their deposit stays in play until the
+				// game ends, as for a registered player.
+				Some(PlayerRegistration::Unregistered) =>
+					return Err(Error::<T>::UnregisteredFromGame.into()),
+				Some(PlayerRegistration::NotRegistered) | None => (),
+			}
 
 			ensure!(archived.is_some() || player.is_some(), Error::<T>::NoPlayer);
 
@@ -2205,6 +2236,48 @@ pub mod pallet {
 				pays_fee: Pays::No,
 			})
 		}
+
+		/// Unregisters the caller from the current game.
+		///
+		/// The game must be in its registration phase, `registration_ends` has not passed and the
+		/// caller must be signed up for the game.
+		///
+		/// The caller stays a player and the game counts them as absent. They can neither sign up
+		/// again nor call [`Pallet::offboard`] until the game ends. The caller keeps their tenure
+		/// claim and their airdrop entries, see [Unregistering](crate#unregistering). The call
+		/// pays its fee.
+		#[pallet::call_index(30)]
+		#[pallet::weight(<T as Config>::WeightInfo::unregister())]
+		pub fn unregister(origin: OriginFor<T>) -> DispatchResult {
+			let who =
+				indiv_pallet_score::Pallet::<T>::ensure_signed_or_participant_or_person(origin)?;
+
+			let mut game = Self::require_open_game().map_err(Error::<T>::from)?;
+			let GameState::Registration { next_player_index } = &mut game.state else {
+				return Err(Error::<T>::NoRegistration.into());
+			};
+
+			Players::<T>::try_mutate(&who, |maybe_player| {
+				let player = maybe_player
+					.as_mut()
+					.filter(|player| player.is_registered())
+					.ok_or(Error::<T>::NotRegistered)?;
+				player.registration = PlayerRegistration::Unregistered;
+				Ok::<_, Error<T>>(())
+			})?;
+
+			if next_player_index.is_zero() {
+				defensive!("indiv-pallet-game: a registered player is missing from the count");
+			}
+			next_player_index.saturating_dec();
+			Game::<T>::put(game);
+
+			log::trace!(target: LOG_TARGET, "Player {who:?} unregistered from game");
+
+			Self::deposit_event(Event::<T>::Unregistered { who });
+
+			Ok(())
+		}
 	}
 
 	/// Reasons a game is not open for player registration.
@@ -2270,6 +2343,8 @@ pub mod pallet {
 		AlreadyPlayingWithInvite,
 		/// The player is already registered for the current game.
 		AlreadyRegistered,
+		/// The player unregistered from the current game.
+		Unregistered,
 	}
 
 	impl<T: Config> From<SignUpEligibilityError> for Error<T> {
@@ -2278,6 +2353,7 @@ pub mod pallet {
 				SignUpEligibilityError::AlreadyPlayingWithInvite =>
 					Self::UseInviteButAlreadyPlaying,
 				SignUpEligibilityError::AlreadyRegistered => Self::AlreadyRegistered,
+				SignUpEligibilityError::Unregistered => Self::UnregisteredFromGame,
 			}
 		}
 	}
@@ -2332,12 +2408,14 @@ pub mod pallet {
 				!matches!(kind, SignUpKind::WithInvite) || maybe_player.is_none(),
 				SignUpEligibilityError::AlreadyPlayingWithInvite
 			);
-			// The player must not be registered for the current game yet.
-			ensure!(
-				maybe_player.as_ref().is_none_or(|player| !player.registered),
-				SignUpEligibilityError::AlreadyRegistered
-			);
-			Ok(maybe_player)
+			match maybe_player.as_ref().map(|player| player.registration) {
+				// The player must not be registered for the current game yet.
+				Some(PlayerRegistration::Registered) =>
+					Err(SignUpEligibilityError::AlreadyRegistered),
+				// A player unregisters from a game once and for all.
+				Some(PlayerRegistration::Unregistered) => Err(SignUpEligibilityError::Unregistered),
+				Some(PlayerRegistration::NotRegistered) | None => Ok(maybe_player),
+			}
 		}
 
 		/// Return the current game, if it is open for registration.
@@ -2899,7 +2977,7 @@ pub mod pallet {
 				&who,
 				Player {
 					first_game,
-					registered: true,
+					registration: PlayerRegistration::Registered,
 					sent_report: false,
 					early_attendance_enactment: None,
 					yes_person: 0,
@@ -3094,7 +3172,7 @@ pub mod pallet {
 
 			// Ideally we should iterate on registered players only, or at least refund the weight
 			// when skipping this part.
-			if player_info.registered {
+			if player_info.is_registered() {
 				*pending_attendance = pending_attendance.saturating_add(1);
 
 				let player_recognized_as_person =
@@ -3524,7 +3602,7 @@ pub mod pallet {
 			let result = Self::apply_attendance(
 				player_id,
 				attendance,
-				player.registered,
+				player.is_registered(),
 				game.index,
 				&mut game.pending_attendance,
 			);
@@ -3595,7 +3673,7 @@ pub mod pallet {
 
 		/// Determine the attendance status of a player given a partial vote state.
 		pub(crate) fn determine_attendance(player: &Player<T::PlayDeposit>) -> AttendanceStatus {
-			if !player.registered {
+			if !player.is_registered() {
 				return AttendanceStatus::NotAttended;
 			}
 
@@ -3655,12 +3733,12 @@ pub mod pallet {
 					cached
 				} else {
 					let half_plus_one = player.yes_person.saturating_sub(1) >= player.no_not_person;
-					let attendance = player.registered && player.sent_report && half_plus_one;
+					let attendance = player.is_registered() && player.sent_report && half_plus_one;
 
 					Self::apply_attendance(
 						&player_id,
 						attendance,
-						player.registered,
+						player.is_registered(),
 						game_index,
 						pending_attendance,
 					)
@@ -3753,7 +3831,7 @@ pub mod pallet {
 					&player_id,
 					Player {
 						first_game: player.first_game,
-						registered: false,
+						registration: PlayerRegistration::NotRegistered,
 						sent_report: false,
 						early_attendance_enactment: None,
 						yes_person: 0,
@@ -3855,39 +3933,41 @@ pub mod pallet {
 			Game::<T>::put(game);
 		}
 
-		/// Clear one bounded chunk from each per-game index <-> player map, and from the game's
-		/// [`AwardedNftClaimCredits`].
+		/// The chunks of weight `chunk_weight` that `weight_meter` can pay for, at most
+		/// [`OP_UPPER_BOUND`].
+		///
+		/// The count sizes the limit of one `clear` per map. A storage `clear` does not support
+		/// its cursor argument: a second `clear` of a map in the same block starts at the first
+		/// key again, so a loop of clears with a cursor does not advance.
+		pub(crate) fn affordable_chunks(weight_meter: &WeightMeter, chunk_weight: Weight) -> u32 {
+			weight_meter
+				.remaining()
+				.checked_div_per_component(&chunk_weight)
+				.map_or(OP_UPPER_BOUND, |chunks| {
+					u32::try_from(chunks).unwrap_or(u32::MAX).min(OP_UPPER_BOUND)
+				})
+		}
+
+		/// Clears up to `chunks` chunks of [`PLAYER_PROCESS_STEP2_CHUNK`] entries from each
+		/// per-game index <-> player map and from the game's [`AwardedNftClaimCredits`].
+		///
+		/// Call it at most once per block. A second call in the same block walks the same keys
+		/// again, so continue a [`StepResult::Continue`] in a later block.
 		///
 		/// The awarded-credit slots go with the maps, being positions in groups only those maps
 		/// resolve. Step 1 has finished the attendance backfill by now, so no award can name
 		/// this game again and the slots have no reader left.
-		pub(crate) fn player_process_step2_inner_loop(
-			game_index: GameIdx,
-			cursor1: &mut Option<Vec<u8>>,
-			cursor2: &mut Option<Vec<u8>>,
-			cursor3: &mut Option<Vec<u8>>,
-			done1: &mut bool,
-			done2: &mut bool,
-			done3: &mut bool,
-		) {
-			if !*done1 {
-				let r = IndexToPlayer::<T>::clear(PLAYER_PROCESS_STEP2_CHUNK, cursor1.as_deref());
-				*cursor1 = r.maybe_cursor;
-				*done1 = cursor1.is_none();
-			}
-			if !*done2 {
-				let r = PlayerToIndex::<T>::clear(PLAYER_PROCESS_STEP2_CHUNK, cursor2.as_deref());
-				*cursor2 = r.maybe_cursor;
-				*done2 = cursor2.is_none();
-			}
-			if !*done3 {
-				*cursor3 = T::NftClaimCredits::clear_game_credits(
-					game_index,
-					PLAYER_PROCESS_STEP2_CHUNK,
-					cursor3.as_deref(),
-				);
-				*done3 = cursor3.is_none();
-			}
+		pub(crate) fn clear_index_chunks(game_index: GameIdx, chunks: u32) -> ChunkedClear {
+			let limit = chunks.saturating_mul(PLAYER_PROCESS_STEP2_CHUNK);
+			ChunkedClear::from_removals(
+				&[
+					IndexToPlayer::<T>::clear(limit, None),
+					PlayerToIndex::<T>::clear(limit, None),
+					T::NftClaimCredits::clear_game_credits(game_index, limit),
+				],
+				PLAYER_PROCESS_STEP2_CHUNK,
+				chunks,
+			)
 		}
 
 		pub(crate) fn player_process_step2(weight_meter: &mut WeightMeter) {
@@ -3910,40 +3990,16 @@ pub mod pallet {
 				return;
 			};
 
-			let mut cursor1: Option<Vec<u8>> = None;
-			let mut cursor2: Option<Vec<u8>> = None;
-			let mut cursor3: Option<Vec<u8>> = None;
-			let mut done1 = false;
-			let mut done2 = false;
-			let mut done3 = false;
-			for _ in 0..OP_UPPER_BOUND {
-				if weight_meter
-					.try_consume(<T as Config>::WeightInfo::player_process_step2_inner_loop())
-					.is_err()
-				{
-					return;
-				}
-
-				Self::player_process_step2_inner_loop(
-					game.index,
-					&mut cursor1,
-					&mut cursor2,
-					&mut cursor3,
-					&mut done1,
-					&mut done2,
-					&mut done3,
-				);
-
-				if done1 && done2 && done3 {
-					break;
-				}
+			let chunk_weight = <T as Config>::WeightInfo::player_process_step2_inner_loop();
+			let affordable = Self::affordable_chunks(weight_meter, chunk_weight);
+			if affordable == 0 {
+				return;
 			}
+			let cleared = Self::clear_index_chunks(game.index, affordable);
+			weight_meter.consume(chunk_weight.saturating_mul(cleared.chunks.into()));
 
-			// If still not done continue later.
-			if !(done1 && done2 && done3) {
-				defensive!(
-					"indiv-pallet-game: player_process_step2 exhausted OP_UPPER_BOUND without draining; possible cursor bug or miscalibrated weight meter"
-				);
+			// A later call continues while a map still holds entries.
+			if cleared.result == StepResult::Continue {
 				return;
 			}
 
@@ -3968,7 +4024,7 @@ pub mod pallet {
 					&player_id,
 					Player {
 						first_game: player.first_game,
-						registered: false,
+						registration: PlayerRegistration::NotRegistered,
 						sent_report: false,
 						early_attendance_enactment: None,
 						yes_person: 0,
@@ -4022,51 +4078,38 @@ pub mod pallet {
 
 			let rounds = game.rounds;
 			let game_index = game.index;
+			if let CancellingStep::Step1DrainShuffle = step {
+				let chunk_weight = <T as Config>::WeightInfo::process_cancelling_step_shuffle();
+				let affordable = Self::affordable_chunks(weight_meter, chunk_weight);
+				if affordable == 0 {
+					return;
+				}
+				let cleared = Self::clear_shuffle_chunks(affordable);
+				weight_meter.consume(chunk_weight.saturating_mul(cleared.chunks.into()));
+
+				// A later call continues while a shuffle map still holds entries.
+				if cleared.result == StepResult::Continue {
+					return;
+				}
+				*step = CancellingStep::Step2DrainPlayers { last_iteration: None };
+			}
+
 			let mut finished = false;
-			let mut shuffle_cursor1: Option<Vec<u8>> = None;
-			let mut shuffle_cursor2: Option<Vec<u8>> = None;
-			let mut shuffle_done1 = false;
-			let mut shuffle_done2 = false;
-			for _ in 0..OP_UPPER_BOUND {
-				match step {
-					CancellingStep::Step1DrainShuffle => {
-						if weight_meter
-							.try_consume(
-								<T as Config>::WeightInfo::process_cancelling_step_shuffle(),
-							)
-							.is_err()
-						{
-							break;
-						}
-						Self::process_cancelling_step_shuffle(
-							&mut shuffle_cursor1,
-							&mut shuffle_cursor2,
-							&mut shuffle_done1,
-							&mut shuffle_done2,
-						);
-						// Once both shuffle maps are drained, move on to draining players.
-						if shuffle_done1 && shuffle_done2 {
-							*step = CancellingStep::Step2DrainPlayers { last_iteration: None };
-						}
-					},
-					CancellingStep::Step2DrainPlayers { last_iteration } => {
-						if weight_meter
-							.try_consume(<T as Config>::WeightInfo::process_cancelling_step_player(
-								rounds as u32,
-							))
-							.is_err()
-						{
-							break;
-						}
-						finished = Self::process_cancelling_step_player(
-							game_index,
-							last_iteration,
-							rounds,
-						);
-						if finished {
-							break;
-						}
-					},
+			if let CancellingStep::Step2DrainPlayers { last_iteration } = step {
+				for _ in 0..OP_UPPER_BOUND {
+					if weight_meter
+						.try_consume(<T as Config>::WeightInfo::process_cancelling_step_player(
+							rounds as u32,
+						))
+						.is_err()
+					{
+						break;
+					}
+					finished =
+						Self::process_cancelling_step_player(game_index, last_iteration, rounds);
+					if finished {
+						break;
+					}
 				}
 			}
 
@@ -4078,26 +4121,21 @@ pub mod pallet {
 			}
 		}
 
-		/// Clear one bounded chunk from each shuffle map ([`ShuffleRecognized`]
-		/// and [`ShuffleNotRecognized`]). The caller checks `done1 && done2`
-		/// after this call to detect overall completion.
-		pub(crate) fn process_cancelling_step_shuffle(
-			cursor1: &mut Option<Vec<u8>>,
-			cursor2: &mut Option<Vec<u8>>,
-			done1: &mut bool,
-			done2: &mut bool,
-		) {
-			if !*done1 {
-				let r = ShuffleRecognized::<T>::clear(CANCELLING_SHUFFLE_CHUNK, cursor1.as_deref());
-				*cursor1 = r.maybe_cursor;
-				*done1 = cursor1.is_none();
-			}
-			if !*done2 {
-				let r =
-					ShuffleNotRecognized::<T>::clear(CANCELLING_SHUFFLE_CHUNK, cursor2.as_deref());
-				*cursor2 = r.maybe_cursor;
-				*done2 = cursor2.is_none();
-			}
+		/// Clears up to `chunks` chunks of [`CANCELLING_SHUFFLE_CHUNK`] entries from each shuffle
+		/// map ([`ShuffleRecognized`] and [`ShuffleNotRecognized`]).
+		///
+		/// Call it at most once per block. A second call in the same block walks the same keys
+		/// again, so continue a [`StepResult::Continue`] in a later block.
+		pub(crate) fn clear_shuffle_chunks(chunks: u32) -> ChunkedClear {
+			let limit = chunks.saturating_mul(CANCELLING_SHUFFLE_CHUNK);
+			ChunkedClear::from_removals(
+				&[
+					ShuffleRecognized::<T>::clear(limit, None),
+					ShuffleNotRecognized::<T>::clear(limit, None),
+				],
+				CANCELLING_SHUFFLE_CHUNK,
+				chunks,
+			)
 		}
 
 		/// The number of attestations one player is involved in over a game with these
