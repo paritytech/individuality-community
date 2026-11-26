@@ -104,7 +104,10 @@ pub mod pallet {
 
 	use super::*;
 	use alloc::vec::Vec;
-	use frame_support::{dispatch::PostDispatchInfo, pallet_prelude::*};
+	use frame_support::{
+		dispatch::{DispatchErrorWithPostInfo, PostDispatchInfo},
+		pallet_prelude::*,
+	};
 	use frame_system::pallet_prelude::*;
 	use sp_core::H160;
 
@@ -186,7 +189,7 @@ pub mod pallet {
 		#[pallet::constant]
 		type PalletId: Get<PalletId>;
 
-		/// The origin that can call contracts as the maintainer account.
+		/// The origin that can call contracts as the maintainer account and set the limits.
 		type MaintenanceOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
 		/// The origin that sets which contract functions the maintainer account can call.
@@ -433,7 +436,7 @@ pub mod pallet {
 		#[pallet::call_index(0)]
 		#[pallet::weight(
 			<T as Config>::WeightInfo::reserve_name()
-				.saturating_add(Limits::<T>::get().contract_call_weight)
+				.saturating_add(T::MaxLimits::get().contract_call_weight)
 		)]
 		pub fn reserve_name(
 			origin: OriginFor<T>,
@@ -506,7 +509,8 @@ pub mod pallet {
 					chat_key.as_slice(),
 				),
 			};
-			let contract_weight = Self::call_dispatcher(calldata)?;
+			let contract_weight =
+				Self::call_dispatcher(calldata, <T as Config>::WeightInfo::reserve_name())?;
 
 			LiteLabelOwner::<T>::insert(&lite_label, &candidate);
 			AccountNames::<T>::mutate(&candidate, |record| {
@@ -550,7 +554,7 @@ pub mod pallet {
 		#[pallet::call_index(1)]
 		#[pallet::weight(
 			<T as Config>::WeightInfo::register_name()
-				.saturating_add(Limits::<T>::get().contract_call_weight)
+				.saturating_add(T::MaxLimits::get().contract_call_weight)
 		)]
 		pub fn register_name(
 			origin: OriginFor<T>,
@@ -563,7 +567,8 @@ pub mod pallet {
 			let who_h160 = T::AddressMapper::to_address(&who);
 			let calldata =
 				issuePersonhoodNameCall::new_abi_encoded(label.as_slice(), who_h160, &link);
-			let contract_weight = Self::call_dispatcher(calldata)?;
+			let contract_weight =
+				Self::call_dispatcher(calldata, <T as Config>::WeightInfo::register_name())?;
 
 			AliasRegistration::<T>::insert(
 				alias,
@@ -656,10 +661,7 @@ pub mod pallet {
 			#[pallet::compact] deposit_limit: u128,
 		) -> DispatchResultWithPostInfo {
 			T::MaintenanceOrigin::ensure_origin(origin)?;
-			let selector: [u8; 4] = data
-				.get(..4)
-				.and_then(|bytes| bytes.try_into().ok())
-				.ok_or(Error::<T>::MissingSelector)?;
+			let selector = *data.first_chunk::<4>().ok_or(Error::<T>::MissingSelector)?;
 			ensure!(
 				AllowedMaintainerCalls::<T>::contains_key(dest, selector),
 				Error::<T>::MaintainerCallNotAllowed
@@ -672,7 +674,12 @@ pub mod pallet {
 
 			let (_, contract_weight) =
 				T::ContractCaller::call_as(&maintainer, dest, data, weight_limit, deposit_limit)
-					.map_err(Error::<T>::from)?;
+					.map_err(|err| {
+						Self::contract_call_failure(
+							<T as Config>::WeightInfo::call_as_maintainer(),
+							err,
+						)
+					})?;
 
 			Self::deposit_event(Event::MaintainerCallExecuted { dest, selector });
 			Ok(Some(
@@ -795,12 +802,30 @@ pub mod pallet {
 		/// Calls `RootGatewayDispatcher` with the given ABI-encoded `calldata`
 		/// (which the dispatcher forwards to `DotnsPopController`) and returns
 		/// the weight reported by the contract caller.
-		fn call_dispatcher(calldata: Vec<u8>) -> Result<Weight, Error<T>> {
+		///
+		/// A failed call is charged `base` plus the weight the contract used.
+		fn call_dispatcher(
+			calldata: Vec<u8>,
+			base: Weight,
+		) -> Result<Weight, DispatchErrorWithPostInfo> {
 			let address =
 				DispatcherAddress::<T>::get().ok_or(Error::<T>::DispatcherAddressNotSet)?;
 			T::ContractCaller::call(address, calldata, 0, Limits::<T>::get().contract_call_weight)
 				.map(|(_, weight)| weight)
-				.map_err(Error::<T>::from)
+				.map_err(|err| Self::contract_call_failure(base, err))
+		}
+
+		/// Maps a failed contract call to its pallet error, charged `base` plus the weight the
+		/// contract used, so a failure refunds the unused contract call budget like a success.
+		fn contract_call_failure(
+			base: Weight,
+			err: ContractCallError,
+		) -> DispatchErrorWithPostInfo {
+			let actual_weight = base.saturating_add(err.weight_consumed);
+			DispatchErrorWithPostInfo {
+				post_info: Some(actual_weight).into(),
+				error: Error::<T>::from(err).into(),
+			}
 		}
 
 		/// Verifies a ring membership proof against the `MemberService`.

@@ -1484,8 +1484,13 @@ impl indiv_pallet_dotns_gateway::ContractCaller for ReviveContractCaller {
 			Ok(ret) => Err(indiv_pallet_dotns_gateway::ContractCallError {
 				dispatch: sp_runtime::DispatchError::Other("contract reverted"),
 				revert_data: Some(ret.data),
+				weight_consumed: cr.weight_consumed,
 			}),
-			Err(e) => Err(indiv_pallet_dotns_gateway::ContractCallError::from(e)),
+			Err(e) => Err(indiv_pallet_dotns_gateway::ContractCallError {
+				dispatch: e,
+				revert_data: None,
+				weight_consumed: cr.weight_consumed,
+			}),
 		}
 	}
 }
@@ -1512,8 +1517,13 @@ impl indiv_pallet_dotns_gateway::SignedContractCaller<AccountId> for ReviveContr
 			Ok(ret) => Err(indiv_pallet_dotns_gateway::ContractCallError {
 				dispatch: sp_runtime::DispatchError::Other("contract reverted"),
 				revert_data: Some(ret.data),
+				weight_consumed: cr.weight_consumed,
 			}),
-			Err(e) => Err(indiv_pallet_dotns_gateway::ContractCallError::from(e)),
+			Err(e) => Err(indiv_pallet_dotns_gateway::ContractCallError {
+				dispatch: e,
+				revert_data: None,
+				weight_consumed: cr.weight_consumed,
+			}),
 		}
 	}
 }

@@ -74,6 +74,18 @@ fn entry(label: &[u8], chat: Option<ChatKey>) -> Option<NameEntry> {
 	Some(NameEntry { label: base_name(label), chat })
 }
 
+/// The error of a gateway call whose contract call failed, charged `base` plus the weight the
+/// mock contract used, which is zero unless a test sets it.
+fn charged_contract_failure(
+	base: frame_support::weights::Weight,
+	error: Error<Test>,
+) -> frame_support::dispatch::DispatchErrorWithPostInfo {
+	frame_support::dispatch::DispatchErrorWithPostInfo {
+		post_info: Some(base.saturating_add(CONTRACT_CALL_WEIGHT.with(|w| *w.borrow()))).into(),
+		error: error.into(),
+	}
+}
+
 mod attestation_allowance {
 	use super::*;
 
@@ -539,7 +551,10 @@ mod reservation {
 					None,
 					SIGNED_AT_NOW,
 				),
-				Error::<Test>::ContractCallFailed
+				charged_contract_failure(
+					<Test as crate::Config>::WeightInfo::reserve_name(),
+					Error::<Test>::ContractCallFailed,
+				)
 			);
 
 			// Allowance not decremented on failure (tx reverted).
@@ -563,7 +578,10 @@ mod reservation {
 					None,
 					SIGNED_AT_NOW,
 				),
-				Error::<Test>::ContractCallFailed
+				charged_contract_failure(
+					<Test as crate::Config>::WeightInfo::reserve_name(),
+					Error::<Test>::ContractCallFailed,
+				)
 			);
 		});
 	}
@@ -1065,7 +1083,10 @@ mod registration {
 
 			assert_noop!(
 				DotnsGateway::register_name(person_registration_origin(alias_a()), ALICE, bn, link,),
-				Error::<Test>::ContractCallFailed
+				charged_contract_failure(
+					<Test as crate::Config>::WeightInfo::register_name(),
+					Error::<Test>::ContractCallFailed,
+				)
 			);
 		});
 	}
@@ -1082,7 +1103,10 @@ mod registration {
 
 			assert_noop!(
 				DotnsGateway::register_name(person_registration_origin(alias_a()), ALICE, bn, link,),
-				Error::<Test>::ContractRevert(DispatcherRevert::PersonhoodNameUnavailable)
+				charged_contract_failure(
+					<Test as crate::Config>::WeightInfo::register_name(),
+					Error::<Test>::ContractRevert(DispatcherRevert::PersonhoodNameUnavailable),
+				)
 			);
 		});
 	}
@@ -1099,7 +1123,10 @@ mod registration {
 
 			assert_noop!(
 				DotnsGateway::register_name(person_registration_origin(alias_a()), ALICE, bn, link),
-				Error::<Test>::ContractRevert(DispatcherRevert::NotRoot)
+				charged_contract_failure(
+					<Test as crate::Config>::WeightInfo::register_name(),
+					Error::<Test>::ContractRevert(DispatcherRevert::NotRoot),
+				)
 			);
 		});
 	}
@@ -1760,7 +1787,10 @@ mod maintainer {
 					LIMIT,
 					0
 				),
-				Error::<Test>::ContractRevert(DispatcherRevert::NotRoot)
+				charged_contract_failure(
+					<Test as crate::Config>::WeightInfo::call_as_maintainer(),
+					Error::<Test>::ContractRevert(DispatcherRevert::NotRoot),
+				)
 			);
 		});
 	}
@@ -1779,7 +1809,10 @@ mod maintainer {
 					LIMIT,
 					0
 				),
-				Error::<Test>::ContractCallFailed
+				charged_contract_failure(
+					<Test as crate::Config>::WeightInfo::call_as_maintainer(),
+					Error::<Test>::ContractCallFailed,
+				)
 			);
 		});
 	}
@@ -1811,6 +1844,29 @@ mod maintainer {
 			assert_eq!(charged, overhead.saturating_add(LIMIT));
 			assert_eq!(info.actual_weight, Some(overhead.saturating_add(used)));
 			assert!(info.actual_weight.unwrap().all_lt(charged));
+		});
+	}
+
+	#[test]
+	fn refunds_the_unused_contract_weight_of_a_failed_call() {
+		new_test_ext().execute_with(|| {
+			allow_setter();
+			let used = Weight::from_parts(200_000, 5_000);
+			set_contract_call_weight(used);
+			set_contract_call_revert(vec![0xde, 0xad, 0xbe, 0xef]);
+
+			let err = DotnsGateway::call_as_maintainer(
+				RuntimeOrigin::root(),
+				DEST,
+				setter_call(),
+				LIMIT,
+				0,
+			)
+			.unwrap_err();
+
+			let overhead = <Test as crate::Config>::WeightInfo::call_as_maintainer();
+			assert_eq!(err.post_info.actual_weight, Some(overhead.saturating_add(used)));
+			assert_eq!(err.error, Error::<Test>::ContractCallFailed.into());
 		});
 	}
 
@@ -1927,7 +1983,7 @@ mod limits {
 	fn sets_the_limits() {
 		new_test_ext().execute_with(|| {
 			System::set_block_number(1);
-			let limits = widest_limits();
+			let limits = MockMinLimits::get();
 
 			assert_ok!(DotnsGateway::set_limits(RuntimeOrigin::root(), limits.clone()));
 
@@ -2029,10 +2085,12 @@ mod limits {
 	}
 
 	#[test]
-	fn reserve_name_charges_and_passes_the_set_contract_call_weight() {
+	fn reserve_name_charges_the_maximum_and_passes_the_set_contract_call_weight() {
 		new_test_ext().execute_with(|| {
 			set_attestation_allowance(ATTESTER, 1);
-			let limits = widest_limits();
+			// A `set_limits` earlier in the same batch can raise the set weight after the batch
+			// is charged, so the charge is the maximum.
+			let limits = MockMinLimits::get();
 			assert_ok!(DotnsGateway::set_limits(RuntimeOrigin::root(), limits.clone()));
 
 			let call = Call::<Test>::reserve_name {
@@ -2046,11 +2104,29 @@ mod limits {
 			assert_eq!(
 				call.get_dispatch_info().call_weight,
 				<() as crate::WeightInfo>::reserve_name()
-					.saturating_add(limits.contract_call_weight)
+					.saturating_add(MockMaxLimits::get().contract_call_weight)
 			);
 
 			assert_ok!(reserve_alice(SIGNED_AT_NOW));
 			assert_eq!(get_contract_call_weight_limits(), vec![limits.contract_call_weight]);
+		});
+	}
+
+	#[test]
+	fn register_name_charges_the_maximum_contract_call_weight() {
+		new_test_ext().execute_with(|| {
+			assert_ok!(DotnsGateway::set_limits(RuntimeOrigin::root(), MockMinLimits::get()));
+
+			let call = Call::<Test>::register_name {
+				who: ALICE,
+				label: base_name(ALICE_BASE),
+				link: Link::None(default_chat_key()),
+			};
+			assert_eq!(
+				call.get_dispatch_info().call_weight,
+				<() as crate::WeightInfo>::register_name()
+					.saturating_add(MockMaxLimits::get().contract_call_weight)
+			);
 		});
 	}
 

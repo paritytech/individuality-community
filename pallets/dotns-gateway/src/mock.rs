@@ -175,6 +175,7 @@ pub fn set_contract_call_revert(revert_data: Vec<u8>) {
 	set_contract_call_result(Err(crate::ContractCallError {
 		dispatch: DispatchError::Other("revert"),
 		revert_data: Some(revert_data),
+		weight_consumed: frame_support::weights::Weight::zero(),
 	}));
 }
 
@@ -209,7 +210,10 @@ impl crate::ContractCaller for MockContractCaller {
 		CONTRACT_CALLS.with(|c| c.borrow_mut().push((dest, data, value)));
 		CONTRACT_CALL_WEIGHT_LIMITS.with(|c| c.borrow_mut().push(weight_limit));
 		let weight = CONTRACT_CALL_WEIGHT.with(|w| *w.borrow());
-		CONTRACT_CALL_RESULT.with(|r| r.borrow().clone()).map(|data| (data, weight))
+		CONTRACT_CALL_RESULT
+			.with(|r| r.borrow().clone())
+			.map(|data| (data, weight))
+			.map_err(|err| crate::ContractCallError { weight_consumed: weight, ..err })
 	}
 }
 
@@ -231,7 +235,10 @@ impl crate::SignedContractCaller<u64> for MockContractCaller {
 			})
 		});
 		let weight = CONTRACT_CALL_WEIGHT.with(|w| *w.borrow());
-		CONTRACT_CALL_RESULT.with(|r| r.borrow().clone()).map(|data| (data, weight))
+		CONTRACT_CALL_RESULT
+			.with(|r| r.borrow().clone())
+			.map(|data| (data, weight))
+			.map_err(|err| crate::ContractCallError { weight_consumed: weight, ..err })
 	}
 }
 

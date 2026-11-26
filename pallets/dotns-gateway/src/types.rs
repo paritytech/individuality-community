@@ -218,8 +218,9 @@ pub enum Link {
 /// [`crate::Config::MaxLimits`].
 #[frame_support::stored]
 pub struct GatewayLimits {
-	/// The weight budget for one contract call. The calls that reach the contracts charge it in
-	/// advance and refund what the contract does not use.
+	/// The weight budget for the contract call of `reserve_name` and `register_name`. Both charge
+	/// the budget of [`crate::Config::MaxLimits`] in advance, since a `set_limits` earlier in the
+	/// same batch can raise this one, and refund what the contract does not use.
 	pub contract_call_weight: Weight,
 	/// The time, in seconds, during which a reservation signature stays valid after `signed_at`.
 	pub signature_validity_seconds: u64,
@@ -254,11 +255,14 @@ pub struct ContractCallError {
 	/// Raw revert bytes if the failure was a contract revert; `None` for
 	/// low-level failures (out-of-gas, caller errors, etc.).
 	pub revert_data: Option<Vec<u8>>,
+	/// The weight the contract used before it failed, so the caller can refund the rest of the
+	/// contract call budget.
+	pub weight_consumed: Weight,
 }
 
 impl From<DispatchError> for ContractCallError {
 	fn from(dispatch: DispatchError) -> Self {
-		Self { dispatch, revert_data: None }
+		Self { dispatch, revert_data: None, weight_consumed: Weight::zero() }
 	}
 }
 
