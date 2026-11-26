@@ -355,7 +355,7 @@ mod benches {
 			1000 + T::PersonAuthDuration::get() as u64 + 1,
 		));
 
-		// Demote the person so we benchmark the worst case (was_demoted path).
+		// Demote the person so the touch replaces a different allowance.
 		assert_ok!(Pallet::<T>::demote_auth_expired(
 			SystemOrigin::Authorized.into(),
 			account.clone()

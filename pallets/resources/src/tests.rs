@@ -1761,43 +1761,24 @@ fn claim_cleans_up_queue() {
 }
 
 #[test]
-fn touch_keeps_existing_allowance_for_non_demoted_person() {
+fn touch_applies_a_changed_person_limit() {
 	new_test_ext().execute_with(|| {
-		let lite_account = id_to_account(1);
-		let person_id = 10;
-		let person_alias = id_to_alias(person_id);
-		let person_origin = person_origin_for(person_id, 0, 0);
+		let account = register_lite_person_with_other_grant(&OTHER_GRANT);
+		promote_to_person(&account);
 
-		let person_allowance = <Test as Config>::PersonStatementLimit::get();
+		let raised_person = StatementAllowance { max_count: 500, max_size: 160 * 1024 };
+		PersonStatementLimit::set(&raised_person);
+		touch_person();
 
-		// Register as lite person, then promote to full person.
-		set_time_sec(100);
-		assert_ok!(Resources::register_lite_person(
-			lite_person_origin(1),
-			comm_id(b"key1"),
-			username::<Test>(b"liteuser.12"),
-			None
-		));
-		let proof = mock_lite_proof(lite_account.clone());
-		assert_ok!(Resources::register_person(
-			person_origin.clone(),
-			lite_account.clone(),
-			proof,
-			PersonalUsernameChoice::Standalone(username::<Test>(b"personuser"))
-		));
-		assert_eq!(get_allowance(&lite_account), person_allowance);
-
-		// Touch without demotion — allowance should remain unchanged.
-		let min_interval: u32 = <Test as Config>::MinPersonAuthUpdateInterval::get();
-		advance_time_sec(min_interval as u64 + 1);
-		let touch_time = TestClock::now().as_secs();
-		assert_ok!(Resources::touch_person_authorization(person_origin.clone()));
-
-		assert_eq!(get_allowance(&lite_account), person_allowance);
+		assert_eq!(get_allowance(&account), OTHER_GRANT.saturating_add(raised_person.clone()));
 		assert_eq!(
-			Consumers::<Test>::get(&lite_account).unwrap().credibility,
-			Credibility::Person { alias: person_alias, last_update: touch_time, demoted: false }
+			Consumers::<Test>::get(&account).map(|info| info.allowance),
+			Some(raised_person.into())
 		);
+		assert!(matches!(
+			Consumers::<Test>::get(&account).unwrap().credibility,
+			Credibility::Person { demoted: false, .. }
+		));
 	});
 }
 

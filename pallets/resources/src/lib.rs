@@ -767,6 +767,9 @@ pub mod pallet {
 
 		/// Update a person's authorization by ensuring they can still authenticate as people.
 		///
+		/// The person receives the current `PersonStatementLimit` as allowance, so a person picks
+		/// up a changed limit on the next touch.
+		///
 		/// This call must be performed at least `MinPersonAuthUpdateInterval` seconds after the
 		/// last update in order to prevent spam.
 		#[pallet::call_index(2)]
@@ -777,9 +780,7 @@ pub mod pallet {
 			let account = AccountOfAlias::<T>::get(alias).ok_or(Error::<T>::NotRegistered)?;
 			let mut consumer_info =
 				Consumers::<T>::get(&account).ok_or(Error::<T>::NotRegistered)?;
-			let Credibility::Person { last_update, demoted: was_demoted, .. } =
-				consumer_info.credibility
-			else {
+			let Credibility::Person { last_update, .. } = consumer_info.credibility else {
 				return Err(Error::<T>::NotFullPerson.into());
 			};
 			// Ensure the authorization is old enough to be touched.
@@ -789,14 +790,11 @@ pub mod pallet {
 				Error::<T>::TouchNotReady
 			);
 
-			if was_demoted {
-				// A person's allowance should be given back.
-				Self::set_consumer_allowance(
-					&account,
-					&mut consumer_info,
-					T::PersonStatementLimit::get(),
-				);
-			}
+			Self::set_consumer_allowance(
+				&account,
+				&mut consumer_info,
+				T::PersonStatementLimit::get(),
+			);
 			consumer_info.credibility =
 				Credibility::Person { alias, last_update: now, demoted: false };
 			Consumers::<T>::insert(&account, consumer_info);
