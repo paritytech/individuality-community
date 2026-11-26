@@ -2153,6 +2153,11 @@ parameter_types! {
 	/// contract-registered collection reserves this plus revive's dispatch base, refunded to what
 	/// the call really consumed. Any other claim reserves nothing.
 	///
+	/// The ceiling is the only bound on a minter call. It covers loading the minter's code and
+	/// any code the minter delegates to, at about one byte of proof per byte of code. A minter
+	/// that exceeds it fails every claim: the credit stays unspent, and the claimant pays for the
+	/// weight consumed.
+	///
 	/// Deliberately far below the DotNS contract budget: a minter only picks an item index. The
 	/// nft-claims `integrity_test` holds the claim worst case plus this ceiling to the block
 	/// budget.
@@ -2217,7 +2222,7 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 
 	fn validate(contract: sp_core::H160) -> sp_runtime::DispatchResult {
 		frame_support::ensure!(
-			pallet_revive::AccountInfo::<Runtime>::is_contract(&contract),
+			pallet_revive::AccountInfo::<Runtime>::load_contract(&contract).is_some(),
 			indiv_pallet_nft_claims::Error::<Runtime>::MinterNotAContract
 		);
 		Ok(())
@@ -4093,11 +4098,18 @@ pallet_revive::impl_runtime_apis_plus_revive_traits! {
 		}
 	}
 
+	#[api_version(2)]
 	impl indiv_pallet_nft_claims::runtime_api::NftClaimsApi<Block> for Runtime {
 		fn preview_mints(
 			queries: indiv_pallet_nft_claims::runtime_api::PreviewQueries,
 		) -> Vec<indiv_pallet_nft_claims::runtime_api::PreviewOutcome> {
 			NftClaims::preview_mints(queries)
+		}
+
+		fn credit_statuses(
+			queries: indiv_pallet_nft_claims::runtime_api::CreditStatusQueries,
+		) -> Vec<indiv_pallet_nft_claims::runtime_api::CreditStatus> {
+			NftClaims::credit_statuses(queries)
 		}
 	}
 
