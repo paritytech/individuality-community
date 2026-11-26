@@ -76,7 +76,6 @@ impl frame_system::Config for IntegrationTest {
 #[derive_impl(pallet_balances::config_preludes::TestDefaultConfig)]
 impl pallet_balances::Config for IntegrationTest {
 	type AccountStore = System;
-	type MaxFreezes = frame_support::traits::VariantCountOf<RuntimeFreezeReason>;
 }
 
 #[derive_impl(pallet_assets::config_preludes::TestDefaultConfig)]

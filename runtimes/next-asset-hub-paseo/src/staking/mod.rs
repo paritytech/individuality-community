@@ -441,6 +441,8 @@ parameter_types! {
 
 impl pallet_staking_async::Config for Runtime {
 	type Filter = ();
+	// This runtime has no `pallet-validator-set-announcer`.
+	type OnEraStart = ();
 	type OldCurrency = Balances;
 	type Currency = Balances;
 	type CurrencyBalance = Balance;
@@ -478,7 +480,9 @@ impl pallet_staking_async::Config for Runtime {
 	type StakerRewardCalculator = pallet_staking_async::reward::DefaultStakerRewardCalculator<Self>;
 	type MaxPruningItems = MaxPruningItems;
 	type WeightInfo = weights::pallet_staking_async::WeightInfo<Runtime>;
-	type IsValidatorInactive = ();
+	// A validator is inactive in an era if it earned zero points in every service.
+	// `chill_inactive` stays disabled while no `ChillInactiveThreshold` is stored.
+	type IsValidatorInactive = pallet_staking_async::AllZero;
 }
 
 sp_runtime::impl_opaque_keys! {
@@ -601,7 +605,7 @@ impl Convert<rc_client::KeysMessage<AccountId>, Xcm<()>> for KeysMessageToXcm {
 			rc_client::KeysMessage::PurgeKeys { stash } =>
 				RelayChainRuntimePallets::AhClient(AhClientCalls::PurgeKeys { stash }).encode(),
 		};
-		rc_client::build_transact_xcm(encoded_call)
+		rc_client::build_transact_xcm(encoded_call, OriginKind::Native)
 	}
 }
 
