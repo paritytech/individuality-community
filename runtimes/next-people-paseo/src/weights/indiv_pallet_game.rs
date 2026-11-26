@@ -19,7 +19,7 @@
 //! THIS FILE WAS AUTO-GENERATED USING THE SUBSTRATE BENCHMARK CLI VERSION 64.0.1
 //! DATE: 2026-11-24, STEPS: `50`, REPEAT: `20`, LOW RANGE: `[]`, HIGH RANGE: `[]`
 //! WORST CASE MAP SIZE: `1000000`
-//! HOSTNAME: `parity-weights-f5b44885bd1f5cb6`, CPU: `Intel(R) Xeon(R) CPU @ 2.60GHz`
+//! HOSTNAME: `parity-weights-e1b49a2b09e23484`, CPU: `Intel(R) Xeon(R) CPU @ 2.60GHz`
 //! WASM-EXECUTION: `Compiled`, CHAIN: `None`, DB CACHE: 1024
 
 // Executed Command:
@@ -83,8 +83,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `9435`
 		//  Estimated: `123382`
-		// Minimum execution time: 1_541_049_000 picoseconds.
-		Weight::from_parts(1_598_608_000, 0)
+		// Minimum execution time: 1_556_446_000 picoseconds.
+		Weight::from_parts(1_608_158_000, 0)
 			.saturating_add(Weight::from_parts(0, 123382))
 			.saturating_add(T::DbWeight::get().reads(28))
 			.saturating_add(T::DbWeight::get().writes(41))
@@ -95,10 +95,10 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Game::Game` (`max_values`: Some(1), `max_size`: Some(78), added: 573, mode: `MaxEncodedLen`)
 	fn end_registration_shuffle() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `301`
+		//  Measured:  `313`
 		//  Estimated: `1563`
-		// Minimum execution time: 12_942_000 picoseconds.
-		Weight::from_parts(13_996_000, 0)
+		// Minimum execution time: 12_329_000 picoseconds.
+		Weight::from_parts(13_586_000, 0)
 			.saturating_add(Weight::from_parts(0, 1563))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -124,11 +124,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `1085 + n * (179 ±0)`
 		//  Estimated: `7404 + n * (3308 ±0)`
-		// Minimum execution time: 14_253_000 picoseconds.
-		Weight::from_parts(43_670_861, 0)
+		// Minimum execution time: 14_298_000 picoseconds.
+		Weight::from_parts(43_251_202, 0)
 			.saturating_add(Weight::from_parts(0, 7404))
-			// Standard Error: 98_077
-			.saturating_add(Weight::from_parts(69_829_365, 0).saturating_mul(n.into()))
+			// Standard Error: 92_838
+			.saturating_add(Weight::from_parts(69_921_689, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(5))
@@ -145,8 +145,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `8753`
 		//  Estimated: `123382`
-		// Minimum execution time: 7_336_000 picoseconds.
-		Weight::from_parts(8_033_000, 0)
+		// Minimum execution time: 7_287_000 picoseconds.
+		Weight::from_parts(7_999_000, 0)
 			.saturating_add(Weight::from_parts(0, 123382))
 			.saturating_add(T::DbWeight::get().reads(3))
 	}
@@ -158,8 +158,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `234`
 		//  Estimated: `1563`
-		// Minimum execution time: 7_169_000 picoseconds.
-		Weight::from_parts(7_824_000, 0)
+		// Minimum execution time: 7_072_000 picoseconds.
+		Weight::from_parts(7_729_000, 0)
 			.saturating_add(Weight::from_parts(0, 1563))
 			.saturating_add(T::DbWeight::get().reads(2))
 	}
@@ -195,8 +195,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `425`
 		//  Estimated: `4111`
-		// Minimum execution time: 32_745_000 picoseconds.
-		Weight::from_parts(34_729_000, 0)
+		// Minimum execution time: 32_433_000 picoseconds.
+		Weight::from_parts(34_343_000, 0)
 			.saturating_add(Weight::from_parts(0, 4111))
 			.saturating_add(T::DbWeight::get().reads(11))
 			.saturating_add(T::DbWeight::get().writes(3))
@@ -210,13 +210,13 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// The range of component `n` is `[1, 10]`.
 	fn shuffle_step_insert(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `676`
+		//  Measured:  `688`
 		//  Estimated: `6100`
-		// Minimum execution time: 26_665_000 picoseconds.
-		Weight::from_parts(26_311_268, 0)
+		// Minimum execution time: 26_152_000 picoseconds.
+		Weight::from_parts(25_790_293, 0)
 			.saturating_add(Weight::from_parts(0, 6100))
-			// Standard Error: 3_883
-			.saturating_add(Weight::from_parts(2_230_714, 0).saturating_mul(n.into()))
+			// Standard Error: 6_212
+			.saturating_add(Weight::from_parts(2_244_420, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(1))
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
@@ -232,11 +232,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `408 + n * (87 ±0)`
 		//  Estimated: `4891 + n * (5098 ±0)`
-		// Minimum execution time: 21_317_000 picoseconds.
-		Weight::from_parts(12_990_979, 0)
+		// Minimum execution time: 21_554_000 picoseconds.
+		Weight::from_parts(12_455_974, 0)
 			.saturating_add(Weight::from_parts(0, 4891))
-			// Standard Error: 35_801
-			.saturating_add(Weight::from_parts(13_805_543, 0).saturating_mul(n.into()))
+			// Standard Error: 32_308
+			.saturating_add(Weight::from_parts(13_942_883, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -252,11 +252,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `1151`
 		//  Estimated: `6120`
-		// Minimum execution time: 20_758_000 picoseconds.
-		Weight::from_parts(25_389_432, 0)
+		// Minimum execution time: 20_815_000 picoseconds.
+		Weight::from_parts(25_541_451, 0)
 			.saturating_add(Weight::from_parts(0, 6120))
-			// Standard Error: 1_383
-			.saturating_add(Weight::from_parts(50_702, 0).saturating_mul(p.into()))
+			// Standard Error: 1_474
+			.saturating_add(Weight::from_parts(50_293, 0).saturating_mul(p.into()))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
@@ -278,14 +278,18 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `458`
 		//  Estimated: `4111`
-		// Minimum execution time: 17_919_000 picoseconds.
-		Weight::from_parts(19_058_000, 0)
+		// Minimum execution time: 17_833_000 picoseconds.
+		Weight::from_parts(18_940_000, 0)
 			.saturating_add(Weight::from_parts(0, 4111))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
 	/// Storage: `Game::Game` (r:1 w:1)
 	/// Proof: `Game::Game` (`max_values`: Some(1), `max_size`: Some(78), added: 573, mode: `MaxEncodedLen`)
+	/// Storage: `Game::PlayerStatementLimits` (r:1 w:0)
+	/// Proof: `Game::PlayerStatementLimits` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Parameters::Parameters` (r:1 w:0)
+	/// Proof: `Parameters::Parameters` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: `Timestamp::Now` (r:1 w:0)
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `NftCredits::CreditBufferCursor` (r:1 w:0)
@@ -298,12 +302,12 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Members::Collections` (`max_values`: None, `max_size`: Some(646), added: 3121, mode: `MaxEncodedLen`)
 	fn player_process_step1() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `464`
+		//  Measured:  `467`
 		//  Estimated: `4111`
-		// Minimum execution time: 24_130_000 picoseconds.
-		Weight::from_parts(25_775_000, 0)
+		// Minimum execution time: 31_441_000 picoseconds.
+		Weight::from_parts(33_454_000, 0)
 			.saturating_add(Weight::from_parts(0, 4111))
-			.saturating_add(T::DbWeight::get().reads(6))
+			.saturating_add(T::DbWeight::get().reads(8))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `Score::Participants` (r:1 w:1)
@@ -336,21 +340,25 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// Storage: `Balances::Holds` (r:1 w:1)
 	/// Proof: `Balances::Holds` (`max_values`: None, `max_size`: Some(265), added: 2740, mode: `MaxEncodedLen`)
+	/// Storage: `Game::PlayerStatementLimits` (r:1 w:0)
+	/// Proof: `Game::PlayerStatementLimits` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a239a263ce38c84e6e61343` (r:1 w:1)
+	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a239a263ce38c84e6e61343` (r:1 w:1)
 	/// Storage: `Game::Players` (r:2 w:1)
 	/// Proof: `Game::Players` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
 	/// The range of component `r` is `[1, 10]`.
 	fn player_process_step1_inner_loop(r: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `4904 + r * (477 ±0)`
-		//  Estimated: `9020 + r * (22689 ±85)`
-		// Minimum execution time: 411_571_000 picoseconds.
-		Weight::from_parts(263_241_546, 0)
+		//  Measured:  `4944 + r * (477 ±0)`
+		//  Estimated: `9020 + r * (22689 ±0)`
+		// Minimum execution time: 416_298_000 picoseconds.
+		Weight::from_parts(273_075_466, 0)
 			.saturating_add(Weight::from_parts(0, 9020))
-			// Standard Error: 261_274
-			.saturating_add(Weight::from_parts(164_090_244, 0).saturating_mul(r.into()))
-			.saturating_add(T::DbWeight::get().reads(17))
+			// Standard Error: 366_817
+			.saturating_add(Weight::from_parts(165_343_691, 0).saturating_mul(r.into()))
+			.saturating_add(T::DbWeight::get().reads(19))
 			.saturating_add(T::DbWeight::get().reads((9_u64).saturating_mul(r.into())))
-			.saturating_add(T::DbWeight::get().writes(14))
+			.saturating_add(T::DbWeight::get().writes(15))
 			.saturating_add(Weight::from_parts(0, 22689).saturating_mul(r.into()))
 	}
 	/// Storage: `Game::Game` (r:1 w:1)
@@ -359,8 +367,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `285`
 		//  Estimated: `1563`
-		// Minimum execution time: 17_735_000 picoseconds.
-		Weight::from_parts(19_169_000, 0)
+		// Minimum execution time: 17_798_000 picoseconds.
+		Weight::from_parts(19_090_000, 0)
 			.saturating_add(Weight::from_parts(0, 1563))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -375,8 +383,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `21156`
 		//  Estimated: `260055`
-		// Minimum execution time: 302_080_000 picoseconds.
-		Weight::from_parts(316_742_000, 0)
+		// Minimum execution time: 306_460_000 picoseconds.
+		Weight::from_parts(315_739_000, 0)
 			.saturating_add(Weight::from_parts(0, 260055))
 			.saturating_add(T::DbWeight::get().reads(303))
 			.saturating_add(T::DbWeight::get().writes(300))
@@ -391,8 +399,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `176`
 		//  Estimated: `3545`
-		// Minimum execution time: 9_250_000 picoseconds.
-		Weight::from_parts(9_965_000, 0)
+		// Minimum execution time: 8_948_000 picoseconds.
+		Weight::from_parts(9_589_000, 0)
 			.saturating_add(Weight::from_parts(0, 3545))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -405,8 +413,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `7711`
 		//  Estimated: `258439`
-		// Minimum execution time: 199_824_000 picoseconds.
-		Weight::from_parts(206_836_000, 0)
+		// Minimum execution time: 195_270_000 picoseconds.
+		Weight::from_parts(203_210_000, 0)
 			.saturating_add(Weight::from_parts(0, 258439))
 			.saturating_add(T::DbWeight::get().reads(202))
 			.saturating_add(T::DbWeight::get().writes(200))
@@ -426,11 +434,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `414 + n * (4 ±0)`
 		//  Estimated: `6100`
-		// Minimum execution time: 21_308_000 picoseconds.
-		Weight::from_parts(21_308_580, 0)
+		// Minimum execution time: 21_080_000 picoseconds.
+		Weight::from_parts(20_732_437, 0)
 			.saturating_add(Weight::from_parts(0, 6100))
-			// Standard Error: 16_152
-			.saturating_add(Weight::from_parts(1_456_998, 0).saturating_mul(n.into()))
+			// Standard Error: 18_185
+			.saturating_add(Weight::from_parts(1_555_761, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(4))
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
@@ -453,6 +461,10 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Airdrop::Events` (`max_values`: None, `max_size`: Some(833), added: 3308, mode: `MaxEncodedLen`)
 	/// Storage: `Airdrop::Registrations` (r:16 w:16)
 	/// Proof: `Airdrop::Registrations` (`max_values`: None, `max_size`: Some(105), added: 2580, mode: `MaxEncodedLen`)
+	/// Storage: `Game::PlayerStatementLimits` (r:1 w:1)
+	/// Proof: `Game::PlayerStatementLimits` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Parameters::Parameters` (r:1 w:0)
+	/// Proof: `Parameters::Parameters` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653adef12e42f3e487e9b14095` (r:1 w:1)
 	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653adef12e42f3e487e9b14095` (r:1 w:1)
 	/// Storage: `Game::CommunicationIdentifiers` (r:0 w:1)
@@ -460,16 +472,16 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// The range of component `n` is `[0, 16]`.
 	fn sign_up_with_invite(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `562 + n * (183 ±0)`
-		//  Estimated: `4012 + n * (3308 ±0)`
-		// Minimum execution time: 48_324_000 picoseconds.
-		Weight::from_parts(60_659_403, 0)
-			.saturating_add(Weight::from_parts(0, 4012))
-			// Standard Error: 113_143
-			.saturating_add(Weight::from_parts(660_388_451, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(8))
+		//  Measured:  `565 + n * (183 ±0)`
+		//  Estimated: `4015 + n * (3308 ±0)`
+		// Minimum execution time: 52_878_000 picoseconds.
+		Weight::from_parts(63_259_289, 0)
+			.saturating_add(Weight::from_parts(0, 4015))
+			// Standard Error: 93_854
+			.saturating_add(Weight::from_parts(657_523_004, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(10))
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
-			.saturating_add(T::DbWeight::get().writes(6))
+			.saturating_add(T::DbWeight::get().writes(7))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 3308).saturating_mul(n.into()))
 	}
@@ -495,6 +507,10 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Airdrop::Events` (`max_values`: None, `max_size`: Some(833), added: 3308, mode: `MaxEncodedLen`)
 	/// Storage: `Airdrop::Registrations` (r:16 w:16)
 	/// Proof: `Airdrop::Registrations` (`max_values`: None, `max_size`: Some(105), added: 2580, mode: `MaxEncodedLen`)
+	/// Storage: `Game::PlayerStatementLimits` (r:1 w:1)
+	/// Proof: `Game::PlayerStatementLimits` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Parameters::Parameters` (r:1 w:0)
+	/// Proof: `Parameters::Parameters` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653adef12e42f3e487e9b14095` (r:1 w:1)
 	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653adef12e42f3e487e9b14095` (r:1 w:1)
 	/// Storage: `Game::CommunicationIdentifiers` (r:0 w:1)
@@ -502,16 +518,16 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// The range of component `n` is `[0, 16]`.
 	fn sign_up_with_account_new(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `665 + n * (183 ±0)`
-		//  Estimated: `4115 + n * (3308 ±0)`
-		// Minimum execution time: 85_514_000 picoseconds.
-		Weight::from_parts(96_514_016, 0)
-			.saturating_add(Weight::from_parts(0, 4115))
-			// Standard Error: 117_912
-			.saturating_add(Weight::from_parts(662_140_240, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(10))
+		//  Measured:  `668 + n * (183 ±0)`
+		//  Estimated: `4118 + n * (3308 ±0)`
+		// Minimum execution time: 91_219_000 picoseconds.
+		Weight::from_parts(104_221_764, 0)
+			.saturating_add(Weight::from_parts(0, 4118))
+			// Standard Error: 125_347
+			.saturating_add(Weight::from_parts(659_571_388, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(12))
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
-			.saturating_add(T::DbWeight::get().writes(7))
+			.saturating_add(T::DbWeight::get().writes(8))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 3308).saturating_mul(n.into()))
 	}
@@ -544,11 +560,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `2206 + n * (183 ±0)`
 		//  Estimated: `4657 + n * (3308 ±0)`
-		// Minimum execution time: 41_794_000 picoseconds.
-		Weight::from_parts(43_576_000, 0)
+		// Minimum execution time: 41_948_000 picoseconds.
+		Weight::from_parts(77_781_156, 0)
 			.saturating_add(Weight::from_parts(0, 4657))
-			// Standard Error: 1_294_685
-			.saturating_add(Weight::from_parts(29_129_177_409, 0).saturating_mul(n.into()))
+			// Standard Error: 2_136_582
+			.saturating_add(Weight::from_parts(28_997_062_212, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(3))
@@ -563,6 +579,10 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `Game::AliasToStmtAccount` (r:1 w:1)
 	/// Proof: `Game::AliasToStmtAccount` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
+	/// Storage: `Game::PlayerStatementLimits` (r:1 w:1)
+	/// Proof: `Game::PlayerStatementLimits` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Parameters::Parameters` (r:1 w:0)
+	/// Proof: `Parameters::Parameters` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a6b79c57e6a095239282c04` (r:1 w:1)
 	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653a6b79c57e6a095239282c04` (r:1 w:1)
 	/// Storage: `Game::StmtAccountToAlias` (r:1 w:2)
@@ -590,16 +610,16 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// The range of component `n` is `[0, 16]`.
 	fn sign_up_with_alias(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `2207 + n * (183 ±0)`
-		//  Estimated: `6100 + n * (3308 ±8)`
-		// Minimum execution time: 115_173_000 picoseconds.
-		Weight::from_parts(162_960_335, 0)
+		//  Measured:  `2210 + n * (183 ±0)`
+		//  Estimated: `6100 + n * (3308 ±0)`
+		// Minimum execution time: 120_580_000 picoseconds.
+		Weight::from_parts(184_856_675, 0)
 			.saturating_add(Weight::from_parts(0, 6100))
-			// Standard Error: 2_704_372
-			.saturating_add(Weight::from_parts(29_153_538_802, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(15))
+			// Standard Error: 2_309_178
+			.saturating_add(Weight::from_parts(28_992_832_666, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(17))
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
-			.saturating_add(T::DbWeight::get().writes(9))
+			.saturating_add(T::DbWeight::get().writes(10))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 3308).saturating_mul(n.into()))
 	}
@@ -625,6 +645,10 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Airdrop::Events` (`max_values`: None, `max_size`: Some(833), added: 3308, mode: `MaxEncodedLen`)
 	/// Storage: `Airdrop::Registrations` (r:16 w:16)
 	/// Proof: `Airdrop::Registrations` (`max_values`: None, `max_size`: Some(105), added: 2580, mode: `MaxEncodedLen`)
+	/// Storage: `Game::PlayerStatementLimits` (r:1 w:1)
+	/// Proof: `Game::PlayerStatementLimits` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Parameters::Parameters` (r:1 w:0)
+	/// Proof: `Parameters::Parameters` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653adef12e42f3e487e9b14095` (r:1 w:1)
 	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653adef12e42f3e487e9b14095` (r:1 w:1)
 	/// Storage: `Game::CommunicationIdentifiers` (r:0 w:1)
@@ -632,16 +656,16 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// The range of component `n` is `[0, 16]`.
 	fn sign_up_with_account_lite_invite(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `739 + n * (183 ±0)`
-		//  Estimated: `4189 + n * (3308 ±0)`
-		// Minimum execution time: 61_351_000 picoseconds.
-		Weight::from_parts(70_788_644, 0)
-			.saturating_add(Weight::from_parts(0, 4189))
-			// Standard Error: 177_214
-			.saturating_add(Weight::from_parts(663_717_598, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(10))
+		//  Measured:  `742 + n * (183 ±0)`
+		//  Estimated: `4192 + n * (3308 ±0)`
+		// Minimum execution time: 66_108_000 picoseconds.
+		Weight::from_parts(77_745_972, 0)
+			.saturating_add(Weight::from_parts(0, 4192))
+			// Standard Error: 188_153
+			.saturating_add(Weight::from_parts(658_604_278, 0).saturating_mul(n.into()))
+			.saturating_add(T::DbWeight::get().reads(12))
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
-			.saturating_add(T::DbWeight::get().writes(7))
+			.saturating_add(T::DbWeight::get().writes(8))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 3308).saturating_mul(n.into()))
 	}
@@ -681,15 +705,15 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// The range of component `n` is `[0, 9]`.
 	fn report(e: u32, n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `9280 + e * (252 ±0) + n * (237 ±0)`
-		//  Estimated: `8337 + e * (3439 ±5) + n * (2573 ±48)`
-		// Minimum execution time: 601_871_000 picoseconds.
-		Weight::from_parts(228_763_425, 0)
+		//  Measured:  `9311 + e * (252 ±0) + n * (237 ±0)`
+		//  Estimated: `8337 + e * (3439 ±28) + n * (2573 ±266)`
+		// Minimum execution time: 561_378_000 picoseconds.
+		Weight::from_parts(204_610_151, 0)
 			.saturating_add(Weight::from_parts(0, 8337))
-			// Standard Error: 103_501
-			.saturating_add(Weight::from_parts(33_315_893, 0).saturating_mul(e.into()))
-			// Standard Error: 882_968
-			.saturating_add(Weight::from_parts(24_533_658, 0).saturating_mul(n.into()))
+			// Standard Error: 107_363
+			.saturating_add(Weight::from_parts(30_419_199, 0).saturating_mul(e.into()))
+			// Standard Error: 915_915
+			.saturating_add(Weight::from_parts(27_748_262, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(18))
 			.saturating_add(T::DbWeight::get().reads((4_u64).saturating_mul(e.into())))
 			.saturating_add(T::DbWeight::get().reads((4_u64).saturating_mul(n.into())))
@@ -709,6 +733,10 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Game::Game` (`max_values`: Some(1), `max_size`: Some(78), added: 573, mode: `MaxEncodedLen`)
 	/// Storage: `Balances::Holds` (r:1 w:1)
 	/// Proof: `Balances::Holds` (`max_values`: None, `max_size`: Some(265), added: 2740, mode: `MaxEncodedLen`)
+	/// Storage: `Game::PlayerStatementLimits` (r:1 w:0)
+	/// Proof: `Game::PlayerStatementLimits` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Parameters::Parameters` (r:1 w:0)
+	/// Proof: `Parameters::Parameters` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653ad861ea1ebf4800d4b89f4f` (r:1 w:1)
 	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653ad861ea1ebf4800d4b89f4f` (r:1 w:1)
 	/// Storage: `Score::Participants` (r:1 w:1)
@@ -727,12 +755,12 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Members::OnboardingQueue` (`max_values`: None, `max_size`: Some(8206), added: 10681, mode: `MaxEncodedLen`)
 	fn offboard_account() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1400`
+		//  Measured:  `1403`
 		//  Estimated: `11671`
-		// Minimum execution time: 127_294_000 picoseconds.
-		Weight::from_parts(135_887_000, 0)
+		// Minimum execution time: 130_240_000 picoseconds.
+		Weight::from_parts(138_454_000, 0)
 			.saturating_add(Weight::from_parts(0, 11671))
-			.saturating_add(T::DbWeight::get().reads(13))
+			.saturating_add(T::DbWeight::get().reads(15))
 			.saturating_add(T::DbWeight::get().writes(8))
 	}
 	/// Storage: `NetworkSuffix::NetworkSuffix` (r:1 w:0)
@@ -745,6 +773,10 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Game::Game` (`max_values`: Some(1), `max_size`: Some(78), added: 573, mode: `MaxEncodedLen`)
 	/// Storage: `Game::AliasToStmtAccount` (r:1 w:1)
 	/// Proof: `Game::AliasToStmtAccount` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
+	/// Storage: `Game::PlayerStatementLimits` (r:1 w:0)
+	/// Proof: `Game::PlayerStatementLimits` (`max_values`: Some(1), `max_size`: Some(17), added: 512, mode: `MaxEncodedLen`)
+	/// Storage: `Parameters::Parameters` (r:1 w:0)
+	/// Proof: `Parameters::Parameters` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653acecc1507dc1ddd7295951c` (r:1 w:1)
 	/// Proof: UNKNOWN KEY `0x3a73746174656d656e745f616c6c6f77616e63653acecc1507dc1ddd7295951c` (r:1 w:1)
 	/// Storage: `Score::Participants` (r:1 w:1)
@@ -753,12 +785,12 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 	/// Proof: `Game::StmtAccountToAlias` (`max_values`: None, `max_size`: Some(80), added: 2555, mode: `MaxEncodedLen`)
 	fn offboard_person() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `831`
-		//  Estimated: `4296`
-		// Minimum execution time: 47_576_000 picoseconds.
-		Weight::from_parts(50_359_000, 0)
-			.saturating_add(Weight::from_parts(0, 4296))
-			.saturating_add(T::DbWeight::get().reads(7))
+		//  Measured:  `834`
+		//  Estimated: `4299`
+		// Minimum execution time: 51_979_000 picoseconds.
+		Weight::from_parts(54_936_000, 0)
+			.saturating_add(Weight::from_parts(0, 4299))
+			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().writes(6))
 	}
 	/// Storage: `Game::ArchivedPlayers` (r:1 w:1)
@@ -783,8 +815,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `1356`
 		//  Estimated: `11671`
-		// Minimum execution time: 81_057_000 picoseconds.
-		Weight::from_parts(86_122_000, 0)
+		// Minimum execution time: 79_630_000 picoseconds.
+		Weight::from_parts(84_711_000, 0)
 			.saturating_add(Weight::from_parts(0, 11671))
 			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().writes(7))
@@ -796,7 +828,7 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		//  Measured:  `109`
 		//  Estimated: `3517`
 		// Minimum execution time: 11_012_000 picoseconds.
-		Weight::from_parts(11_901_000, 0)
+		Weight::from_parts(11_787_000, 0)
 			.saturating_add(Weight::from_parts(0, 3517))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -810,11 +842,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `763 + n * (52 ±0)`
 		//  Estimated: `990 + n * (2571 ±0)`
-		// Minimum execution time: 13_056_000 picoseconds.
-		Weight::from_parts(13_206_000, 0)
+		// Minimum execution time: 12_731_000 picoseconds.
+		Weight::from_parts(13_283_000, 0)
 			.saturating_add(Weight::from_parts(0, 990))
-			// Standard Error: 6_324
-			.saturating_add(Weight::from_parts(2_239_480, 0).saturating_mul(n.into()))
+			// Standard Error: 4_366
+			.saturating_add(Weight::from_parts(1_933_026, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(1))
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
@@ -828,8 +860,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `187`
 		//  Estimated: `3561`
-		// Minimum execution time: 18_087_000 picoseconds.
-		Weight::from_parts(19_291_000, 0)
+		// Minimum execution time: 17_904_000 picoseconds.
+		Weight::from_parts(19_267_000, 0)
 			.saturating_add(Weight::from_parts(0, 3561))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -842,8 +874,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `231`
 		//  Estimated: `3561`
-		// Minimum execution time: 16_940_000 picoseconds.
-		Weight::from_parts(18_158_000, 0)
+		// Minimum execution time: 16_974_000 picoseconds.
+		Weight::from_parts(18_121_000, 0)
 			.saturating_add(Weight::from_parts(0, 3561))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -861,11 +893,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `328`
 		//  Estimated: `123382`
-		// Minimum execution time: 33_055_000 picoseconds.
-		Weight::from_parts(25_983_113, 0)
+		// Minimum execution time: 32_534_000 picoseconds.
+		Weight::from_parts(25_050_790, 0)
 			.saturating_add(Weight::from_parts(0, 123382))
-			// Standard Error: 15_288
-			.saturating_add(Weight::from_parts(8_752_212, 0).saturating_mul(n.into()))
+			// Standard Error: 16_734
+			.saturating_add(Weight::from_parts(8_886_115, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
@@ -875,8 +907,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `8753`
 		//  Estimated: `123382`
-		// Minimum execution time: 186_764_000 picoseconds.
-		Weight::from_parts(192_678_000, 0)
+		// Minimum execution time: 182_544_000 picoseconds.
+		Weight::from_parts(194_324_000, 0)
 			.saturating_add(Weight::from_parts(0, 123382))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -887,8 +919,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `0`
 		//  Estimated: `0`
-		// Minimum execution time: 5_590_000 picoseconds.
-		Weight::from_parts(6_168_000, 0)
+		// Minimum execution time: 5_628_000 picoseconds.
+		Weight::from_parts(6_129_000, 0)
 			.saturating_add(Weight::from_parts(0, 0))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
@@ -917,11 +949,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `681 + n * (183 ±0)`
 		//  Estimated: `3593 + n * (3308 ±0)`
-		// Minimum execution time: 103_449_000 picoseconds.
-		Weight::from_parts(173_790_524, 0)
+		// Minimum execution time: 97_526_000 picoseconds.
+		Weight::from_parts(97_181_693, 0)
 			.saturating_add(Weight::from_parts(0, 3593))
-			// Standard Error: 296_116
-			.saturating_add(Weight::from_parts(664_385_765, 0).saturating_mul(n.into()))
+			// Standard Error: 187_228
+			.saturating_add(Weight::from_parts(658_957_196, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(8))
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -937,8 +969,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `268`
 		//  Estimated: `1563`
-		// Minimum execution time: 13_337_000 picoseconds.
-		Weight::from_parts(14_442_000, 0)
+		// Minimum execution time: 13_165_000 picoseconds.
+		Weight::from_parts(14_319_000, 0)
 			.saturating_add(Weight::from_parts(0, 1563))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -951,8 +983,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `235`
 		//  Estimated: `3563`
-		// Minimum execution time: 9_910_000 picoseconds.
-		Weight::from_parts(10_672_000, 0)
+		// Minimum execution time: 9_899_000 picoseconds.
+		Weight::from_parts(10_823_000, 0)
 			.saturating_add(Weight::from_parts(0, 3563))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -975,8 +1007,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `4023`
 		//  Estimated: `53918`
-		// Minimum execution time: 1_166_603_000 picoseconds.
-		Weight::from_parts(1_212_846_000, 0)
+		// Minimum execution time: 1_174_762_000 picoseconds.
+		Weight::from_parts(1_259_645_000, 0)
 			.saturating_add(Weight::from_parts(0, 53918))
 			.saturating_add(T::DbWeight::get().reads(22))
 			.saturating_add(T::DbWeight::get().writes(54))
@@ -989,8 +1021,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `234`
 		//  Estimated: `1563`
-		// Minimum execution time: 13_226_000 picoseconds.
-		Weight::from_parts(14_442_000, 0)
+		// Minimum execution time: 12_973_000 picoseconds.
+		Weight::from_parts(13_929_000, 0)
 			.saturating_add(Weight::from_parts(0, 1563))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -1012,11 +1044,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `851 + n * (179 ±0)`
 		//  Estimated: `7404 + n * (3308 ±0)`
-		// Minimum execution time: 3_209_000 picoseconds.
-		Weight::from_parts(27_475_592, 0)
+		// Minimum execution time: 3_187_000 picoseconds.
+		Weight::from_parts(20_490_522, 0)
 			.saturating_add(Weight::from_parts(0, 7404))
-			// Standard Error: 196_293
-			.saturating_add(Weight::from_parts(72_413_828, 0).saturating_mul(n.into()))
+			// Standard Error: 160_810
+			.saturating_add(Weight::from_parts(73_677_711, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(4))
@@ -1049,8 +1081,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `1549`
 		//  Estimated: `7404`
-		// Minimum execution time: 136_588_000 picoseconds.
-		Weight::from_parts(146_278_000, 0)
+		// Minimum execution time: 136_020_000 picoseconds.
+		Weight::from_parts(145_250_000, 0)
 			.saturating_add(Weight::from_parts(0, 7404))
 			.saturating_add(T::DbWeight::get().reads(12))
 			.saturating_add(T::DbWeight::get().writes(8))
@@ -1061,8 +1093,8 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `0`
 		//  Estimated: `0`
-		// Minimum execution time: 6_165_000 picoseconds.
-		Weight::from_parts(6_656_000, 0)
+		// Minimum execution time: 5_936_000 picoseconds.
+		Weight::from_parts(6_466_000, 0)
 			.saturating_add(Weight::from_parts(0, 0))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
@@ -1095,11 +1127,11 @@ impl<T: frame_system::Config> indiv_pallet_game::WeightInfo for WeightInfo<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `3698`
 		//  Estimated: `10150`
-		// Minimum execution time: 108_331_000 picoseconds.
-		Weight::from_parts(85_867_715, 0)
+		// Minimum execution time: 107_756_000 picoseconds.
+		Weight::from_parts(83_521_544, 0)
 			.saturating_add(Weight::from_parts(0, 10150))
-			// Standard Error: 59_778
-			.saturating_add(Weight::from_parts(14_914_421, 0).saturating_mul(n.into()))
+			// Standard Error: 58_933
+			.saturating_add(Weight::from_parts(15_188_071, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(13))
 			.saturating_add(T::DbWeight::get().writes(8))
 	}

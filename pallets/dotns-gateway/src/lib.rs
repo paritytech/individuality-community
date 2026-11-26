@@ -423,9 +423,9 @@ pub mod pallet {
 		///   server-side after the candidate signs, so the candidate cannot commit to them at
 		///   signing time).
 		/// - `lite_label`: the lite-person label. Must be `<dns-stem>.<2+ digits>` (e.g.
-		///   `alice.42`), matching `StringUtils.isLitePersonLabel` in the contracts. Only the
-		///   `<dns-stem>` portion enters the signed message; the digits ride along as an unsigned
-		///   extrinsic argument used for the contract calldata and storage key.
+		///   `alice.42`). Only the `<dns-stem>` portion enters the signed message; the digits ride
+		///   along as an unsigned extrinsic argument used for the contract calldata and storage
+		///   key.
 		/// - `chat_key`: 65-byte public key used for ECDH chat.
 		/// - `reserved_base_label`: optional personhood label queued for the candidate, to issue
 		///   later as their personhood name. Must be lowercase ASCII letters only (e.g. `alice`).

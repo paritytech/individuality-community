@@ -20,12 +20,14 @@ extern crate alloc;
 
 use crate::{
 	Config, Game, GameAirdrop, GameIdx, GameInfo, GameSchedule, GameSchedules, GameState, Pallet,
+	PlayerStatementLimits, PlayerStatementLimitsRecord,
 };
 use alloc::vec::Vec;
 use frame_support::{
 	migrations::VersionedMigration, pallet_prelude::*, storage_alias,
 	traits::UncheckedOnRuntimeUpgrade,
 };
+use sp_statement_store::StatementAllowance;
 
 const LOG_TARGET: &str = "runtime::game::migration";
 
@@ -168,6 +170,43 @@ pub mod v1 {
 				"every schedule must have the migrated window"
 			);
 			ensure!(Game::<T>::get().map(|game| game.index) == game, "the game must not change");
+			Ok(())
+		}
+	}
+}
+
+/// Stores `Granted` as [`PlayerStatementLimitsRecord::granted`].
+///
+/// `Granted` must be the allowance that live players hold before the upgrade.
+pub type MigrateV1ToV2<T, Granted> = VersionedMigration<
+	1,
+	2,
+	v2::InitialisePlayerStatementLimits<T, Granted>,
+	Pallet<T>,
+	<T as frame_system::Config>::DbWeight,
+>;
+
+pub mod v2 {
+	use super::*;
+
+	/// Use [`super::MigrateV1ToV2`] rather than this directly.
+	pub struct InitialisePlayerStatementLimits<T, Granted>(PhantomData<(T, Granted)>);
+
+	impl<T: Config, Granted: Get<StatementAllowance>> UncheckedOnRuntimeUpgrade
+		for InitialisePlayerStatementLimits<T, Granted>
+	{
+		fn on_runtime_upgrade() -> Weight {
+			PlayerStatementLimits::<T>::put(PlayerStatementLimitsRecord {
+				granted: Granted::get().into(),
+				next: None,
+			});
+			log::info!(target: LOG_TARGET, "initialised PlayerStatementLimits");
+			T::DbWeight::get().writes(1)
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn post_upgrade(_state: Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+			ensure!(PlayerStatementLimits::<T>::exists(), "PlayerStatementLimits is not set");
 			Ok(())
 		}
 	}

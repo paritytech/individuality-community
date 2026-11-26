@@ -69,7 +69,6 @@ mod benchmarks {
 		DispatcherAddress::<T>::put(H160([0xd0; 20]));
 
 		// 32-byte lite-format label: 29 lowercase letters, a dot, two digits.
-		// Matches `<dns-stem>.<2+ digits>` per `StringUtils.isLitePersonLabel`.
 		let mut lite_bytes = [b'x'; 32];
 		lite_bytes[29] = b'.';
 		lite_bytes[30] = b'4';
