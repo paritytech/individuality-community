@@ -448,6 +448,8 @@ fn bounded_metadata<T: indiv_pallet_scarcity::Config>(
 		.collect()
 }
 
+const LOG_TARGET: &str = "runtime::scarcity-precompile";
+
 /// Deposit an EVM event, charging its weight.
 fn deposit_event<T: pallet_revive::Config>(
 	env: &mut impl Ext<T = T>,

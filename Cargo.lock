@@ -5604,6 +5604,7 @@ dependencies = [
  "indiv-pallet-scarcity",
  "indiv-precompile-fixtures",
  "indiv-precompile-support",
+ "log",
  "pallet-balances",
  "pallet-revive",
  "parity-scale-codec",
