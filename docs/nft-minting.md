@@ -6,7 +6,7 @@ This guide describes how an NFT claim credit becomes an NFT, and how a wallet or
 
 | Stage | Chain | What happens | Trigger |
 |---|---|---|---|
-| 1. Earned | People | The `game` pallet awards a credit and `nft-credits` adds it to the buffer of a tree block. | A `report` by another player, or the attendance processing after the reporting phase. |
+| 1. Earned | People | The `game` pallet awards a credit and `nft-credits` adds it to the buffer of a tree block. | A `report` by another player, a `claim_tenure_credits` before the game, or the attendance processing after the reporting phase. |
 | 2. Committed | People | The block after the tree block builds the Merkle tree over the buffer and records its root. | `on_initialize` |
 | 3. Sent | People | The offchain worker sends the tree to Asset Hub over XCM. | Offchain worker, with retries |
 | 4. Claimable | Asset Hub | `nft-claims` stores the tree. The claimant can now mint. | `receive_credit_trees` |
@@ -23,23 +23,29 @@ The claimant is an `AccountOrPerson`: `Account(account)` with `ClaimantKind::Acc
 
 ## Award phases
 
-A game awards credits in two phases:
+A game awards two kinds of credit:
 
-1. During reporting, each `report` awards a credit to every co-member that the reporter votes `Person` for.
-2. After reporting, the game processes each player's attendance. An attendee then gets the rest of their credits: one credit for every co-member in every round they played, whether or not that co-member reported. A player who did not attend keeps only the credits from reports.
+- A **game credit** for every co-member in every round a player plays.
+- A **tenure credit** for each tenure threshold a player reaches. The tenure is the number of games the player attended while recognised as a person. The People chain sets the thresholds in `Game::TenureThresholds`.
+
+The credits arrive in three phases:
+
+1. Before the game starts, a player that signed up calls `claim_tenure_credits`, once per game. The call opens at the game's `tenure_claim_opens` time and closes when the game starts. A person receives the tenure credits at once, as far as the credit buffers have room. An account that is not a person, or a suspended person, receives none yet.
+2. During reporting, each `report` awards a game credit to every co-member that the reporter votes `Person` for.
+3. After reporting, the game processes each player's attendance. An attendee then gets the rest of their game credits: one for every co-member in every round they played, whether or not that co-member reported. The same step pays the tenure credits not yet paid: to a person in all cases, and to an account that is not a person, or a suspended person, only if it attended. A player who did not attend keeps only the game credits from reports. A person who did not attend still receives all their tenure credits.
 
 Attendance processing can take many blocks. Read `Game::Game` on the People chain to tell whether credits of the current game can still arrive:
 
 | `Game::Game` | Credits of the game |
 |---|---|
-| `Registration`, `Shuffle` or `Reporting` | Reports can award more credits. |
-| `PlayerProcess { step: Step1ProcessPlayers }` | Attendance processing can award more credits. |
+| `Registration`, `Shuffle` or `Reporting` | Tenure claims or reports can award more credits. |
+| `PlayerProcess { step: Step1ProcessPlayers }` | Attendance processing can award more game and tenure credits. |
 | `PlayerProcess { step: Step2ClearIndices }` | Final. |
 | `Cancelling`, or no game with this index | Final. |
 
 `Game::GameEnded { index }` marks the end of a game, and `Game::GameCancelled { game_index }` marks a cancellation. After either event, no credit of that game is awarded. The game's last trees follow the stages above. Each tree carries `game_index`, so a wallet groups the trees of a game by it.
 
-An attendee's final count is the sum, over the rounds they played, of their group's size minus one.
+An attendee's final count of game credits is the sum, over the rounds they played, of their group's size minus one. Their tenure credits come on top. The `Game::TenureCreditsClaimed { player, game_index, credits }` event contains how many a player claimed.
 
 ## Expiry
 

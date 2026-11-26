@@ -84,8 +84,9 @@ the credits to the Asset Hub, where the claimant mints:
 - `claim` — mint the NFT of one credit into a registered collection, with the
   inclusion proof from the People chain's `nft_claim_credit_proofs` runtime API.
 
-See [nft-minting.md](./nft-minting.md) for the stages between a game and the
-mint, and how a wallet tracks them.
+[nft-overview.md](./nft-overview.md) gives a technical overview of the whole
+stack, from a game credit to an owned NFT. See [nft-minting.md](./nft-minting.md)
+for the stages between a game and the mint, and how a wallet tracks them.
 
 ## Reference
 
