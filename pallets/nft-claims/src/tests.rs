@@ -307,7 +307,7 @@ mod claim {
 	use crate::{
 		runtime_api::{
 			CreditStatus, CreditStatusQueries, CreditStatusQuery, PreviewFailure, PreviewOutcome,
-			PreviewQueries, PreviewQuery, SelectionKind, MAX_PREVIEW_QUERIES, MAX_STATUS_QUERIES,
+			PreviewQueries, PreviewQuery, SelectionKind, MAX_PREVIEW_QUERIES,
 		},
 		ClaimedLeaves, CollectionMinter, CollectionMinters, Error, ItemSelection,
 	};
@@ -2131,11 +2131,13 @@ mod claim {
 		});
 	}
 
+	/// Wallets batch up to 256 queries per call, as `docs/nft-minting.md` documents, so the test
+	/// uses the literal bound rather than the constant.
 	#[test]
 	fn a_status_request_over_the_limit_does_not_decode() {
 		let query = CreditStatusQuery { block: BLOCK, leaf_index: 0 };
-		let full = vec![query; MAX_STATUS_QUERIES as usize].encode();
-		let oversized = vec![query; MAX_STATUS_QUERIES as usize + 1].encode();
+		let full = vec![query; 256].encode();
+		let oversized = vec![query; 257].encode();
 
 		assert!(CreditStatusQueries::decode(&mut &full[..]).is_ok());
 		assert!(CreditStatusQueries::decode(&mut &oversized[..]).is_err());
