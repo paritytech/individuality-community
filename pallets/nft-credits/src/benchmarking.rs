@@ -41,18 +41,19 @@ pub trait BenchmarkHelper {
 mod benches {
 	use super::*;
 
-	// The `on_initialize` path that records a block's root. `n` is the number of leaves the tree
-	// is built over, swept over the whole range one tree holds: the hashing and the awards'
-	// contribution to the proof size both scale with it.
+	// The `on_initialize` path that records a block's root. `c` is the number of full award chunks
+	// the tree is built over: the chunk reads, the hashing, and the proof size all scale with it.
+	// The component counts chunks, not awards, so that each chunk adds one whole read.
 	//
-	// Filing the block for expiry is a fixed pair of writes whatever `n` is, the awards being
+	// Filing the block for expiry is a fixed pair of writes whatever `c` is, the awards being
 	// removed by a sweep of their own rather than by this path.
 	//
 	// The delivery queue is set up one entry short of `MaxQueuedCreditTrees`, so the run rewrites
 	// a queue that the tree just filled. A full queue instead drops the delivery, which rewrites
 	// nothing and costs less.
 	#[benchmark]
-	fn build_credit_tree(n: Linear<1, AWARDS_PER_TREE>) -> Result<(), BenchmarkError> {
+	fn build_credit_tree(c: Linear<1, CHUNKS_PER_TREE>) -> Result<(), BenchmarkError> {
+		let n = c * AWARDS_PER_CHUNK;
 		let capacity = T::MaxQueuedCreditTrees::get();
 		queue_credit_trees::<T>(capacity.saturating_sub(1));
 		frame_system::Pallet::<T>::set_block_number(capacity.saturating_add(10).into());
@@ -88,10 +89,7 @@ mod benches {
 			NftClaimCreditRoots::<T>::get(block).expect("a root is recorded for the block");
 		assert_eq!(credit_root.leaf_count, n);
 		assert_eq!(CreditTreeDeliveryQueue::<T>::decode_len(), Some(capacity as usize));
-		assert_eq!(
-			NftClaimCreditAwards::<T>::iter_prefix_values(block).count() as u32,
-			n.div_ceil(AWARDS_PER_CHUNK)
-		);
+		assert_eq!(NftClaimCreditAwards::<T>::iter_prefix_values(block).count() as u32, c);
 		assert!(NftClaimCreditAwardExpiries::<T>::contains_key(
 			ExpiryTimestamp::from(credit_root.timestamp),
 			block
