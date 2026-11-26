@@ -131,10 +131,13 @@ extern crate alloc;
 
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
+mod bitmap;
 pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
+#[cfg(test)]
+mod state_machine_tests;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -1306,13 +1309,12 @@ pub mod pallet {
 		/// Whether `leaf_index` is set in `bitmap`, which holds one bit per leaf of an award
 		/// block's tree.
 		pub fn leaf_is_claimed(bitmap: &[u8], leaf_index: u32) -> bool {
-			let byte = (leaf_index / 8) as usize;
-			bitmap.get(byte).is_some_and(|bits| bits & (1u8 << (leaf_index % 8)) != 0)
+			crate::bitmap::is_set(bitmap, leaf_index)
 		}
 
 		/// How many leaves `bitmap` records as claimed.
 		pub(crate) fn claimed_leaf_count(bitmap: &[u8]) -> u32 {
-			bitmap.iter().map(|bits| bits.count_ones()).sum()
+			crate::bitmap::count_set(bitmap)
 		}
 
 		/// Sets the bit of `leaf_index` in `block`'s bitmap, widening it to `leaf_count` bits.
@@ -1322,25 +1324,17 @@ pub mod pallet {
 		/// stored tree to. Both are checked here, so a bit outside the bitmap is an error rather
 		/// than a silent no-op.
 		fn spend_leaf(block: CreditTreeBlock, leaf_index: u32, leaf_count: u32) -> Result<(), ()> {
-			if leaf_index >= leaf_count || leaf_count > T::MaxCreditsPerTree::get() {
+			if leaf_count > T::MaxCreditsPerTree::get() {
 				return Err(());
 			}
 
-			let bytes = leaf_count.div_ceil(8) as usize;
-			let byte = (leaf_index / 8) as usize;
-			ClaimedLeaves::<T>::mutate(block, |bitmap| {
-				if bitmap.len() < bytes {
-					// `bytes` covers `MaxCreditsPerTree` bits at most, which is the bound.
-					let mut bits = core::mem::take(bitmap).into_inner();
-					bits.resize(bytes, 0);
-					*bitmap = BoundedVec::truncate_from(bits);
-				}
-				if let Some(bits) = bitmap.as_mut().get_mut(byte) {
-					*bits |= 1u8 << (leaf_index % 8);
-				}
-			});
-
-			Ok(())
+			ClaimedLeaves::<T>::try_mutate(block, |stored| {
+				let mut bits = core::mem::take(stored).into_inner();
+				crate::bitmap::set(&mut bits, leaf_index, leaf_count)?;
+				// `leaf_count` is within `MaxCreditsPerTree`, so `bits` fits the bound.
+				*stored = BoundedVec::truncate_from(bits);
+				Ok(())
+			})
 		}
 
 		/// Removes the tree of `block` and queues its deletion for the game chain.

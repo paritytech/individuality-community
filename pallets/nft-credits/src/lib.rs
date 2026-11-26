@@ -134,6 +134,9 @@ pub mod migration;
 #[cfg(test)]
 mod mock;
 pub mod runtime_api;
+mod slots;
+#[cfg(test)]
+mod state_machine_tests;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -912,14 +915,12 @@ impl<T: Config> Pallet<T> {
 	/// mapping independent of the group size, below `max_report_credit_slots`, which the
 	/// `integrity_test` holds to [`AwardedCredits::CAPACITY`].
 	pub fn credit_slot(round: RoundIndex, attester_position: AttesterPosition) -> CreditSlot {
-		CreditSlot::from(round)
-			.saturating_mul(T::MaxGroupSize::get())
-			.saturating_add(attester_position)
+		slots::report_slot(u32::from(round), attester_position, T::MaxGroupSize::get())
 	}
 
 	/// The number of report credit slots any game of this runtime can use.
 	pub(crate) fn max_report_credit_slots() -> u32 {
-		T::MaxRounds::get().saturating_mul(T::MaxGroupSize::get())
+		slots::max_report_slots(T::MaxRounds::get(), T::MaxGroupSize::get())
 	}
 
 	/// The number of credit slots any game of this runtime can use, the report slots followed by
@@ -934,7 +935,7 @@ impl<T: Config> Pallet<T> {
 	///
 	/// Tenure credit slots start after the last report slot, so the two kinds never share a slot.
 	pub fn tenure_credit_slot(index: u32) -> CreditSlot {
-		Self::max_report_credit_slots().saturating_add(index)
+		slots::tenure_slot(index, T::MaxRounds::get(), T::MaxGroupSize::get())
 	}
 
 	/// Compute the NFT claim credit for the tenure threshold at `index` in a game.

@@ -43,6 +43,8 @@ pallet-assets = { workspace = true }
 pallet-assets-holder = { workspace = true }
 pallet-balances = { workspace = true }
 parking_lot = { workspace = true }
+proptest = { workspace = true }
+proptest-state-machine = { workspace = true }
 sp-core = { workspace = true }
 sp-state-machine = { workspace = true }
 sp-statement-store = { workspace = true }

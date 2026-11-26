@@ -63,7 +63,7 @@ pub struct AwardedCredits(u128);
 
 impl AwardedCredits {
 	/// The number of credit slots the set holds.
-	pub const CAPACITY: u32 = u128::BITS;
+	pub const CAPACITY: u32 = crate::slots::SLOT_CAPACITY;
 
 	/// Every slot awarded, for benchmarks that need the worst case.
 	#[cfg(feature = "runtime-benchmarks")]
