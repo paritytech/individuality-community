@@ -36,7 +36,8 @@
 //! * The offchain worker runs the shuffle and the player process in step calls, `advance_shuffle`
 //!   and `process_players`. A block includes at most one step call. A step call meters its work
 //!   against the step budget, half of the `Normal` maximum extrinsic weight, and runs at most
-//!   `OP_UPPER_BOUND` loop iterations. Player process step 1 and step 2 take separate calls.
+//!   `OP_UPPER_BOUND` loop iterations. Player process step 2 clears at most that many chunks.
+//!   Player process step 1 and step 2 take separate calls.
 //! * A phase change takes `PHASE_CHANGE_BLOCKS` blocks from the shuffle and from the player
 //!   process. `end_registration` and `end_reporting` land in the first block of the phase. The
 //!   first step call after them misses the next block about half of the time. After that a step
