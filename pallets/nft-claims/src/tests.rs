@@ -2006,6 +2006,48 @@ mod claim {
 			);
 		});
 	}
+
+	/// A credit's proof claims at its own leaf index and at no other, in every tree the mock
+	/// accepts.
+	///
+	/// Fails today: `binary_merkle_tree::verify_proof` also accepts the proof of the last node of
+	/// an odd layer at the index of its left neighbour, e.g. leaf 2 of 3 at index 1
+	/// (individuality-formal IND-001).
+	#[test]
+	#[ignore = "claim accepts a proof at more than one leaf index (individuality-formal IND-001)"]
+	fn a_proof_claims_only_at_its_own_leaf_index() {
+		let max_leaf_count = new_test_ext().execute_with(MaxCreditsPerTree::get);
+		for leaf_count in 1..=max_leaf_count {
+			new_test_ext().execute_with(|| {
+				let awards = (0..leaf_count)
+					.map(|i| {
+						let mut credit = [0u8; 32];
+						credit[..4].copy_from_slice(&i.to_le_bytes());
+						(AccountOrPerson::Account(ALICE), credit)
+					})
+					.collect::<Vec<_>>();
+				store_tree(&awards);
+
+				for (leaf, (_, credit)) in awards.iter().enumerate() {
+					for leaf_index in (0..leaf_count).filter(|&index| index != leaf as u32) {
+						assert_claim_noop!(
+							NftClaims::claim(
+								RuntimeOrigin::signed(ALICE),
+								ClaimantKind::Account,
+								BLOCK,
+								*credit,
+								leaf_index,
+								proof_of(&awards, leaf as u32),
+								COLLECTION,
+								PURSE
+							),
+							Error::<Test>::InvalidProof
+						);
+					}
+				}
+			});
+		}
+	}
 }
 
 mod set_collection_minter {
