@@ -231,12 +231,11 @@ pub trait CollectionSelector<AccountId> {
 	/// budget.
 	fn contract_max_weight() -> Weight;
 
-	/// Confirm `contract` can be registered as a minter: Code is deployed at the address and
-	/// loading that code fits the weight ceiling of one call.
+	/// Confirm `contract` can be registered as a minter: code is deployed at the address.
 	///
-	/// Run once at registration, so typos, contracts that are not deployed yet and minters
-	/// that no claim could call fail there with a clear error. Nothing on-chain proves the code
-	/// implements the minter interface, so [`Self::select`] still validates every call's outcome.
+	/// Run once at registration, so typos and contracts that are not deployed yet fail there with
+	/// a clear error. The code can change after registration, so [`Self::select`] still validates
+	/// every call's outcome under [`Self::contract_max_weight`].
 	fn validate(contract: H160) -> Result<(), DispatchError>;
 
 	/// Ask `contract` as `owner` which of `collection`'s items the claim of `credit` mints.
@@ -584,9 +583,6 @@ pub mod pallet {
 		/// An [`ItemSelection::Random`] draw reaches this by landing on a deleted index, which
 		/// stays inside the draw range, and a contract selection by naming such an index.
 		UnknownItem,
-		/// The minter contract's code exceeds the runtime's size cap. Loading it would leave too
-		/// little of the selector's weight ceiling for the call.
-		MinterCodeTooLarge,
 	}
 
 	/// Why an offchain worker's submission was rejected, reported to the caller as

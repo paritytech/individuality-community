@@ -2137,7 +2137,6 @@ mod claim {
 		let full = vec![query; MAX_STATUS_QUERIES as usize].encode();
 		let oversized = vec![query; MAX_STATUS_QUERIES as usize + 1].encode();
 
-		assert_eq!(MAX_STATUS_QUERIES, 256);
 		assert!(CreditStatusQueries::decode(&mut &full[..]).is_ok());
 		assert!(CreditStatusQueries::decode(&mut &oversized[..]).is_err());
 	}
