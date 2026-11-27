@@ -547,13 +547,9 @@ impl StateMachineTest for GameChainTest {
 				},
 				Step::Bulk { game, count } => chain.bulk(game, count),
 				Step::EndGame { game } => {
-					let mut cursor = None;
-					loop {
-						cursor = NftCredits::clear_game_credits(game, 2, cursor.as_deref());
-						if cursor.is_none() {
-							break;
-						}
-					}
+					// One call, because a second call in a block walks the same entries again.
+					let cleared = NftCredits::clear_game_credits(game, u32::MAX);
+					assert!(cleared.maybe_cursor.is_none(), "the game has no entry left");
 				},
 				Step::ForgetPlayer { game, player } =>
 					NftCredits::forget_player_credits(game, &claimant(player)),
