@@ -32,7 +32,7 @@
 //! - `ClaimOnce`: a credit is minted at most once. A tree that is redelivered after its last claim
 //!   mints nothing again, and the chain rejects a tree that is redelivered after its deadline.
 //! - `ClaimantBinding`: only the credit's owner mints it, with the credit's own leaf index and
-//!   proof.
+//!   proof. Such a claim succeeds while the chain holds the tree and the credit is not minted.
 //! - `GapsAreReal`: a gap never names a sequence the chain accepted. The chain rejects a stale
 //!   tree, so a gap can name its sequence.
 //! - `ExpectationMonotonic` and `ReplayKeepsSequence`: the expectation never decreases, and a
@@ -320,6 +320,11 @@ impl ClaimsChain {
 		};
 
 		self.ext.execute_with(|| {
+			let claimable = &owner == claimant &&
+				leaf_index == own_leaf &&
+				proof == own_proof &&
+				CreditTrees::<Test>::contains_key(block) &&
+				!self.minted.contains(&(block, credit));
 			let result = NftClaims::claim(
 				origin,
 				kind,
@@ -347,6 +352,7 @@ impl ClaimsChain {
 					"ClaimOnce: the credit at {award} of block {block} was minted twice"
 				);
 			}
+			assert_eq!(result.is_ok(), claimable, "the owner claims a stored credit once");
 		});
 	}
 

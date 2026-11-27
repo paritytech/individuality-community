@@ -50,7 +50,7 @@ use crate::{
 	mock::*, AwardedNftClaimCredits, CreditBuffers, CreditTreeBatch, Event, NftClaimCreditRoots,
 	AWARDS_PER_TREE, MAX_PENDING_CREDIT_TREES,
 };
-use codec::{Decode, Encode};
+use codec::Encode;
 use frame_support::{
 	pallet_prelude::TransactionSource,
 	traits::{Authorize, Hooks},
@@ -153,8 +153,7 @@ enum Step {
 	FailXcm {
 		fail: bool,
 	},
-	/// Anyone replays the trees of up to four blocks that recorded a root. More than
-	/// `MaxCreditTreesPerMessage` is refused.
+	/// Anyone replays the trees of up to `MaxCreditTreesPerMessage` blocks that recorded a root.
 	Replay {
 		picks: Vec<prop::sample::Index>,
 	},
@@ -185,11 +184,11 @@ impl ReferenceStateMachine for GameChainReference {
 			2 => (0..GAMES, 0..CLAIMANTS).prop_map(|(game, player)| Step::Attend { game, player }),
 			2 => (0..GAMES, 0..CLAIMANTS, 0..=MaxTenureThresholds::get())
 				.prop_map(|(game, player, count)| Step::Tenure { game, player, count }),
-			1 => (0..GAMES, 1..=AWARDS_PER_TREE).prop_map(|(game, count)| Step::Bulk { game, count }),
+			3 => (0..GAMES, 1..=AWARDS_PER_TREE).prop_map(|(game, count)| Step::Bulk { game, count }),
 			1 => (0..GAMES).prop_map(|game| Step::EndGame { game }),
 			1 => (0..GAMES, 0..CLAIMANTS)
 				.prop_map(|(game, player)| Step::ForgetPlayer { game, player }),
-			6 => Just(Step::NextBlock),
+			4 => Just(Step::NextBlock),
 			3 => (1..=MAX_JUMP).prop_map(|secs| Step::AdvanceTime { secs }),
 			1 => any::<bool>().prop_map(|fail| Step::FailXcm { fail }),
 			2 => picks().prop_map(|picks| Step::Replay { picks }),
@@ -251,7 +250,7 @@ struct GameChain {
 	next_sequence: TreeSequence,
 	/// The last live sequence sent.
 	last_sent: Option<TreeSequence>,
-	/// The blocks whose tree reached the claims chain.
+	/// The blocks whose tree was sent to the claims chain.
 	delivered: BTreeSet<CreditTreeBlock>,
 	/// The XCM messages already checked.
 	seen_xcms: usize,
@@ -298,31 +297,22 @@ impl GameChain {
 			let attester = claimant(0);
 			let time = self.now as u32;
 			self.award(game, &attestee, || {
-				NftCredits::award_report_credit(game, 0, &attester, &attestee, 0, time)
+				let awarded =
+					NftCredits::award_report_credit(game, 0, &attester, &attestee, 0, time);
+				assert_eq!(awarded, 1, "a new claimant gets its credit");
+				awarded
 			});
 		}
 	}
 
 	fn sent_batches(&mut self) -> Vec<CreditTreeBatch<Test>> {
-		use xcm::latest::{Instruction, Xcm};
-
 		let sent = sent_credit_tree_xcms();
-		let new = sent[self.seen_xcms..].to_vec();
+		let new = sent[self.seen_xcms..]
+			.iter()
+			.map(|(_, encoded)| decode_credit_tree_batch(encoded))
+			.collect::<Vec<_>>();
 		self.seen_xcms = sent.len();
-		new.into_iter()
-			.map(|(_, encoded)| {
-				let message = Xcm::<()>::decode(&mut &encoded[..]).expect("XCM decodes");
-				let call = message
-					.0
-					.into_iter()
-					.find_map(|instruction| match instruction {
-						Instruction::Transact { call, .. } => Some(call.encoded().to_vec()),
-						_ => None,
-					})
-					.expect("the XCM carries a Transact");
-				CreditTreeBatch::<Test>::decode(&mut &call[2..]).expect("the batch decodes")
-			})
-			.collect::<Vec<_>>()
+		new
 	}
 
 	fn run_offchain_worker(&mut self) {
@@ -354,6 +344,9 @@ impl GameChain {
 
 	/// Checks the events and messages of the last step, then clears the events.
 	fn check(&mut self, step_game: Option<u32>) {
+		// The blocks of this step that recorded a root, and those whose delivery was dropped.
+		let mut recorded = Vec::new();
+		let mut dropped = BTreeSet::new();
 		for record in System::events() {
 			let RuntimeEvent::NftCredits(event) = record.event else { continue };
 			match event {
@@ -409,19 +402,26 @@ impl GameChain {
 						self.roots.insert(block, credit_root).is_none(),
 						"RootsWrittenOnce: block {block} recorded a second root"
 					);
-					self.queued.insert(self.next_sequence, block);
-					self.next_sequence += 1;
+					recorded.push(block);
 				},
 				Event::CreditTreeDeliveryDropped { block } => {
-					// The root was recorded in the same block and consumed no sequence.
-					self.next_sequence -= 1;
-					let dropped = self.queued.remove(&self.next_sequence);
-					assert_eq!(dropped, Some(block as CreditTreeBlock));
+					dropped.insert(block as CreditTreeBlock);
 				},
 				_ => {},
 			}
 		}
 		System::reset_events();
+
+		// A dropped delivery consumes no sequence. The two events of a block come in any order.
+		for block in &dropped {
+			assert!(recorded.contains(block), "block {block} dropped a delivery without a root");
+		}
+		for block in recorded {
+			if !dropped.contains(&block) {
+				self.queued.insert(self.next_sequence, block);
+				self.next_sequence += 1;
+			}
+		}
 
 		let now = System::block_number();
 		for block in self.awards.keys().filter(|&&block| u64::from(block) < now) {
