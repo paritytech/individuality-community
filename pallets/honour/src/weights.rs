@@ -55,7 +55,10 @@ use core::marker::PhantomData;
 /// Weight functions needed for `indiv_pallet_honour`.
 pub trait WeightInfo {
 	fn bestow() -> Weight;
+	fn clear() -> Weight;
 	fn extension_validate() -> Weight;
+	fn extension_validate_clear() -> Weight;
+	fn migrate_v1_step() -> Weight;
 }
 
 /// Weights for `indiv_pallet_honour` using the Substrate node and recommended hardware.
@@ -78,6 +81,17 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(5_u64))
 			.saturating_add(T::DbWeight::get().writes(5_u64))
 	}
+	/// Hand-written estimate. The benchmark bot must regenerate this file.
+	///
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Honour::Points` (r:1 w:1)
+	/// Storage: `Honour::Votes` (r:0 w:1)
+	/// Storage: `Honour::Tally` (r:1 w:1)
+	fn clear() -> Weight {
+		Weight::from_parts(35_000_000, 3587)
+			.saturating_add(T::DbWeight::get().reads(3_u64))
+			.saturating_add(T::DbWeight::get().writes(3_u64))
+	}
 	/// Storage: `Timestamp::Now` (r:1 w:0)
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `Members::Collections` (r:1 w:0)
@@ -95,6 +109,24 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		// Minimum execution time: 30_377_650_000 picoseconds.
 		Weight::from_parts(30_710_032_000, 4657)
 			.saturating_add(T::DbWeight::get().reads(5_u64))
+	}
+	/// Hand-written estimate. The benchmark bot must regenerate this file.
+	///
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Members::Collections` (r:1 w:0)
+	/// Storage: `Members::Root` (r:1 w:0)
+	/// Storage: `Honour::Points` (r:1 w:0)
+	fn extension_validate_clear() -> Weight {
+		Weight::from_parts(30_700_000_000, 4657)
+			.saturating_add(T::DbWeight::get().reads(4_u64))
+	}
+	/// Hand-written estimate. The benchmark bot must regenerate this file.
+	///
+	/// Storage: `Honour::Points` (r:2 w:1)
+	fn migrate_v1_step() -> Weight {
+		Weight::from_parts(15_000_000, 6183)
+			.saturating_add(T::DbWeight::get().reads(3_u64))
+			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
 }
 
@@ -117,6 +149,17 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads(5_u64))
 			.saturating_add(RocksDbWeight::get().writes(5_u64))
 	}
+	/// Hand-written estimate. The benchmark bot must regenerate this file.
+	///
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Honour::Points` (r:1 w:1)
+	/// Storage: `Honour::Votes` (r:0 w:1)
+	/// Storage: `Honour::Tally` (r:1 w:1)
+	fn clear() -> Weight {
+		Weight::from_parts(35_000_000, 3587)
+			.saturating_add(RocksDbWeight::get().reads(3_u64))
+			.saturating_add(RocksDbWeight::get().writes(3_u64))
+	}
 	/// Storage: `Timestamp::Now` (r:1 w:0)
 	/// Proof: `Timestamp::Now` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `Members::Collections` (r:1 w:0)
@@ -134,5 +177,23 @@ impl WeightInfo for () {
 		// Minimum execution time: 30_377_650_000 picoseconds.
 		Weight::from_parts(30_710_032_000, 4657)
 			.saturating_add(RocksDbWeight::get().reads(5_u64))
+	}
+	/// Hand-written estimate. The benchmark bot must regenerate this file.
+	///
+	/// Storage: `Timestamp::Now` (r:1 w:0)
+	/// Storage: `Members::Collections` (r:1 w:0)
+	/// Storage: `Members::Root` (r:1 w:0)
+	/// Storage: `Honour::Points` (r:1 w:0)
+	fn extension_validate_clear() -> Weight {
+		Weight::from_parts(30_700_000_000, 4657)
+			.saturating_add(RocksDbWeight::get().reads(4_u64))
+	}
+	/// Hand-written estimate. The benchmark bot must regenerate this file.
+	///
+	/// Storage: `Honour::Points` (r:2 w:1)
+	fn migrate_v1_step() -> Weight {
+		Weight::from_parts(15_000_000, 6183)
+			.saturating_add(RocksDbWeight::get().reads(3_u64))
+			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
 }

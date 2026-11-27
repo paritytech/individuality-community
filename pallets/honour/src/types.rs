@@ -57,19 +57,35 @@ pub type Honour = i32;
 /// Measure `UnixTime` durations in seconds.
 pub type Seconds = u64;
 
-/// Information associated with every used point that gets stored.
+/// State of a point that its voter used at least once.
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
-pub struct PointInfo {
-	/// ID of the subject toward which the point is directed.
-	pub subject: SubjectId,
-	/// Alias of the subject toward which the point is directed.
-	pub subject_alias: SubjectAlias,
-	/// Current direction of the point.
-	pub direction: Direction,
-	/// The time when the point was used the last time.
-	///
-	/// Timestamp in seconds since Unix epoch.
-	pub last_used_at: Seconds,
+pub enum PointInfo {
+	/// The point holds a vote.
+	Active {
+		/// ID of the subject toward which the point is directed.
+		subject: SubjectId,
+		/// Alias of the subject toward which the point is directed.
+		subject_alias: SubjectAlias,
+		/// Current direction of the point.
+		direction: Direction,
+		/// The time when the voter bestowed the vote, in seconds since the Unix epoch.
+		last_used_at: Seconds,
+	},
+	/// The point holds no vote because its voter cleared it.
+	Cleared {
+		/// The time when the voter cleared the point, in seconds since the Unix epoch.
+		cleared_at: Seconds,
+	},
+}
+
+impl PointInfo {
+	/// The time when the voter last bestowed or cleared the point.
+	pub fn last_used_at(&self) -> Seconds {
+		match self {
+			PointInfo::Active { last_used_at, .. } => *last_used_at,
+			PointInfo::Cleared { cleared_at } => *cleared_at,
+		}
+	}
 }
 
 /// Direction of an honour vote.

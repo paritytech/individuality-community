@@ -814,6 +814,8 @@ impl pallet_migrations::Config for Runtime {
 		indiv_pallet_people::migration::MigrateV0ToV1<Runtime>,
 		// Single use! - remove once the upgrade carrying it is live.
 		indiv_pallet_resources::migration::v1::RecordGrantedAllowances<Runtime>,
+		// Single use! - remove once the upgrade carrying it is live.
+		indiv_pallet_honour::migration::v1::MigratePointsToActive<Runtime>,
 	);
 	// Benchmarks need mocked migrations to guarantee that they succeed.
 	#[cfg(feature = "runtime-benchmarks")]

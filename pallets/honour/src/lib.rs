@@ -20,11 +20,16 @@
 //! toward arbitrary subjects, each either honourable (+1) or dishonourable (-1).
 //!
 //! Once a point is bestowed, it can be redirected to another subject (or the same subject with a
-//! different direction) after the timeout of [`Config::PointFreezeDuration`] blocks has passed.
+//! different direction) or cleared. A voter clears a point to withdraw its vote without casting a
+//! new one.
 //!
-//! To submit a vote, the transaction must use the [`VoterAuth`](extension::VoterAuth) extension.
-//! For the transaction to succeed, a valid ring proof must be attached, generated for a ring
-//! belonging to the `indiv-pallet-people` pallet, thus proving the voter is a verified human.
+//! Every use of a point, bestowing or clearing, freezes the point for
+//! [`Config::PointFreezeDuration`] seconds. The transactions are feeless, so the freeze is the
+//! spam protection: each person can submit at most one transaction per point in that duration.
+//!
+//! To bestow or clear a point, the transaction must use the [`VoterAuth`](extension::VoterAuth)
+//! extension. For the transaction to succeed, a valid ring proof must be attached, generated for a
+//! ring belonging to the `indiv-pallet-people` pallet, thus proving the voter is a verified human.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -40,6 +45,7 @@ mod tests;
 #[cfg(feature = "runtime-benchmarks")]
 pub mod benchmarking;
 pub mod extension;
+pub mod migration;
 pub mod types;
 pub mod weights;
 
@@ -59,12 +65,16 @@ pub mod pallet {
 	};
 	use frame_system::pallet_prelude::*;
 	use indiv_support::traits::{
-		ContextualAlias, MembershipMultiProver, RevisionIndex, RingIndex, PEOPLE_IDENTIFIER,
+		Alias, Context, ContextualAlias, MembershipMultiProver, RevisionIndex, RingIndex,
+		PEOPLE_IDENTIFIER,
 	};
 	use sp_runtime::traits::{BadOrigin, Dispatchable};
 	use verifiable::GenerateVerifiable;
 
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
 	#[pallet::pallet]
+	#[pallet::storage_version(STORAGE_VERSION)]
 	pub struct Pallet<T>(_);
 
 	#[pallet::origin]
@@ -72,7 +82,10 @@ pub mod pallet {
 		Clone, PartialEq, Eq, Debug, Encode, Decode, MaxEncodedLen, TypeInfo, DecodeWithMemTracking,
 	)]
 	pub enum Origin {
+		/// A person that proved the aliases of a vote.
 		Voter { aliases: VoteAliases },
+		/// A person that proved the alias of a point.
+		PointHolder { point_alias: PointAlias },
 	}
 
 	#[pallet::config]
@@ -113,7 +126,7 @@ pub mod pallet {
 		#[pallet::constant]
 		type PointFreezeDuration: Get<Seconds>;
 
-		/// Duration in seconds a `bestow` call remains valid after its `call_valid_from`.
+		/// Duration in seconds a call remains valid after its `call_valid_from`.
 		#[pallet::constant]
 		type CallMortality: Get<Seconds>;
 
@@ -123,9 +136,6 @@ pub mod pallet {
 	}
 
 	/// Points that have been used by voters.
-	///
-	/// Records in [`Points`] track used points to prevent double-spending and enforce rate-limiting
-	/// based on the last usage time.
 	#[pallet::storage]
 	pub type Points<T: Config> = StorageMap<_, Blake2_128Concat, PointAlias, PointInfo>;
 
@@ -143,7 +153,7 @@ pub mod pallet {
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		/// A subject was voted on with a previously unused point.
+		/// A subject was voted on with a point that held no vote.
 		VoteCast {
 			/// The subject that was voted on.
 			subject: SubjectId,
@@ -170,6 +180,13 @@ pub mod pallet {
 			/// The honour value after the update.
 			new_value: Honour,
 		},
+		/// A voter cleared a point and withdrew its vote.
+		VoteCleared {
+			/// The subject that held the cleared point.
+			subject: SubjectId,
+			/// The direction of the withdrawn vote.
+			direction: Direction,
+		},
 	}
 
 	#[pallet::error]
@@ -181,6 +198,8 @@ pub mod pallet {
 		SubjectAlreadyVoted,
 		/// The provided ring proof failed verification.
 		InvalidProof,
+		/// The point holds no vote.
+		PointNotDirected,
 	}
 
 	#[pallet::hooks]
@@ -188,9 +207,12 @@ pub mod pallet {
 		fn integrity_test() {
 			let freeze = T::PointFreezeDuration::get();
 			let mortality = T::CallMortality::get();
+			// A use of a point freezes it for `freeze` seconds. A transaction that the voter signed
+			// before that use expires within `mortality` seconds, so nobody can replay it when the
+			// freeze ends.
 			assert!(
-				mortality <= freeze.saturating_mul(2),
-				"CallMortality must be <= 2 * PointFreezeDuration to prevent vote-redirect replay"
+				mortality <= freeze,
+				"CallMortality must be <= PointFreezeDuration to prevent the replay of transactions"
 			);
 		}
 	}
@@ -209,10 +231,28 @@ pub mod pallet {
 		) -> DispatchResult {
 			let aliases = match origin.into_caller().try_into() {
 				Ok(Origin::Voter { aliases }) => aliases,
-				Err(_) => return Err(BadOrigin.into()),
+				_ => return Err(BadOrigin.into()),
 			};
 
 			Self::do_bestow(vote, aliases).map_err(Into::into)
+		}
+
+		/// Clear a point and withdraw the vote that it holds.
+		///
+		/// Accepts only the [`Origin::PointHolder`] origin, which is created by verifying a ring
+		/// proof in the [`VoterAuth`](extension::VoterAuth) transaction extension.
+		#[pallet::call_index(1)]
+		pub fn clear(
+			origin: OriginFor<T>,
+			_point: PointId,
+			_call_valid_from: Seconds,
+		) -> DispatchResult {
+			let point_alias = match origin.into_caller().try_into() {
+				Ok(Origin::PointHolder { point_alias }) => point_alias,
+				_ => return Err(BadOrigin.into()),
+			};
+
+			Self::do_clear(point_alias).map_err(Into::into)
 		}
 	}
 
@@ -220,11 +260,14 @@ pub mod pallet {
 		pub fn do_bestow(vote: VoteData, aliases: VoteAliases) -> Result<(), Error<T>> {
 			let now = T::Clock::now().as_secs();
 
-			if let Some(old_point_info) = Points::<T>::take(aliases.point_alias) {
-				Votes::<T>::remove(old_point_info.subject_alias);
-
-				let old_subject = old_point_info.subject;
-				let old_direction = old_point_info.direction;
+			if let Some(PointInfo::Active {
+				subject: old_subject,
+				subject_alias: old_subject_alias,
+				direction: old_direction,
+				..
+			}) = Points::<T>::get(aliases.point_alias)
+			{
+				Votes::<T>::remove(old_subject_alias);
 
 				Pallet::<T>::deposit_event(Event::<T>::VoteReused {
 					old_subject,
@@ -255,7 +298,7 @@ pub mod pallet {
 
 			Points::<T>::insert(
 				aliases.point_alias,
-				PointInfo {
+				PointInfo::Active {
 					subject: vote.subject,
 					subject_alias: aliases.subject_alias,
 					direction: vote.direction,
@@ -267,6 +310,32 @@ pub mod pallet {
 
 			Pallet::<T>::deposit_event(Event::<T>::HonourChanged {
 				subject: vote.subject,
+				old_value: result.old_value,
+				new_value: result.new_value,
+			});
+
+			Ok(())
+		}
+
+		pub fn do_clear(point_alias: PointAlias) -> Result<(), Error<T>> {
+			let Some(PointInfo::Active { subject, subject_alias, direction, .. }) =
+				Points::<T>::get(point_alias)
+			else {
+				return Err(Error::<T>::PointNotDirected);
+			};
+
+			Votes::<T>::remove(subject_alias);
+			Points::<T>::insert(
+				point_alias,
+				PointInfo::Cleared { cleared_at: T::Clock::now().as_secs() },
+			);
+
+			Pallet::<T>::deposit_event(Event::<T>::VoteCleared { subject, direction });
+
+			let result = Self::tally(&subject, direction.opposite());
+
+			Pallet::<T>::deposit_event(Event::<T>::HonourChanged {
+				subject,
 				old_value: result.old_value,
 				new_value: result.new_value,
 			});
@@ -288,15 +357,9 @@ pub mod pallet {
 			TallyResult { old_value, new_value }
 		}
 
-		/// Check if a point is currently frozen.
-		///
-		/// A point is frozen if it was used within the last [`Config::PointFreezeDuration`] secs.
-		pub(crate) fn is_point_frozen(point_alias: &PointAlias, now: Seconds) -> bool {
-			if let Some(point) = Points::<T>::get(point_alias) {
-				point.last_used_at.saturating_add(T::PointFreezeDuration::get()) > now
-			} else {
-				false
-			}
+		/// Check if `point` is frozen at `now`.
+		pub(crate) fn is_point_frozen(point: &PointInfo, now: Seconds) -> bool {
+			point.last_used_at().saturating_add(T::PointFreezeDuration::get()) > now
 		}
 
 		/// Verify the ring proof and return the aliases corresponding to the vote.
@@ -307,8 +370,30 @@ pub mod pallet {
 			ring_index: RingIndex,
 			revision: RevisionIndex,
 		) -> Result<VoteAliases, Error<T>> {
-			let contexts = vote.get_contexts();
+			Self::validate_proof(vote.get_contexts(), message, proof, ring_index, revision)
+				.map(VoteAliases::from_aliases)
+		}
 
+		/// Verify the ring proof and return the alias corresponding to the point.
+		pub(crate) fn validate_point_proof(
+			point: PointId,
+			message: &[u8],
+			proof: &RingProofOf<T>,
+			ring_index: RingIndex,
+			revision: RevisionIndex,
+		) -> Result<PointAlias, Error<T>> {
+			Self::validate_proof([context::point(point)], message, proof, ring_index, revision)
+				.map(|[point_alias]| point_alias)
+		}
+
+		/// Verify the ring proof and return one alias for each context, in the same order.
+		fn validate_proof<const N: usize>(
+			contexts: [Context; N],
+			message: &[u8],
+			proof: &RingProofOf<T>,
+			ring_index: RingIndex,
+			revision: RevisionIndex,
+		) -> Result<[Alias; N], Error<T>> {
 			let aliases = T::MemberService::verify_membership_multi_context(
 				PEOPLE_IDENTIFIER,
 				proof,
@@ -319,15 +404,15 @@ pub mod pallet {
 			)
 			.map_err(|_| Error::<T>::InvalidProof)?;
 
-			let arr: [ContextualAlias; 2] =
+			let aliases: [ContextualAlias; N] =
 				aliases.try_into().map_err(|_: Vec<_>| Error::<T>::InvalidProof)?;
 
 			// should be impossible, but check anyway
-			if arr[0].context != contexts[0] || arr[1].context != contexts[1] {
+			if aliases.iter().zip(&contexts).any(|(alias, context)| alias.context != *context) {
 				return Err(Error::<T>::InvalidProof);
 			}
 
-			Ok(VoteAliases::from_aliases([arr[0].alias, arr[1].alias]))
+			Ok(aliases.map(|alias| alias.alias))
 		}
 	}
 
