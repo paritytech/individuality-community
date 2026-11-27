@@ -19,19 +19,22 @@
 //! `df6014b`. Each property below names its operator in that spec.
 //!
 //! The reference machine plays the game pallet and the claims chain. The game pallet awards
-//! report and tenure credits after it checks the remaining capacity, as its callers do, and ends
-//! or cancels games. A bulk award fills a tree, because `AWARDS_PER_TREE` is a constant too large
-//! to reach one credit at a time. The claims chain sends deletions only for trees it received.
+//! report, attendance and tenure credits, and ends or cancels games. It checks the remaining
+//! capacity before a report or an attendance backfill, as its callers do. The claimants are one
+//! group in every round, so a report and the backfill reach the same credit. A bulk award adds up
+//! to a whole tree of credits, because `AWARDS_PER_TREE` is a constant too large to reach one
+//! credit at a time. The claims chain sends deletions only for trees it received.
 //! Blocks, time jumps, failing XCM sends, replays and offchain-worker runs interleave with the
 //! awards. Every call the offchain worker submits goes through `authorize` before it is
 //! dispatched.
 //!
 //! After each step the test checks:
 //!
-//! - `AwardOnce`: a credit slot of a claimant in a game is awarded at most once.
+//! - `AwardOnce`: a credit slot of a claimant in a game is awarded at most once, and so is a credit
+//!   of a claimant.
 //! - `NoDroppedAward`, `NoClobberedBuffer` and `AwardCommittedOnce`: no award is dropped or
 //!   overwritten, each award is in exactly one root, and that root is the Merkle root over the
-//!   awards of its block in leaf order.
+//!   awards of its block in leaf order. A block that has awards records a root when it ends.
 //! - `BuffersBounded`: buffers stay within `MAX_PENDING_CREDIT_TREES` blocks ahead of the current
 //!   block.
 //! - `SingleGameTrees`: a tree holds the credits of one game only.
@@ -53,6 +56,7 @@ use frame_support::{
 	traits::{Authorize, Hooks},
 	BoundedVec,
 };
+use indiv_pallet_game::{IndexToPlayer, PlayerToIndex};
 use indiv_pallet_score::AccountOrPerson;
 use indiv_support::credit_trees::{
 	credit_leaf, AwardCredits, CreditTreeBlock, NftClaimCredit, NftClaimCreditTree, TreeSequence,
@@ -72,13 +76,17 @@ use std::{
 /// The games credits are awarded in. Several games can award in one block, which starts a new
 /// buffer for each change of game.
 const GAMES: u32 = 3;
-/// The claimants of report and tenure credits. Few, so that awards often reach the same slot.
+/// The claimants of report, attendance and tenure credits. They are one group in every round, and
+/// the index of a claimant is its position in the group. Few, so that awards often reach the same
+/// slot.
 const CLAIMANTS: u64 = 3;
-/// The rounds and attester positions a report credit is drawn from. Small, so that slots collide.
+/// The rounds a report credit is drawn from. Small, so that slots collide.
 const ROUNDS: u8 = 2;
-const POSITIONS: u32 = 2;
-/// The largest time jump of one step. A root expires `root_ttl` (32 days) after its timestamp.
-const MAX_JUMP: u64 = 10 * 24 * 60 * 60;
+/// The most credits one attendance backfill awards: one per other group member in every round.
+const BACKFILL_CREDITS: u32 = ROUNDS as u32 * (CLAIMANTS as u32 - 1);
+/// The largest time jump of one step. A root expires `root_ttl` (32 days) after its timestamp, so
+/// a few jumps reach the sweep of a root.
+const MAX_JUMP: u64 = 20 * 24 * 60 * 60;
 const START_TIME: u64 = 10_000;
 
 type Claimant = AccountOrPerson<AccountId32>;
@@ -104,13 +112,17 @@ impl Games {
 
 #[derive(Clone, Debug)]
 enum Step {
-	/// `attester` reports `attestee` in `round`, from `position`, which awards one credit.
+	/// `attester` reports `attestee` in `round`, which awards one credit.
 	Report {
 		game: u32,
 		round: u8,
 		attester: u64,
 		attestee: u64,
-		position: u32,
+	},
+	/// `player` is marked as attended, which awards the credits no report awarded them.
+	Attend {
+		game: u32,
+		player: u64,
 	},
 	/// `player` claims their first `count` tenure credits.
 	Tenure {
@@ -167,15 +179,10 @@ impl ReferenceStateMachine for GameChainReference {
 	fn transitions(_state: &Games) -> BoxedStrategy<Step> {
 		let picks = || prop::collection::vec(any::<prop::sample::Index>(), 1..=4);
 		prop_oneof![
-			6 => (0..GAMES, 0..ROUNDS, 0..CLAIMANTS, 0..CLAIMANTS, 0..POSITIONS).prop_map(
-				|(game, round, attester, attestee, position)| Step::Report {
-					game,
-					round,
-					attester,
-					attestee,
-					position
-				}
+			6 => (0..GAMES, 0..ROUNDS, 0..CLAIMANTS, 0..CLAIMANTS).prop_map(
+				|(game, round, attester, attestee)| Step::Report { game, round, attester, attestee }
 			),
+			2 => (0..GAMES, 0..CLAIMANTS).prop_map(|(game, player)| Step::Attend { game, player }),
 			2 => (0..GAMES, 0..CLAIMANTS, 0..=MaxTenureThresholds::get())
 				.prop_map(|(game, player, count)| Step::Tenure { game, player, count }),
 			1 => (0..GAMES, 1..=AWARDS_PER_TREE).prop_map(|(game, count)| Step::Bulk { game, count }),
@@ -183,7 +190,7 @@ impl ReferenceStateMachine for GameChainReference {
 			1 => (0..GAMES, 0..CLAIMANTS)
 				.prop_map(|(game, player)| Step::ForgetPlayer { game, player }),
 			6 => Just(Step::NextBlock),
-			2 => (1..=MAX_JUMP).prop_map(|secs| Step::AdvanceTime { secs }),
+			3 => (1..=MAX_JUMP).prop_map(|secs| Step::AdvanceTime { secs }),
 			1 => any::<bool>().prop_map(|fail| Step::FailXcm { fail }),
 			2 => picks().prop_map(|picks| Step::Replay { picks }),
 			2 => picks().prop_map(|picks| Step::ReceiveDeletions { picks }),
@@ -207,8 +214,11 @@ impl ReferenceStateMachine for GameChainReference {
 
 	fn preconditions(state: &Games, step: &Step) -> bool {
 		match *step {
-			Step::Report { game, attestee, .. } => state.open(game, attestee),
-			Step::Tenure { game, player, .. } => state.open(game, player),
+			// A player does not report themselves.
+			Step::Report { game, attester, attestee, .. } =>
+				attester != attestee && state.open(game, attestee),
+			Step::Attend { game, player } | Step::Tenure { game, player, .. } =>
+				state.open(game, player),
 			Step::Bulk { game, .. } | Step::EndGame { game } => !state.ended.contains(&game),
 			Step::ForgetPlayer { game, player } => state.open(game, player),
 			_ => true,
@@ -230,6 +240,8 @@ struct GameChain {
 	now: u64,
 	/// The slots each claimant, keyed by its encoding, was awarded per game across the whole run.
 	awarded_slots: BTreeMap<(u32, Vec<u8>), BTreeSet<u32>>,
+	/// Every credit awarded across the whole run, with the encoding of its claimant.
+	credits: BTreeSet<(Vec<u8>, NftClaimCredit)>,
 	/// The awards of each tree block, by leaf index.
 	awards: BTreeMap<CreditTreeBlock, BTreeMap<u32, RecordedAward>>,
 	/// The root each block recorded.
@@ -348,6 +360,10 @@ impl GameChain {
 				Event::NftClaimCreditAwarded { claimant, credit, block, leaf_index } => {
 					let game = step_game.expect("only an award step awards");
 					let block = block as CreditTreeBlock;
+					assert!(
+						self.credits.insert((claimant.encode(), credit)),
+						"AwardOnce: a credit of {claimant:?} in game {game} was awarded twice"
+					);
 					let previous = self
 						.awards
 						.entry(block)
@@ -408,6 +424,12 @@ impl GameChain {
 		System::reset_events();
 
 		let now = System::block_number();
+		for block in self.awards.keys().filter(|&&block| u64::from(block) < now) {
+			assert!(
+				self.roots.contains_key(block),
+				"NoDroppedAward: block {block} has awards and recorded no root"
+			);
+		}
 		for (block, _) in CreditBuffers::<Test>::iter() {
 			assert!(
 				block >= now && block < now + u64::from(MAX_PENDING_CREDIT_TREES),
@@ -456,12 +478,23 @@ impl StateMachineTest for GameChainTest {
 			// Small, so that a run of failing sends fills the delivery queue.
 			MaxQueuedCreditTrees::set(&2);
 			MaxCreditTreesPerMessage::set(&2);
+			// No mock helper registers players without a played game, so the group is written
+			// directly.
+			for index in 0..CLAIMANTS as u32 {
+				let player = claimant(u64::from(index));
+				let indices = vec![index; usize::from(ROUNDS)];
+				PlayerToIndex::<Test>::insert(&player, BoundedVec::truncate_from(indices));
+				for round in 0..ROUNDS {
+					IndexToPlayer::<Test>::insert((round, index), &player);
+				}
+			}
 			System::reset_events();
 		});
 		GameChain {
 			ext,
 			now: START_TIME,
 			awarded_slots: BTreeMap::new(),
+			credits: BTreeSet::new(),
 			awards: BTreeMap::new(),
 			roots: BTreeMap::new(),
 			queued: BTreeMap::new(),
@@ -478,18 +511,31 @@ impl StateMachineTest for GameChainTest {
 		let mut ext = core::mem::take(&mut chain.ext);
 		ext.execute_with(|| {
 			let step_game = match step {
-				Step::Report { game, .. } | Step::Tenure { game, .. } | Step::Bulk { game, .. } =>
-					Some(game),
+				Step::Report { game, .. } |
+				Step::Attend { game, .. } |
+				Step::Tenure { game, .. } |
+				Step::Bulk { game, .. } => Some(game),
 				_ => None,
 			};
 			let time = chain.now as u32;
 			match step {
-				Step::Report { game, round, attester, attestee, position } =>
+				Step::Report { game, round, attester, attestee } =>
 					if NftCredits::remaining_capacity(game) >= 1 {
+						let position = attester as u32;
 						let (attester, attestee) = (claimant(attester), claimant(attestee));
 						chain.award(game, &attestee, || {
 							NftCredits::award_report_credit(
 								game, round, &attester, &attestee, position, time,
+							)
+						});
+					},
+				Step::Attend { game, player } =>
+					if NftCredits::remaining_capacity(game) >= BACKFILL_CREDITS {
+						let player = claimant(player);
+						let group_size = CLAIMANTS as u32;
+						chain.award(game, &player, || {
+							NftCredits::award_attendance_credits(
+								game, ROUNDS, group_size, group_size, &player, time,
 							)
 						});
 					},
