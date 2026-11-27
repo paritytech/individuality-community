@@ -21,9 +21,12 @@
 //! after the single-block migrations and before the multi-block migrations.
 
 use crate::{
-	types::{NotificationReference, NotificationRegistration, StmtStoreAllowanceEntry},
+	types::{
+		ConsumerInfo, Credibility, NotificationReference, NotificationRegistration,
+		StmtStoreAllowanceEntry,
+	},
 	weights::WeightInfo,
-	Config, NotificationRegistrationByAlias, Pallet, StatementStoreAllowances,
+	Config, Consumers, NotificationRegistrationByAlias, Pallet, StatementStoreAllowances,
 };
 use frame_support::{
 	migrations::{MigrationId, SteppedMigration, SteppedMigrationError},
@@ -31,12 +34,17 @@ use frame_support::{
 	storage_alias,
 	weights::WeightMeter,
 };
-use indiv_support::{traits::Alias, utils::BigEndianU32};
+use indiv_support::{
+	traits::{Alias, CommunicationIdentifier, Username},
+	utils::BigEndianU32,
+};
 
 #[cfg(feature = "try-runtime")]
 use codec::DecodeAll;
 
 const LOG_TARGET: &str = "runtime::indiv-pallet-resources::migration";
+
+const PALLET_MIGRATIONS_ID: &[u8; 22] = b"indiv-pallet-resources";
 
 pub mod v1 {
 	use super::*;
@@ -111,7 +119,7 @@ pub mod v1 {
 		type Identifier = MigrationId<22>;
 
 		fn id() -> Self::Identifier {
-			MigrationId { pallet_id: *b"indiv-pallet-resources", version_from: 0, version_to: 1 }
+			MigrationId { pallet_id: *PALLET_MIGRATIONS_ID, version_from: 0, version_to: 1 }
 		}
 
 		fn step(
@@ -279,6 +287,141 @@ pub mod v1 {
 				},
 			);
 			Some(alias)
+		}
+	}
+}
+
+pub mod v2 {
+	use super::*;
+
+	/// The storage as version 1 sees it.
+	pub mod v1 {
+		use super::*;
+
+		/// A consumer without its granted allowance.
+		#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+		pub struct ConsumerInfo {
+			pub identifier_key: CommunicationIdentifier,
+			pub full_username: Option<Username>,
+			pub lite_username: Username,
+			pub credibility: Credibility,
+		}
+
+		#[storage_alias]
+		pub type Consumers<T: Config> = StorageMap<
+			Pallet<T>,
+			Blake2_128Concat,
+			<T as frame_system::Config>::AccountId,
+			ConsumerInfo,
+		>;
+	}
+
+	/// Records the personhood statement allowance in every consumer over several blocks.
+	///
+	/// A lite or demoted consumer gets the current `LitePersonStatementLimit` and a person gets
+	/// the current `PersonStatementLimit`. This is correct only if the limits have not changed
+	/// since the first consumer registered.
+	///
+	/// [`Consumers`] does not decode an entry that the migration has not rewritten yet. Until the
+	/// migration completes, `Consumers::get` returns `None` for such a consumer, while
+	/// `Consumers::contains_key` still finds it.
+	pub struct RecordConsumerAllowances<T>(PhantomData<T>);
+
+	impl<T: Config> SteppedMigration for RecordConsumerAllowances<T> {
+		type Cursor = T::AccountId;
+		type Identifier = MigrationId<22>;
+
+		fn id() -> Self::Identifier {
+			MigrationId { pallet_id: *PALLET_MIGRATIONS_ID, version_from: 1, version_to: 2 }
+		}
+
+		fn step(
+			mut cursor: Option<Self::Cursor>,
+			meter: &mut WeightMeter,
+		) -> Result<Option<Self::Cursor>, SteppedMigrationError> {
+			if Pallet::<T>::on_chain_storage_version() != 1 {
+				return Ok(None);
+			}
+			let required = T::WeightInfo::migrate_consumer_allowances_step();
+			if meter.remaining().any_lt(required) {
+				return Err(SteppedMigrationError::InsufficientWeight { required });
+			}
+
+			loop {
+				if meter.try_consume(required).is_err() {
+					return Ok(cursor);
+				}
+				let Some(account) = Self::migrate_consumer(cursor) else {
+					log::info!(target: LOG_TARGET, "recorded the allowance of all consumers");
+					StorageVersion::new(2).put::<Pallet<T>>();
+					return Ok(None);
+				};
+				cursor = Some(account);
+			}
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn pre_upgrade() -> Result<alloc::vec::Vec<u8>, sp_runtime::TryRuntimeError> {
+			if Pallet::<T>::on_chain_storage_version() != 1 {
+				return Ok(None::<alloc::vec::Vec<(T::AccountId, v1::ConsumerInfo)>>.encode());
+			}
+			Ok(Some(v1::Consumers::<T>::iter().collect::<alloc::vec::Vec<_>>()).encode())
+		}
+
+		#[cfg(feature = "try-runtime")]
+		fn post_upgrade(state: alloc::vec::Vec<u8>) -> Result<(), sp_runtime::TryRuntimeError> {
+			let state = Option::<alloc::vec::Vec<(T::AccountId, v1::ConsumerInfo)>>::decode_all(
+				&mut &state[..],
+			)
+			.map_err(|_| "the pre-upgrade state must decode")?;
+			let Some(consumers) = state else {
+				log::info!(target: LOG_TARGET, "the storage version was not 1; nothing to check");
+				return Ok(());
+			};
+
+			ensure!(
+				Consumers::<T>::iter_keys().count() == consumers.len(),
+				"the migration must keep every consumer"
+			);
+			for (account, info) in consumers {
+				let migrated = Consumers::<T>::get(&account)
+					.ok_or("a consumer must decode with its allowance")?;
+				ensure!(
+					migrated == Self::with_allowance(info),
+					"a consumer must keep its fields and record the allowance of its credibility"
+				);
+			}
+
+			ensure!(
+				Pallet::<T>::on_chain_storage_version() == 2,
+				"the storage version must be 2 after the migration"
+			);
+			Ok(())
+		}
+	}
+
+	impl<T: Config> RecordConsumerAllowances<T> {
+		/// Migrates the consumer after `last`, or returns `None` when no consumer is left.
+		fn migrate_consumer(last: Option<T::AccountId>) -> Option<T::AccountId> {
+			let mut iter = match last {
+				Some(account) =>
+					v1::Consumers::<T>::iter_from(v1::Consumers::<T>::hashed_key_for(account)),
+				None => v1::Consumers::<T>::iter(),
+			};
+			let (account, info) = iter.next()?;
+			Consumers::<T>::insert(&account, Self::with_allowance(info));
+			Some(account)
+		}
+
+		/// `info` with the allowance that its credibility holds under the current limits.
+		fn with_allowance(info: v1::ConsumerInfo) -> ConsumerInfo {
+			ConsumerInfo {
+				allowance: Pallet::<T>::credibility_allowance(&info.credibility).into(),
+				identifier_key: info.identifier_key,
+				full_username: info.full_username,
+				lite_username: info.lite_username,
+				credibility: info.credibility,
+			}
 		}
 	}
 }
