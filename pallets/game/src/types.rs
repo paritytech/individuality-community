@@ -16,12 +16,16 @@
 
 use super::*;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
-use frame_support::{pallet_prelude::Get, traits::ConstU32, BoundedVec};
+use frame_support::{defensive, pallet_prelude::Get, traits::ConstU32, BoundedVec};
 use indiv_pallet_airdrop::{types::AirdropPrize, RegistrationEntry};
 use indiv_pallet_score::AccountOrPerson;
-use indiv_support::traits::{Alias, RevisionIndex, RingIndex};
+use indiv_support::{
+	statement_allowance::BoundedStatementAllowance,
+	traits::{Alias, RevisionIndex, RingIndex},
+};
 use scale_info::TypeInfo;
 use sp_core::sr25519::vrf::VrfSignature;
+use sp_io::MultiRemovalResults;
 
 /// The index of a player in a round in a game.
 ///
@@ -79,6 +83,36 @@ pub enum Report {
 pub type FullReport<T> =
 	BoundedVec<BoundedVec<Report, <T as Config>::MaxGroupSize>, <T as Config>::MaxRounds>;
 
+/// The registration of a player for the current game.
+///
+/// The variant indices are part of the storage layout of [`Player`], so they are explicit.
+#[derive(
+	Encode,
+	Decode,
+	MaxEncodedLen,
+	TypeInfo,
+	Debug,
+	DecodeWithMemTracking,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+)]
+pub enum PlayerRegistration {
+	/// The player did not sign up for the current game.
+	#[codec(index = 0)]
+	NotRegistered,
+	/// The player signed up for the current game.
+	#[codec(index = 1)]
+	Registered,
+	/// The player signed up for the current game, then unregistered.
+	///
+	/// Their airdrop entries stay in the draws. They can neither sign up again nor offboard
+	/// until the game ends.
+	#[codec(index = 2)]
+	Unregistered,
+}
+
 /// The information of a player.
 ///
 /// The player may hold a deposit and a sufficient ref, both must be handled when the player is
@@ -87,8 +121,8 @@ pub type FullReport<T> =
 pub struct Player<PlayDeposit> {
 	/// The index of the first game this player was eligible to play.
 	pub first_game: GameIdx,
-	/// The player has registered for the current game.
-	pub registered: bool,
+	/// The registration of the player for the current game.
+	pub registration: PlayerRegistration,
 	/// The player sent a report for the current game.
 	pub sent_report: bool,
 	/// When the player's attendance was determined early during the reporting phase, the
@@ -112,6 +146,13 @@ pub struct Player<PlayDeposit> {
 	/// The credibility, the reason the player can play.
 	/// This is also used to know if the player is recognized or not.
 	pub credibility: PlayerCredibility<PlayDeposit>,
+}
+
+impl<PlayDeposit> Player<PlayDeposit> {
+	/// Whether the player is registered for the current game.
+	pub fn is_registered(&self) -> bool {
+		self.registration == PlayerRegistration::Registered
+	}
 }
 
 /// The cached outcome of an early `set_attendance` call.
@@ -277,6 +318,20 @@ impl<BlockNumber> ArchivedPlayer<BlockNumber> {
 			Self::Kickable { first_game, .. } | Self::Unkickable { first_game } => *first_game,
 		}
 	}
+}
+
+/// The statement allowances that the pallet grants to live players.
+#[derive(
+	Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Clone, PartialEq, Eq, Debug,
+)]
+pub struct PlayerStatementLimitsRecord {
+	/// The allowance that each live player holds.
+	pub granted: BoundedStatementAllowance,
+	/// The allowance that player processing moves each live player to.
+	///
+	/// Player processing sets it at its start if `PlayerStatementLimit` differs from `granted`,
+	/// and moves it to `granted` at its end.
+	pub next: Option<BoundedStatementAllowance>,
 }
 
 /// The information of a game.
@@ -635,6 +690,48 @@ pub enum StepResult {
 	Continue,
 	/// The step is finished.
 	Finished,
+}
+
+/// The outcome of one clear of several maps, each with a limit of whole chunks.
+#[must_use]
+pub(crate) struct ChunkedClear {
+	/// The chunks that the clear used: the most keys it walked in one map, rounded up to whole
+	/// chunks. At least one, because a clear reads a map that is already empty.
+	pub(crate) chunks: u32,
+	/// [`StepResult::Finished`] means that every map is empty. [`StepResult::Continue`] means
+	/// that a map still holds entries. Clear it again in a later block, because a second clear
+	/// in the same block walks the same keys again.
+	pub(crate) result: StepResult,
+}
+
+impl ChunkedClear {
+	/// The outcome of `removals`, one per map, each with a limit of `chunks` chunks of
+	/// `chunk_size` entries.
+	///
+	/// A removal's `loops` counts the keys that the clear walks in committed storage. A clear
+	/// removes the entries written in the current block without counting them. A removal that
+	/// walks more keys than the limit is a defensive failure, and the outcome charges every chunk
+	/// that it walked.
+	pub(crate) fn from_removals(
+		removals: &[MultiRemovalResults],
+		chunk_size: u32,
+		chunks: u32,
+	) -> Self {
+		let walked = removals.iter().map(|removal| removal.loops).max().unwrap_or(0);
+		let limit = chunks.saturating_mul(chunk_size);
+		if walked > limit {
+			defensive!(
+				"indiv-pallet-game: a clear walked more keys than its limit",
+				(walked, limit)
+			);
+		}
+		let result = if removals.iter().all(|removal| removal.maybe_cursor.is_none()) {
+			StepResult::Finished
+		} else {
+			StepResult::Continue
+		};
+		Self { chunks: walked.div_ceil(chunk_size).max(1), result }
+	}
 }
 
 /// The reason why a statement is invalid for indiv-pallet-game.

@@ -51,8 +51,10 @@ pub trait BenchmarkHelper<T: Config> {
 )]
 mod benchmarks {
 	use super::*;
-	use crate::{AliasRegistration, AttestationAllowance, DispatcherAddress};
-	use frame_support::traits::UnixTime;
+	use crate::{
+		AliasRegistration, AllowedMaintainerCalls, AttestationAllowance, DispatcherAddress,
+	};
+	use frame_support::traits::{EnsureOrigin, Get, UnixTime};
 	use frame_system::RawOrigin;
 	use indiv_support::traits::PEOPLE_IDENTIFIER;
 	use sp_core::H160;
@@ -67,7 +69,6 @@ mod benchmarks {
 		DispatcherAddress::<T>::put(H160([0xd0; 20]));
 
 		// 32-byte lite-format label: 29 lowercase letters, a dot, two digits.
-		// Matches `<dns-stem>.<2+ digits>` per `StringUtils.isLitePersonLabel`.
 		let mut lite_bytes = [b'x'; 32];
 		lite_bytes[29] = b'.';
 		lite_bytes[30] = b'4';
@@ -77,7 +78,7 @@ mod benchmarks {
 
 		let chat_key = crate::ChatKey::from([b'k'; 65]);
 
-		// 32-byte single DNS label (lowercase letters only).
+		// 32-byte personhood label (lowercase letters only).
 		let reserved_base_label: Option<crate::BaseLabel> = Some(
 			crate::BaseLabel::try_from([b'y'; 32].to_vec())
 				.map_err(|_| BenchmarkError::Stop("reserved_base_label too long"))?,
@@ -115,7 +116,7 @@ mod benchmarks {
 	#[benchmark]
 	fn register_name() -> Result<(), BenchmarkError> {
 		let caller: T::AccountId = whitelisted_caller();
-		// 32-byte single DNS label for the full-person label position.
+		// 32-byte personhood label (lowercase letters only).
 		let label = crate::BaseLabel::try_from([b'x'; 32].to_vec())
 			.map_err(|_| BenchmarkError::Stop("label too long"))?;
 
@@ -150,7 +151,7 @@ mod benchmarks {
 		T::BenchmarkHelper::set_time(1);
 		let revision = T::BenchmarkHelper::setup_ring_root(PEOPLE_IDENTIFIER, 0);
 		let caller: T::AccountId = T::BenchmarkHelper::candidate();
-		// 32-byte single DNS label for the full-person label position.
+		// 32-byte personhood label (lowercase letters only).
 		let label = crate::BaseLabel::try_from([b'x'; 32].to_vec())
 			.map_err(|_| BenchmarkError::Stop("label too long"))?;
 
@@ -243,6 +244,64 @@ mod benchmarks {
 		_(RawOrigin::Root, new_addr);
 
 		assert_eq!(DispatcherAddress::<T>::get(), Some(new_addr));
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn call_as_maintainer() -> Result<(), BenchmarkError> {
+		let origin = T::MaintenanceOrigin::try_successful_origin()
+			.map_err(|_| BenchmarkError::Weightless)?;
+		let dest = H160([0xd0; 20]);
+		// A 4-byte selector and one 32-byte word, the shape of a single-value setter.
+		let data = [0u8; 36].to_vec();
+		AllowedMaintainerCalls::<T>::insert(dest, [0u8; 4], ());
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, dest, data, Limits::<T>::get().contract_call_weight, 0u128);
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn set_limits() -> Result<(), BenchmarkError> {
+		let origin = T::MaintenanceOrigin::try_successful_origin()
+			.map_err(|_| BenchmarkError::Weightless)?;
+		let limits = T::MaxLimits::get();
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, limits.clone());
+
+		assert_eq!(Limits::<T>::get(), limits);
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn allow_maintainer_call() -> Result<(), BenchmarkError> {
+		let origin = T::MaintainerCallsManager::try_successful_origin()
+			.map_err(|_| BenchmarkError::Weightless)?;
+		let dest = H160([0xd0; 20]);
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, dest, [0x12; 4]);
+
+		assert!(AllowedMaintainerCalls::<T>::contains_key(dest, [0x12; 4]));
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn disallow_maintainer_call() -> Result<(), BenchmarkError> {
+		let origin = T::MaintainerCallsManager::try_successful_origin()
+			.map_err(|_| BenchmarkError::Weightless)?;
+		let dest = H160([0xd0; 20]);
+		AllowedMaintainerCalls::<T>::insert(dest, [0x12; 4], ());
+
+		#[extrinsic_call]
+		_(origin as T::RuntimeOrigin, dest, [0x12; 4]);
+
+		assert!(!AllowedMaintainerCalls::<T>::contains_key(dest, [0x12; 4]));
 
 		Ok(())
 	}

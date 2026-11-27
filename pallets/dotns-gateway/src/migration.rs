@@ -55,11 +55,9 @@ pub mod v1 {
 	/// labels need no backfill: no full registration happened on any deployment before the map
 	/// existed.
 	///
-	/// A backfilled entry carries no ordering guarantee. [`Pallet::reserve_name`] overwrites
-	/// `lite` on every reservation, so a live record holds the most recent label, while the
-	/// backfill takes whichever label storage iteration yields first. Two accounts with the same
-	/// history can therefore show different labels, depending on whether the entry was
-	/// backfilled or written after the upgrade.
+	/// A backfilled entry carries no ordering guarantee. The backfill takes whichever label
+	/// storage iteration yields first. [`Pallet::reserve_name`] does not replace it, because it
+	/// rejects a candidate that already has a device name.
 	pub struct BackfillAccountNames<T>(PhantomData<T>);
 
 	impl<T: Config> UncheckedOnRuntimeUpgrade for BackfillAccountNames<T> {

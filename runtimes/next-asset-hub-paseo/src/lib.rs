@@ -190,7 +190,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 	impl_name: Cow::Borrowed("next-asset-hub-paseo"),
 	spec_name: Cow::Borrowed("next-asset-hub-paseo"),
 	authoring_version: 1,
-	spec_version: 3_004_000,
+	spec_version: 3_006_000,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 22,
@@ -1463,6 +1463,7 @@ impl indiv_pallet_dotns_gateway::ContractCaller for ReviveContractCaller {
 		dest: sp_core::H160,
 		data: Vec<u8>,
 		value: u128,
+		weight_limit: Weight,
 	) -> Result<(Vec<u8>, Weight), indiv_pallet_dotns_gateway::ContractCallError> {
 		use pallet_revive::{ExecConfig, TransactionLimits};
 		let cr = pallet_revive::Pallet::<Runtime>::bare_call(
@@ -1470,7 +1471,7 @@ impl indiv_pallet_dotns_gateway::ContractCaller for ReviveContractCaller {
 			dest,
 			value.into(),
 			TransactionLimits::WeightAndDeposit {
-				weight_limit: DotnsMaxContractCallWeight::get(),
+				weight_limit,
 				// Root origin does not pay the deposit cost; per-call storage growth
 				// is bounded by `weight_limit.proof_size`.
 				deposit_limit: u128::MAX,
@@ -1483,18 +1484,72 @@ impl indiv_pallet_dotns_gateway::ContractCaller for ReviveContractCaller {
 			Ok(ret) => Err(indiv_pallet_dotns_gateway::ContractCallError {
 				dispatch: sp_runtime::DispatchError::Other("contract reverted"),
 				revert_data: Some(ret.data),
+				weight_consumed: cr.weight_consumed,
 			}),
-			Err(e) => Err(indiv_pallet_dotns_gateway::ContractCallError::from(e)),
+			Err(e) => Err(indiv_pallet_dotns_gateway::ContractCallError {
+				dispatch: e,
+				revert_data: None,
+				weight_consumed: cr.weight_consumed,
+			}),
+		}
+	}
+}
+
+impl indiv_pallet_dotns_gateway::SignedContractCaller<AccountId> for ReviveContractCaller {
+	fn call_as(
+		account: &AccountId,
+		dest: sp_core::H160,
+		data: Vec<u8>,
+		weight_limit: Weight,
+		deposit_limit: u128,
+	) -> Result<(Vec<u8>, Weight), indiv_pallet_dotns_gateway::ContractCallError> {
+		use pallet_revive::{ExecConfig, TransactionLimits};
+		let cr = pallet_revive::Pallet::<Runtime>::bare_call(
+			RuntimeOrigin::signed(account.clone()),
+			dest,
+			0u32.into(),
+			TransactionLimits::WeightAndDeposit { weight_limit, deposit_limit },
+			data,
+			&ExecConfig::new_substrate_tx(),
+		);
+		match cr.result {
+			Ok(ret) if !ret.did_revert() => Ok((ret.data, cr.weight_consumed)),
+			Ok(ret) => Err(indiv_pallet_dotns_gateway::ContractCallError {
+				dispatch: sp_runtime::DispatchError::Other("contract reverted"),
+				revert_data: Some(ret.data),
+				weight_consumed: cr.weight_consumed,
+			}),
+			Err(e) => Err(indiv_pallet_dotns_gateway::ContractCallError {
+				dispatch: e,
+				revert_data: None,
+				weight_consumed: cr.weight_consumed,
+			}),
 		}
 	}
 }
 
 parameter_types! {
-	// On-chain measured weight is below these limits so this is to have some margin.
-	pub const DotnsMaxContractCallWeight: Weight =
-		Weight::from_parts(100_000_000_000, 2 * 1024 * 1024);
-	pub const DotnsMaxValiditySeconds: u64 = 3 * 24 * 60 * 60; // 3 days
-	pub const DotnsMaxFutureSkewSeconds: u64 = 30;
+	// Governance moves the dotNS gateway limits between the minimum and the maximum with
+	// `DotnsGateway::set_limits`. The pallet's module doc says what each bound protects.
+	pub const DotnsDefaultLimits: indiv_pallet_dotns_gateway::GatewayLimits =
+		indiv_pallet_dotns_gateway::GatewayLimits {
+			contract_call_weight: Weight::from_parts(100_000_000_000, 2 * 1024 * 1024),
+			signature_validity_seconds: 24 * 60 * 60,
+			future_skew_seconds: 30,
+		};
+	pub const DotnsMinLimits: indiv_pallet_dotns_gateway::GatewayLimits =
+		indiv_pallet_dotns_gateway::GatewayLimits {
+			contract_call_weight: Weight::from_parts(32_000_000_000, 2 * 1024 * 1024),
+			signature_validity_seconds: 60,
+			future_skew_seconds: 0,
+		};
+	pub const DotnsMaxLimits: indiv_pallet_dotns_gateway::GatewayLimits =
+		indiv_pallet_dotns_gateway::GatewayLimits {
+			contract_call_weight: Weight::from_parts(128_000_000_000, 4 * 1024 * 1024),
+			signature_validity_seconds: 24 * 60 * 60,
+			future_skew_seconds: 5 * 60,
+		};
+	pub const DotnsGatewayPalletId: PalletId = PalletId(*b"py/dotns");
 }
 
 parameter_types! {
@@ -1522,12 +1577,15 @@ impl indiv_pallet_dotns_gateway::Config for Runtime {
 	type MemberService = MembersSubscriber;
 	type ContractCaller = ReviveContractCaller;
 	type AddressMapper = ReviveAddressMapper;
-	type MaxContractCallWeight = DotnsMaxContractCallWeight;
-	type MaxValiditySeconds = DotnsMaxValiditySeconds;
-	type MaxFutureSkewSeconds = DotnsMaxFutureSkewSeconds;
+	type DefaultLimits = DotnsDefaultLimits;
+	type MinLimits = DotnsMinLimits;
+	type MaxLimits = DotnsMaxLimits;
 	type UnixTime = Timestamp;
 	type AttestationAllowanceManager = EnsureRoot<AccountId>;
 	type DispatcherAddressManager = EnsureRoot<AccountId>;
+	type PalletId = DotnsGatewayPalletId;
+	type MaintenanceOrigin = EnsureRoot<AccountId>;
+	type MaintainerCallsManager = EnsureRoot<AccountId>;
 	type AttestationSignature = Signature;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = DotnsGatewayBenchHelper;
@@ -2153,6 +2211,11 @@ parameter_types! {
 	/// contract-registered collection reserves this plus revive's dispatch base, refunded to what
 	/// the call really consumed. Any other claim reserves nothing.
 	///
+	/// The ceiling is the only bound on a minter call. It covers loading the minter's code and
+	/// any code the minter delegates to, at about one byte of proof per byte of code. A minter
+	/// that exceeds it fails every claim: the credit stays unspent, and the claimant pays for the
+	/// weight consumed.
+	///
 	/// Deliberately far below the DotNS contract budget: a minter only picks an item index. The
 	/// nft-claims `integrity_test` holds the claim worst case plus this ceiling to the block
 	/// budget.
@@ -2217,7 +2280,7 @@ impl indiv_pallet_nft_claims::CollectionSelector<AccountId> for NftClaimsCollect
 
 	fn validate(contract: sp_core::H160) -> sp_runtime::DispatchResult {
 		frame_support::ensure!(
-			pallet_revive::AccountInfo::<Runtime>::is_contract(&contract),
+			pallet_revive::AccountInfo::<Runtime>::load_contract(&contract).is_some(),
 			indiv_pallet_nft_claims::Error::<Runtime>::MinterNotAContract
 		);
 		Ok(())
@@ -3171,11 +3234,7 @@ pub mod migrations {
 	pub type SingleBlockMigrations = (Unreleased, Permanent);
 
 	/// MBM migrations to apply on runtime upgrade.
-	pub type MbmMigrations = (
-		pallet_revive::migrations::v3::Migration<Runtime>,
-		pallet_revive::migrations::v4::Migration<Runtime>,
-		indiv_pallet_scarcity::migration::v3::MigrateToLocations<Runtime>,
-	);
+	pub type MbmMigrations = (indiv_pallet_scarcity::migration::v3::MigrateToLocations<Runtime>,);
 }
 
 /// Executive: handles dispatch to the various modules.
@@ -4095,11 +4154,18 @@ pallet_revive::impl_runtime_apis_plus_revive_traits! {
 		}
 	}
 
+	#[api_version(2)]
 	impl indiv_pallet_nft_claims::runtime_api::NftClaimsApi<Block> for Runtime {
 		fn preview_mints(
 			queries: indiv_pallet_nft_claims::runtime_api::PreviewQueries,
 		) -> Vec<indiv_pallet_nft_claims::runtime_api::PreviewOutcome> {
 			NftClaims::preview_mints(queries)
+		}
+
+		fn credit_statuses(
+			queries: indiv_pallet_nft_claims::runtime_api::CreditStatusQueries,
+		) -> Vec<indiv_pallet_nft_claims::runtime_api::CreditStatus> {
+			NftClaims::credit_statuses(queries)
 		}
 	}
 

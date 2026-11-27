@@ -22,7 +22,7 @@ use super::*;
 use crate::{
 	parameters::{
 		AccountsApiAllowance, LitePersonStatementLimit, NotificationAllowance,
-		NotificationPeriodDuration, StmtStoreGraceWindow,
+		NotificationPeriodDuration, PlayerStatementLimit, StmtStoreGraceWindow,
 	},
 	OperationAllowedOneTimeExcess, RestrictedEntity,
 };
@@ -400,7 +400,7 @@ fn game_sign_up_grants_player_allowance() {
 		assert!(matches!(game_info.unwrap().state, indiv_pallet_game::GameState::Reporting { .. }));
 
 		let allowance = get_allowance(&stmt_acc);
-		assert_eq!(allowance, crate::people::PlayerStatementLimit::get());
+		assert_eq!(allowance, PlayerStatementLimit::get());
 	})
 }
 
@@ -624,6 +624,14 @@ fn signed_replacement_is_limited_to_one_per_fifteen_minutes() {
 		Executive::apply_extrinsic(uxt)
 			.expect("first replacement is valid")
 			.expect("first replacement dispatch succeeds");
+
+		// The allowance status reports the relay chain block of the next valid replacement.
+		let entity = RestrictedEntity::StmtStoreHolder(alias);
+		let status = OriginRestriction::get_allowance_status(entity.clone());
+		assert_eq!(status.max, 0);
+		assert_eq!(status.used, Usages::<Runtime>::get(&entity).unwrap().used);
+		assert_eq!(status.now, relay_block_for(3));
+		assert_eq!(status.fully_recovered_at, Some(relay_block_for(3 + 450)));
 
 		// The next replacement is refused until the fee of one replacement has recovered.
 		let attempt = |block: BlockNumber| {

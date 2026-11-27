@@ -33,15 +33,16 @@ use frame_support::{
 		fungibles::{
 			Create, Inspect as FungiblesInspect, InspectEnumerable, Mutate as FungiblesMutate,
 		},
-		ContainsPair, OnIdle,
+		ContainsPair, OnIdle, ProcessMessageError,
 	},
 	weights::Weight,
 };
 use next_asset_hub_paseo_runtime::{
 	genesis_config_presets::EXTERNAL_ASSET_ID,
 	xcm_config::{
-		bridging, CheckingAccount, DotLocation, ExternalAssetLocation, LocationToAccountId,
-		RelayChainLocation, StakingPot, TrustBackedAssetsPalletLocation, XcmConfig,
+		bridging, Barrier, CheckingAccount, DotLocation, ExternalAssetLocation,
+		LocationToAccountId, RelayChainLocation, StakingPot, TrustBackedAssetsPalletLocation,
+		XcmConfig,
 	},
 	AllPalletsWithoutSystem, AssetConversion, AssetDeposit, Assets, Balances, Block, Executive,
 	ExistentialDeposit, ForeignAssets, ForeignAssetsInstance, GenericUncheckedExtrinsic,
@@ -66,10 +67,10 @@ use system_parachains_constants::paseo::{
 };
 use xcm::latest::{
 	prelude::{Assets as XcmAssets, *},
-	WESTEND_GENESIS_HASH,
+	AssetTransferFilter, WESTEND_GENESIS_HASH,
 };
 use xcm_builder::WithLatestLocationConverter;
-use xcm_executor::traits::ConvertLocation;
+use xcm_executor::traits::{ConvertLocation, Properties, ShouldExecute};
 use xcm_runtime_apis::conversions::LocationToAccountHelper;
 
 const ALICE: [u8; 32] = [1u8; 32];
@@ -1035,6 +1036,103 @@ fn authorized_aliases_work() {
 				&local_alice
 			));
 		})
+}
+
+fn local_should_execute(instruction: Instruction<RuntimeCall>) -> Result<(), ProcessMessageError> {
+	let weight = Weight::from_parts(1_000_000, 1000);
+	let mut properties = Properties { weight_credit: weight, message_id: None };
+	Barrier::should_execute::<RuntimeCall>(
+		&Location::new(0, AccountId32 { network: None, id: ALICE }),
+		&mut [instruction],
+		weight,
+		&mut properties,
+	)
+}
+
+/// Wraps `instruction` in each nesting that `DenyRecursively` checks, including two levels deep.
+fn with_nestings(instruction: Instruction<RuntimeCall>) -> [Instruction<RuntimeCall>; 5] {
+	let nested = Xcm(vec![instruction.clone()]);
+	[
+		instruction,
+		SetAppendix(nested.clone()),
+		SetErrorHandler(nested.clone()),
+		ExecuteWithOrigin { descendant_origin: None, xcm: nested.clone() },
+		SetAppendix(Xcm(vec![SetErrorHandler(nested)])),
+	]
+}
+
+fn initiate_transfer(
+	destination: Location,
+	remote_fees: Option<AssetTransferFilter>,
+	assets: Vec<AssetTransferFilter>,
+) -> Instruction<RuntimeCall> {
+	InitiateTransfer {
+		destination,
+		remote_fees,
+		preserve_origin: false,
+		assets: assets.try_into().unwrap(),
+		remote_xcm: Xcm(vec![]),
+	}
+}
+
+#[test]
+fn barrier_denies_relay_reserve_transfers_recursively() {
+	let all = Wild(AllCounted(1));
+	let reserve_transfers = [
+		TransferReserveAsset {
+			assets: (Parent, UNITS).into(),
+			dest: Location::parent(),
+			xcm: Xcm(vec![]),
+		},
+		DepositReserveAsset { assets: all.clone(), dest: Location::parent(), xcm: Xcm(vec![]) },
+		InitiateReserveWithdraw {
+			assets: all.clone(),
+			reserve: Location::parent(),
+			xcm: Xcm(vec![]),
+		},
+		initiate_transfer(
+			Location::parent(),
+			None,
+			vec![AssetTransferFilter::ReserveDeposit(all.clone())],
+		),
+		initiate_transfer(
+			Location::parent(),
+			None,
+			vec![
+				AssetTransferFilter::Teleport(all.clone()),
+				AssetTransferFilter::ReserveWithdraw(all.clone()),
+			],
+		),
+		initiate_transfer(
+			Location::parent(),
+			Some(AssetTransferFilter::ReserveWithdraw(all.clone())),
+			vec![AssetTransferFilter::Teleport(all.clone())],
+		),
+	];
+	for instruction in reserve_transfers.into_iter().flat_map(with_nestings) {
+		assert_eq!(
+			local_should_execute(instruction.clone()),
+			Err(ProcessMessageError::Unsupported),
+			"{instruction:?}"
+		);
+	}
+
+	let allowed = [
+		ClearOrigin,
+		initiate_transfer(
+			Location::parent(),
+			Some(AssetTransferFilter::Teleport(all.clone())),
+			vec![AssetTransferFilter::Teleport(all.clone())],
+		),
+		initiate_transfer(
+			Location::new(1, Parachain(2000)),
+			Some(AssetTransferFilter::ReserveDeposit(all.clone())),
+			vec![AssetTransferFilter::ReserveWithdraw(all)],
+		),
+	];
+	for instruction in allowed.into_iter().flat_map(with_nestings) {
+		assert_eq!(local_should_execute(instruction.clone()), Ok(()), "{instruction:?}");
+	}
 }
 
 #[test]
@@ -2617,6 +2715,66 @@ mod credit_tree_removal {
 
 			let expected = (57u8, 20u8, codec::Compact(1u32), BLOCK).encode();
 			assert_eq!(call, expected, "the pallet and call indices are the game chain's");
+		});
+	}
+}
+
+/// The alias-accounts view functions return the values that governance sets through
+/// `pallet_parameters`.
+mod alias_accounts_view_functions {
+	use super::*;
+	use frame_support::view_functions::ViewFunction;
+	use indiv_pallet_alias_accounts::{
+		GetAliasFeeViewFunction, GetOffchainWorkerIntervalViewFunction,
+	};
+	use next_asset_hub_paseo_runtime::{
+		dynamic_params::alias_accounts::{AliasFee, Parameters, StaleAliasSweepInterval},
+		RuntimeParameters,
+	};
+	use parachains_common::BlockNumber;
+
+	fn set_parameter(parameter: Parameters) {
+		assert_ok!(pallet_parameters::Pallet::<Runtime>::set_parameter(
+			RuntimeOrigin::root(),
+			RuntimeParameters::AliasAccounts(parameter)
+		));
+	}
+
+	/// Runs a view function without arguments through the runtime dispatch that clients call.
+	fn execute_view_function<Query: ViewFunction>() -> Query::ReturnType
+	where
+		Query::ReturnType: Decode,
+	{
+		let output = Runtime::execute_view_function(Query::id(), Vec::new())
+			.expect("the runtime dispatches the view function");
+		Decode::decode(&mut &output[..]).expect("the output decodes as the return type")
+	}
+
+	#[test]
+	fn alias_fee_view_function_returns_the_updated_parameter() {
+		sp_io::TestExternalities::default().execute_with(|| {
+			assert_eq!(execute_view_function::<GetAliasFeeViewFunction<Runtime>>(), None);
+
+			set_parameter(Parameters::AliasFee(AliasFee, Some(Some(7))));
+
+			assert_eq!(execute_view_function::<GetAliasFeeViewFunction<Runtime>>(), Some(7));
+		});
+	}
+
+	#[test]
+	fn offchain_worker_interval_view_function_returns_the_interval_that_the_sweep_uses() {
+		sp_io::TestExternalities::default().execute_with(|| {
+			let interval = |blocks: BlockNumber| {
+				set_parameter(Parameters::StaleAliasSweepInterval(
+					StaleAliasSweepInterval,
+					Some(blocks),
+				));
+				execute_view_function::<GetOffchainWorkerIntervalViewFunction<Runtime>>()
+			};
+
+			assert_eq!(interval(9), 9);
+			// The runtime keeps the interval non-zero whatever governance stores.
+			assert_eq!(interval(0), 1);
 		});
 	}
 }
