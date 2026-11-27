@@ -33,6 +33,8 @@ indiv-support = { workspace = true }
 
 [dev-dependencies]
 parking_lot = { workspace = true }
+proptest = { workspace = true }
+proptest-state-machine = { workspace = true }
 sp-io = { workspace = true }
 
 [features]

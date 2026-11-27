@@ -243,6 +243,8 @@ polkadot-runtime-common = { version = "34.0.0", default-features = false }
 primitive-types = { version = "0.13.1", default-features = false, features = [
 	"num-traits",
 ] }
+proptest = { version = "1.11.0" }
+proptest-state-machine = { version = "0.8.0" }
 rand = { version = "0.8.5" }
 rand_core = { version = "0.6", default-features = false }
 remote-externalities = { version = "0.62.0", default-features = false, package = "frame-remote-externalities" }

@@ -233,9 +233,15 @@ pub fn sent_credit_tree_xcms() -> Vec<(xcm::latest::Location, Vec<u8>)> {
 /// The batch of credit trees carried by the last XCM message, with the pallet index and call
 /// index it was addressed to checked along the way.
 pub fn last_sent_credit_tree_batch() -> crate::CreditTreeBatch<Test> {
+	let (_, encoded) = sent_credit_tree_xcms().pop().expect("an XCM was sent");
+	decode_credit_tree_batch(&encoded)
+}
+
+/// Decodes the batch of credit trees that the XCM message `encoded` carries. Checks the pallet
+/// index and call index the message is addressed to.
+pub fn decode_credit_tree_batch(encoded: &[u8]) -> crate::CreditTreeBatch<Test> {
 	use xcm::latest::{Instruction, Xcm};
 
-	let (_, encoded) = sent_credit_tree_xcms().pop().expect("an XCM was sent");
 	let message: Xcm<()> = Xcm::decode(&mut &encoded[..]).expect("XCM decodes");
 	let call = message
 		.0
