@@ -211,6 +211,34 @@ pub enum Link {
 	None(ChatKey),
 }
 
+/// The operational limits of the gateway.
+///
+/// [`crate::Config::MaintenanceOrigin`] sets them within [`crate::Config::MinLimits`] and
+/// [`crate::Config::MaxLimits`].
+#[frame_support::stored]
+pub struct GatewayLimits {
+	/// The weight budget for the contract call of `reserve_name` and `register_name`. Both charge
+	/// the budget of [`crate::Config::MaxLimits`] in advance, since a `set_limits` earlier in the
+	/// same batch can raise this one, and refund what the contract does not use.
+	pub contract_call_weight: Weight,
+	/// The time, in seconds, during which a reservation signature stays valid after `signed_at`.
+	pub signature_validity_seconds: u64,
+	/// The time, in seconds, by which `signed_at` may be ahead of chain time.
+	pub future_skew_seconds: u64,
+}
+
+impl GatewayLimits {
+	/// Returns whether each limit is within `min` and `max`, both included.
+	pub fn is_within(&self, min: &Self, max: &Self) -> bool {
+		self.contract_call_weight.all_gte(min.contract_call_weight) &&
+			self.contract_call_weight.all_lte(max.contract_call_weight) &&
+			(min.signature_validity_seconds..=max.signature_validity_seconds)
+				.contains(&self.signature_validity_seconds) &&
+			(min.future_skew_seconds..=max.future_skew_seconds)
+				.contains(&self.future_skew_seconds)
+	}
+}
+
 /// Converts a runtime AccountId to an EVM H160 address.
 pub trait AddressMapper<AccountId> {
 	/// Converts an account id to an Ethereum address.
@@ -226,23 +254,30 @@ pub struct ContractCallError {
 	/// Raw revert bytes if the failure was a contract revert; `None` for
 	/// low-level failures (out-of-gas, caller errors, etc.).
 	pub revert_data: Option<Vec<u8>>,
+	/// The weight the contract used before it failed, so the caller can refund the rest of the
+	/// contract call budget.
+	pub weight_consumed: Weight,
 }
 
 impl From<DispatchError> for ContractCallError {
 	fn from(dispatch: DispatchError) -> Self {
-		Self { dispatch, revert_data: None }
+		Self { dispatch, revert_data: None, weight_consumed: Weight::zero() }
 	}
 }
 
 /// Abstraction for calling smart contracts via pallet_revive.
 pub trait ContractCaller {
-	/// Calls a contract at `dest` with the given ABI-encoded `data`.
+	/// Calls a contract at `dest` with the given ABI-encoded `data`, as Root.
 	///
-	/// `value` is the amount of native currency to transfer with the call.
-	/// Returns `(raw_return_data, weight_consumed)` on success, allowing the
-	/// caller to refund unused weight from the contract call budget.
-	fn call(dest: H160, data: Vec<u8>, value: u128)
-		-> Result<(Vec<u8>, Weight), ContractCallError>;
+	/// `value` is the amount of native currency to transfer with the call. The contract may use
+	/// up to `weight_limit`. Returns `(raw_return_data, weight_consumed)` on success, so the
+	/// caller can refund unused weight from the contract call budget.
+	fn call(
+		dest: H160,
+		data: Vec<u8>,
+		value: u128,
+		weight_limit: Weight,
+	) -> Result<(Vec<u8>, Weight), ContractCallError>;
 }
 
 impl ContractCaller for () {
@@ -250,6 +285,34 @@ impl ContractCaller for () {
 		_dest: H160,
 		_data: Vec<u8>,
 		_value: u128,
+		_weight_limit: Weight,
+	) -> Result<(Vec<u8>, Weight), ContractCallError> {
+		Ok((Vec::new(), Weight::zero()))
+	}
+}
+
+/// Abstraction for calling smart contracts as a signed account via pallet_revive.
+pub trait SignedContractCaller<AccountId> {
+	/// Calls the contract at `dest` with the ABI-encoded `data`, signed by `account`.
+	///
+	/// `account` pays the storage deposit, up to `deposit_limit`. Returns
+	/// `(raw_return_data, weight_consumed)` on success.
+	fn call_as(
+		account: &AccountId,
+		dest: H160,
+		data: Vec<u8>,
+		weight_limit: Weight,
+		deposit_limit: u128,
+	) -> Result<(Vec<u8>, Weight), ContractCallError>;
+}
+
+impl<AccountId> SignedContractCaller<AccountId> for () {
+	fn call_as(
+		_account: &AccountId,
+		_dest: H160,
+		_data: Vec<u8>,
+		_weight_limit: Weight,
+		_deposit_limit: u128,
 	) -> Result<(Vec<u8>, Weight), ContractCallError> {
 		Ok((Vec::new(), Weight::zero()))
 	}
